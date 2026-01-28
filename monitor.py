@@ -384,7 +384,7 @@ def main(stdscr, loaded_packets=None, source_file=None):
     unique_mode = False
     status_msg = None
     status_time = 0
-    paused_at_pkt_num = None  # Track packet number when paused (for buffer rotation)
+    frozen_packets = None  # Snapshot of packets when paused
     stdscr.nodelay(True)
 
     while True:
@@ -429,40 +429,30 @@ def main(stdscr, loaded_packets=None, source_file=None):
         # Filter to unique packets if unique_mode is on
         if unique_mode:
             seen = set()
-            packets = []
+            live_packets = []
             for pkt in all_packets:
                 key = (pkt[3], pkt[5])  # ftype, payload
                 if key not in seen:
                     seen.add(key)
-                    packets.append(pkt)
+                    live_packets.append(pkt)
         else:
-            packets = all_packets
+            live_packets = all_packets
 
-        num_packets = len(packets)
-
+        # When following, use live packets; when paused, freeze the list
         if follow:
-            # Following: always show latest packets
+            packets = live_packets
+            frozen_packets = None
+            num_packets = len(packets)
             if num_packets > view_height:
                 scroll_pos = num_packets - view_height
                 cursor_offset = view_height - 1
-            paused_at_pkt_num = None
         else:
-            # Paused: track position by packet number to handle buffer rotation
-            if paused_at_pkt_num is None and num_packets > 0:
-                # Just paused - remember current packet number
-                paused_at_pkt_num = packets[scroll_pos][0] if scroll_pos < num_packets else packets[-1][0]
-            elif paused_at_pkt_num is not None and num_packets > 0:
-                # Find our packet by number (it may have moved due to buffer rotation)
-                found = False
-                for i, pkt in enumerate(packets):
-                    if pkt[0] >= paused_at_pkt_num:
-                        scroll_pos = i
-                        found = True
-                        break
-                if not found:
-                    # Our packet was evicted, go to start
-                    scroll_pos = 0
-                    paused_at_pkt_num = packets[0][0] if packets else None
+            # Paused - use frozen snapshot
+            if frozen_packets is None:
+                # Just paused - freeze current view
+                frozen_packets = list(live_packets)
+            packets = frozen_packets
+            num_packets = len(packets)
 
         scroll_pos = max(0, min(scroll_pos, max(0, num_packets - view_height)))
         cursor_offset = max(0, min(cursor_offset, view_height - 1, num_packets - scroll_pos - 1))
@@ -482,7 +472,12 @@ def main(stdscr, loaded_packets=None, source_file=None):
         elif follow:
             hdr = f" PRECOR Monitor | {total} pkts ({num_packets} {unique_str}shown) | LIVE{save_str} "
         else:
-            hdr = f" PRECOR Monitor | {total} pkts ({num_packets} {unique_str}shown) | PAUSED{save_str} "
+            # Show how many new packets arrived while paused
+            new_since_pause = len(live_packets) - len(frozen_packets) if frozen_packets else 0
+            if new_since_pause > 0:
+                hdr = f" PRECOR Monitor | {total} pkts | PAUSED (+{new_since_pause} new){save_str} "
+            else:
+                hdr = f" PRECOR Monitor | {total} pkts ({num_packets} {unique_str}shown) | PAUSED{save_str} "
 
         color = curses.A_REVERSE
         if is_saving:
@@ -641,8 +636,6 @@ def main(stdscr, loaded_packets=None, source_file=None):
                 elif scroll_pos + view_height < num_packets:
                     scroll_pos += 1
             follow = False
-            if num_packets > 0 and scroll_pos < num_packets:
-                paused_at_pkt_num = packets[scroll_pos][0]
         elif key == ord('k') or key == curses.KEY_UP:
             if selected_idx is not None:
                 if selected_idx > 0:
@@ -655,19 +648,12 @@ def main(stdscr, loaded_packets=None, source_file=None):
                 elif scroll_pos > 0:
                     scroll_pos -= 1
             follow = False
-            if num_packets > 0 and scroll_pos < num_packets:
-                paused_at_pkt_num = packets[scroll_pos][0]
         elif key == curses.KEY_NPAGE:
-            scroll_pos += view_height
+            scroll_pos = min(scroll_pos + view_height, max(0, num_packets - view_height))
             follow = False
-            if num_packets > 0:
-                scroll_pos = min(scroll_pos, max(0, num_packets - view_height))
-                paused_at_pkt_num = packets[scroll_pos][0] if scroll_pos < num_packets else None
         elif key == curses.KEY_PPAGE:
             scroll_pos = max(0, scroll_pos - view_height)
             follow = False
-            if num_packets > 0 and scroll_pos < num_packets:
-                paused_at_pkt_num = packets[scroll_pos][0]
         elif key == ord('u') or key == ord('U'):
             unique_mode = not unique_mode
             scroll_pos = 0
