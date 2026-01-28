@@ -57,16 +57,37 @@ def get_direction_hypothesis(ftype):
         return ("???", None, "unknown range")
 
 
-def detect_compound_frames(raw_frame):
-    """Detect if frame contains compound messages (05 delimiter)."""
-    # Look for 05 52 pattern inside the frame (not at start/end)
-    compounds = []
-    i = 2  # Skip initial 52 xx
+def parse_compound_frames(raw_frame):
+    """Parse compound frames (05 52 delimiter) into sub-frames.
+    Returns list of (start_idx, end_idx, type_byte, sub_payload) tuples."""
+    sub_frames = []
+
+    # Find all 05 52 delimiters
+    delimiters = []
+    i = 2
     while i < len(raw_frame) - 3:
         if raw_frame[i] == 0x05 and raw_frame[i + 1] == 0x52:
-            compounds.append(i)
+            delimiters.append(i)
         i += 1
-    return compounds
+
+    if not delimiters:
+        return sub_frames
+
+    # First sub-frame: from byte 0 to first delimiter
+    sub_frames.append((0, delimiters[0], raw_frame[1], bytes(raw_frame[2:delimiters[0]])))
+
+    # Middle sub-frames
+    for i, delim in enumerate(delimiters):
+        start = delim + 1  # Skip the 05, start at 52
+        if i + 1 < len(delimiters):
+            end = delimiters[i + 1]
+        else:
+            # Last sub-frame goes to end (before 45 01)
+            end = len(raw_frame) - 2
+        if start + 1 < end:
+            sub_frames.append((start, end, raw_frame[start + 1], bytes(raw_frame[start + 2:end])))
+
+    return sub_frames
 
 
 def format_wire_display(ftype, payload, raw_frame):
@@ -199,10 +220,29 @@ def format_wire_display(ftype, payload, raw_frame):
     else:
         lines.append(("field", f"  DIR    {direction} (0x{ftype:02X}) → {hyp_desc}", "hypothesis"))
 
-    # Check for compound frames
-    compounds = detect_compound_frames(raw_frame)
-    if compounds:
-        lines.append(("field", f"  CMPND  {len(compounds)+1} sub-frames (delim at: {compounds})", "hypothesis"))
+    # Check for compound frames and parse them
+    sub_frames = parse_compound_frames(raw_frame)
+    if sub_frames:
+        lines.append(("field", f"  CMPND  {len(sub_frames)} sub-frames:", "hypothesis"))
+        for i, (start, end, sub_type, sub_payload) in enumerate(sub_frames):
+            type_name = NAMES.get(sub_type, f'0x{sub_type:02X}')
+            sub_dir, sub_ch, _ = get_direction_hypothesis(sub_type)
+            sub_hex = ' '.join(f'{b:02X}' for b in raw_frame[start:end])
+            if sub_ch:
+                lines.append(("field", f"    [{i+1}] {type_name} ({sub_dir}/'{sub_ch}'): {sub_hex}", "value"))
+            else:
+                lines.append(("field", f"    [{i+1}] {type_name} ({sub_dir}): {sub_hex}", "value"))
+            # Try to decode sub-payload
+            if sub_payload:
+                b16_parts = []
+                for b in sub_payload:
+                    if b in DIGIT_TO_VAL:
+                        b16_parts.append(f"{DIGIT_TO_VAL[b]:X}")
+                    elif 32 <= b <= 126:
+                        b16_parts.append(chr(b))
+                    else:
+                        b16_parts.append(f"({b:02X})")
+                lines.append(("field", f"        → b16: {''.join(b16_parts)}", "dim"))
 
     return lines
 

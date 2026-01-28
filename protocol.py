@@ -162,7 +162,7 @@ def decode_packet(frame_type, payload):
 
     elif frame_type in (TYPE_DISP1, TYPE_DISP2):
         ascii_str = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in payload)
-        return f"display: '{ascii_str}'", False
+        return f"'{ascii_str}'", False
 
     else:
         name = NAMES.get(frame_type, f'0x{frame_type:02X}')
