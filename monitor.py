@@ -28,6 +28,46 @@ from protocol import (
 
 MAX_PACKETS = 2000
 
+# Hypothesis: Direction based on 2nd byte
+# 0x20-0x5F (ASCII printable) = REQUEST (Console → Motor)
+# 0x80+ = RESPONSE (Motor → Console)
+HYPOTHESIS_NAMES = {
+    0x54: ("REQ", "T", "Tick/poll heartbeat"),
+    0x52: ("REQ", "R", "Run state"),
+    0x51: ("REQ", "Q", "Query compound"),
+    0x4F: ("REQ", "O", "Output compound"),
+    0x4B: ("REQ", "K", "inKline set"),
+    0x2A: ("REQ", "*", "speed set"),
+    0x9A: ("RSP", None, "sensor data? (variable)"),
+    0xA2: ("RSP", None, "ack/status"),
+    0xD4: ("RSP", None, "diagnostic"),
+}
+
+
+def get_direction_hypothesis(ftype):
+    """Return (direction, ascii_char, hypothesis_desc) based on type byte."""
+    if ftype in HYPOTHESIS_NAMES:
+        return HYPOTHESIS_NAMES[ftype]
+    elif 0x20 <= ftype <= 0x5F:
+        ch = chr(ftype)
+        return ("REQ", ch, "request (ASCII range)")
+    elif ftype >= 0x80:
+        return ("RSP", None, "response (high byte)")
+    else:
+        return ("???", None, "unknown range")
+
+
+def detect_compound_frames(raw_frame):
+    """Detect if frame contains compound messages (05 delimiter)."""
+    # Look for 05 52 pattern inside the frame (not at start/end)
+    compounds = []
+    i = 2  # Skip initial 52 xx
+    while i < len(raw_frame) - 3:
+        if raw_frame[i] == 0x05 and raw_frame[i + 1] == 0x52:
+            compounds.append(i)
+        i += 1
+    return compounds
+
 
 def format_wire_display(ftype, payload, raw_frame):
     """Generate wire-protocol analyzer style display."""
@@ -149,6 +189,20 @@ def format_wire_display(ftype, payload, raw_frame):
                 lines.append(("field", f"  {'B16':6} [{b16_str:12}] = {numeric} (decoded)", "highlight"))
             else:
                 lines.append(("field", f"  {'B16':6} [{b16_str:12}]   (b16/ascii)", "dim"))
+
+    # Hypothesis section
+    lines.append(("field", "", None))
+    lines.append(("field", "  ─── HYPOTHESIS ───", "dim"))
+    direction, ascii_ch, hyp_desc = get_direction_hypothesis(ftype)
+    if ascii_ch:
+        lines.append(("field", f"  DIR    {direction} ('{ascii_ch}' = 0x{ftype:02X}) → {hyp_desc}", "hypothesis"))
+    else:
+        lines.append(("field", f"  DIR    {direction} (0x{ftype:02X}) → {hyp_desc}", "hypothesis"))
+
+    # Check for compound frames
+    compounds = detect_compound_frames(raw_frame)
+    if compounds:
+        lines.append(("field", f"  CMPND  {len(compounds)+1} sub-frames (delim at: {compounds})", "hypothesis"))
 
     return lines
 
@@ -499,7 +553,7 @@ def main(stdscr, loaded_packets=None, source_file=None):
             pass
 
         # Column headers
-        col_hdr = f"{'#':<5}|{'TYPE':<8}|{'RAW BYTES':<40}|{'MEANING'}"
+        col_hdr = f"{'#':<5}|{'TYPE':<8}|{'DIR':<4}|{'RAW BYTES':<36}|{'MEANING'}"
         stdscr.addstr(2, 0, col_hdr[:width - 1], curses.A_BOLD)
         stdscr.addstr(3, 0, "-" * (width - 1))
 
@@ -512,8 +566,9 @@ def main(stdscr, loaded_packets=None, source_file=None):
             pkt = packets[pkt_idx]
             num, name, meaning, ftype, has_unknown, payload, raw_frame = pkt
             raw_hex = hex_str(raw_frame)
+            direction, _, _ = get_direction_hypothesis(ftype)
 
-            line = f"{num:<5}|{name:<8}|{raw_hex:<40}|{meaning}"
+            line = f"{num:<5}|{name:<8}|{direction:<4}|{raw_hex:<36}|{meaning}"
 
             y = header_lines + idx
             is_cursor = (not follow and idx == cursor_offset)
@@ -573,6 +628,8 @@ def main(stdscr, loaded_packets=None, source_file=None):
                             stdscr.addstr(y, 0, text[:width-1], curses.color_pair(4))
                         elif style == "value":
                             stdscr.addstr(y, 0, text[:width-1], curses.color_pair(2))
+                        elif style == "hypothesis":
+                            stdscr.addstr(y, 0, text[:width-1], curses.color_pair(3) | curses.A_ITALIC if hasattr(curses, 'A_ITALIC') else curses.color_pair(3))
                         elif style == "dim":
                             stdscr.addstr(y, 0, text[:width-1], curses.A_DIM)
                         else:
