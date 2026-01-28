@@ -20,7 +20,7 @@ import serial
 
 from protocol import (
     SERIAL_PORT, BAUD_RATE, FRAME_START, NAMES, DIGIT_TO_VAL,
-    decode_speed, decode_incline, decode_packet, hex_str,
+    decode_speed, decode_incline, decode_base16, decode_packet, hex_str,
     build_set_spd, build_set_inc,
     SET_SPD_HEADER, SET_INC_HEADER, TYPE_SET_SPD, TYPE_SET_INC,
     TYPE_DISP1, TYPE_DISP2,
@@ -78,7 +78,20 @@ def format_wire_display(ftype, payload, raw_frame):
 
     else:
         if payload:
-            fields.append((2, 2 + len(payload), "DATA", f"{len(payload)} bytes", "value"))
+            # Try to decode each byte using the custom base-16 digit set
+            decoded_digits = []
+            for b in payload:
+                if b in DIGIT_TO_VAL:
+                    decoded_digits.append(f"{DIGIT_TO_VAL[b]:X}")
+                else:
+                    decoded_digits.append("·")
+            digits_str = ''.join(decoded_digits)
+            # Also compute numeric value if all bytes are valid digits
+            numeric = decode_base16(payload)
+            if numeric is not None:
+                fields.append((2, 2 + len(payload), "DATA", f"b16:{digits_str}={numeric} ({len(payload)}B)", "value"))
+            else:
+                fields.append((2, 2 + len(payload), "DATA", f"b16:{digits_str} ({len(payload)}B)", "value"))
             pos = 2 + len(payload)
 
     # Frame end
