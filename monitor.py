@@ -126,15 +126,19 @@ def format_wire_display(ftype, payload, raw_frame):
         else:
             lines.append(("field", f"  {label:6} [{byte_str:12}]", style))
 
-        # Add b16 decode line below DATA field
-        if label == "DATA":
+        # Add b16 decode line below DATA and DISP fields
+        if label in ("DATA", "DISP"):
             data_bytes = bytes(raw_frame[i] for i in range(start, min(end, len(raw_frame))))
-            # Build decode line with same spacing as byte_str
+            # Build decode line: b16 digit, or ASCII char, or hex
             b16_parts = []
             all_valid = True
             for b in data_bytes:
                 if b in DIGIT_TO_VAL:
                     b16_parts.append(f" {DIGIT_TO_VAL[b]:X}")
+                elif 32 <= b <= 126:
+                    # Printable ASCII - show the character
+                    b16_parts.append(f" {chr(b)}")
+                    all_valid = False
                 else:
                     b16_parts.append(f"{b:02X}")
                     all_valid = False
@@ -144,7 +148,7 @@ def format_wire_display(ftype, payload, raw_frame):
             if numeric is not None:
                 lines.append(("field", f"  {'B16':6} [{b16_str:12}] = {numeric} (decoded)", "highlight"))
             else:
-                lines.append(("field", f"  {'B16':6} [{b16_str:12}]   (partial decode)", "dim"))
+                lines.append(("field", f"  {'B16':6} [{b16_str:12}]   (b16/ascii)", "dim"))
 
     return lines
 
