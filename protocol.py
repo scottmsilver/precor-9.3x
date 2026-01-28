@@ -167,3 +167,56 @@ def decode_packet(frame_type, payload):
     else:
         name = NAMES.get(frame_type, f'0x{frame_type:02X}')
         return f"{name}: {len(payload)} bytes", True
+
+
+def decode_frames(data):
+    """
+    Decode all frames from a data buffer.
+    Returns list of (name, meaning, frame_bytes) tuples.
+    """
+    frames = []
+    buf = bytearray(data)
+
+    while len(buf) >= 4:
+        if buf[0] != FRAME_START:
+            buf = buf[1:]
+            continue
+
+        found = False
+        for j in range(2, min(50, len(buf) - 1)):
+            if buf[j] == 0x45 and buf[j + 1] == 0x01:
+                ftype = buf[1]
+                payload = bytes(buf[2:j])
+                frame_bytes = bytes(buf[:j + 2])
+                name = NAMES.get(ftype, f'0x{ftype:02X}')
+                meaning, _ = decode_packet(ftype, payload)
+                frames.append((name, meaning, frame_bytes))
+                buf = buf[j + 2:]
+                found = True
+                break
+
+        if not found:
+            break
+
+    return frames
+
+
+def wait_for_gap(ser, gap_ms=20, timeout=2.0):
+    """Wait for a gap in bus traffic before sending."""
+    import time
+    start = time.time()
+    last_byte_time = time.time()
+
+    if ser.in_waiting:
+        ser.read(ser.in_waiting)
+        last_byte_time = time.time()
+
+    while time.time() - start < timeout:
+        if ser.in_waiting:
+            ser.read(ser.in_waiting)
+            last_byte_time = time.time()
+        elif (time.time() - last_byte_time) * 1000 >= gap_ms:
+            return True
+        time.sleep(0.001)
+
+    return False

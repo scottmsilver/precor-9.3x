@@ -4,12 +4,13 @@ Simple packet sniffer - shows unique packets as hex bytes.
 Usage: python3 sniff.py [seconds]
 """
 
-import serial
-import time
 import sys
+import time
 
-SERIAL_PORT = '/dev/ttyUSB0'
-BAUD_RATE = 9600
+import serial
+
+from protocol import SERIAL_PORT, BAUD_RATE, FRAME_START, hex_str
+
 
 def main():
     duration = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
@@ -29,17 +30,16 @@ def main():
 
             i = 0
             while i < len(buf) - 3:
-                if buf[i] == 0x52:
+                if buf[i] == FRAME_START:
                     for j in range(i + 1, min(i + 50, len(buf) - 1)):
-                        if buf[j] == 0x45 and buf[j+1] == 0x01:
-                            frame = bytes(buf[i:j+2])
+                        if buf[j] == 0x45 and buf[j + 1] == 0x01:
+                            frame = bytes(buf[i:j + 2])
 
                             if frame not in seen:
                                 seen.add(frame)
-                                hex_str = ' '.join(f'{b:02X}' for b in frame)
-                                print(hex_str)
+                                print(hex_str(frame))
 
-                            buf = buf[j+2:]
+                            buf = buf[j + 2:]
                             i = 0
                             break
                     else:
@@ -57,6 +57,7 @@ def main():
     ser.close()
     print()
     print(f"Done. {len(seen)} unique packets.")
+
 
 if __name__ == "__main__":
     main()
