@@ -97,22 +97,7 @@ def format_wire_display(ftype, payload, raw_frame):
         ascii_line += f"{ch}  "
     lines.append(("ascii", ascii_line.rstrip(), "dim"))
 
-    # Line 3: Base-16 decode attempt (show decoded digit or original hex if not valid)
-    b16_line = "  "
-    for b in raw_frame:
-        if b in DIGIT_TO_VAL:
-            b16_line += f" {DIGIT_TO_VAL[b]:X} "
-        else:
-            b16_line += f"({b:02X})"
-    # Calculate numeric value for payload portion only
-    numeric = decode_base16(payload) if payload else None
-    if numeric is not None:
-        b16_line += f"  → {numeric} (b16 decoded)"
-    else:
-        b16_line += "  (b16 decode)"
-    lines.append(("b16", b16_line, "value"))
-
-    # Line 4: Field brackets
+    # Line 3: Field brackets
     bracket_line = "  "
     for i in range(len(raw_frame)):
         in_field = False
@@ -140,6 +125,26 @@ def format_wire_display(ftype, payload, raw_frame):
             lines.append(("field", f"  {label:6} [{byte_str:12}] = {value}", style))
         else:
             lines.append(("field", f"  {label:6} [{byte_str:12}]", style))
+
+        # Add b16 decode line below DATA field
+        if label == "DATA":
+            data_bytes = bytes(raw_frame[i] for i in range(start, min(end, len(raw_frame))))
+            # Build decode line with same spacing as byte_str
+            b16_parts = []
+            all_valid = True
+            for b in data_bytes:
+                if b in DIGIT_TO_VAL:
+                    b16_parts.append(f" {DIGIT_TO_VAL[b]:X}")
+                else:
+                    b16_parts.append(f"{b:02X}")
+                    all_valid = False
+            b16_str = ' '.join(b16_parts)
+            # Calculate numeric if all valid
+            numeric = decode_base16(data_bytes) if all_valid else None
+            if numeric is not None:
+                lines.append(("field", f"  {'B16':6} [{b16_str:12}] = {numeric} (decoded)", "highlight"))
+            else:
+                lines.append(("field", f"  {'B16':6} [{b16_str:12}]   (partial decode)", "dim"))
 
     return lines
 
@@ -539,8 +544,6 @@ def main(stdscr, loaded_packets=None, source_file=None):
                         stdscr.addstr(y, 0, text[:width-1], curses.A_BOLD)
                     elif line_type == "ascii":
                         stdscr.addstr(y, 0, text[:width-1], curses.color_pair(3))
-                    elif line_type == "b16":
-                        stdscr.addstr(y, 0, text[:width-1], curses.color_pair(2))
                     elif line_type == "bracket":
                         stdscr.addstr(y, 0, text[:width-1], curses.A_DIM)
                     elif line_type == "field":
