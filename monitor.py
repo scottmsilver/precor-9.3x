@@ -19,7 +19,7 @@ from datetime import datetime
 import serial
 
 from protocol import (
-    SERIAL_PORT, BAUD_RATE, FRAME_START, NAMES,
+    SERIAL_PORT, BAUD_RATE, FRAME_START, NAMES, DIGIT_TO_VAL,
     decode_speed, decode_incline, decode_packet, hex_str,
     build_set_spd, build_set_inc,
     SET_SPD_HEADER, SET_INC_HEADER, TYPE_SET_SPD, TYPE_SET_INC,
@@ -27,6 +27,62 @@ from protocol import (
 )
 
 MAX_PACKETS = 2000
+
+
+def format_detail_lines(ftype, payload, raw_frame):
+    """Generate detailed breakdown lines for a packet."""
+    lines = []
+
+    # Hex dump with ASCII
+    hex_part = ' '.join(f'{b:02X}' for b in raw_frame)
+    ascii_part = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in raw_frame)
+    lines.append(("Hex:   ", hex_part, None))
+    lines.append(("ASCII: ", ascii_part, None))
+    lines.append(("", "", None))
+
+    # Frame structure
+    lines.append(("Structure:", "", "header"))
+    lines.append(("  ", f"52        = Frame start ('R')", "dim"))
+    lines.append(("  ", f"{raw_frame[1]:02X}        = Type: {NAMES.get(ftype, 'unknown')}", "type"))
+
+    if ftype == TYPE_SET_SPD and len(payload) >= 4 and payload[:3] == SET_SPD_HEADER:
+        lines.append(("  ", f"1F 2F 8B  = SET_SPD header", "dim"))
+        speed_bytes = payload[3:]
+        speed = decode_speed(speed_bytes)
+        hex_speed = ' '.join(f'{b:02X}' for b in speed_bytes)
+        digits = [f"{DIGIT_TO_VAL.get(b, '?'):X}" for b in speed_bytes]
+        lines.append(("  ", f"{hex_speed:9} = Speed bytes -> {''.join(digits)} base16", "value"))
+        if speed is not None:
+            lines.append(("  ", f"            = {speed:.2f} mph ({int(speed*100)} hundredths)", "highlight"))
+
+    elif ftype == TYPE_SET_INC and len(payload) >= 2 and payload[:2] == SET_INC_HEADER:
+        lines.append(("  ", f"CA 5A     = SET_INC header", "dim"))
+        if len(payload) > 2:
+            inc_bytes = payload[2:]
+            incline = decode_incline(inc_bytes)
+            hex_inc = ' '.join(f'{b:02X}' for b in inc_bytes)
+            digits = [f"{DIGIT_TO_VAL.get(b, '?'):X}" for b in inc_bytes]
+            lines.append(("  ", f"{hex_inc:9} = Incline bytes -> {''.join(digits)} base16", "value"))
+            if incline is not None:
+                lines.append(("  ", f"            = {incline:.1f}% ({int(incline*2)} half-pct)", "highlight"))
+        else:
+            lines.append(("  ", f"            = 0% (no incline bytes)", "highlight"))
+
+    elif ftype in (TYPE_DISP1, TYPE_DISP2):
+        ascii_payload = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in payload)
+        lines.append(("  ", f"Payload   = Display data", "dim"))
+        lines.append(("  ", f"ASCII     = '{ascii_payload}'", "highlight"))
+
+    else:
+        # Unknown packet - show raw payload breakdown
+        lines.append(("  ", f"Payload   = {len(payload)} bytes (unknown format)", "dim"))
+        if payload:
+            hex_payload = ' '.join(f'{b:02X}' for b in payload)
+            lines.append(("  ", f"{hex_payload}", "value"))
+
+    lines.append(("  ", f"45 01     = Frame end", "dim"))
+
+    return lines
 
 
 class PacketCapture:
@@ -405,11 +461,39 @@ def main(stdscr, loaded_packets=None, source_file=None):
         if selected_idx is not None and selected_idx < num_packets:
             pkt = packets[selected_idx]
             num, name, meaning, ftype, has_unknown, payload, raw_frame = pkt
+
+            # Separator line
             stdscr.addstr(detail_start - 1, 0, "=" * (width - 1), curses.A_DIM)
-            detail = f"PACKET #{num}: {name} | {meaning}"
-            stdscr.addstr(detail_start, 0, detail[:width - 1], curses.A_BOLD)
-            stdscr.addstr(detail_start + 1, 0, f"Raw: {hex_str(raw_frame)}"[:width - 1])
-            stdscr.addstr(detail_start + 2, 0, f"Payload: {hex_str(payload)}"[:width - 1])
+
+            # Title
+            title = f" PACKET #{num}: {name} "
+            stdscr.addstr(detail_start, 0, title, curses.A_REVERSE | curses.A_BOLD)
+            stdscr.addstr(detail_start, len(title), f" {meaning}", curses.color_pair(1))
+
+            # Detailed breakdown
+            detail_lines = format_detail_lines(ftype, payload, raw_frame)
+            for i, (prefix, text, style) in enumerate(detail_lines):
+                y = detail_start + 2 + i
+                if y >= height - 1:
+                    break
+                try:
+                    if style == "header":
+                        stdscr.addstr(y, 0, prefix + text, curses.A_BOLD | curses.A_UNDERLINE)
+                    elif style == "highlight":
+                        stdscr.addstr(y, 0, prefix, curses.A_DIM)
+                        stdscr.addstr(text, curses.color_pair(1) | curses.A_BOLD)
+                    elif style == "value":
+                        stdscr.addstr(y, 0, prefix, curses.A_DIM)
+                        stdscr.addstr(text, curses.color_pair(2))
+                    elif style == "type":
+                        stdscr.addstr(y, 0, prefix, curses.A_DIM)
+                        stdscr.addstr(text, curses.color_pair(4))
+                    elif style == "dim":
+                        stdscr.addstr(y, 0, prefix + text, curses.A_DIM)
+                    else:
+                        stdscr.addstr(y, 0, prefix + text)
+                except:
+                    pass
 
         # Footer
         if status_msg and time.time() - status_time < 3.0:
