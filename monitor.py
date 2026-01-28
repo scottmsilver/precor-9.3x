@@ -78,20 +78,7 @@ def format_wire_display(ftype, payload, raw_frame):
 
     else:
         if payload:
-            # Try to decode each byte using the custom base-16 digit set
-            decoded_digits = []
-            for b in payload:
-                if b in DIGIT_TO_VAL:
-                    decoded_digits.append(f"{DIGIT_TO_VAL[b]:X}")
-                else:
-                    decoded_digits.append("·")
-            digits_str = ''.join(decoded_digits)
-            # Also compute numeric value if all bytes are valid digits
-            numeric = decode_base16(payload)
-            if numeric is not None:
-                fields.append((2, 2 + len(payload), "DATA", f"b16:{digits_str}={numeric} ({len(payload)}B)", "value"))
-            else:
-                fields.append((2, 2 + len(payload), "DATA", f"b16:{digits_str} ({len(payload)}B)", "value"))
+            fields.append((2, 2 + len(payload), "DATA", f"{len(payload)} bytes", "value"))
             pos = 2 + len(payload)
 
     # Frame end
@@ -110,7 +97,22 @@ def format_wire_display(ftype, payload, raw_frame):
         ascii_line += f"{ch}  "
     lines.append(("ascii", ascii_line.rstrip(), "dim"))
 
-    # Line 3: Field brackets
+    # Line 3: Base-16 decode attempt (show decoded digit or original hex if not valid)
+    b16_line = "  "
+    for b in raw_frame:
+        if b in DIGIT_TO_VAL:
+            b16_line += f" {DIGIT_TO_VAL[b]:X} "
+        else:
+            b16_line += f"({b:02X})"
+    # Calculate numeric value for payload portion only
+    numeric = decode_base16(payload) if payload else None
+    if numeric is not None:
+        b16_line += f"  → {numeric} (b16 decoded)"
+    else:
+        b16_line += "  (b16 decode)"
+    lines.append(("b16", b16_line, "value"))
+
+    # Line 4: Field brackets
     bracket_line = "  "
     for i in range(len(raw_frame)):
         in_field = False
@@ -537,6 +539,8 @@ def main(stdscr, loaded_packets=None, source_file=None):
                         stdscr.addstr(y, 0, text[:width-1], curses.A_BOLD)
                     elif line_type == "ascii":
                         stdscr.addstr(y, 0, text[:width-1], curses.color_pair(3))
+                    elif line_type == "b16":
+                        stdscr.addstr(y, 0, text[:width-1], curses.color_pair(2))
                     elif line_type == "bracket":
                         stdscr.addstr(y, 0, text[:width-1], curses.A_DIM)
                     elif line_type == "field":
