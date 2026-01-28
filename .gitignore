@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+
+# Captures and logs (large files)
+*.jsonl
+*.log
+
+# Editor backups
+*~
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+
+# Analysis/experimental scripts (not part of main tools)
+analysis/
