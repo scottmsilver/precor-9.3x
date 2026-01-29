@@ -17,6 +17,7 @@ Usage:
   python3 emulate.py --incline 2.0      # Start at 2.0% incline
   python3 emulate.py --playback file.jsonl  # Replay capture file
   python3 emulate.py --playback file.jsonl --loop  # Loop playback
+  python3 emulate.py --ramp 1.0 2.0     # Ramp speed from 1.0 to 2.0 mph
 
 Runtime controls:
   +/=  : Increase speed 0.5 mph
@@ -172,6 +173,137 @@ class ConsoleEmulator:
             print("Done.")
 
 
+class SpeedRampTest:
+    """Run heartbeat cycle with speed ramping from start to end."""
+
+    # Fixed packets from capture (the ones we don't understand)
+    DISP1 = bytes.fromhex('524f49945405524da3540552aa3a174501')
+    DISP2 = bytes.fromhex('5251e8542a055253a98a5a9f4501')
+    UNK_A2 = bytes.fromhex('52a215194501')
+    UNK_52_SHORT = bytes.fromhex('525269174501')
+    UNK_9A_A = bytes.fromhex('529a17194501')
+    UNK_9A_B = bytes.fromhex('529a17314501')
+    UNK_D4 = bytes.fromhex('52d41b178b9f4501')
+    UNK_54 = bytes.fromhex('52541b4501')
+    UNK_52_LONG = bytes.fromhex('52520a1f8b9595959f4501')
+
+    def __init__(self, start_speed=1.0, end_speed=2.0, step=0.1, cycles_per_step=10):
+        self.start_speed = start_speed
+        self.end_speed = end_speed
+        self.step = step
+        self.cycles_per_step = cycles_per_step
+        self.running = True
+        self.ser = None
+
+    def send(self, pkt, name=""):
+        """Send a packet."""
+        self.ser.write(pkt)
+        self.ser.flush()
+        if self.ser.in_waiting:
+            self.ser.read(self.ser.in_waiting)
+
+    def run_cycle(self, speed, incline=0.0):
+        """Run one heartbeat cycle with given speed/incline."""
+        # Packet 1: SET_INC
+        self.send(build_set_inc(incline))
+        time.sleep(0.020)
+
+        # Packet 2: SET_SPD
+        self.send(build_set_spd(speed))
+        time.sleep(0.020)
+
+        # Packet 3: DISP1 (compound)
+        self.send(self.DISP1)
+        time.sleep(0.020)
+
+        # Packet 4: UNK_A2 (response)
+        self.send(self.UNK_A2)
+        time.sleep(0.020)
+
+        # Packet 5: UNK_52 short
+        self.send(self.UNK_52_SHORT)
+        time.sleep(0.020)
+
+        # Packet 6-7: UNK_9A (responses)
+        self.send(self.UNK_9A_A)
+        self.send(self.UNK_9A_B)
+        time.sleep(0.020)
+
+        # Packet 8: UNK_D4
+        self.send(self.UNK_D4)
+        time.sleep(0.020)
+
+        # Packet 9: UNK_54 (tick)
+        self.send(self.UNK_54)
+        time.sleep(0.020)
+
+        # Packet 10: DISP2 (compound)
+        self.send(self.DISP2)
+        time.sleep(0.020)
+
+        # Packet 11: UNK_52 long
+        self.send(self.UNK_52_LONG)
+        time.sleep(0.020)
+
+    def check_keyboard(self):
+        """Check for keyboard input (non-blocking)."""
+        if select.select([sys.stdin], [], [], 0)[0]:
+            ch = sys.stdin.read(1)
+            if ch in 'qQ':
+                self.running = False
+                return True
+        return False
+
+    def run(self):
+        """Main ramp test loop."""
+        print("Opening serial port...")
+        self.ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
+        time.sleep(0.1)
+
+        print(f"Speed ramp test: {self.start_speed} -> {self.end_speed} mph")
+        print(f"  Step: {self.step} mph, Cycles per step: {self.cycles_per_step}")
+        print("Press q to quit")
+        print()
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+
+            speed = self.start_speed
+            total_cycles = 0
+
+            while self.running and speed <= self.end_speed:
+                print(f"\n=== Speed: {speed:.1f} mph ===")
+
+                for cycle in range(self.cycles_per_step):
+                    if not self.running:
+                        break
+
+                    self.run_cycle(speed)
+                    total_cycles += 1
+
+                    print(f"\r  Cycle {cycle+1}/{self.cycles_per_step} (total: {total_cycles})", end='', flush=True)
+
+                    if self.check_keyboard():
+                        break
+
+                speed += self.step
+
+            print(f"\n\nRamp complete! Total cycles: {total_cycles}")
+
+            # Wind down
+            print("Sending stop...")
+            for _ in range(5):
+                self.run_cycle(0.0)
+
+        except KeyboardInterrupt:
+            print("\n\nInterrupted!")
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            self.ser.close()
+            print("Done.")
+
+
 class CapturePlayback:
     """Replay packets from a JSONL capture file."""
 
@@ -280,6 +412,8 @@ def main():
     incline = 0.0
     playback_file = None
     loop = False
+    ramp_start = None
+    ramp_end = None
 
     args = sys.argv[1:]
     i = 0
@@ -296,12 +430,19 @@ def main():
         elif args[i] == '--loop':
             loop = True
             i += 1
+        elif args[i] == '--ramp' and i + 2 < len(args):
+            ramp_start = float(args[i + 1])
+            ramp_end = float(args[i + 2])
+            i += 3
         else:
             i += 1
 
     print(__doc__)
 
-    if playback_file:
+    if ramp_start is not None:
+        ramp = SpeedRampTest(start_speed=ramp_start, end_speed=ramp_end)
+        ramp.run()
+    elif playback_file:
         player = CapturePlayback(playback_file, loop=loop)
         player.run()
     else:
