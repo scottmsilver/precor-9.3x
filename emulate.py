@@ -321,11 +321,18 @@ class CapturePlayback:
             for line in f:
                 record = json.loads(line)
                 if record['type'] == 'packet':
-                    ts = datetime.fromisoformat(record['timestamp'])
+                    # Use delta_ms if available (new format), otherwise fall back to timestamp
+                    delta_ms = record.get('delta_ms', 0)
                     raw = bytes.fromhex(record['raw_frame'])
                     name = record['frame_name']
-                    self.packets.append((ts, name, raw))
+                    self.packets.append((delta_ms, name, raw))
         print(f"Loaded {len(self.packets)} packets")
+
+        # Show timing stats
+        if self.packets:
+            deltas = [p[0] for p in self.packets]
+            avg_delta = sum(deltas) / len(deltas)
+            print(f"Timing: avg={avg_delta:.1f}ms, min={min(deltas):.1f}ms, max={max(deltas):.1f}ms")
 
     def send(self, pkt):
         """Send a packet."""
@@ -355,7 +362,7 @@ class CapturePlayback:
         self.ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
         time.sleep(0.1)
 
-        print(f"Replaying {len(self.packets)} packets...")
+        print(f"Replaying {len(self.packets)} packets with original timing...")
         print("Press q to quit")
         print()
 
@@ -369,22 +376,15 @@ class CapturePlayback:
                 if self.loop:
                     print(f"\n=== Loop {loop_count} ===")
 
-                # Get first packet time as reference
-                base_time = self.packets[0][0]
-                start_real = time.time()
-
-                for i, (ts, name, raw) in enumerate(self.packets):
+                for i, (delta_ms, name, raw) in enumerate(self.packets):
                     if not self.running:
                         break
 
-                    # Calculate delay from start
-                    offset = (ts - base_time).total_seconds()
-                    target_time = start_real + offset
-                    now = time.time()
-
-                    if target_time > now:
-                        # Wait, but check keyboard periodically
-                        while time.time() < target_time and self.running:
+                    # Wait the delta time from previous packet
+                    if i > 0 and delta_ms > 0:
+                        delay_sec = delta_ms / 1000.0
+                        end_time = time.time() + delay_sec
+                        while time.time() < end_time and self.running:
                             if self.check_keyboard():
                                 break
                             time.sleep(0.001)
@@ -394,17 +394,19 @@ class CapturePlayback:
 
                     # Send packet
                     self.send(raw)
-                    print(f"\r  [{i+1}/{len(self.packets)}] {name:8} {hex_str(raw)[:50]}...", end='', flush=True)
+                    print(f"\r  [{i+1}/{len(self.packets)}] +{delta_ms:6.1f}ms {name:8} {hex_str(raw)[:40]}", end='', flush=True)
 
                 if not self.loop:
                     break
+
+            print()
 
         except KeyboardInterrupt:
             print("\n\nInterrupted!")
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
             self.ser.close()
-            print("\nDone.")
+            print("Done.")
 
 
 def main():

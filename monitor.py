@@ -273,9 +273,12 @@ class PacketCapture:
         self.save_filename = f"capture_{timestamp}.jsonl"
         self.save_file = open(self.save_filename, 'w')
         self.save_count = 0
+        self.save_start_time = time.time()
+        self.save_last_time = self.save_start_time
         self.save_file.write(json.dumps({
             "type": "header",
             "timestamp": datetime.now().isoformat(),
+            "start_epoch": self.save_start_time,
             "description": "PRECOR treadmill packet capture"
         }) + "\n")
         self.save_file.flush()
@@ -296,11 +299,19 @@ class PacketCapture:
     def save_packet(self, pkt):
         """Save a packet to file if saving is active."""
         if self.save_file:
+            now = time.time()
+            delta_ms = (now - self.save_last_time) * 1000
+            offset_ms = (now - self.save_start_time) * 1000
+            self.save_last_time = now
+
             num, fname, meaning, ftype, has_unknown, payload, raw_frame = pkt
             record = {
                 "type": "packet",
                 "num": num,
                 "timestamp": datetime.now().isoformat(),
+                "epoch": now,
+                "offset_ms": round(offset_ms, 3),
+                "delta_ms": round(delta_ms, 3),
                 "frame_type": ftype,
                 "frame_name": fname,
                 "raw_frame": raw_frame.hex(),
