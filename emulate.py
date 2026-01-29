@@ -15,6 +15,8 @@ Usage:
   python3 emulate.py                    # Start with speed=0, incline=0
   python3 emulate.py --speed 3.5        # Start at 3.5 mph
   python3 emulate.py --incline 2.0      # Start at 2.0% incline
+  python3 emulate.py --playback file.jsonl  # Replay capture file
+  python3 emulate.py --playback file.jsonl --loop  # Loop playback
 
 Runtime controls:
   +/=  : Increase speed 0.5 mph
@@ -25,15 +27,17 @@ Runtime controls:
   q    : Quit
 """
 
+import json
 import select
 import sys
 import termios
 import time
 import tty
+from datetime import datetime
 
 import serial
 
-from protocol import SERIAL_PORT, BAUD_RATE, build_set_spd, build_set_inc, hex_str
+from protocol import SERIAL_PORT, BAUD_RATE, NAMES, build_set_spd, build_set_inc, hex_str
 
 # Unknown packets - replayed exactly as captured
 UNK_52_LONG = bytes.fromhex('52520a1f8b9595959f4501')
@@ -168,9 +172,114 @@ class ConsoleEmulator:
             print("Done.")
 
 
+class CapturePlayback:
+    """Replay packets from a JSONL capture file."""
+
+    def __init__(self, filename, loop=False):
+        self.filename = filename
+        self.loop = loop
+        self.running = True
+        self.ser = None
+        self.packets = []
+
+    def load_capture(self):
+        """Load packets from capture file."""
+        print(f"Loading {self.filename}...")
+        with open(self.filename) as f:
+            for line in f:
+                record = json.loads(line)
+                if record['type'] == 'packet':
+                    ts = datetime.fromisoformat(record['timestamp'])
+                    raw = bytes.fromhex(record['raw_frame'])
+                    name = record['frame_name']
+                    self.packets.append((ts, name, raw))
+        print(f"Loaded {len(self.packets)} packets")
+
+    def send(self, pkt):
+        """Send a packet."""
+        self.ser.write(pkt)
+        self.ser.flush()
+        if self.ser.in_waiting:
+            self.ser.read(self.ser.in_waiting)
+
+    def check_keyboard(self):
+        """Check for keyboard input (non-blocking)."""
+        if select.select([sys.stdin], [], [], 0)[0]:
+            ch = sys.stdin.read(1)
+            if ch in 'qQ':
+                self.running = False
+                return True
+        return False
+
+    def run(self):
+        """Main playback loop."""
+        self.load_capture()
+
+        if not self.packets:
+            print("No packets to replay!")
+            return
+
+        print("Opening serial port...")
+        self.ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
+        time.sleep(0.1)
+
+        print(f"Replaying {len(self.packets)} packets...")
+        print("Press q to quit")
+        print()
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+
+            loop_count = 0
+            while self.running:
+                loop_count += 1
+                if self.loop:
+                    print(f"\n=== Loop {loop_count} ===")
+
+                # Get first packet time as reference
+                base_time = self.packets[0][0]
+                start_real = time.time()
+
+                for i, (ts, name, raw) in enumerate(self.packets):
+                    if not self.running:
+                        break
+
+                    # Calculate delay from start
+                    offset = (ts - base_time).total_seconds()
+                    target_time = start_real + offset
+                    now = time.time()
+
+                    if target_time > now:
+                        # Wait, but check keyboard periodically
+                        while time.time() < target_time and self.running:
+                            if self.check_keyboard():
+                                break
+                            time.sleep(0.001)
+
+                    if not self.running:
+                        break
+
+                    # Send packet
+                    self.send(raw)
+                    print(f"\r  [{i+1}/{len(self.packets)}] {name:8} {hex_str(raw)[:50]}...", end='', flush=True)
+
+                if not self.loop:
+                    break
+
+        except KeyboardInterrupt:
+            print("\n\nInterrupted!")
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            self.ser.close()
+            print("\nDone.")
+
+
 def main():
     speed = 0.0
     incline = 0.0
+    playback_file = None
+    loop = False
 
     args = sys.argv[1:]
     i = 0
@@ -181,13 +290,23 @@ def main():
         elif args[i] == '--incline' and i + 1 < len(args):
             incline = float(args[i + 1])
             i += 2
+        elif args[i] == '--playback' and i + 1 < len(args):
+            playback_file = args[i + 1]
+            i += 2
+        elif args[i] == '--loop':
+            loop = True
+            i += 1
         else:
             i += 1
 
     print(__doc__)
 
-    emu = ConsoleEmulator(speed=speed, incline=incline)
-    emu.run()
+    if playback_file:
+        player = CapturePlayback(playback_file, loop=loop)
+        player.run()
+    else:
+        emu = ConsoleEmulator(speed=speed, incline=incline)
+        emu.run()
 
 
 if __name__ == "__main__":
