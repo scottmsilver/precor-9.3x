@@ -390,44 +390,52 @@ class PacketCapture:
                 if ser.in_waiting:
                     buf.extend(ser.read(ser.in_waiting))
 
-                # Parse frames
+                # Parse frames - look for 52 xx ... 45 01 pattern
+                # Minimum valid frame: 52 xx 45 01 = 4 bytes
                 i = 0
                 while i < len(buf) - 3:
                     if buf[i] == FRAME_START:
-                        for j in range(i + 1, min(i + 50, len(buf) - 1)):
+                        # Look for frame end (45 01), minimum 2 bytes after start
+                        found_frame = False
+                        for j in range(i + 2, min(i + 50, len(buf) - 1)):
                             if buf[j] == 0x45 and buf[j + 1] == 0x01:
-                                ftype = buf[i + 1]
-                                raw_frame = bytes(buf[i:j + 2])
-                                payload = bytes(buf[i + 2:j])
-                                fname = NAMES.get(ftype, f'0x{ftype:02X}')
-                                meaning, has_unknown = decode_packet(ftype, payload)
+                                frame_len = j + 2 - i
+                                # Validate: frame must be at least 4 bytes
+                                if frame_len >= 4:
+                                    ftype = buf[i + 1]
+                                    raw_frame = bytes(buf[i:j + 2])
+                                    payload = bytes(buf[i + 2:j])
+                                    fname = NAMES.get(ftype, f'0x{ftype:02X}')
+                                    meaning, has_unknown = decode_packet(ftype, payload)
 
-                                self.extract_values(ftype, payload)
+                                    self.extract_values(ftype, payload)
 
-                                with self.lock:
-                                    self.count += 1
-                                    pkt = (
-                                        self.count,
-                                        fname,
-                                        meaning,
-                                        ftype,
-                                        has_unknown,
-                                        payload,
-                                        raw_frame
-                                    )
-                                    self.packets.append(pkt)
-                                    self.save_packet(pkt)
+                                    with self.lock:
+                                        self.count += 1
+                                        pkt = (
+                                            self.count,
+                                            fname,
+                                            meaning,
+                                            ftype,
+                                            has_unknown,
+                                            payload,
+                                            raw_frame
+                                        )
+                                        self.packets.append(pkt)
+                                        self.save_packet(pkt)
 
-                                buf = buf[j + 2:]
-                                i = 0
+                                    buf = buf[j + 2:]
+                                    i = 0
+                                    found_frame = True
                                 break
-                        else:
+                        if not found_frame:
                             i += 1
                     else:
                         i += 1
-                        if i > 100:
-                            buf = buf[i:]
-                            i = 0
+                    # Prevent buffer from growing too large with garbage
+                    if i > 100:
+                        buf = buf[i:]
+                        i = 0
 
                 time.sleep(0.005)
             except Exception:
