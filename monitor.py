@@ -24,37 +24,16 @@ from protocol import (
     build_set_spd, build_set_inc,
     SET_SPD_HEADER, SET_INC_HEADER, TYPE_SET_SPD, TYPE_SET_INC,
     TYPE_DISP1, TYPE_DISP2,
+    get_direction,
 )
 
 MAX_PACKETS = 2000
 
-# Hypothesis: Direction based on 2nd byte
-# 0x20-0x5F (ASCII printable) = REQUEST (Console → Motor)
-# 0x80+ = RESPONSE (Motor → Console)
-HYPOTHESIS_NAMES = {
-    0x54: ("REQ", "T", "Tick/poll heartbeat"),
-    0x52: ("REQ", "R", "Run state"),
-    0x51: ("REQ", "Q", "Query compound"),
-    0x4F: ("REQ", "O", "Output compound"),
-    0x4B: ("REQ", "K", "inKline set"),
-    0x2A: ("REQ", "*", "speed set"),
-    0x9A: ("RSP", None, "sensor data? (variable)"),
-    0xA2: ("RSP", None, "ack/status"),
-    0xD4: ("RSP", None, "diagnostic"),
-}
 
-
+# Alias for compatibility
 def get_direction_hypothesis(ftype):
     """Return (direction, ascii_char, hypothesis_desc) based on type byte."""
-    if ftype in HYPOTHESIS_NAMES:
-        return HYPOTHESIS_NAMES[ftype]
-    elif 0x20 <= ftype <= 0x5F:
-        ch = chr(ftype)
-        return ("REQ", ch, "request (ASCII range)")
-    elif ftype >= 0x80:
-        return ("RSP", None, "response (high byte)")
-    else:
-        return ("???", None, "unknown range")
+    return get_direction(ftype)
 
 
 def parse_compound_frames(raw_frame):

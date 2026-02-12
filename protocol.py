@@ -5,7 +5,8 @@ PRECOR 9.3x Protocol Library
 Shared constants and functions for encoding/decoding the treadmill serial protocol.
 """
 
-SERIAL_PORT = '/dev/ttyUSB0'
+from ports import get_port
+SERIAL_PORT = get_port('controller_tx')
 BAUD_RATE = 9600
 
 # Frame markers
@@ -31,6 +32,34 @@ NAMES = {
     0xAA: 'UNK_AA',
     0xD4: 'UNK_D4',
 }
+
+# Direction hypothesis based on packet type byte
+# 0x20-0x5F (ASCII printable) = REQUEST (Console -> Motor)
+# 0x80+ = RESPONSE (Motor -> Console)
+DIRECTION_HYPOTHESIS = {
+    0x54: ("REQ", "T", "Tick/poll heartbeat"),
+    0x52: ("REQ", "R", "Run state"),
+    0x51: ("REQ", "Q", "Query compound"),
+    0x4F: ("REQ", "O", "Output compound"),
+    0x4B: ("REQ", "K", "inKline set"),
+    0x2A: ("REQ", "*", "speed set"),
+    0x9A: ("RSP", None, "sensor data? (variable)"),
+    0xA2: ("RSP", None, "ack/status"),
+    0xD4: ("RSP", None, "diagnostic"),
+}
+
+
+def get_direction(ftype):
+    """Return (direction, ascii_char, hypothesis_desc) based on type byte."""
+    if ftype in DIRECTION_HYPOTHESIS:
+        return DIRECTION_HYPOTHESIS[ftype]
+    elif 0x20 <= ftype <= 0x5F:
+        ch = chr(ftype)
+        return ("REQ", ch, "request (ASCII range)")
+    elif ftype >= 0x80:
+        return ("RSP", None, "response (high byte)")
+    else:
+        return ("???", None, "unknown range")
 
 # Custom base-16 digit set for speed/incline encoding
 # Value:  0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15

@@ -1,0 +1,17 @@
+{
+  "controller_tx": {
+    "device": "/dev/ttyACM0",
+    "description": "Console side of pin 6 cut - reads KV commands from controller",
+    "chip": "RS485 USB adapter"
+  },
+  "motor_rx": {
+    "device": "/dev/ttyACM1",
+    "description": "Motor side of pin 6 cut - delivers KV commands to motor (proxy)",
+    "chip": "RS485 USB adapter"
+  },
+  "motor_tx": {
+    "device": "/dev/ttyUSB0",
+    "description": "Pin 3 tap - reads binary R...E responses from motor",
+    "chip": "FTDI TTL adapter"
+  }
+}
