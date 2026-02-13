@@ -1,95 +1,94 @@
 #!/usr/bin/env python3
 """
-Simple KV protocol listener via GPIO.
+Simple KV protocol listener via treadmill_io.
+
+Connects to the treadmill_io C binary and prints KV pairs as they arrive.
 
 Usage:
-    python3 listen.py                  # Listen on console_read (default)
-    python3 listen.py motor_read       # Listen on motor responses
+    python3 listen.py                  # Listen on all sources
+    python3 listen.py --source motor   # Only motor responses
     python3 listen.py --changes        # Only show when values change
     python3 listen.py --unique         # Only show unique key:value pairs
 """
 
 import argparse
-import time
-import pigpio
+import threading
 
-from gpio_pins import get_gpio, BAUD, parse_kv_stream, gpio_read_open, gpio_read_close
-
-
-def listen(pi, gpio, baud, mode='all'):
-    """Listen on a GPIO pin and display KV pairs."""
-    gpio_read_open(pi, gpio, baud)
-
-    print(f"Listening on GPIO {gpio} at {baud} baud (inverted)")
-    print(f"Mode: {mode}")
-    print(f"Press Ctrl+C to stop\n")
-
-    start = time.time()
-    buf = bytearray()
-    last_seen = {}
-    seen = set()
-    total = 0
-    shown = 0
-
-    try:
-        while True:
-            count, data = pi.bb_serial_read(gpio)
-            if count > 0:
-                total += count
-                buf.extend(data)
-                pairs, buf = parse_kv_stream(buf)
-                for key, val in pairs:
-                    t = (time.time() - start) * 1000
-
-                    if mode == 'changes':
-                        if last_seen.get(key) == val:
-                            continue
-                        last_seen[key] = val
-                    elif mode == 'unique':
-                        pair = (key, val)
-                        if pair in seen:
-                            continue
-                        seen.add(pair)
-
-                    shown += 1
-                    if val:
-                        print(f"{t:10.1f}  {key:<12} = {val}")
-                    else:
-                        print(f"{t:10.1f}  {key:<12}")
-            else:
-                time.sleep(0.02)
-    except KeyboardInterrupt:
-        pass
-
-    gpio_read_close(pi, gpio)
-    print(f"\nTotal: {total} bytes, {shown} entries shown")
+from treadmill_client import TreadmillClient
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Listen on a GPIO pin for KV protocol')
-    parser.add_argument('pin', nargs='?', default='console_read',
-                        help='Pin name from gpio.json (default: console_read)')
-    parser.add_argument('--baud', '-b', type=int, default=BAUD,
-                        help=f'Baud rate (default: {BAUD})')
-    parser.add_argument('--changes', '-c', action='store_true',
-                        help='Only show when a key\'s value changes')
-    parser.add_argument('--unique', '-u', action='store_true',
-                        help='Only show each unique (key, value) pair once')
+    parser = argparse.ArgumentParser(description="Listen for KV protocol via treadmill_io")
+    parser.add_argument(
+        "--source",
+        "-S",
+        choices=["all", "console", "motor", "emulate"],
+        default="all",
+        help="Filter by source (default: all)",
+    )
+    parser.add_argument("--changes", "-c", action="store_true", help="Only show when a key's value changes")
+    parser.add_argument("--unique", "-u", action="store_true", help="Only show each unique (key, value) pair once")
+    parser.add_argument("--socket", "-s", default="/tmp/treadmill_io.sock", help="Path to treadmill_io Unix socket")
     args = parser.parse_args()
 
-    gpio = get_gpio(args.pin)
+    mode = "changes" if args.changes else "unique" if args.unique else "all"
+    source_filter = args.source
 
-    pi = pigpio.pi()
-    if not pi.connected:
-        print("ERROR: Cannot connect to pigpiod. Run: sudo pigpiod")
-        return 1
+    last_seen = {}
+    seen = set()
+    shown = 0
+    stop_event = threading.Event()
 
-    mode = 'changes' if args.changes else 'unique' if args.unique else 'all'
+    def on_message(msg):
+        nonlocal shown
+        if msg.get("type") != "kv":
+            return
+
+        source = msg.get("source", "")
+        if source_filter != "all" and source != source_filter:
+            return
+
+        key = msg.get("key", "")
+        val = msg.get("value", "")
+        ts = msg.get("ts", 0)
+
+        if mode == "changes":
+            if last_seen.get(key) == val:
+                return
+            last_seen[key] = val
+        elif mode == "unique":
+            pair = (key, val)
+            if pair in seen:
+                return
+            seen.add(pair)
+
+        shown += 1
+        src_tag = source[0].upper() if source else "?"
+        if val:
+            print(f"{ts:10.2f}  [{src_tag}]  {key:<12} = {val}")
+        else:
+            print(f"{ts:10.2f}  [{src_tag}]  {key:<12}")
+
+    client = TreadmillClient(args.socket)
+    client.on_message = on_message
 
     try:
-        listen(pi, gpio, args.baud, mode)
-    finally:
-        pi.stop()
+        client.connect()
+    except Exception as e:
+        print(f"ERROR: Cannot connect to treadmill_io: {e}")
+        print("Is 'sudo ./treadmill_io' running?")
+        return 1
+
+    print(f"Listening via treadmill_io (source={source_filter}, mode={mode})")
+    print("Press Ctrl+C to stop\n")
+
+    try:
+        stop_event.wait()
+    except KeyboardInterrupt:
+        pass
+
+    client.close()
+    print(f"\n{shown} entries shown")
 
 
 if __name__ == "__main__":
