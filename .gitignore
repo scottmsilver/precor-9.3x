@@ -19,5 +19,8 @@ venv/
 # OS files
 .DS_Store
 
+# Secrets
+.gemini_key
+
 # Analysis/experimental scripts (not part of main tools)
 analysis/

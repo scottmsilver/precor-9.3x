@@ -21,6 +21,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from program_engine import CHAT_SYSTEM_PROMPT, TOOL_DECLARATIONS, ProgramState, call_gemini, generate_program
 from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
 
 logging.basicConfig(level=logging.INFO)
@@ -29,10 +30,11 @@ log = logging.getLogger("treadmill")
 
 @asynccontextmanager
 async def lifespan(application):
-    global loop, msg_queue, client
+    global loop, msg_queue, client, prog
 
     loop = asyncio.get_event_loop()
     msg_queue = asyncio.Queue(maxsize=500)
+    prog = ProgramState()
 
     # Connect to treadmill_io C binary
     client = TreadmillClient()
@@ -73,6 +75,8 @@ async def lifespan(application):
     # Shutdown
     state["running"] = False
     broadcast_task.cancel()
+    if prog and prog.running:
+        await prog.stop()
     client.close()
     log.info("Server stopped")
 
@@ -83,6 +87,7 @@ app = FastAPI(title="Treadmill Controller", lifespan=lifespan)
 loop: asyncio.AbstractEventLoop = None
 msg_queue: asyncio.Queue = None
 client: TreadmillClient = None
+prog: ProgramState = None
 
 # --- Shared state ---
 state = {
@@ -97,6 +102,8 @@ latest = {
     "last_console": {},
     "last_motor": {},
 }
+
+chat_history: list = []
 
 
 def _enqueue(msg):
@@ -213,6 +220,14 @@ class ProxyRequest(BaseModel):
     enabled: bool
 
 
+class GenerateRequest(BaseModel):
+    prompt: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
 # --- REST endpoints ---
 
 
@@ -261,6 +276,235 @@ async def set_proxy(req: ProxyRequest):
         client.set_proxy(False)
     await broadcast_status()
     return build_status()
+
+
+# --- Program endpoints ---
+
+
+@app.post("/api/program/generate")
+async def api_generate_program(req: GenerateRequest):
+    try:
+        program = await generate_program(req.prompt)
+        prog.load(program)
+        return {"ok": True, "program": program}
+    except Exception as e:
+        log.error(f"Program generation failed: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/program/start")
+async def api_start_program():
+    if not prog.program:
+        return {"ok": False, "error": "No program loaded"}
+    state["proxy"] = False
+    state["emulate"] = True
+    client.set_emulate(True)
+    await broadcast_status()
+    await prog.start(_prog_on_change(), _prog_on_update())
+    return prog.to_dict()
+
+
+@app.post("/api/program/stop")
+async def api_stop_program():
+    await prog.stop()
+    state["emu_speed"] = 0
+    state["emu_incline"] = 0
+    client.set_speed(0)
+    client.set_incline(0)
+    await broadcast_status()
+    return prog.to_dict()
+
+
+@app.post("/api/program/pause")
+async def api_pause_program():
+    await prog.toggle_pause()
+    return prog.to_dict()
+
+
+@app.post("/api/program/skip")
+async def api_skip_program():
+    await prog.skip()
+    return prog.to_dict()
+
+
+@app.get("/api/program")
+async def api_get_program():
+    return prog.to_dict()
+
+
+# --- Chat endpoint (agentic Gemini) ---
+
+
+def _prog_on_change():
+    """Return an on_change callback for program execution."""
+
+    async def on_change(speed, incline):
+        state["emu_speed"] = max(0, min(int(speed * 10), MAX_SPEED_TENTHS))
+        state["emu_incline"] = max(0, min(int(incline), MAX_INCLINE))
+        client.set_speed(speed)
+        client.set_incline(incline)
+        await broadcast_status()
+
+    return on_change
+
+
+def _prog_on_update():
+    """Return an on_update callback for program execution."""
+
+    async def on_update(prog_state):
+        await manager.broadcast(prog_state)
+
+    return on_update
+
+
+async def _exec_fn(name, args):
+    """Execute a treadmill function call from Gemini."""
+    if name == "set_speed":
+        mph = float(args.get("mph", 0))
+        state["emu_speed"] = max(0, min(int(mph * 10), MAX_SPEED_TENTHS))
+        client.set_speed(mph)
+        if not state["emulate"]:
+            state["proxy"] = False
+            state["emulate"] = True
+            client.set_emulate(True)
+        await broadcast_status()
+        return f"Speed set to {mph} mph"
+
+    elif name == "set_incline":
+        inc = int(args.get("incline", 0))
+        state["emu_incline"] = max(0, min(inc, MAX_INCLINE))
+        client.set_incline(inc)
+        if not state["emulate"]:
+            state["proxy"] = False
+            state["emulate"] = True
+            client.set_emulate(True)
+        await broadcast_status()
+        return f"Incline set to {inc}%"
+
+    elif name == "start_workout":
+        desc = args.get("description", "")
+        try:
+            program = await generate_program(desc)
+            prog.load(program)
+            state["proxy"] = False
+            state["emulate"] = True
+            client.set_emulate(True)
+            await broadcast_status()
+            await prog.start(_prog_on_change(), _prog_on_update())
+            n = len(program["intervals"])
+            mins = sum(iv["duration"] for iv in program["intervals"]) // 60
+            return f"Started '{program['name']}': {n} intervals, {mins} min"
+        except Exception as e:
+            return f"Failed: {e}"
+
+    elif name == "stop_treadmill":
+        if prog and prog.running:
+            await prog.stop()
+        state["emu_speed"] = 0
+        state["emu_incline"] = 0
+        client.set_speed(0)
+        client.set_incline(0)
+        await broadcast_status()
+        return "Treadmill stopped"
+
+    elif name == "pause_program":
+        if prog and prog.running:
+            await prog.toggle_pause()
+            return "Program paused" if prog.paused else "Program resumed"
+        return "No program running"
+
+    elif name == "resume_program":
+        if prog and prog.paused:
+            await prog.toggle_pause()
+            return "Program resumed"
+        return "No paused program"
+
+    elif name == "skip_interval":
+        if prog and prog.running:
+            await prog.skip()
+            iv = prog.current_iv
+            return f"Skipped to: {iv['name']}" if iv else "Program complete"
+        return "No program running"
+
+    return f"Unknown function: {name}"
+
+
+@app.post("/api/chat")
+async def api_chat(req: ChatRequest):
+    global chat_history
+
+    # Build treadmill state context
+    treadmill_state = {
+        "speed_mph": state["emu_speed"] / 10,
+        "incline_pct": state["emu_incline"],
+        "mode": "emulate" if state["emulate"] else "proxy" if state["proxy"] else "off",
+    }
+    if prog and prog.program:
+        treadmill_state["program"] = {
+            "name": prog.program.get("name"),
+            "running": prog.running,
+            "paused": prog.paused,
+            "interval": prog.current_iv.get("name") if prog.current_iv else None,
+            "elapsed": prog.total_elapsed,
+            "remaining": prog.total_duration - prog.total_elapsed,
+        }
+
+    system = f"{CHAT_SYSTEM_PROMPT}\n\nCurrent state:\n{json.dumps(treadmill_state)}"
+
+    chat_history.append({"role": "user", "parts": [{"text": req.message}]})
+
+    executed = []
+    try:
+        for _ in range(3):  # max function-calling turns
+            result = await call_gemini(chat_history, system, TOOL_DECLARATIONS)
+            candidates = result.get("candidates", [])
+            if not candidates:
+                return {"text": "AI had no response. Try again.", "actions": executed}
+            candidate = candidates[0].get("content", {})
+            parts = candidate.get("parts", [])
+
+            func_calls = [p for p in parts if "functionCall" in p]
+            text_parts = [p.get("text", "") for p in parts if "text" in p]
+
+            if not func_calls:
+                chat_history.append(candidate)
+                if len(chat_history) > 20:
+                    chat_history = chat_history[-20:]
+                return {"text": " ".join(text_parts).strip(), "actions": executed}
+
+            # Execute function calls
+            chat_history.append(candidate)
+            func_responses = []
+            for fc in func_calls:
+                call = fc["functionCall"]
+                name = call["name"]
+                args = call.get("args", {})
+                result_str = await _exec_fn(name, args)
+                executed.append({"name": name, "args": args, "result": result_str})
+                func_responses.append(
+                    {
+                        "functionResponse": {
+                            "name": name,
+                            "response": {"result": result_str},
+                        }
+                    }
+                )
+            chat_history.append({"role": "user", "parts": func_responses})
+
+        # Fell through max turns
+        if len(chat_history) > 20:
+            chat_history = chat_history[-20:]
+        return {"text": "Done!", "actions": executed}
+
+    except Exception as e:
+        log.error(f"Chat error: {e}")
+        # Clean up broken history
+        chat_history = [
+            m for m in chat_history if m.get("role") == "user" and "parts" in m and any("text" in p for p in m["parts"])
+        ]
+        if len(chat_history) > 10:
+            chat_history = chat_history[-10:]
+        return {"text": f"Error: {e}", "actions": executed}
 
 
 # --- WebSocket endpoint ---

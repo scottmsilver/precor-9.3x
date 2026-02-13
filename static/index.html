@@ -8,220 +8,607 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #1a1a2e; --panel: #16213e; --border: #333;
-  --text: #e0e0e0; --accent: #00d4aa; --danger: #ff4757;
-  --kv-ctrl: #4ade80; --kv-emu: #c084fc; --motor: #60a5fa;
+  --bg: #0a0a0a; --card: #151515; --elev: #1e1e1e; --input: #252525;
+  --text: #e8e8e8; --dim: #888; --muted: #444;
+  --green: #00e676; --orange: #ff9100; --cyan: #40c4ff;
+  --red: #ff1744; --purple: #e040fb;
 }
-html, body { height: 100%; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; touch-action: manipulation; user-select: none; }
-body { display: flex; flex-direction: column; max-height: 100vh; overflow: hidden; }
+html, body {
+  height: 100%; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  touch-action: manipulation; user-select: none;
+}
+body { display: flex; flex-direction: column; min-height: 100dvh; }
 
 /* Header */
-.header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.header h1 { font-size: 1.1rem; font-weight: 600; }
-.dot { width: 12px; height: 12px; border-radius: 50%; background: var(--danger); transition: background 0.3s; }
-.dot.on { background: var(--accent); }
-
-/* Gauges */
-.gauges { display: flex; gap: 12px; padding: 16px; flex-shrink: 0; }
-.gauge { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 12px; text-align: center; }
-.gauge-value { font-size: 2.5rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; color: var(--accent); }
-.gauge-unit { font-size: 0.85rem; color: #999; margin-top: 2px; }
-.gauge-label { font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.1em; margin-top: 4px; }
-
-/* Controls */
-.controls { padding: 0 16px 12px; flex-shrink: 0; }
-.ctrl-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.ctrl-row label { flex: 1; font-size: 0.85rem; text-align: center; font-variant-numeric: tabular-nums; }
-.btn { min-height: 56px; min-width: 72px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font-size: 1.3rem; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s; -webkit-tap-highlight-color: transparent; }
-.btn:active { background: #2a3a5e; }
-.btn-sm { min-height: 48px; min-width: 0; flex: 1; font-size: 0.85rem; font-weight: 500; }
-.mode-toggle { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-.mode-btn { flex: 1; min-height: 52px; border: none; background: var(--panel); color: #888; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; -webkit-tap-highlight-color: transparent; }
-.mode-btn.active { background: var(--accent); color: #111; }
-.mode-btn.active.emu { background: var(--kv-emu); color: #111; }
-
-/* Log tabs (mobile) */
-.tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.tab { flex: 1; padding: 10px; text-align: center; font-size: 0.8rem; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; color: #888; transition: color 0.2s, border-color 0.2s; -webkit-tap-highlight-color: transparent; }
-.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-
-/* Log area */
-.log-area { flex: 1; overflow: hidden; display: flex; min-height: 0; }
-.log-pane { flex: 1; overflow-y: auto; padding: 8px; font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace; font-size: 0.75rem; line-height: 1.5; overscroll-behavior: contain; }
-.log-pane.hidden { display: none; }
-.log-entry { white-space: nowrap; }
-.log-entry.kv-ctrl { color: var(--kv-ctrl); }
-.log-entry.kv-emu { color: var(--kv-emu); }
-.log-entry.motor { color: var(--motor); }
-
-/* Desktop: side-by-side logs */
-@media (min-width: 768px) {
-  .tabs { display: none; }
-  .log-area { gap: 1px; background: var(--border); }
-  .log-pane { display: flex !important; flex-direction: column; background: var(--bg); }
-  .log-pane.hidden { display: flex !important; }
-  .log-label { font-size: 0.7rem; color: #666; text-transform: uppercase; padding: 4px 8px; background: var(--panel); flex-shrink: 0; letter-spacing: 0.05em; }
+.hdr {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; flex-shrink: 0;
 }
-@media (max-width: 767px) {
-  .log-label { display: none; }
+.hdr-left { display: flex; align-items: center; gap: 10px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); transition: background 0.3s; }
+.dot.on { background: var(--green); }
+.mode {
+  font-size: 0.6rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; padding: 3px 10px; border-radius: 10px;
+  background: var(--elev); color: var(--muted);
+}
+.mode.proxy { background: rgba(0,230,118,0.12); color: var(--green); }
+.mode.emu { background: rgba(224,64,251,0.12); color: var(--purple); }
+.gear {
+  background: none; border: none; color: var(--muted); font-size: 1.2rem;
+  cursor: pointer; padding: 4px 8px; -webkit-tap-highlight-color: transparent;
+}
+
+/* Hero speed */
+.hero { text-align: center; padding: 16px 20px 4px; flex-shrink: 0; }
+.hero-speed {
+  font-size: 5.5rem; font-weight: 800; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.04em;
+  color: var(--green); transition: color 0.3s;
+}
+.hero-speed.zero { color: var(--muted); }
+.hero-lbl { font-size: 0.7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 2px; }
+
+/* Inline speed/incline adjust */
+.adj {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 6px 20px; flex-shrink: 0;
+}
+.adj-btn {
+  min-width: 48px; min-height: 40px; border-radius: 8px;
+  border: 1px solid var(--muted); background: transparent;
+  color: var(--dim); font-size: 0.75rem; font-weight: 600;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent; transition: background 0.1s, border-color 0.1s;
+}
+.adj-btn:active { background: var(--elev); border-color: var(--dim); }
+.adj-val {
+  min-width: 56px; text-align: center; font-size: 1.1rem; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stats row */
+.stats {
+  display: flex; justify-content: center; gap: 32px;
+  padding: 12px 20px; flex-shrink: 0;
+}
+.stat { text-align: center; }
+.stat-val { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat-lbl { font-size: 0.55rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+
+/* Program area */
+.pgm { padding: 0 20px; flex-shrink: 0; }
+.pgm-timeline {
+  display: flex; height: 6px; border-radius: 3px; overflow: hidden;
+  position: relative; margin-bottom: 12px; background: var(--elev);
+}
+.tl-seg { min-width: 2px; transition: opacity 0.3s; }
+.tl-seg.done { opacity: 0.3; }
+.tl-pos {
+  position: absolute; top: -3px; width: 3px; height: 12px;
+  background: #fff; border-radius: 2px; transition: left 1s linear;
+  box-shadow: 0 0 6px rgba(255,255,255,0.5);
+}
+.now-card {
+  background: var(--card); border-radius: 12px; padding: 14px 16px;
+  margin-bottom: 8px; position: relative; overflow: hidden;
+}
+.now-glow { position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+.now-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.now-name { font-size: 0.9rem; font-weight: 700; }
+.now-targets { font-size: 0.75rem; color: var(--dim); }
+.now-countdown {
+  font-size: 2.2rem; font-weight: 800; line-height: 1;
+  font-variant-numeric: tabular-nums; margin-bottom: 6px;
+}
+.now-bar { height: 3px; border-radius: 2px; background: var(--elev); overflow: hidden; }
+.now-bar-fill { height: 100%; border-radius: 2px; transition: width 1s linear; }
+.next-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 0; font-size: 0.75rem; color: var(--dim);
+}
+.pgm-stats {
+  display: flex; justify-content: center; gap: 20px;
+  font-size: 0.7rem; color: var(--dim); padding: 4px 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+.pgm-btns { display: flex; gap: 8px; margin-bottom: 8px; }
+.pgm-btn {
+  flex: 1; min-height: 40px; border-radius: 8px;
+  border: 1px solid var(--muted); background: transparent;
+  color: var(--dim); font-size: 0.7rem; font-weight: 700;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.pgm-btn:active { background: var(--elev); }
+.pgm-btn.stop { border-color: var(--red); color: var(--red); }
+
+/* Stop button */
+.stop-area {
+  position: sticky; bottom: 60px; z-index: 10;
+  padding: 8px 20px; flex-shrink: 0;
+  background: linear-gradient(transparent, var(--bg) 40%);
+}
+.stop-btn {
+  width: 100%; min-height: 52px; border-radius: 12px;
+  border: 2px solid var(--red); background: rgba(255,23,68,0.12);
+  color: var(--red); font-size: 0.9rem; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.1em;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.stop-btn:active { background: rgba(255,23,68,0.3); }
+
+/* Spacer */
+.spacer { flex: 1; }
+
+/* Chat area */
+.chat {
+  position: sticky; bottom: 0; z-index: 20;
+  padding: 0 16px 12px; flex-shrink: 0;
+  background: linear-gradient(transparent, var(--bg) 20%);
+}
+.chat-response {
+  font-size: 0.78rem; color: var(--dim); padding: 6px 12px;
+  max-height: 60px; overflow-y: auto; line-height: 1.4;
+}
+.chat-response b { color: var(--purple); font-weight: 600; }
+.chat-bar {
+  display: flex; gap: 8px; align-items: center;
+}
+.chat-input {
+  flex: 1; min-height: 44px; padding: 10px 14px; border-radius: 22px;
+  border: 1px solid var(--muted); background: var(--input);
+  color: var(--text); font-family: inherit; font-size: 0.85rem;
+  outline: none; -webkit-appearance: none;
+}
+.chat-input:focus { border-color: var(--purple); }
+.chat-input::placeholder { color: var(--muted); }
+.chat-send {
+  width: 44px; height: 44px; border-radius: 22px; border: none;
+  background: var(--purple); color: #fff; font-size: 1.1rem;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s;
+}
+.chat-send:disabled { opacity: 0.3; cursor: default; }
+.chat-send:active:not(:disabled) { opacity: 0.7; }
+.chat-thinking {
+  display: inline-block; width: 16px; height: 16px;
+  border: 2px solid var(--muted); border-top-color: var(--purple);
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Settings overlay */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+}
+.settings-panel {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 51;
+  width: min(320px, 85vw); background: var(--bg);
+  border-left: 1px solid var(--muted); padding: 20px;
+  overflow-y: auto;
+}
+.settings-panel h3 {
+  font-size: 0.7rem; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.08em; margin: 16px 0 8px;
+}
+.settings-panel h3:first-child { margin-top: 0; }
+.mode-toggle {
+  display: flex; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--muted);
+}
+.mode-btn {
+  flex: 1; min-height: 44px; border: none;
+  background: var(--card); color: var(--muted);
+  font-size: 0.75rem; font-weight: 700; cursor: pointer;
+  text-transform: uppercase;
+  -webkit-tap-highlight-color: transparent;
+}
+.mode-btn.active { background: var(--green); color: #111; }
+.mode-btn.active.emu { background: var(--purple); color: #fff; }
+.presets {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+}
+.preset {
+  min-height: 40px; border-radius: 8px;
+  border: 1px solid var(--muted); background: transparent;
+  color: var(--dim); font-size: 0.85rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.preset:active { background: var(--elev); }
+.preset.active { border-color: var(--green); color: var(--green); }
+.preset.active.inc { border-color: var(--orange); color: var(--orange); }
+
+/* Program complete */
+.pgm-done { text-align: center; padding: 12px 0; }
+.pgm-done-title { font-size: 1rem; font-weight: 800; color: var(--green); margin-bottom: 4px; }
+
+/* Desktop */
+@media (min-width: 768px) {
+  .hero-speed { font-size: 7rem; }
+  .stats { max-width: 500px; margin: 0 auto; }
+  .pgm { max-width: 500px; margin: 0 auto; }
+  .stop-area { max-width: 500px; margin: 0 auto; width: 100%; }
+  .chat { max-width: 500px; margin: 0 auto; width: 100%; }
 }
 </style>
 </head>
 <body x-data="app()" x-init="init()">
 
 <!-- Header -->
-<div class="header">
-  <h1>Treadmill</h1>
-  <div class="dot" :class="{ on: connected }"></div>
+<div class="hdr">
+  <div class="hdr-left">
+    <div class="dot" :class="{ on: connected }"></div>
+    <div class="mode" :class="{ proxy: proxy, emu: emulate }"
+         x-text="emulate ? 'Emulate' : proxy ? 'Proxy' : 'Off'"></div>
+  </div>
+  <button class="gear" @click="showSettings = !showSettings">&#9881;</button>
 </div>
 
-<!-- Gauges -->
-<div class="gauges">
-  <div class="gauge">
-    <div class="gauge-value" x-text="speedDisplay"></div>
-    <div class="gauge-unit">mph</div>
-    <div class="gauge-label">Speed</div>
+<!-- Hero Speed -->
+<div class="hero">
+  <div class="hero-speed" :class="{ zero: speedVal === 0 }" x-text="speedDisplay"></div>
+  <div class="hero-lbl">mph</div>
+</div>
+
+<!-- Speed adjust -->
+<div class="adj" x-show="!programRunning">
+  <button class="adj-btn" @pointerdown="startRepeat('speed',-10)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;1</button>
+  <button class="adj-btn" @pointerdown="startRepeat('speed',-1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;.1</button>
+  <div class="adj-val" style="color:var(--green)" x-text="emuSpeedDisplay"></div>
+  <button class="adj-btn" @pointerdown="startRepeat('speed',1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+.1</button>
+  <button class="adj-btn" @pointerdown="startRepeat('speed',10)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+1</button>
+</div>
+
+<!-- Incline adjust -->
+<div class="adj" x-show="!programRunning">
+  <button class="adj-btn" @pointerdown="startRepeat('incline',-5)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;5</button>
+  <button class="adj-btn" @pointerdown="startRepeat('incline',-1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;1</button>
+  <div class="adj-val" style="color:var(--orange)" x-text="emu_incline + '%'"></div>
+  <button class="adj-btn" @pointerdown="startRepeat('incline',1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+1</button>
+  <button class="adj-btn" @pointerdown="startRepeat('incline',5)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+5</button>
+</div>
+
+<!-- Stats -->
+<div class="stats">
+  <div class="stat">
+    <div class="stat-val" style="color:var(--orange)" x-text="inclineDisplay"></div>
+    <div class="stat-lbl">Incline %</div>
   </div>
-  <div class="gauge">
-    <div class="gauge-value" x-text="inclineDisplay"></div>
-    <div class="gauge-unit">%</div>
-    <div class="gauge-label">Incline</div>
+  <div class="stat">
+    <div class="stat-val" style="color:var(--cyan)" x-text="elapsedDisplay"></div>
+    <div class="stat-lbl">Time</div>
+  </div>
+  <div class="stat">
+    <div class="stat-val" x-text="distDisplay"></div>
+    <div class="stat-lbl">Miles</div>
   </div>
 </div>
 
-<!-- Controls -->
-<div class="controls">
-  <div class="ctrl-row">
-    <button class="btn" @click="setSpeed(-1)">&minus;</button>
-    <label>SPD <span x-text="emu_speed"></span></label>
-    <button class="btn" @click="setSpeed(1)">+</button>
-  </div>
-  <div class="ctrl-row">
-    <button class="btn" @click="setIncline(-1)">&minus;</button>
-    <label>INC <span x-text="emu_incline"></span></label>
-    <button class="btn" @click="setIncline(1)">+</button>
-  </div>
-  <div class="mode-toggle">
-    <button class="mode-btn" :class="{ active: proxy }" @click="setMode('proxy')">PROXY</button>
-    <button class="mode-btn" :class="{ active: emulate, emu: emulate }" @click="setMode('emulate')">EMULATE</button>
-  </div>
-</div>
-
-<!-- Log tabs (mobile) -->
-<div class="tabs">
-  <div class="tab" :class="{ active: activeTab === 'kv' }" @click="activeTab = 'kv'">KV Log</div>
-  <div class="tab" :class="{ active: activeTab === 'bin' }" @click="activeTab = 'bin'">Motor Log</div>
-</div>
-
-<!-- Logs -->
-<div class="log-area">
-  <div class="log-pane" :class="{ hidden: activeTab !== 'kv' }" x-ref="kvPane">
-    <div class="log-label">KV Log</div>
-    <template x-for="e in kvLog" :key="e.id">
-      <div class="log-entry" :class="e.source === 'emulate' ? 'kv-emu' : 'kv-ctrl'" x-text="e.text"></div>
+<!-- Program display (when active) -->
+<div class="pgm" x-show="program && programRunning">
+  <!-- Timeline -->
+  <div class="pgm-timeline" style="position:relative">
+    <template x-for="(iv,i) in (program?.intervals||[])" :key="i">
+      <div class="tl-seg" :class="{done:i<programCurrentInterval}"
+           :style="`flex-grow:${iv.duration};background:${ivColor(iv)}`"></div>
     </template>
+    <div class="tl-pos" :style="`left:calc(${pgmTimelinePos}% - 1px)`"></div>
   </div>
-  <div class="log-pane" :class="{ hidden: activeTab !== 'bin' }" x-ref="binPane">
-    <div class="log-label">Motor Log</div>
-    <template x-for="e in binLog" :key="e.id">
-      <div class="log-entry motor" x-text="e.text"></div>
-    </template>
+
+  <!-- NOW card -->
+  <template x-if="pgmCurrentIv">
+    <div class="now-card">
+      <div class="now-glow" :style="`background:${ivColor(pgmCurrentIv)}`"></div>
+      <div class="now-top">
+        <div class="now-name" :style="`color:${ivColor(pgmCurrentIv)}`" x-text="pgmCurrentIv.name"></div>
+        <div class="now-targets" x-text="`${pgmCurrentIv.speed}mph ${pgmCurrentIv.incline}%`"></div>
+      </div>
+      <div class="now-countdown" x-text="fmtDur(pgmIvRemaining)"></div>
+      <div class="now-bar">
+        <div class="now-bar-fill" :style="`width:${pgmIvPct}%;background:${ivColor(pgmCurrentIv)}`"></div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Next up -->
+  <div class="next-row" x-show="pgmNextIv">
+    <span x-text="'Next: ' + (pgmNextIv?.name || '')"></span>
+    <span x-text="pgmNextIv ? `${pgmNextIv.speed}mph ${pgmNextIv.incline}% \u00b7 ${fmtDur(pgmNextIv.duration)}` : ''"></span>
+  </div>
+
+  <!-- Program stats -->
+  <div class="pgm-stats">
+    <span x-text="`${programCurrentInterval+1}/${program?.intervals?.length||0} intervals`"></span>
+    <span x-text="fmtDur(pgmTotalElapsed) + ' elapsed'"></span>
+    <span x-text="fmtDur(pgmTotalRemaining) + ' left'"></span>
+  </div>
+
+  <!-- Program controls -->
+  <div class="pgm-btns">
+    <button class="pgm-btn" @click="pgmPause()" x-text="programPaused ? 'Resume' : 'Pause'"></button>
+    <button class="pgm-btn" @click="pgmSkip()">Skip</button>
+    <button class="pgm-btn stop" @click="pgmStop()">End</button>
   </div>
 </div>
+
+<!-- Program complete -->
+<div class="pgm" x-show="pgmCompleted && !programRunning && program">
+  <div class="pgm-done">
+    <div class="pgm-done-title">Workout Complete!</div>
+    <div style="color:var(--dim);font-size:0.8rem" x-text="fmtDur(pgmTotalElapsed) + ' total'"></div>
+  </div>
+</div>
+
+<!-- Spacer pushes stop/chat to bottom -->
+<div class="spacer"></div>
+
+<!-- Stop -->
+<div class="stop-area" x-show="emulate && emu_speed > 0 && !programRunning">
+  <button class="stop-btn" @click="emergencyStop()">Stop</button>
+</div>
+
+<!-- Chat -->
+<div class="chat">
+  <div class="chat-response" x-show="chatResponse">
+    <template x-if="chatThinking">
+      <span class="chat-thinking"></span>
+    </template>
+    <span x-html="chatResponse"></span>
+  </div>
+  <div class="chat-bar">
+    <input type="text" class="chat-input" x-model="chatMsg"
+           @keydown.enter="sendChat()"
+           placeholder="Ask your AI coach..."
+           :disabled="chatThinking">
+    <button class="chat-send" @click="sendChat()" :disabled="chatThinking || !chatMsg.trim()">&#8593;</button>
+  </div>
+</div>
+
+<!-- Settings Overlay -->
+<template x-if="showSettings">
+  <div>
+    <div class="settings-overlay" @click="showSettings = false"></div>
+    <div class="settings-panel">
+      <h3>Mode</h3>
+      <div class="mode-toggle">
+        <button class="mode-btn" :class="{ active: proxy }" @click="setMode('proxy')">Proxy</button>
+        <button class="mode-btn" :class="{ active: emulate, emu: emulate }" @click="setMode('emulate')">Emulate</button>
+      </div>
+
+      <h3>Speed Presets</h3>
+      <div class="presets">
+        <template x-for="p in [2,3,4,5,6,7,8,10]" :key="p">
+          <button class="preset" :class="{ active: emu_speed === p*10 }"
+                  @click="setSpeedTo(p)" x-text="p.toFixed(1)"></button>
+        </template>
+      </div>
+
+      <h3>Incline Presets</h3>
+      <div class="presets">
+        <template x-for="p in [0,2,4,6,8,10,12,15]" :key="p">
+          <button class="preset" :class="{ active: emu_incline === p, inc: true }"
+                  @click="setInclineTo(p)" x-text="p"></button>
+        </template>
+      </div>
+    </div>
+  </div>
+</template>
 
 <script>
 function app() {
   let idCounter = 0;
   return {
-    ws: null,
-    connected: false,
-    proxy: true,
-    emulate: false,
-    emu_speed: 0,
-    emu_incline: 0,
-    speed: null,
-    incline: null,
-    kvLog: [],
-    binLog: [],
-    activeTab: 'kv',
+    // Connection
+    ws: null, connected: false,
+    // Treadmill state
+    proxy: true, emulate: false,
+    emu_speed: 0, emu_incline: 0,
+    speed: null, incline: null,
+    // Timer / distance
+    elapsed: 0, distance: 0, timerInterval: null,
+    // Program
+    program: null, programRunning: false, programPaused: false,
+    programCurrentInterval: 0, programIntervalElapsed: 0,
+    pgmTotalElapsed: 0, pgmTotalDuration: 0, pgmCompleted: false,
+    // Chat
+    chatMsg: '', chatResponse: '', chatThinking: false,
+    // UI
+    showSettings: false,
+    repeatTimer: null, repeatCount: 0,
 
-    get speedDisplay() { return this.speed !== null ? this.speed.toFixed(1) : '--'; },
-    get inclineDisplay() { return this.incline !== null ? this.incline.toFixed(1) : '--'; },
+    // --- Computed ---
+    get speedVal() {
+      if (this.emulate) return this.emu_speed / 10;
+      if (this.speed !== null) return this.speed;
+      return 0;
+    },
+    get speedDisplay() { return this.speedVal.toFixed(1); },
+    get emuSpeedDisplay() { return (this.emu_speed / 10).toFixed(1); },
+    get inclineDisplay() {
+      if (this.emulate) return this.emu_incline.toString();
+      if (this.incline !== null) return this.incline.toFixed(0);
+      return '0';
+    },
+    get elapsedDisplay() {
+      const s = this.elapsed, m = Math.floor(s / 60), sec = s % 60;
+      if (m >= 60) { const h = Math.floor(m/60); return `${h}:${String(m%60).padStart(2,'0')}:${String(sec).padStart(2,'0')}`; }
+      return `${m}:${String(sec).padStart(2,'0')}`;
+    },
+    get distDisplay() { return this.distance.toFixed(2); },
 
-    init() {
-      this.connect();
+    // Program computed
+    get pgmCurrentIv() {
+      if (!this.program || this.programCurrentInterval >= this.program.intervals.length) return null;
+      return this.program.intervals[this.programCurrentInterval];
+    },
+    get pgmNextIv() {
+      const i = this.programCurrentInterval + 1;
+      if (!this.program || i >= this.program.intervals.length) return null;
+      return this.program.intervals[i];
+    },
+    get pgmTotalDur() {
+      if (!this.program) return 0;
+      return this.program.intervals.reduce((s, iv) => s + iv.duration, 0);
+    },
+    get pgmIvRemaining() {
+      const iv = this.pgmCurrentIv;
+      return iv ? Math.max(0, iv.duration - this.programIntervalElapsed) : 0;
+    },
+    get pgmTotalRemaining() {
+      return Math.max(0, (this.pgmTotalDuration || this.pgmTotalDur) - this.pgmTotalElapsed);
+    },
+    get pgmIvPct() {
+      const iv = this.pgmCurrentIv;
+      return iv && iv.duration ? Math.min(100, (this.programIntervalElapsed / iv.duration) * 100) : 0;
+    },
+    get pgmTimelinePos() {
+      const d = this.pgmTotalDuration || this.pgmTotalDur;
+      return d ? Math.min(100, (this.pgmTotalElapsed / d) * 100) : 0;
     },
 
+    // --- Init ---
+    init() {
+      this.connect();
+      fetch('/api/program').then(r => r.json()).then(d => {
+        if (d.program) { this._loadPgmState(d); }
+      }).catch(() => {});
+      this.timerInterval = setInterval(() => {
+        const spd = this.speedVal;
+        if (spd > 0) { this.elapsed += 1; this.distance += spd / 3600; }
+      }, 1000);
+    },
+
+    // --- WebSocket ---
     connect() {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       this.ws = new WebSocket(`${proto}//${location.host}/ws`);
-
       this.ws.onopen = () => { this.connected = true; };
-      this.ws.onclose = () => {
-        this.connected = false;
-        setTimeout(() => this.connect(), 2000);
-      };
+      this.ws.onclose = () => { this.connected = false; setTimeout(() => this.connect(), 2000); };
       this.ws.onerror = () => { this.ws.close(); };
-
       this.ws.onmessage = (evt) => {
         const msg = JSON.parse(evt.data);
         if (msg.type === 'status') {
-          this.proxy = msg.proxy;
-          this.emulate = msg.emulate;
+          this.proxy = msg.proxy; this.emulate = msg.emulate;
           if (msg.emu_speed != null) this.emu_speed = msg.emu_speed;
           if (msg.emu_incline != null) this.emu_incline = msg.emu_incline;
           if (msg.speed != null) this.speed = msg.speed;
           if (msg.incline != null) this.incline = msg.incline;
-        } else if (msg.type === 'kv') {
-          const text = `${msg.ts.toFixed(1).padStart(7)}  ${msg.key.padEnd(8)} ${msg.value}`;
-          if (msg.source === 'motor') {
-            this.binLog.push({ id: ++idCounter, text });
-            if (this.binLog.length > 200) this.binLog.splice(0, this.binLog.length - 200);
-            this.$nextTick(() => {
-              const pane = this.$refs.binPane;
-              if (pane) pane.scrollTop = pane.scrollHeight;
-            });
-          } else {
-            this.kvLog.push({ id: ++idCounter, text, source: msg.source });
-            if (this.kvLog.length > 200) this.kvLog.splice(0, this.kvLog.length - 200);
-            this.$nextTick(() => {
-              const pane = this.$refs.kvPane;
-              if (pane) pane.scrollTop = pane.scrollHeight;
-            });
-          }
+        } else if (msg.type === 'program') {
+          this._loadPgmState(msg);
         }
       };
     },
 
+    _loadPgmState(d) {
+      this.program = d.program;
+      this.programRunning = d.running;
+      this.programPaused = d.paused;
+      this.pgmCompleted = d.completed;
+      this.programCurrentInterval = d.current_interval;
+      this.programIntervalElapsed = d.interval_elapsed;
+      this.pgmTotalElapsed = d.total_elapsed;
+      this.pgmTotalDuration = d.total_duration;
+    },
+
+    // --- API helpers ---
     async post(path, body) {
       try {
-        const res = await fetch(path, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
+        const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         return await res.json();
-      } catch (e) {
-        console.error('POST failed:', path, e);
-      }
+      } catch (e) { console.error('POST failed:', path, e); }
     },
+    haptic(ms) { if (navigator.vibrate) navigator.vibrate(ms || 10); },
 
-    setSpeed(delta) {
+    // --- Speed / Incline ---
+    adjustSpeed(delta) {
       this.emu_speed = Math.max(0, Math.min(this.emu_speed + delta, 120));
       this.post('/api/speed', { value: this.emu_speed / 10 });
+      this.haptic(15);
     },
-
-    setIncline(delta) {
+    adjustIncline(delta) {
       this.emu_incline = Math.max(0, Math.min(this.emu_incline + delta, 99));
       this.post('/api/incline', { value: this.emu_incline });
+      this.haptic(15);
+    },
+    setSpeedTo(mph) {
+      this.emu_speed = Math.round(mph * 10);
+      this.post('/api/speed', { value: mph }); this.haptic(25);
+    },
+    setInclineTo(val) {
+      this.emu_incline = val;
+      this.post('/api/incline', { value: val }); this.haptic(25);
+    },
+    startRepeat(type, delta) {
+      this.repeatCount = 0;
+      const action = type === 'speed' ? () => this.adjustSpeed(delta) : () => this.adjustIncline(delta);
+      action();
+      this.repeatTimer = setTimeout(() => {
+        this.repeatTimer = setInterval(() => { this.repeatCount++; action(); }, this.repeatCount > 5 ? 75 : 150);
+      }, 400);
+    },
+    stopRepeat() {
+      clearTimeout(this.repeatTimer); clearInterval(this.repeatTimer);
+      this.repeatTimer = null; this.repeatCount = 0;
+    },
+    setMode(mode) {
+      this.post(mode === 'emulate' ? '/api/emulate' : '/api/proxy', { enabled: true });
+      this.haptic([25, 30, 25]);
+    },
+    emergencyStop() {
+      this.emu_speed = 0; this.emu_incline = 0;
+      this.post('/api/speed', { value: 0 }); this.post('/api/incline', { value: 0 });
+      if (this.programRunning) this.pgmStop();
+      this.haptic([50, 30, 50]);
     },
 
-    setMode(mode) {
-      if (mode === 'emulate') {
-        this.post('/api/emulate', { enabled: true });
-      } else {
-        this.post('/api/proxy', { enabled: true });
+    // --- Program ---
+    async pgmStop() { await this.post('/api/program/stop', {}); this.programRunning = false; this.haptic([50,30,50]); },
+    async pgmPause() { await this.post('/api/program/pause', {}); this.haptic(25); },
+    async pgmSkip() { await this.post('/api/program/skip', {}); this.haptic(25); },
+
+    // --- Chat ---
+    async sendChat() {
+      const msg = this.chatMsg.trim();
+      if (!msg || this.chatThinking) return;
+      this.chatMsg = '';
+      this.chatThinking = true;
+      this.chatResponse = '';
+      try {
+        const res = await this.post('/api/chat', { message: msg });
+        this.chatResponse = res?.text || 'No response';
+        this.pgmCompleted = false;
+      } catch (e) {
+        this.chatResponse = 'Error connecting to AI';
       }
+      this.chatThinking = false;
+      this.haptic(15);
+    },
+
+    // --- Helpers ---
+    fmtDur(secs) {
+      if (secs == null || secs < 0) secs = 0;
+      secs = Math.floor(secs);
+      const m = Math.floor(secs / 60), s = secs % 60;
+      if (m >= 60) { const h = Math.floor(m/60); return `${h}:${String(m%60).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+      return `${m}:${String(s).padStart(2,'0')}`;
+    },
+    ivColor(iv) {
+      if (!iv) return '#444';
+      const n = (iv.name || '').toLowerCase();
+      if (n.includes('warm') || n.includes('cool')) return '#40C4FF';
+      const t = (iv.speed / 12 + iv.incline / 15) / 2;
+      if (t < 0.2) return '#26A69A';
+      if (t < 0.35) return '#00E676';
+      if (t < 0.5) return '#FFD740';
+      if (t < 0.65) return '#FF9100';
+      return '#FF5722';
     },
   };
 }
