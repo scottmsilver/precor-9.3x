@@ -9,12 +9,6 @@ bit-banged serial (inverted polarity for RS-485 signaling).
   Right pane: Motor → Console (pin 3 motor responses)
   Write pin:  Pin 6 motor side — proxy forwarding or emulation output
 
-Wiring (BCM numbering):
-  GPIO 27 (phys 13) ← treadmill pin 6 console side
-  GPIO 22 (phys 15) → treadmill pin 6 motor side
-  GPIO 17 (phys 11) ← treadmill pin 3
-  GND     (phys 14) ← treadmill GND
-
 Requires: sudo pigpiod
 
 Usage:
@@ -30,119 +24,16 @@ from collections import deque
 
 import pigpio
 
+from gpio_pins import (
+    get_gpio, BAUD, parse_kv_stream, build_kv_cmd,
+    gpio_read_open, gpio_read_close, gpio_write_open, gpio_write_close,
+    gpio_write_bytes, KV_CYCLE, KV_BURSTS,
+)
+
 MAX_ENTRIES = 2000
-BAUD = 9600
-
-# Default GPIO assignments (BCM numbering)
-DEFAULT_GPIO_CONSOLE = 27  # pin 6 console side (read)
-DEFAULT_GPIO_WRITE = 22    # pin 6 motor side (write)
-DEFAULT_GPIO_MOTOR = 17    # pin 3 motor responses (read)
-
-# KV cycle that the real controller sends (14 keys, repeating)
-KV_CYCLE = [
-    ('inc',  lambda s: str(s['emu_incline'])),
-    ('hmph', lambda s: format(s['emu_speed_raw'], 'X')),
-    ('amps', None),
-    ('err',  None),
-    ('belt', None),
-    ('vbus', None),
-    ('lift', None),
-    ('lfts', None),
-    ('lftg', None),
-    ('part', lambda s: '6'),
-    ('ver',  None),
-    ('type', None),
-    ('diag', lambda s: '0'),
-    ('loop', lambda s: '5550'),
-]
-
-# Burst groupings matching real controller timing
-KV_BURSTS = [
-    [0, 1],           # inc, hmph
-    [2, 3, 4],        # amps, err, belt
-    [5, 6, 7, 8],     # vbus, lift, lfts, lftg
-    [9, 10, 11],      # part, ver, type
-    [12, 13],          # diag, loop
-]
 
 
-def build_kv_cmd(key, value=None):
-    """Build a KV command: [key:value]\\xff or [key]\\xff."""
-    if value is not None:
-        return f'[{key}:{value}]'.encode() + b'\xff'
-    return f'[{key}]'.encode() + b'\xff'
-
-
-def parse_kv_stream(buf):
-    """Parse [key:value] pairs from buffer.
-    Handles both \\xff-delimited (pin 6) and bare (pin 3) formats.
-    Returns (pairs, remaining_buf)."""
-    pairs = []
-    i = 0
-    while i < len(buf):
-        if buf[i] in (0xFF, 0x00):
-            i += 1
-            continue
-        if buf[i] == ord('['):
-            end_idx = buf.find(b']', i)
-            if end_idx == -1:
-                break  # incomplete pair, keep remainder
-            raw = buf[i + 1:end_idx]
-            if all(0x20 <= b <= 0x7E for b in raw):
-                content = raw.decode('ascii')
-                if ':' in content:
-                    k, v = content.split(':', 1)
-                    pairs.append((k, v))
-                elif content:
-                    pairs.append((content, ''))
-            elif raw:
-                # Non-printable content — show as hex
-                hex_str = ' '.join(f'{b:02X}' for b in raw)
-                pairs.append(('BIN', hex_str))
-            # skip empty []
-            i = end_idx + 1
-        else:
-            i += 1
-    return pairs, bytearray(buf[i:])
-
-
-def gpio_write_bytes(pi, gpio, baud, data, write_lock):
-    """Write bytes as inverted serial (RS-485 polarity) on GPIO pin.
-    Idle=LOW, start bit=HIGH, data bits inverted, stop bit=LOW."""
-    if not data:
-        return
-    bit_us = int(1_000_000 / baud)
-    mask = 1 << gpio
-
-    with write_lock:
-        while pi.wave_tx_busy():
-            time.sleep(0.001)
-
-        pulses = []
-        for byte_val in data:
-            # Start bit: HIGH (inverted from standard LOW)
-            pulses.append(pigpio.pulse(mask, 0, bit_us))
-            # 8 data bits, LSB first, INVERTED
-            for bit in range(8):
-                if (byte_val >> bit) & 1:
-                    pulses.append(pigpio.pulse(0, mask, bit_us))  # 1 → LOW
-                else:
-                    pulses.append(pigpio.pulse(mask, 0, bit_us))  # 0 → HIGH
-            # Stop bit: LOW (inverted idle)
-            pulses.append(pigpio.pulse(0, mask, bit_us))
-
-        pi.wave_clear()
-        pi.wave_add_generic(pulses)
-        wid = pi.wave_create()
-        pi.wave_send_once(wid)
-
-        while pi.wave_tx_busy():
-            time.sleep(0.001)
-
-        pi.wave_delete(wid)
-
-
-def console_read_thread(pi, gpio_read, gpio_write, baud,
+def console_read_thread(pi, gpio_read, gpio_write,
                         entries, lock, state, write_lock):
     """Read KV from console side of pin 6. Proxy-forward to motor if enabled."""
     buf = bytearray()
@@ -150,10 +41,8 @@ def console_read_thread(pi, gpio_read, gpio_write, baud,
         count, data = pi.bb_serial_read(gpio_read)
         if count > 0:
             state['console_bytes'] += count
-            # Proxy: forward raw bytes to motor side
             if state['proxy']:
-                gpio_write_bytes(pi, gpio_write, baud, data, write_lock)
-            # Parse for display
+                gpio_write_bytes(pi, gpio_write, data, write_lock)
             buf.extend(data)
             pairs, buf = parse_kv_stream(buf)
             if pairs:
@@ -183,7 +72,7 @@ def motor_read_thread(pi, gpio, entries, lock, state):
             time.sleep(0.02)
 
 
-def emulate_thread(pi, gpio_write, baud, entries, lock, state, write_lock):
+def emulate_thread(pi, gpio_write, entries, lock, state, write_lock):
     """Send KV cycle to motor, emulating the controller."""
     while state['running'] and state['emulate']:
         for burst in KV_BURSTS:
@@ -195,7 +84,7 @@ def emulate_thread(pi, gpio_write, baud, entries, lock, state, write_lock):
                 key, val_fn = KV_CYCLE[idx]
                 value = val_fn(state) if val_fn else None
                 cmd = build_kv_cmd(key, value)
-                gpio_write_bytes(pi, gpio_write, baud, cmd, write_lock)
+                gpio_write_bytes(pi, gpio_write, cmd, write_lock)
                 now = time.time() - state['start']
                 val_str = f'{value}' if value is not None else ''
                 with lock:
@@ -265,29 +154,20 @@ def main(stdscr, args):
     }
 
     gpio_console = args.gpio_console
-    gpio_write = args.gpio_write
+    gpio_wr = args.gpio_write
     gpio_motor = args.gpio_motor
 
-    # Connect to pigpiod
     pi = pigpio.pi()
     if not pi.connected:
         raise RuntimeError("Cannot connect to pigpiod. Run: sudo pigpiod")
 
-    # Setup read pins (inverted for RS-485)
-    pi.bb_serial_read_open(gpio_console, args.baud, 8)
-    pi.bb_serial_invert(gpio_console, 1)
+    gpio_read_open(pi, gpio_console)
+    gpio_read_open(pi, gpio_motor)
+    gpio_write_open(pi, gpio_wr)
 
-    pi.bb_serial_read_open(gpio_motor, args.baud, 8)
-    pi.bb_serial_invert(gpio_motor, 1)
-
-    # Setup write pin (idle LOW for RS-485)
-    pi.set_mode(gpio_write, pigpio.OUTPUT)
-    pi.write(gpio_write, 0)
-
-    # Start reader threads
     threads = []
     t = threading.Thread(target=console_read_thread,
-                         args=(pi, gpio_console, gpio_write, args.baud,
+                         args=(pi, gpio_console, gpio_wr,
                                entries, lock, state, write_lock),
                          daemon=True)
     t.start()
@@ -299,7 +179,6 @@ def main(stdscr, args):
     t.start()
     threads.append(t)
 
-    # UI state
     follow = True
     changes_only = False
     unique_mode = False
@@ -341,8 +220,7 @@ def main(stdscr, args):
             left_w = mid - 1
             right_w = width - mid - 1
 
-            # Header
-            left_title = f" Console\u2192Motor (GPIO {gpio_console}\u2192{gpio_write})"
+            left_title = f" Console\u2192Motor (GPIO {gpio_console}\u2192{gpio_wr})"
             right_title = f"  Motor responses (GPIO {gpio_motor})"
 
             if state['emulate']:
@@ -370,14 +248,12 @@ def main(stdscr, args):
             except curses.error:
                 pass
 
-            # Separator
             try:
                 sep = "\u2500" * left_w + "\u253C" + "\u2500" * right_w
                 stdscr.addstr(1, 0, sep[:width - 1], curses.A_DIM)
             except curses.error:
                 pass
 
-            # Entries
             for row in range(view_height):
                 y = row + 2
                 if y >= height - 2:
@@ -406,14 +282,12 @@ def main(stdscr, args):
                     except curses.error:
                         pass
 
-            # Bottom separator
             try:
                 bot_sep = "\u2500" * left_w + "\u2534" + "\u2500" * right_w
                 stdscr.addstr(height - 2, 0, bot_sep[:width - 1], curses.A_DIM)
             except curses.error:
                 pass
 
-            # Footer
             mode_str = ""
             if changes_only:
                 mode_str = " [CHANGES]"
@@ -433,7 +307,6 @@ def main(stdscr, args):
 
             stdscr.refresh()
 
-            # Key handling
             try:
                 key = stdscr.getch()
             except curses.error:
@@ -459,7 +332,7 @@ def main(stdscr, args):
                     state['emulate'] = True
                     t = threading.Thread(
                         target=emulate_thread,
-                        args=(pi, gpio_write, args.baud,
+                        args=(pi, gpio_wr,
                               entries, lock, state, write_lock),
                         daemon=True)
                     t.start()
@@ -501,16 +374,9 @@ def main(stdscr, args):
 
     finally:
         state['running'] = False
-        try:
-            pi.bb_serial_read_close(gpio_console)
-        except Exception:
-            pass
-        try:
-            pi.bb_serial_read_close(gpio_motor)
-        except Exception:
-            pass
-        pi.write(gpio_write, 0)
-        pi.set_mode(gpio_write, pigpio.INPUT)
+        gpio_read_close(pi, gpio_console)
+        gpio_read_close(pi, gpio_motor)
+        gpio_write_close(pi, gpio_wr)
         pi.stop()
 
 
@@ -518,17 +384,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Dual Protocol Monitor — GPIO Edition')
     parser.add_argument('--gpio-console', type=int,
-                        default=DEFAULT_GPIO_CONSOLE,
-                        help=f'GPIO for pin 6 console side read '
-                             f'(default: {DEFAULT_GPIO_CONSOLE})')
+                        default=get_gpio('console_read'),
+                        help='GPIO for pin 6 console side read')
     parser.add_argument('--gpio-write', type=int,
-                        default=DEFAULT_GPIO_WRITE,
-                        help=f'GPIO for pin 6 motor side write '
-                             f'(default: {DEFAULT_GPIO_WRITE})')
+                        default=get_gpio('motor_write'),
+                        help='GPIO for pin 6 motor side write')
     parser.add_argument('--gpio-motor', type=int,
-                        default=DEFAULT_GPIO_MOTOR,
-                        help=f'GPIO for pin 3 motor responses read '
-                             f'(default: {DEFAULT_GPIO_MOTOR})')
+                        default=get_gpio('motor_read'),
+                        help='GPIO for pin 3 motor responses read')
     parser.add_argument('--baud', '-b', type=int, default=BAUD,
                         help=f'Baud rate (default: {BAUD})')
     args = parser.parse_args()

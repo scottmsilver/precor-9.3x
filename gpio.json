@@ -1,0 +1,20 @@
+{
+  "console_read": {
+    "gpio": 27,
+    "physical_pin": 13,
+    "description": "Pin 6 console side — reads KV commands from controller",
+    "direction": "in"
+  },
+  "motor_write": {
+    "gpio": 22,
+    "physical_pin": 15,
+    "description": "Pin 6 motor side — sends KV commands to motor (proxy/emulate)",
+    "direction": "out"
+  },
+  "motor_read": {
+    "gpio": 17,
+    "physical_pin": 11,
+    "description": "Pin 3 — reads KV responses from motor",
+    "direction": "in"
+  }
+}

@@ -4,119 +4,99 @@ Reverse-engineering and control tools for the Precor 9.31 (and similar) treadmil
 
 ## Hardware Setup
 
-The console and motor communicate over a 6-pin cable at 9600 baud, 8N1, 5V TTL. Two pins carry data:
+The console and motor communicate over a 6-pin cable at 9600 baud, 8N1, using RS-485 signaling (idle LOW, inverted polarity). Both pins carry the same KV text protocol:
 
-- **Pin 6** (Controller to Motor) — text-based `[key:value]` protocol, 0xFF delimited
-- **Pin 3** (Motor to Controller) — binary `R...E` frame protocol
+- **Pin 6** (Controller to Motor) — `[key:value]` commands, 0xFF delimited
+- **Pin 3** (Motor to Controller) — `[key:value]` responses
 
-### Wiring
-
-Pin 6 is **cut** and connected through two RS485 USB adapters, allowing the Raspberry Pi to intercept and proxy (or replace) controller commands. Pin 3 is **tapped** passively with an FTDI TTL adapter.
+Pin 6 is **cut** and wired through the Raspberry Pi's GPIO, allowing it to intercept and proxy (or replace) controller commands. Pin 3 is **tapped** passively.
 
 ```
-Console ──pin6──> [ACM0] Pi [ACM1] ──pin6──> Motor
-                                   Motor ──pin3──> [USB0] Pi (tap)
+Console ──pin6──> [GPIO 27] Pi [GPIO 22] ──pin6──> Motor
+                                Motor ──pin3──> [GPIO 17] Pi (tap)
 ```
 
-Port mappings are configured in `ports.json`:
+GPIO pin assignments are configured in `gpio.json`:
 
-| Logical Name    | Device        | Role                                        |
-|-----------------|---------------|---------------------------------------------|
-| `controller_tx` | `/dev/ttyACM0` | Reads KV commands from the console          |
-| `motor_rx`      | `/dev/ttyACM1` | Writes KV commands to the motor (proxy)     |
-| `motor_tx`      | `/dev/ttyUSB0` | Reads binary responses from the motor (tap) |
+| Logical Name    | GPIO | Physical Pin | Role                              |
+|-----------------|------|--------------|-----------------------------------|
+| `console_read`  | 27   | 13           | Reads KV commands from console    |
+| `motor_write`   | 22   | 15           | Writes KV commands to motor       |
+| `motor_read`    | 17   | 11           | Reads KV responses from motor     |
 
-## Protocols
+The Pi reads and writes RS-485 using pigpio's bit-banged serial with `invert=1`.
 
-### Pin 6 — KV Text Protocol
+## Protocol
 
-The console sends a repeating 15-key cycle to the motor. Each command is `[key]` or `[key:value]` followed by `0xFF`. Keys are sent in bursts of 3-5 with ~100ms between bursts.
+### KV Text Protocol
 
-Cycle: `inc, hmph, mph, amps, err, belt, vbus, lift, lfts, lftg, part, ver, type, diag, loop`
-
-### Pin 3 — Binary Frame Protocol
-
-The motor responds with binary frames:
+Both directions use `[key:value]` text framing. The console sends a repeating 14-key cycle to the motor, in bursts with ~100ms gaps:
 
 ```
-52 [type] [payload...] 45 00
-|         |            |
-|         |            +-- Frame end (0x45 0x00, or 0x45 followed by 0x52)
-|         +-- Payload bytes (often contain 0x8B separator + base-16 digits)
-|
-+-- Frame start (0x52)
+inc, hmph, amps, err, belt, vbus, lift, lfts, lftg, part, ver, type, diag, loop
 ```
 
-Note: Pin 6 frames end with `45 01`; pin 3 frames end with `45 00`.
+Commands with values: `[key:value]\xff` — Commands without: `[key]\xff`
 
-#### Known Frame Types
+The motor responds with `[key:value]` (no 0xFF delimiter).
 
-| Type | Name     | Correlation | Description                |
-|------|----------|-------------|----------------------------|
-| 0x2A | SET_SPD  | —           | Speed setting              |
-| 0x4B | SET_INC  | —           | Incline setting            |
-| 0x4F | DISP1    | —           | Display data               |
-| 0x51 | DISP2    | —           | Display data               |
-| 0x52 | INC_R    | `inc` 70%   | Incline response           |
-| 0x54 | DIAG_R   | `diag` 83%  | Diagnostic response        |
-| 0x49 | BELT_R   | `belt` 75%  | Belt response              |
-| 0x22 | MPH_R    | `mph` 100%  | Speed response             |
-| 0x12 | HMPH_R   | `hmph` 71%  | Half-mph response          |
-| 0xAA | LIFT_R   | `lift` 55%  | Lift response              |
-| 0xD4 | TYPE_R   | `type` 61%  | Type response              |
-| 0x4D | PART_R   | `part` 39%  | Part response              |
+### Speed Encoding
 
-#### Custom Base-16 Digit Set
+Speed is sent via the `hmph` key as mph x 100, in uppercase hex:
 
-Speed and incline values use a non-standard base-16 encoding:
+| Speed  | hmph value |
+|--------|-----------|
+| 1.2 mph | `78`     |
+| 1.5 mph | `96`     |
+| 2.5 mph | `FA`     |
 
-```
-Value:  0    1    2    3    4    5    6    7    8    9   10   11   12   13   14   15
-Byte:  9F   9D   9B   99   97   95   93   91   8F   8D   7D   7B   79   77   75   73
+## Prerequisites
+
+```bash
+sudo apt install pigpio
+sudo pigpiod        # must be running
+pip install pigpio
+pip install fastapi uvicorn  # for web UI only
 ```
 
 ## Tools
 
 | File              | Description                                              |
 |-------------------|----------------------------------------------------------|
-| `dual_monitor.py` | Side-by-side curses UI: KV (pin 6) and binary (pin 3) with proxy and controller emulation |
-| `monitor.py`      | Single-port curses packet monitor with recording         |
-| `emulate.py`      | Console emulator — replays captured binary heartbeat cycle to control motor directly |
-| `sniff.py`        | Packet sniffer with unique/all/parsed/graph modes        |
-| `send_cmd.py`     | One-shot command sender (speed, incline, raw bytes)      |
-| `listen.py`       | Serial listener with auto-detect, changes, and unique filtering |
-| `protocol.py`     | Shared protocol library (encoding, decoding, constants)  |
-| `ports.py`        | Port configuration helper (resolves logical names from `ports.json`) |
+| `dual_monitor.py` | Side-by-side curses UI with proxy and controller emulation |
+| `server.py`       | FastAPI web server with WebSocket for phone control       |
+| `listen.py`       | Simple KV listener with changes/unique filtering          |
+| `gpio_serial.py`  | Raw GPIO serial reader for debugging                      |
+| `gpio_pins.py`    | Shared library: GPIO config, KV parsing, serial I/O      |
 
 ### Quick Start
 
 ```bash
-pip install pyserial
+sudo pigpiod
 
 # Main tool: dual monitor with side-by-side view
 python3 dual_monitor.py
 
-# Emulate the controller (talk directly to the motor)
-#   Press 'e' in dual_monitor to enter emulate mode, or:
-python3 emulate.py --speed 2.0
+# Simple listener
+python3 listen.py                    # console commands (default)
+python3 listen.py motor_read         # motor responses
+python3 listen.py --changes          # only show value changes
 
-# Sniff unique packets for 30 seconds
-python3 sniff.py
-
-# Send a single speed command
-python3 send_cmd.py speed 3.5
+# Web UI (phone-friendly)
+python3 server.py
+# Open http://<pi-ip>:8000
 ```
 
 ### dual_monitor.py
 
-The primary tool. Shows KV text commands on the left pane and binary motor responses on the right, with independent scrolling.
+The primary tool. Left pane shows console commands (or emulated commands), right pane shows motor responses.
 
 ```
- pin6 KV (ACM0↔ACM1)        [PROXY ON]│  MOT→CTRL pin3 bin (USB0)
-──────────────────────────────────────┼────────────────────────────
-   0.1  inc      0                    │   0.1  INC_R    =0
-   0.1  hmph     0                    │   0.2  DIAG_R   =0
-   0.1  mph      0                    │   0.2  BELT_R   =0
+ Console→Motor (GPIO 27→22)  [PROXY]│  Motor responses (GPIO 17)
+────────────────────────────────────┼──────────────────────────────
+   0.1  inc      0                  │   0.1  inc      0
+   0.1  hmph     0                  │   0.2  belt     12A4
+   0.1  amps     23                 │   0.2  type     6
 ```
 
 Key bindings:
@@ -124,7 +104,7 @@ Key bindings:
 | Key       | Action                                        |
 |-----------|-----------------------------------------------|
 | `e`       | Toggle emulate mode (replace controller)      |
-| `+` / `-` | Adjust speed (emulate mode)                   |
+| `+` / `-` | Adjust speed by 0.5 mph (emulate mode)       |
 | `]` / `[` | Adjust incline (emulate mode)                 |
 | `p`       | Toggle proxy (forward controller to motor)    |
 | `f`       | Toggle follow / pause scrolling               |
