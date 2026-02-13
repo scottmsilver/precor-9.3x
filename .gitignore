@@ -9,6 +9,7 @@ venv/
 # Captures and logs (large files)
 *.jsonl
 *.log
+*.csv
 
 # Editor backups
 *~
