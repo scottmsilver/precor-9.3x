@@ -21,7 +21,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from treadmill_client import TreadmillClient
+from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("treadmill")
@@ -149,13 +149,32 @@ manager = ConnectionManager()
 
 
 def build_status():
-    mph = state["emu_speed"] / 10
+    emu_mph = state["emu_speed"] / 10
+    # Decode live speed from motor hmph response (hex mph*100)
+    speed = None
+    hmph = latest["last_motor"].get("hmph")
+    if hmph:
+        try:
+            speed = int(hmph, 16) / 100
+        except ValueError:
+            pass
+    # Decode live incline from motor inc response
+    incline = None
+    inc = latest["last_motor"].get("inc")
+    if inc:
+        try:
+            incline = float(inc)
+        except ValueError:
+            pass
     return {
         "type": "status",
         "proxy": state["proxy"],
         "emulate": state["emulate"],
-        "emu_speed_mph": mph,
+        "emu_speed": state["emu_speed"],
+        "emu_speed_mph": emu_mph,
         "emu_incline": state["emu_incline"],
+        "speed": speed,
+        "incline": incline,
         "motor": latest["last_motor"],
     }
 
@@ -204,7 +223,7 @@ async def get_status():
 
 @app.post("/api/speed")
 async def set_speed(req: SpeedRequest):
-    state["emu_speed"] = max(0, min(int(req.value * 10), 120))
+    state["emu_speed"] = max(0, min(int(req.value * 10), MAX_SPEED_TENTHS))
     client.set_speed(req.value)
     await broadcast_status()
     return build_status()
@@ -212,7 +231,7 @@ async def set_speed(req: SpeedRequest):
 
 @app.post("/api/incline")
 async def set_incline(req: InclineRequest):
-    state["emu_incline"] = max(0, min(req.value, 99))
+    state["emu_incline"] = max(0, min(req.value, MAX_INCLINE))
     client.set_incline(req.value)
     await broadcast_status()
     return build_status()

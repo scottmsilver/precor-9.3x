@@ -21,6 +21,8 @@ import socket
 import threading
 
 SOCK_PATH = "/tmp/treadmill_io.sock"
+MAX_SPEED_TENTHS = 120  # 12.0 mph max, in tenths
+MAX_INCLINE = 99
 
 
 class TreadmillClient:

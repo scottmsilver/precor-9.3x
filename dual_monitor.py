@@ -20,7 +20,7 @@ import threading
 import time
 from collections import deque
 
-from treadmill_client import TreadmillClient
+from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, SOCK_PATH, TreadmillClient
 
 MAX_ENTRIES = 2000
 
@@ -260,8 +260,13 @@ def main(stdscr, args):
                 changes_only = False
                 c_scroll = m_scroll = 0
             elif key == ord("p") or key == ord("P"):
-                state["proxy"] = not state["proxy"]
-                client.set_proxy(state["proxy"])
+                if not state["proxy"]:
+                    state["emulate"] = False
+                    state["proxy"] = True
+                    client.set_proxy(True)
+                else:
+                    state["proxy"] = False
+                    client.set_proxy(False)
             elif key == ord("e") or key == ord("E"):
                 if not state["emulate"]:
                     state["proxy"] = False
@@ -272,7 +277,7 @@ def main(stdscr, args):
                     client.set_emulate(False)
             elif key == ord("+") or key == ord("="):
                 if state["emulate"]:
-                    state["emu_speed"] = min(state["emu_speed"] + 5, 120)
+                    state["emu_speed"] = min(state["emu_speed"] + 5, MAX_SPEED_TENTHS)
                     client.set_speed(state["emu_speed"] / 10)
             elif key == ord("-") or key == ord("_"):
                 if state["emulate"]:
@@ -280,7 +285,7 @@ def main(stdscr, args):
                     client.set_speed(state["emu_speed"] / 10)
             elif key == ord("]"):
                 if state["emulate"]:
-                    state["emu_incline"] = min(state["emu_incline"] + 1, 99)
+                    state["emu_incline"] = min(state["emu_incline"] + 1, MAX_INCLINE)
                     client.set_incline(state["emu_incline"])
             elif key == ord("["):
                 if state["emulate"]:
@@ -311,6 +316,6 @@ def main(stdscr, args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Dual Protocol Monitor — Client Edition")
-    parser.add_argument("--socket", "-s", default="/tmp/treadmill_io.sock", help="Path to treadmill_io Unix socket")
+    parser.add_argument("--socket", "-s", default=SOCK_PATH, help="Path to treadmill_io Unix socket")
     args = parser.parse_args()
     curses.wrapper(lambda s: main(s, args))

@@ -14,7 +14,7 @@ Usage:
 import argparse
 import threading
 
-from treadmill_client import TreadmillClient
+from treadmill_client import SOCK_PATH, TreadmillClient
 
 
 def main():
@@ -28,7 +28,7 @@ def main():
     )
     parser.add_argument("--changes", "-c", action="store_true", help="Only show when a key's value changes")
     parser.add_argument("--unique", "-u", action="store_true", help="Only show each unique (key, value) pair once")
-    parser.add_argument("--socket", "-s", default="/tmp/treadmill_io.sock", help="Path to treadmill_io Unix socket")
+    parser.add_argument("--socket", "-s", default=SOCK_PATH, help="Path to treadmill_io Unix socket")
     args = parser.parse_args()
 
     mode = "changes" if args.changes else "unique" if args.unique else "all"

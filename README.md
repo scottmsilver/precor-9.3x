@@ -2,6 +2,30 @@
 
 Reverse-engineering and control tools for the Precor 9.31 (and similar) treadmill serial bus between the console (Upper PCA) and motor controller (Lower PCA).
 
+## Architecture
+
+A C binary (`treadmill_io`) handles all GPIO I/O directly via libpigpio, cutting out the pigpiod daemon for lower latency. Python tools connect via a Unix domain socket for monitoring and control.
+
+```
+┌──────────────────────────────────┐
+│  treadmill_io (C, runs as root)  │
+│  Links libpigpio directly        │
+│                                  │
+│  GPIO 27 read ──┐                │
+│                 ├→ proxy → GPIO 22 write
+│  GPIO 17 read   │                │
+│  Emulate cycle ─┘                │
+│  Unix socket server              │
+└──────────┬───────────────────────┘
+           │ /tmp/treadmill_io.sock
+┌──────────┴───────────────────────┐
+│  Python clients                  │
+│  dual_monitor.py — curses TUI    │
+│  server.py — FastAPI/WebSocket   │
+│  listen.py — simple CLI          │
+└──────────────────────────────────┘
+```
+
 ## Hardware Setup
 
 The console and motor communicate over a 6-pin cable at 9600 baud, 8N1, using RS-485 signaling (idle LOW, inverted polarity). Both pins carry the same KV text protocol:
@@ -13,7 +37,7 @@ Pin 6 is **cut** and wired through the Raspberry Pi's GPIO, allowing it to inter
 
 ```
 Console ──pin6──> [GPIO 27] Pi [GPIO 22] ──pin6──> Motor
-                                Motor ──pin3──> [GPIO 17] Pi (tap)
+                               Motor ──pin3──> [GPIO 17] Pi (tap)
 ```
 
 GPIO pin assignments are configured in `gpio.json`:
@@ -23,8 +47,6 @@ GPIO pin assignments are configured in `gpio.json`:
 | `console_read`  | 27   | 13           | Reads KV commands from console    |
 | `motor_write`   | 22   | 15           | Writes KV commands to motor       |
 | `motor_read`    | 17   | 11           | Reads KV responses from motor     |
-
-The Pi reads and writes RS-485 using pigpio's bit-banged serial with `invert=1`.
 
 ## Protocol
 
@@ -53,38 +75,70 @@ Speed is sent via the `hmph` key as mph x 100, in uppercase hex:
 ## Prerequisites
 
 ```bash
-sudo apt install pigpio
-sudo pigpiod        # must be running
-pip install pigpio
+sudo apt install pigpio    # libpigpio for C binary
 pip install fastapi uvicorn  # for web UI only
 ```
 
-## Tools
-
-| File              | Description                                              |
-|-------------------|----------------------------------------------------------|
-| `dual_monitor.py` | Side-by-side curses UI with proxy and controller emulation |
-| `server.py`       | FastAPI web server with WebSocket for phone control       |
-| `listen.py`       | Simple KV listener with changes/unique filtering          |
-| `gpio_serial.py`  | Raw GPIO serial reader for debugging                      |
-| `gpio_pins.py`    | Shared library: GPIO config, KV parsing, serial I/O      |
-
-### Quick Start
+## Building
 
 ```bash
-sudo pigpiod
+make                # builds treadmill_io C binary
+```
 
-# Main tool: dual monitor with side-by-side view
-python3 dual_monitor.py
+## Quick Start
 
-# Simple listener
-python3 listen.py                    # console commands (default)
-python3 listen.py motor_read         # motor responses
-python3 listen.py --changes          # only show value changes
+```bash
+# 1. Start the C I/O binary (must be root for GPIO access)
+sudo ./treadmill_io
 
-# Web UI (phone-friendly)
-python3 server.py
-# Open http://<pi-ip>:8000
+# 2. Run any Python client (no root needed)
+python3 dual_monitor.py          # curses TUI
+python3 server.py                # web UI at http://<pi-ip>:8000
+python3 listen.py                # simple CLI listener
+python3 listen.py --source motor # motor responses only
+python3 listen.py --changes      # only show value changes
+```
+
+**Note:** `pigpiod` must NOT be running — `treadmill_io` links libpigpio directly and they conflict.
+
+## Files
+
+| File                | Description                                              |
+|---------------------|----------------------------------------------------------|
+| `treadmill_io.c`    | C binary: GPIO I/O, KV parsing, proxy, emulate, IPC     |
+| `Makefile`          | Builds `treadmill_io` with `-lpigpio -lrt -pthread`      |
+| `treadmill_client.py` | Python client library for the C binary (Unix socket)   |
+| `dual_monitor.py`   | Side-by-side curses TUI with proxy and emulation         |
+| `server.py`         | FastAPI web server with WebSocket for phone control      |
+| `listen.py`         | Simple KV listener with source/changes/unique filtering  |
+| `gpio.json`         | GPIO pin assignments (read by `treadmill_io` at startup) |
+| `static/index.html` | Mobile-responsive web UI (Alpine.js)                     |
+
+### Modes
+
+- **Proxy mode** (default) — forwards intercepted console commands to the motor unchanged
+- **Emulate mode** — replaces the console entirely, sending synthesized KV commands with adjustable speed/incline
+
+Proxy and emulate are mutually exclusive.
+
+### IPC Protocol
+
+Python tools communicate with `treadmill_io` via newline-delimited JSON over `/tmp/treadmill_io.sock`.
+
+**C → Python:**
+```json
+{"type":"kv","ts":1.23,"source":"console","key":"hmph","value":"78"}
+{"type":"kv","ts":1.23,"source":"motor","key":"belt","value":"14"}
+{"type":"status","proxy":true,"emulate":false,"emu_speed":0,"emu_incline":0}
+```
+
+**Python → C:**
+```json
+{"cmd":"proxy","enabled":true}
+{"cmd":"emulate","enabled":true}
+{"cmd":"speed","value":1.2}
+{"cmd":"incline","value":5}
+{"cmd":"status"}
 ```
 
 ### dual_monitor.py
@@ -92,11 +146,11 @@ python3 server.py
 The primary tool. Left pane shows console commands (or emulated commands), right pane shows motor responses.
 
 ```
- Console→Motor (GPIO 27→22)  [PROXY]│  Motor responses (GPIO 17)
-────────────────────────────────────┼──────────────────────────────
-   0.1  inc      0                  │   0.1  inc      0
-   0.1  hmph     0                  │   0.2  belt     12A4
-   0.1  amps     23                 │   0.2  type     6
+ Console→Motor (via treadmill_io) [PROXY]│  Motor responses
+─────────────────────────────────────────┼──────────────────────────────
+   0.1  inc      0                       │   0.1  inc      0
+   0.1  hmph     0                       │   0.2  belt     12A4
+   0.1  amps     23                      │   0.2  type     6
 ```
 
 Key bindings:
@@ -112,6 +166,11 @@ Key bindings:
 | `u`       | Show only unique values                       |
 | `j` / `k` | Scroll down / up                              |
 | `q`       | Quit                                          |
+
+### Analysis Tools (offline)
+
+- `analyze_logic.py` — decodes logic analyzer CSVs with standard UART polarity
+- `decode_inverted.py` — decodes logic analyzer CSVs with inverted polarity detection
 
 ## License
 

@@ -168,34 +168,27 @@ function app() {
         if (msg.type === 'status') {
           this.proxy = msg.proxy;
           this.emulate = msg.emulate;
-          this.emu_speed = msg.emu_speed;
-          this.emu_incline = msg.emu_incline;
-          if (msg.speed !== null) this.speed = msg.speed;
-          if (msg.incline !== null) this.incline = msg.incline;
+          if (msg.emu_speed != null) this.emu_speed = msg.emu_speed;
+          if (msg.emu_incline != null) this.emu_incline = msg.emu_incline;
+          if (msg.speed != null) this.speed = msg.speed;
+          if (msg.incline != null) this.incline = msg.incline;
         } else if (msg.type === 'kv') {
           const text = `${msg.ts.toFixed(1).padStart(7)}  ${msg.key.padEnd(8)} ${msg.value}`;
-          this.kvLog.push({ id: ++idCounter, text, source: msg.source });
-          if (this.kvLog.length > 200) this.kvLog.splice(0, this.kvLog.length - 200);
-          this.$nextTick(() => {
-            const pane = this.$refs.kvPane;
-            if (pane) pane.scrollTop = pane.scrollHeight;
-          });
-        } else if (msg.type === 'bin') {
-          const text = `${msg.ts.toFixed(1).padStart(7)}  ${msg.name.padEnd(8)} ${msg.meaning}`;
-          this.binLog.push({ id: ++idCounter, text });
-          if (this.binLog.length > 200) this.binLog.splice(0, this.binLog.length - 200);
-          // Update gauges from decoded binary frames
-          if (msg.name === 'SET_SPD' && msg.meaning.startsWith('spd=')) {
-            const v = parseFloat(msg.meaning.split('=')[1]);
-            if (!isNaN(v)) this.speed = v;
-          } else if (msg.name === 'SET_INC' && msg.meaning.startsWith('inc=')) {
-            const v = parseFloat(msg.meaning.split('=')[1]);
-            if (!isNaN(v)) this.incline = v;
+          if (msg.source === 'motor') {
+            this.binLog.push({ id: ++idCounter, text });
+            if (this.binLog.length > 200) this.binLog.splice(0, this.binLog.length - 200);
+            this.$nextTick(() => {
+              const pane = this.$refs.binPane;
+              if (pane) pane.scrollTop = pane.scrollHeight;
+            });
+          } else {
+            this.kvLog.push({ id: ++idCounter, text, source: msg.source });
+            if (this.kvLog.length > 200) this.kvLog.splice(0, this.kvLog.length - 200);
+            this.$nextTick(() => {
+              const pane = this.$refs.kvPane;
+              if (pane) pane.scrollTop = pane.scrollHeight;
+            });
           }
-          this.$nextTick(() => {
-            const pane = this.$refs.binPane;
-            if (pane) pane.scrollTop = pane.scrollHeight;
-          });
         }
       };
     },
@@ -214,8 +207,8 @@ function app() {
     },
 
     setSpeed(delta) {
-      this.emu_speed = Math.max(0, Math.min(this.emu_speed + delta, 999));
-      this.post('/api/speed', { value: this.emu_speed });
+      this.emu_speed = Math.max(0, Math.min(this.emu_speed + delta, 120));
+      this.post('/api/speed', { value: this.emu_speed / 10 });
     },
 
     setIncline(delta) {
