@@ -22,7 +22,9 @@ python3 server.py              # FastAPI web server on port 8000
 ## Dependencies
 
 - `pigpio` (system package, libpigpio) — linked by `treadmill_io` for GPIO access
-- `fastapi`, `uvicorn` — web server (server.py only)
+- `fastapi`, `uvicorn`, `python-multipart` — web server (server.py)
+- `gpxpy` — GPX route parsing (server.py)
+- `pytest`, `pytest-asyncio` — test suite
 - Build: `make` (gcc, libpigpio-dev)
 
 ## Architecture
@@ -57,16 +59,137 @@ Both directions use `[key:value]` text framing at 9600 baud, 8N1.
 
 ### Application Modes
 
-`dual_monitor.py` and `server.py` share the same mode logic:
 - **Proxy mode** — forwards intercepted console commands to the motor unchanged
 - **Emulate mode** — replaces the console entirely, sending synthesized KV commands with adjustable speed/incline
-- Proxy and emulate are mutually exclusive (toggling one disables the other)
+- Proxy and emulate are mutually exclusive; transitions are **automatic** (see Auto Proxy/Emulate Mode below)
+- Manual toggle available via debug mode (triple-tap connection dot in UI)
 
 ### Web UI
 
 `server.py` serves `static/index.html` — a mobile-responsive Alpine.js interface with WebSocket for real-time KV data streaming and REST endpoints for speed/incline/mode control.
 
+### AI Coach — Gemini Integration
+
+`program_engine.py` handles Gemini API calls and interval program execution:
+- **Gemini model**: `gemini-2.5-flash` via REST API with function calling
+- **Tools**: `set_speed`, `set_incline`, `start_workout`, `stop_treadmill`, `pause/resume/skip`, `extend_interval`, `add_time`
+- **ProgramState**: manages interval execution with 1s tick loop, pause/skip/extend support, encouragement milestones (25/50/75%)
+- **GPX import**: `POST /api/gpx/upload` parses GPX routes into incline-based interval programs
+
+### Program History
+
+Recently generated/loaded programs are saved to `program_history.json` (max 10 entries). Programs are deduplicated by name. History is accessible via REST API and shown as a horizontal scroll in the UI.
+
+### Auto Proxy/Emulate Mode
+
+The C binary auto-detects mode transitions (no manual toggle needed):
+- **Speed/incline command received** → auto-enables emulate mode
+- **Console button press detected** (hmph/inc value change while emulating) → auto-switches to proxy mode
+
+This logic lives in the C binary (not Python) so that mode transitions work even if the Python server crashes — the treadmill stays responsive to physical console buttons regardless of software state.
+
 ### Analysis Tools (offline)
 
 - `analyze_logic.py` — decodes logic analyzer CSVs with standard UART polarity
 - `decode_inverted.py` — decodes logic analyzer CSVs with inverted polarity detection
+
+## Testing
+
+```bash
+# Fast unit tests (mocked sleep, <1s)
+python3 -m pytest tests/test_program_engine.py tests/test_server_integration.py -v
+
+# Live integration tests (real asyncio.sleep, ~45s)
+python3 -m pytest tests/test_live_program.py -v
+
+# Hardware tests (Pi only, treadmill must be connected)
+python3 -m pytest tests/test_hardware_integration.py -v -s -m hardware
+
+# All non-hardware tests
+python3 -m pytest -m "not hardware" -v
+```
+
+## API Reference
+
+### Status & Control
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | Current treadmill state (speed, incline, mode) |
+| `/api/speed` | POST | Set belt speed. Body: `{"value": <mph>}` |
+| `/api/incline` | POST | Set incline grade. Body: `{"value": <int>}` |
+| `/api/emulate` | POST | Toggle emulate mode (debug). Body: `{"enabled": true}` |
+| `/api/proxy` | POST | Toggle proxy mode (debug). Body: `{"enabled": true}` |
+
+### Programs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/program` | GET | Current program state |
+| `/api/program/generate` | POST | Generate program via Gemini. Body: `{"prompt": "..."}` |
+| `/api/program/start` | POST | Start the loaded program |
+| `/api/program/stop` | POST | Stop program, zero speed/incline |
+| `/api/program/pause` | POST | Toggle pause/resume |
+| `/api/program/skip` | POST | Skip to next interval |
+| `/api/program/extend` | POST | Adjust current interval. Body: `{"seconds": <int>}` |
+
+### History & Import
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/programs/history` | GET | List recent programs (max 10) |
+| `/api/programs/history/{id}/load` | POST | Reload a saved program |
+| `/api/gpx/upload` | POST | Upload GPX route file (multipart form) |
+
+### AI Chat
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat` | POST | Send message to AI coach. Body: `{"message": "..."}`. Returns `{"text": "...", "actions": [...]}` |
+
+### WebSocket
+| Endpoint | Description |
+|----------|-------------|
+| `/ws` | Real-time KV data stream + program state updates. Receives JSON messages with `type: "status"` or `type: "program"`. |
+
+## Code Review Standards
+
+When reviewing or writing code in this project, enforce these principles:
+
+### Docs Stay Current
+- **CLAUDE.md must reflect reality.** If you add a feature, endpoint, mode, or dependency, update this file. Stale docs are a bug.
+- Inline comments only where the "why" isn't obvious. Don't comment the "what."
+
+### Tests Are Real
+- **Two tiers required:** fast unit tests (mocked I/O, <1s) AND live integration tests (real `asyncio.sleep`, real timers, ~seconds).
+- Unit tests verify logic in isolation. Live tests prove the system actually works end-to-end with real timing.
+- Hardware tests (`@pytest.mark.hardware`) exist for Pi-only verification but aren't required to pass in CI.
+- Every behavior-changing PR should have at least one test that would fail without the change.
+
+### DRY
+- Constants live in one place (e.g., `MAX_SPEED_TENTHS` in `treadmill_client.py`, shared by C and Python).
+- Don't duplicate logic between `_exec_fn()` and REST endpoints — they should share the same code path.
+- If you see the same 3+ lines in two places, extract it.
+
+### Clear Layers
+
+**C binary** (`treadmill_io.c`): Transport layer only. This code must be:
+- **Incredibly narrow in scope**: GPIO I/O, KV protocol parsing, proxy forwarding, emulation cycle. Nothing else.
+- **Very fast**: bit-banged serial at 9600 baud with DMA waveforms. No allocations in hot paths, no blocking.
+- **Safety-critical**: the 3-hour timeout, the zero-speed-on-emulate-start, and auto proxy/emulate detection live here because they must work even if Python is dead.
+- No application logic, no knowledge of programs/workouts/AI. It just moves bytes and manages modes.
+- Note: The C binary accepts incline 0-99 (hardware range). The application layer (Python/Gemini) enforces 0-15 for safety.
+
+**Python client** (`treadmill_client.py`): Thin IPC wrapper to the C binary. No business logic.
+
+**Program engine** (`program_engine.py`): Interval execution + Gemini API. No HTTP, no GPIO, no imports from server.
+
+**Server** (`server.py`): **All shared business logic lives here.** This is the single source of truth for:
+- State management (speed, incline, mode, program)
+- Endpoint validation and clamping
+- Coordinating between program engine and treadmill client
+- Multiple clients (web UI, future CLI, future watch app) all hit the same server — logic must not leak into any single client.
+
+**UI** (`static/index.html`): Display layer only. Principles:
+- **No business logic.** All decisions happen server-side. The UI calls API endpoints and renders what comes back.
+- **Safety first.** Stop button always visible when belt is moving. Emergency stop is one tap.
+- **Minimal by default.** Show only what's needed right now. Debug info (mode badge, raw state) hidden behind triple-tap.
+- **Beautiful and peaceful.** Warm muted palette, subtle texture, organic curves. No neon, no visual noise.
+- **Progressive disclosure.** Essential info (speed, time, current interval) is prominent. Settings, history, and debug are tucked away but accessible.
+- **Mobile/tablet first.** Touch targets 44px+, no hover-dependent interactions, responsive layout, haptic feedback.

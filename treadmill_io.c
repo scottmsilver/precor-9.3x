@@ -195,6 +195,9 @@ static volatile int emu_speed = 0;        /* tenths of mph (12 = 1.2 mph) */
 static volatile int emu_speed_raw = 0;    /* hundredths of mph for hex encoding */
 static volatile int emu_incline = 0;      /* incline percentage (0-99) */
 
+static char last_console_hmph[32] = "";  /* last seen hmph value from console */
+static char last_console_inc[32] = "";   /* last seen inc value from console */
+
 static volatile uint32_t console_bytes = 0;  /* total bytes received from console */
 static volatile uint32_t motor_bytes = 0;    /* total bytes received from motor */
 
@@ -526,6 +529,24 @@ static void *console_read_fn(void *arg) {
                 push_kv_event("console", pairs[i].key, pairs[i].value);
             }
 
+            /* Auto-detect: if console hmph/inc changes while in emulate mode,
+             * the user pressed physical buttons — switch back to proxy */
+            for (int i = 0; i < n; i++) {
+                if (strcmp(pairs[i].key, "hmph") == 0 || strcmp(pairs[i].key, "inc") == 0) {
+                    char *last = strcmp(pairs[i].key, "hmph") == 0 ? last_console_hmph : last_console_inc;
+                    if (last[0] != '\0' && strcmp(last, pairs[i].value) != 0 && emulate_enabled) {
+                        /* Console activity detected — user pressed physical buttons */
+                        fprintf(stderr, "[auto] console %s changed %s -> %s, switching to proxy\n",
+                                pairs[i].key, last, pairs[i].value);
+                        stop_emulate();
+                        proxy_enabled = 1;
+                        push_status();
+                    }
+                    strncpy(last, pairs[i].value, 31);
+                    last[31] = '\0';
+                }
+            }
+
             /* Shift unconsumed bytes to front of buffer */
             if (consumed > 0 && consumed < parse_len) {
                 memmove(parsebuf, parsebuf + consumed, parse_len - consumed);
@@ -704,7 +725,6 @@ static void handle_command(const char *line) {
         push_status();
     }
     else if (strstr(line, "\"cmd\":\"speed\"")) {
-        /* Value is mph as a float (e.g., 1.2). Convert to tenths internally. */
         double mph = 0;
         const char *vp = strstr(line, "\"value\":");
         if (vp) {
@@ -712,8 +732,13 @@ static void handle_command(const char *line) {
             int tenths = (int)(mph * 10 + 0.5);
             if (tenths < 0) tenths = 0;
             if (tenths > MAX_SPEED_TENTHS) tenths = MAX_SPEED_TENTHS;
+            /* Auto-enable emulate when speed is set */
+            if (!emulate_enabled) {
+                proxy_enabled = 0;
+                start_emulate_thread();
+            }
             emu_speed = tenths;
-            emu_speed_raw = tenths * 10;  /* hundredths for hex encoding */
+            emu_speed_raw = tenths * 10;
         }
         push_status();
     }
@@ -724,6 +749,11 @@ static void handle_command(const char *line) {
             sscanf(vp + 8, "%d", &val);
             if (val < 0) val = 0;
             if (val > MAX_INCLINE) val = MAX_INCLINE;
+            /* Auto-enable emulate when incline is set */
+            if (!emulate_enabled) {
+                proxy_enabled = 0;
+                start_emulate_thread();
+            }
             emu_incline = val;
         }
         push_status();

@@ -8,234 +8,503 @@
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #0a0a0a; --card: #151515; --elev: #1e1e1e; --input: #252525;
-  --text: #e8e8e8; --dim: #888; --muted: #444;
-  --green: #00e676; --orange: #ff9100; --cyan: #40c4ff;
-  --red: #ff1744; --purple: #e040fb;
+  /* Peaceful dark — warm earth tones */
+  --bg: #121210;
+  --card: #1E1D1B;
+  --elevated: #2A2925;
+  --tertiary: #36342F;
+  --input: #2A2925;
+
+  /* Text hierarchy */
+  --text: #E8E4DF;
+  --text2: rgba(232,228,223,0.6);
+  --text3: rgba(232,228,223,0.35);
+  --text4: rgba(232,228,223,0.18);
+
+  /* Muted natural colors */
+  --green: #7C9A82;
+  --red: #C45C52;
+  --blue: #6B8FA0;
+  --yellow: #B8A87A;
+  --orange: #A69882;
+  --pink: #B06B72;
+  --purple: #8B7FA0;
+  --teal: #6B8F8B;
+  --cyan: #6B8F8B;
+
+  /* Fills */
+  --fill: rgba(120,120,128,0.24);
+  --fill2: rgba(120,120,128,0.16);
+  --separator: rgba(84,84,88,0.65);
+
+  /* Radius */
+  --r-sm: 10px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-pill: 9999px;
+
+  /* Animation */
+  --ease: cubic-bezier(0.25,0.1,0.25,1);
+  --ease-spring: cubic-bezier(0.34,1.56,0.64,1);
+  --ease-decel: cubic-bezier(0,0,0.2,1);
 }
 html, body {
   height: 100%; background: var(--bg); color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   touch-action: manipulation; user-select: none;
 }
-body { display: flex; flex-direction: column; min-height: 100dvh; }
+body { display: flex; flex-direction: column; overflow: hidden; height: 100dvh; }
 
 /* Header */
 .hdr {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 20px; flex-shrink: 0;
+  padding: 4px 16px; flex-shrink: 0;
 }
-.hdr-left { display: flex; align-items: center; gap: 10px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); transition: background 0.3s; }
-.dot.on { background: var(--green); }
-.mode {
-  font-size: 0.6rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.08em; padding: 3px 10px; border-radius: 10px;
-  background: var(--elev); color: var(--muted);
+.hdr-left { display: flex; align-items: center; gap: 8px; }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red); transition: background 0.3s;
 }
-.mode.proxy { background: rgba(0,230,118,0.12); color: var(--green); }
-.mode.emu { background: rgba(224,64,251,0.12); color: var(--purple); }
+.dot.on { background: var(--green); animation: breathe 2.4s ease-in-out infinite; }
+@keyframes breathe {
+  0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(124,154,130,0.4); }
+  50% { opacity: 0.85; transform: scale(1.15); box-shadow: 0 0 8px 2px rgba(124,154,130,0.2); }
+}
+.mode-badge {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.02em; padding: 3px 10px; border-radius: 6px;
+  background: var(--fill2); color: var(--text3);
+}
+.mode-badge.proxy { background: rgba(124,154,130,0.15); color: var(--green); }
+.mode-badge.emu { background: rgba(139,127,160,0.15); color: var(--purple); }
 .gear {
-  background: none; border: none; color: var(--muted); font-size: 1.2rem;
-  cursor: pointer; padding: 4px 8px; -webkit-tap-highlight-color: transparent;
+  background: none; border: none; color: var(--text3); font-size: 1.2rem;
+  cursor: pointer; padding: 8px; border-radius: 50%;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease);
+}
+.gear:active { transform: scale(0.88); }
+
+/* Hero time with ambient glow */
+.hero {
+  text-align: center; padding: 4px 16px 4px; flex-shrink: 0;
+  position: relative;
+}
+.hero::before {
+  content: ''; position: absolute;
+  top: 50%; left: 50%; width: 200px; height: 140px;
+  transform: translate(-50%, -55%);
+  background: radial-gradient(ellipse, var(--teal) 0%, transparent 70%);
+  opacity: 0; filter: blur(50px);
+  pointer-events: none; z-index: 0;
+  transition: opacity 0.6s var(--ease);
+  will-change: opacity;
+}
+.hero.active::before { opacity: 0.25; }
+.hero-time {
+  position: relative; z-index: 1;
+  font-size: 96px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  color: var(--text); transition: color 0.35s, font-size 0.3s var(--ease);
+}
+.hero-time.zero { color: var(--text2); }
+
+/* Lobby prompt (idle state) */
+.lobby-prompt {
+  text-align: center; padding: 0 16px 12px;
+  font-size: 15px; color: var(--text3); font-weight: 500;
 }
 
-/* Hero speed */
-.hero { text-align: center; padding: 16px 20px 4px; flex-shrink: 0; }
-.hero-speed {
-  font-size: 5.5rem; font-weight: 800; line-height: 1;
-  font-variant-numeric: tabular-nums; letter-spacing: -0.04em;
-  color: var(--green); transition: color 0.3s;
-}
-.hero-speed.zero { color: var(--muted); }
-.hero-lbl { font-size: 0.7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 2px; }
-
-/* Inline speed/incline adjust */
-.adj {
-  display: flex; align-items: center; justify-content: center; gap: 4px;
-  padding: 6px 20px; flex-shrink: 0;
-}
-.adj-btn {
-  min-width: 48px; min-height: 40px; border-radius: 8px;
-  border: 1px solid var(--muted); background: transparent;
-  color: var(--dim); font-size: 0.75rem; font-weight: 600;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  -webkit-tap-highlight-color: transparent; transition: background 0.1s, border-color 0.1s;
-}
-.adj-btn:active { background: var(--elev); border-color: var(--dim); }
-.adj-val {
-  min-width: 56px; text-align: center; font-size: 1.1rem; font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Stats row */
-.stats {
-  display: flex; justify-content: center; gap: 32px;
-  padding: 12px 20px; flex-shrink: 0;
-}
-.stat { text-align: center; }
-.stat-val { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.stat-lbl { font-size: 0.55rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
-
-/* Program area */
-.pgm { padding: 0 20px; flex-shrink: 0; }
-.pgm-timeline {
-  display: flex; height: 6px; border-radius: 3px; overflow: hidden;
-  position: relative; margin-bottom: 12px; background: var(--elev);
-}
-.tl-seg { min-width: 2px; transition: opacity 0.3s; }
-.tl-seg.done { opacity: 0.3; }
-.tl-pos {
-  position: absolute; top: -3px; width: 3px; height: 12px;
-  background: #fff; border-radius: 2px; transition: left 1s linear;
-  box-shadow: 0 0 6px rgba(255,255,255,0.5);
-}
-.now-card {
-  background: var(--card); border-radius: 12px; padding: 14px 16px;
-  margin-bottom: 8px; position: relative; overflow: hidden;
-}
-.now-glow { position: absolute; top: 0; left: 0; right: 0; height: 2px; }
-.now-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
-.now-name { font-size: 0.9rem; font-weight: 700; }
-.now-targets { font-size: 0.75rem; color: var(--dim); }
-.now-countdown {
-  font-size: 2.2rem; font-weight: 800; line-height: 1;
-  font-variant-numeric: tabular-nums; margin-bottom: 6px;
-}
-.now-bar { height: 3px; border-radius: 2px; background: var(--elev); overflow: hidden; }
-.now-bar-fill { height: 100%; border-radius: 2px; transition: width 1s linear; }
-.next-row {
-  display: flex; justify-content: space-between; align-items: center;
-  padding: 8px 0; font-size: 0.75rem; color: var(--dim);
-}
-.pgm-stats {
+/* Read-only metrics (pace, miles) — subtle, under hero */
+.metrics-ro {
   display: flex; justify-content: center; gap: 20px;
-  font-size: 0.7rem; color: var(--dim); padding: 4px 0 8px;
-  font-variant-numeric: tabular-nums;
+  padding: 0 16px 4px; flex-shrink: 0;
 }
-.pgm-btns { display: flex; gap: 8px; margin-bottom: 8px; }
-.pgm-btn {
-  flex: 1; min-height: 40px; border-radius: 8px;
-  border: 1px solid var(--muted); background: transparent;
-  color: var(--dim); font-size: 0.7rem; font-weight: 700;
+.metric-ro { display: flex; align-items: baseline; gap: 4px; }
+.metric-ro-val {
+  font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.metric-ro-lbl { font-size: 10px; color: var(--text3); }
+
+/* Controllable metrics — speed & incline side by side */
+.controls {
+  display: flex; gap: 12px; padding: 0 12px; flex-shrink: 0;
+}
+.ctrl-panel {
+  flex: 1; display: flex; align-items: center; gap: 4px;
+  background: var(--card); border-radius: var(--r-lg);
+  padding: 8px 6px;
+}
+.ctrl-btns {
+  display: flex; flex-direction: column; gap: 3px;
+}
+.ctrl-btn {
+  width: 36px; height: 28px; border-radius: var(--r-sm);
+  border: 1px solid rgba(255,255,255,0.05);
+  background: var(--fill);
+  color: var(--text2); font-size: 14px; font-weight: 500;
+  font-family: inherit;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease), background 100ms var(--ease);
 }
-.pgm-btn:active { background: var(--elev); }
-.pgm-btn.stop { border-color: var(--red); color: var(--red); }
+.ctrl-btn:active { transform: scale(0.90); background: var(--fill2); }
+.ctrl-btn.coarse { font-size: 12px; opacity: 0.6; }
+.ctrl-panel.speed .ctrl-btn { color: var(--green); }
+.ctrl-panel.incline .ctrl-btn { color: var(--orange); }
+.ctrl-value {
+  flex: 1; text-align: center; min-width: 0;
+}
+.ctrl-val {
+  font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.ctrl-lbl {
+  font-size: 10px; color: var(--text3); margin-top: 1px;
+}
+
+/* Lobby history — expanded */
+.history-section.lobby {
+  padding: 12px 0; flex: 1; overflow-y: auto;
+}
+.history-section.lobby .history-scroll {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 0 16px; overflow-x: visible;
+}
+.history-section.lobby .history-card {
+  width: 100%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.history-section.lobby .history-name { font-size: 15px; }
+.history-section.lobby .history-meta { font-size: 12px; }
+
+/* Program area */
+.pgm-section { padding: 0 16px 4px; flex-shrink: 0; }
+
+/* Program HUD — combined elevation + interval */
+.pgm-hud {
+  position: relative; border-radius: var(--r-lg);
+  background: var(--card); overflow: hidden;
+  margin-bottom: 4px;
+}
+.pgm-hud-bg {
+  position: absolute; inset: 0; z-index: 0;
+  pointer-events: none;
+}
+.pgm-hud-bg svg { display: block; width: 100%; height: 100%; }
+.pgm-hud-content {
+  position: relative; z-index: 1;
+  padding: 10px 14px 8px;
+  display: flex; flex-direction: column;
+  min-height: 140px;
+}
+.pgm-hud-top {
+  display: flex; justify-content: space-between; align-items: center;
+}
+.pgm-hud-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 10px; border-radius: 6px;
+  font-size: 12px; font-weight: 600; text-transform: uppercase;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.pgm-hud-targets {
+  font-size: 12px; color: var(--text2); font-weight: 500;
+  background: rgba(30,29,27,0.6); padding: 2px 8px; border-radius: 4px;
+}
+.pgm-hud-center {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 12px;
+}
+.pgm-hud-countdown {
+  font-size: 52px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  text-shadow: 0 2px 12px rgba(0,0,0,0.5), 0 0 24px rgba(0,0,0,0.3);
+}
+.pgm-hud-timebtn {
+  width: 44px; height: 32px; border-radius: var(--r-sm);
+  border: none; background: rgba(120,120,128,0.2);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  color: var(--text2); font-size: 12px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease);
+}
+.pgm-hud-timebtn:active { transform: scale(0.90); }
+.pgm-hud-bar {
+  height: 3px; border-radius: 2px; background: rgba(120,120,128,0.16);
+  overflow: hidden; margin-top: 4px;
+}
+.pgm-hud-bar-fill { height: 100%; border-radius: 2px; transition: width 1s linear; }
+.pgm-hud-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; color: var(--text3); padding-top: 6px;
+}
+.pgm-hud-footer strong { color: var(--text2); font-weight: 600; }
+
+/* Position dot on elevation */
+.elev-pos {
+  transition: cx 1s linear, cy 1s linear;
+  filter: drop-shadow(0 0 4px rgba(232,228,223,0.6)) drop-shadow(0 0 6px rgba(124,154,130,0.3));
+}
+.pgm-controls { display: flex; gap: 8px; margin-bottom: 4px; }
+.pgm-ctrl-btn {
+  flex: 1; height: 44px; border-radius: 14px;
+  border: none; background: var(--fill);
+  color: var(--text); font-size: 15px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease), opacity 100ms var(--ease);
+}
+.pgm-ctrl-btn:active { transform: scale(0.96); opacity: 0.85; }
+.pgm-ctrl-btn.end { background: rgba(196,92,82,0.15); color: var(--red); }
+
+/* Program complete */
+.pgm-done { text-align: center; padding: 16px 0; }
+.pgm-done-check {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: rgba(124,154,130,0.15); color: var(--green);
+  font-size: 24px; display: inline-flex; align-items: center; justify-content: center;
+  margin-bottom: 8px;
+}
+.pgm-done-title { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+.pgm-done-sub { font-size: 13px; color: var(--text3); }
+
+/* History section */
+.history-section { padding: 8px 0; flex-shrink: 0; }
+.history-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0 16px 8px;
+}
+.history-title { font-size: 13px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: 0.02em; }
+.history-scroll {
+  display: flex; gap: 8px; overflow-x: auto; padding: 0 16px 8px;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+}
+.history-scroll::-webkit-scrollbar { display: none; }
+.history-card {
+  flex-shrink: 0; width: 140px; background: var(--card);
+  border-radius: var(--r-md); padding: 12px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease), opacity 100ms var(--ease);
+}
+.history-card:active { transform: scale(0.96); opacity: 0.85; }
+.history-name {
+  font-size: 13px; font-weight: 600; margin-bottom: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.history-meta { font-size: 11px; color: var(--text3); }
 
 /* Stop button */
 .stop-area {
-  position: sticky; bottom: 60px; z-index: 10;
-  padding: 8px 20px; flex-shrink: 0;
+  position: sticky; bottom: 36px; z-index: 10;
+  padding: 4px 16px; flex-shrink: 0;
   background: linear-gradient(transparent, var(--bg) 40%);
 }
 .stop-btn {
-  width: 100%; min-height: 52px; border-radius: 12px;
-  border: 2px solid var(--red); background: rgba(255,23,68,0.12);
-  color: var(--red); font-size: 0.9rem; font-weight: 800;
-  text-transform: uppercase; letter-spacing: 0.1em;
+  width: 100%; height: 56px; border-radius: 14px;
+  border: none; background: var(--red); color: #fff;
+  font-size: 17px; font-weight: 600; font-family: inherit;
+  letter-spacing: -0.005em;
   cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease), opacity 100ms var(--ease);
 }
-.stop-btn:active { background: rgba(255,23,68,0.3); }
+.stop-btn:active { transform: scale(0.96); opacity: 0.85; }
 
 /* Spacer */
 .spacer { flex: 1; }
 
-/* Chat area */
-.chat {
-  position: sticky; bottom: 0; z-index: 20;
-  padding: 0 16px 12px; flex-shrink: 0;
-  background: linear-gradient(transparent, var(--bg) 20%);
+/* Chat toast */
+.chat-toast {
+  position: fixed;
+  bottom: 56px;
+  left: 16px; right: 16px;
+  max-width: 480px;
+  margin: 0 auto;
+  background: var(--elevated);
+  border: 0.5px solid var(--separator);
+  border-radius: var(--r-md);
+  padding: 10px 14px;
+  font-size: 13px; color: var(--text2);
+  line-height: 1.4;
+  z-index: 25;
+  animation: toastLife 8s var(--ease) forwards;
+  pointer-events: none;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
 }
-.chat-response {
-  font-size: 0.78rem; color: var(--dim); padding: 6px 12px;
-  max-height: 60px; overflow-y: auto; line-height: 1.4;
+@keyframes toastLife {
+  0% { opacity: 0; transform: translateY(8px); }
+  8% { opacity: 1; transform: translateY(0); }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-4px); }
 }
-.chat-response b { color: var(--purple); font-weight: 600; }
-.chat-bar {
-  display: flex; gap: 8px; align-items: center;
+
+/* Chat pill handle */
+.chat-pill {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+  display: flex; justify-content: center; padding: 8px 0 12px;
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
 }
+.chat-pill-bar {
+  width: 48px; height: 4px; border-radius: 2px;
+  background: var(--text4);
+  transition: background 0.2s;
+  animation: pillFloat 3s ease-in-out infinite;
+}
+@keyframes pillFloat {
+  0%, 100% { transform: translateY(0); opacity: 1; }
+  50% { transform: translateY(-2px); opacity: 0.7; }
+}
+.chat-pill:active .chat-pill-bar { background: var(--text3); animation: none; }
+
+/* Chat bottom sheet overlay */
+.chat-sheet-overlay {
+  position: fixed; inset: 0; z-index: 29;
+  background: rgba(18,18,16,0.5);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
+
+/* Chat bottom sheet */
+.chat-sheet {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+  background: var(--card);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  padding: 12px 16px 16px;
+  transform: translateY(100%);
+  transition: transform 0.3s var(--ease-decel);
+}
+.chat-sheet.open { transform: translateY(0); }
+.chat-sheet-handle {
+  width: 36px; height: 4px; border-radius: 2px;
+  background: var(--text4); margin: 0 auto 12px;
+  cursor: pointer;
+}
+.chat-bar { display: flex; gap: 8px; align-items: center; }
 .chat-input {
-  flex: 1; min-height: 44px; padding: 10px 14px; border-radius: 22px;
-  border: 1px solid var(--muted); background: var(--input);
-  color: var(--text); font-family: inherit; font-size: 0.85rem;
+  flex: 1; height: 40px; padding: 8px 16px; border-radius: 20px;
+  border: 0.5px solid var(--separator); background: var(--elevated);
+  color: var(--text); font-family: inherit; font-size: 15px;
   outline: none; -webkit-appearance: none;
+  transition: border-color 0.2s var(--ease);
 }
 .chat-input:focus { border-color: var(--purple); }
-.chat-input::placeholder { color: var(--muted); }
+.chat-input::placeholder { color: var(--text3); }
 .chat-send {
-  width: 44px; height: 44px; border-radius: 22px; border: none;
-  background: var(--purple); color: #fff; font-size: 1.1rem;
+  width: 40px; height: 40px; border-radius: 20px; border: none;
+  background: var(--purple); color: #fff; font-size: 18px;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
   flex-shrink: 0; -webkit-tap-highlight-color: transparent;
-  transition: opacity 0.15s;
+  transition: transform 100ms var(--ease), opacity 150ms var(--ease);
 }
 .chat-send:disabled { opacity: 0.3; cursor: default; }
-.chat-send:active:not(:disabled) { opacity: 0.7; }
+.chat-send:active:not(:disabled) { transform: scale(0.92); opacity: 0.7; }
+.mic-btn {
+  width: 40px; height: 40px; border-radius: 20px; border: none;
+  background: var(--fill); color: var(--text2);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; -webkit-tap-highlight-color: transparent;
+  transition: all 200ms var(--ease);
+}
+.mic-btn:disabled { opacity: 0.3; cursor: default; }
+.mic-btn.recording {
+  background: var(--red); color: #fff;
+  animation: micPulse 1.2s ease-in-out infinite;
+}
+@keyframes micPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(196,92,82,0.4); }
+  50% { transform: scale(1.08); box-shadow: 0 0 16px 4px rgba(196,92,82,0.25); }
+}
+.lobby-mic {
+  width: 56px; height: 56px; border-radius: 28px; border: none;
+  background: var(--fill); color: var(--text2);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 200ms var(--ease);
+}
+.lobby-mic.recording {
+  background: var(--red); color: #fff;
+  animation: micPulse 1.2s ease-in-out infinite;
+}
 .chat-thinking {
-  display: inline-block; width: 16px; height: 16px;
-  border: 2px solid var(--muted); border-top-color: var(--purple);
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid var(--text3); border-top-color: var(--purple);
   border-radius: 50%; animation: spin 0.7s linear infinite;
+  margin-right: 6px; vertical-align: middle;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* Settings overlay */
 .settings-overlay {
   position: fixed; inset: 0; z-index: 50;
-  background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
+  background: rgba(18,18,16,0.6);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
 }
 .settings-panel {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 51;
-  width: min(320px, 85vw); background: var(--bg);
-  border-left: 1px solid var(--muted); padding: 20px;
-  overflow-y: auto;
+  width: min(320px, 85vw); background: #1E1D1B;
+  border-radius: var(--r-xl) 0 0 var(--r-xl);
+  padding: 24px 16px; overflow-y: auto;
 }
 .settings-panel h3 {
-  font-size: 0.7rem; font-weight: 700; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.08em; margin: 16px 0 8px;
+  font-size: 13px; font-weight: 600; color: var(--text3);
+  text-transform: uppercase; letter-spacing: 0.02em;
+  margin: 20px 0 8px;
 }
 .settings-panel h3:first-child { margin-top: 0; }
 .mode-toggle {
-  display: flex; border-radius: 8px; overflow: hidden;
-  border: 1px solid var(--muted);
+  display: flex; border-radius: var(--r-sm); overflow: hidden;
+  background: var(--fill2);
 }
 .mode-btn {
-  flex: 1; min-height: 44px; border: none;
-  background: var(--card); color: var(--muted);
-  font-size: 0.75rem; font-weight: 700; cursor: pointer;
-  text-transform: uppercase;
+  flex: 1; height: 44px; border: none;
+  background: transparent; color: var(--text3);
+  font-size: 15px; font-weight: 600; font-family: inherit;
+  cursor: pointer; border-radius: var(--r-sm);
   -webkit-tap-highlight-color: transparent;
+  transition: all 200ms var(--ease);
 }
-.mode-btn.active { background: var(--green); color: #111; }
+.mode-btn.active { background: var(--green); color: #000; }
 .mode-btn.active.emu { background: var(--purple); color: #fff; }
 .presets {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
 }
 .preset {
-  min-height: 40px; border-radius: 8px;
-  border: 1px solid var(--muted); background: transparent;
-  color: var(--dim); font-size: 0.85rem; font-weight: 700;
-  font-variant-numeric: tabular-nums; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
+  height: 44px; border-radius: var(--r-sm);
+  border: none; background: var(--fill2);
+  color: var(--text2); font-size: 15px; font-weight: 600;
+  font-variant-numeric: tabular-nums; font-family: inherit;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
   -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease), background 100ms var(--ease);
 }
-.preset:active { background: var(--elev); }
-.preset.active { border-color: var(--green); color: var(--green); }
-.preset.active.inc { border-color: var(--orange); color: var(--orange); }
+.preset:active { transform: scale(0.92); }
+.preset.active { background: rgba(124,154,130,0.2); color: var(--green); }
+.preset.active.inc { background: rgba(166,152,130,0.2); color: var(--orange); }
 
-/* Program complete */
-.pgm-done { text-align: center; padding: 12px 0; }
-.pgm-done-title { font-size: 1rem; font-weight: 800; color: var(--green); margin-bottom: 4px; }
+/* Card appear animation */
+@keyframes cardAppear {
+  0% { opacity: 0; transform: scale(0.92) translateY(8px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.card-enter { animation: cardAppear 350ms var(--ease-decel) forwards; }
 
 /* Desktop */
 @media (min-width: 768px) {
-  .hero-speed { font-size: 7rem; }
-  .stats { max-width: 500px; margin: 0 auto; }
-  .pgm { max-width: 500px; margin: 0 auto; }
-  .stop-area { max-width: 500px; margin: 0 auto; width: 100%; }
-  .chat { max-width: 500px; margin: 0 auto; width: 100%; }
+  .hero-time { font-size: 120px; }
+  .metrics-ro { max-width: 480px; margin: 0 auto; }
+  .controls { max-width: 480px; margin: 0 auto; }
+  .pgm-section { max-width: 480px; margin: 0 auto; }
+  .stop-area { max-width: 480px; margin: 0 auto; width: 100%; }
+  .chat-pill { max-width: 480px; margin: 0 auto; }
+  .chat-sheet { max-width: 480px; margin: 0 auto; }
+  .history-section { max-width: 600px; margin: 0 auto; }
+}
+body::after {
+  content: ''; position: fixed; inset: 0; z-index: 9999;
+  pointer-events: none; opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
 }
 </style>
 </head>
@@ -244,129 +513,208 @@ body { display: flex; flex-direction: column; min-height: 100dvh; }
 <!-- Header -->
 <div class="hdr">
   <div class="hdr-left">
-    <div class="dot" :class="{ on: connected }"></div>
-    <div class="mode" :class="{ proxy: proxy, emu: emulate }"
+    <div class="dot" :class="{ on: connected }" @click="debugTap()"></div>
+    <div class="mode-badge" x-show="showDebug" :class="{ proxy: proxy, emu: emulate }"
          x-text="emulate ? 'Emulate' : proxy ? 'Proxy' : 'Off'"></div>
   </div>
   <button class="gear" @click="showSettings = !showSettings">&#9881;</button>
 </div>
 
-<!-- Hero Speed -->
-<div class="hero">
-  <div class="hero-speed" :class="{ zero: speedVal === 0 }" x-text="speedDisplay"></div>
-  <div class="hero-lbl">mph</div>
+<!-- Hero Time (cockpit: large, lobby: smaller) -->
+<div class="hero" :class="{ active: elapsed > 0 || programRunning }" x-show="!isLobby">
+  <div class="hero-time" :class="{ zero: elapsed === 0 && !programRunning }" x-text="elapsedDisplay"></div>
 </div>
 
-<!-- Speed adjust -->
-<div class="adj" x-show="!programRunning">
-  <button class="adj-btn" @pointerdown="startRepeat('speed',-10)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;1</button>
-  <button class="adj-btn" @pointerdown="startRepeat('speed',-1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;.1</button>
-  <div class="adj-val" style="color:var(--green)" x-text="emuSpeedDisplay"></div>
-  <button class="adj-btn" @pointerdown="startRepeat('speed',1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+.1</button>
-  <button class="adj-btn" @pointerdown="startRepeat('speed',10)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+1</button>
-</div>
-
-<!-- Incline adjust -->
-<div class="adj" x-show="!programRunning">
-  <button class="adj-btn" @pointerdown="startRepeat('incline',-5)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;5</button>
-  <button class="adj-btn" @pointerdown="startRepeat('incline',-1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&minus;1</button>
-  <div class="adj-val" style="color:var(--orange)" x-text="emu_incline + '%'"></div>
-  <button class="adj-btn" @pointerdown="startRepeat('incline',1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+1</button>
-  <button class="adj-btn" @pointerdown="startRepeat('incline',5)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+5</button>
-</div>
-
-<!-- Stats -->
-<div class="stats">
-  <div class="stat">
-    <div class="stat-val" style="color:var(--orange)" x-text="inclineDisplay"></div>
-    <div class="stat-lbl">Incline %</div>
-  </div>
-  <div class="stat">
-    <div class="stat-val" style="color:var(--cyan)" x-text="elapsedDisplay"></div>
-    <div class="stat-lbl">Time</div>
-  </div>
-  <div class="stat">
-    <div class="stat-val" x-text="distDisplay"></div>
-    <div class="stat-lbl">Miles</div>
+<!-- Lobby prompt -->
+<div class="lobby-prompt" x-show="isLobby" style="padding-top:24px">
+  <div style="margin-bottom:16px">Choose a program or speak to your coach</div>
+  <div style="display:flex;gap:10px;justify-content:center;align-items:center">
+    <button @click="quickStart()" style="height:48px;padding:0 28px;border-radius:var(--r-pill);border:none;background:var(--fill);color:var(--text);font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 100ms var(--ease)" @pointerdown="$el.style.transform='scale(0.96)'" @pointerup="$el.style.transform=''">Just Start</button>
+    <button class="lobby-mic" :class="{ recording: recording }" @click="toggleRecording()" :disabled="chatThinking">
+      <svg x-show="!recording" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 00-3 3v6a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><path d="M12 19v4"/></svg>
+      <svg x-show="recording" viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
+    <button x-show="program && !programRunning" @click="startLoadedProgram()" style="height:48px;padding:0 28px;border-radius:var(--r-pill);border:none;background:var(--green);color:#000;font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform 100ms var(--ease)" @pointerdown="$el.style.transform='scale(0.96)'" @pointerup="$el.style.transform=''" x-text="'Start ' + (program?.name || 'Program')"></button>
   </div>
 </div>
 
-<!-- Program display (when active) -->
-<div class="pgm" x-show="program && programRunning">
-  <!-- Timeline -->
-  <div class="pgm-timeline" style="position:relative">
-    <template x-for="(iv,i) in (program?.intervals||[])" :key="i">
-      <div class="tl-seg" :class="{done:i<programCurrentInterval}"
-           :style="`flex-grow:${iv.duration};background:${ivColor(iv)}`"></div>
-    </template>
-    <div class="tl-pos" :style="`left:calc(${pgmTimelinePos}% - 1px)`"></div>
+<!-- Read-only metrics under hero (cockpit only) -->
+<div class="metrics-ro" x-show="!isLobby">
+  <div class="metric-ro">
+    <span class="metric-ro-val" style="color:var(--teal)" x-text="paceDisplay"></span>
+    <span class="metric-ro-lbl">min/mi</span>
   </div>
+  <div class="metric-ro">
+    <span class="metric-ro-val" x-text="distDisplay"></span>
+    <span class="metric-ro-lbl">miles</span>
+  </div>
+  <div class="metric-ro">
+    <span class="metric-ro-val" style="color:var(--orange)" x-text="vertDisplay"></span>
+    <span class="metric-ro-lbl">vert ft</span>
+  </div>
+</div>
 
-  <!-- NOW card -->
+<!-- Speed & Incline controls (cockpit only, not during program) -->
+<div class="controls" x-show="!isLobby && (!programRunning || pgmControlsExpanded)">
+  <div class="ctrl-panel speed">
+    <div class="ctrl-btns">
+      <button class="ctrl-btn" @pointerdown="startRepeat('speed', -1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&#8722;</button>
+      <button class="ctrl-btn coarse" @pointerdown="startRepeat('speed', -10)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&#8722;&#8722;</button>
+    </div>
+    <div class="ctrl-value">
+      <div class="ctrl-val" style="color:var(--green)" x-text="emuSpeedDisplay"></div>
+      <div class="ctrl-lbl">mph</div>
+    </div>
+    <div class="ctrl-btns">
+      <button class="ctrl-btn" @pointerdown="startRepeat('speed', 1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+</button>
+      <button class="ctrl-btn coarse" @pointerdown="startRepeat('speed', 10)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">++</button>
+    </div>
+  </div>
+  <div class="ctrl-panel incline">
+    <div class="ctrl-btns">
+      <button class="ctrl-btn" @pointerdown="startRepeat('incline', -1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&#8722;</button>
+      <button class="ctrl-btn coarse" @pointerdown="startRepeat('incline', -5)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&#8722;&#8722;</button>
+    </div>
+    <div class="ctrl-value">
+      <div class="ctrl-val" style="color:var(--orange)" x-text="emu_incline + '%'"></div>
+      <div class="ctrl-lbl">incline</div>
+    </div>
+    <div class="ctrl-btns">
+      <button class="ctrl-btn" @pointerdown="startRepeat('incline', 1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">+</button>
+      <button class="ctrl-btn coarse" @pointerdown="startRepeat('incline', 5)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">++</button>
+    </div>
+  </div>
+</div>
+
+<!-- Program display (when running) -->
+<div class="pgm-section" x-show="program && programRunning">
+  <!-- Combined HUD: elevation as background, interval info overlaid -->
   <template x-if="pgmCurrentIv">
-    <div class="now-card">
-      <div class="now-glow" :style="`background:${ivColor(pgmCurrentIv)}`"></div>
-      <div class="now-top">
-        <div class="now-name" :style="`color:${ivColor(pgmCurrentIv)}`" x-text="pgmCurrentIv.name"></div>
-        <div class="now-targets" x-text="`${pgmCurrentIv.speed}mph ${pgmCurrentIv.incline}%`"></div>
+    <div class="pgm-hud card-enter" :key="'hud-'+programCurrentInterval" @click="pgmControlsExpanded = !pgmControlsExpanded">
+      <!-- Elevation SVG as full background -->
+      <div class="pgm-hud-bg">
+        <svg :viewBox="`0 0 400 140`" preserveAspectRatio="none">
+          <defs>
+            <clipPath id="elev-done">
+              <rect x="0" y="0" :width="pgmTimelinePos * 4" height="140" />
+            </clipPath>
+            <clipPath id="elev-future">
+              <rect :x="pgmTimelinePos * 4" y="0" :width="400 - pgmTimelinePos * 4" height="140" />
+            </clipPath>
+          </defs>
+          <path :d="elevAreaPath" fill="rgba(124,154,130,0.06)" clip-path="url(#elev-future)" />
+          <path :d="elevAreaPath" fill="rgba(124,154,130,0.12)" clip-path="url(#elev-done)" />
+          <path :d="elevOutline" fill="none" stroke="rgba(124,154,130,0.12)" stroke-width="1.5"
+                stroke-linejoin="round" stroke-linecap="round" clip-path="url(#elev-future)" />
+          <path :d="elevOutline" fill="none" stroke="rgba(124,154,130,0.4)" stroke-width="1.5"
+                stroke-linejoin="round" stroke-linecap="round" clip-path="url(#elev-done)" />
+          <circle class="elev-pos" :cx="elevPosX" :cy="elevPosY" r="4"
+                  fill="var(--green)" stroke="var(--text)" stroke-width="1.5" />
+        </svg>
       </div>
-      <div class="now-countdown" x-text="fmtDur(pgmIvRemaining)"></div>
-      <div class="now-bar">
-        <div class="now-bar-fill" :style="`width:${pgmIvPct}%;background:${ivColor(pgmCurrentIv)}`"></div>
+      <!-- Overlaid content -->
+      <div class="pgm-hud-content">
+        <div class="pgm-hud-top">
+          <div class="pgm-hud-badge" :style="`background:${ivColor(pgmCurrentIv)}30;color:${ivColor(pgmCurrentIv)}`"
+               x-text="pgmCurrentIv.name"></div>
+          <div class="pgm-hud-targets" x-text="`${pgmCurrentIv.speed} mph \u00b7 ${pgmCurrentIv.incline}%`"></div>
+        </div>
+        <div class="pgm-hud-center"></div>
+        <div class="pgm-hud-footer">
+          <span x-show="pgmNextIv">Next: <strong x-text="pgmNextIv?.name || ''"></strong>
+            <span x-text="pgmNextIv ? ` \u00b7 ${pgmNextIv.speed} mph \u00b7 ${pgmNextIv.incline}%` : ''"></span></span>
+          <span x-text="`${programCurrentInterval+1} of ${program?.intervals?.length||0}`"></span>
+        </div>
       </div>
     </div>
   </template>
 
-  <!-- Next up -->
-  <div class="next-row" x-show="pgmNextIv">
-    <span x-text="'Next: ' + (pgmNextIv?.name || '')"></span>
-    <span x-text="pgmNextIv ? `${pgmNextIv.speed}mph ${pgmNextIv.incline}% \u00b7 ${fmtDur(pgmNextIv.duration)}` : ''"></span>
-  </div>
-
-  <!-- Program stats -->
-  <div class="pgm-stats">
-    <span x-text="`${programCurrentInterval+1}/${program?.intervals?.length||0} intervals`"></span>
-    <span x-text="fmtDur(pgmTotalElapsed) + ' elapsed'"></span>
-    <span x-text="fmtDur(pgmTotalRemaining) + ' left'"></span>
-  </div>
-
-  <!-- Program controls -->
-  <div class="pgm-btns">
-    <button class="pgm-btn" @click="pgmPause()" x-text="programPaused ? 'Resume' : 'Pause'"></button>
-    <button class="pgm-btn" @click="pgmSkip()">Skip</button>
-    <button class="pgm-btn stop" @click="pgmStop()">End</button>
+  <!-- Controls — compact by default -->
+  <div class="pgm-controls">
+    <!-- Default: just pause button -->
+    <template x-if="!pgmControlsExpanded && !programPaused">
+      <button class="pgm-ctrl-btn" @click="pgmPause()">Pause</button>
+    </template>
+    <!-- Paused: resume + end -->
+    <template x-if="programPaused">
+      <div style="display:flex;gap:8px;width:100%">
+        <button class="pgm-ctrl-btn" style="flex:1" @click="pgmPause()">Resume</button>
+        <button class="pgm-ctrl-btn end" style="flex:1" @click="pgmStop()">End</button>
+      </div>
+    </template>
+    <!-- Expanded: all three -->
+    <template x-if="pgmControlsExpanded && !programPaused">
+      <div style="display:flex;gap:8px;width:100%">
+        <button class="pgm-ctrl-btn" style="flex:1" @click="pgmPause()">Pause</button>
+        <button class="pgm-ctrl-btn" style="flex:1" @click="pgmSkip()">Skip</button>
+        <button class="pgm-ctrl-btn end" style="flex:1" @click="pgmStop()">End</button>
+      </div>
+    </template>
   </div>
 </div>
 
 <!-- Program complete -->
-<div class="pgm" x-show="pgmCompleted && !programRunning && program">
+<div class="pgm-section" x-show="pgmCompleted && !programRunning && program">
   <div class="pgm-done">
-    <div class="pgm-done-title">Workout Complete!</div>
-    <div style="color:var(--dim);font-size:0.8rem" x-text="fmtDur(pgmTotalElapsed) + ' total'"></div>
+    <div class="pgm-done-check">&#10003;</div>
+    <div class="pgm-done-title">Workout Complete</div>
+    <div class="pgm-done-sub" x-text="fmtDur(pgmTotalElapsed) + ' total'"></div>
   </div>
 </div>
 
-<!-- Spacer pushes stop/chat to bottom -->
+<!-- Program history -->
+<div class="history-section" :class="{ lobby: isLobby }" x-show="history.length > 0 && (isLobby || pgmCompleted)">
+  <div class="history-header">
+    <div class="history-title" x-text="isLobby ? 'Your Programs' : 'Recent Programs'"></div>
+  </div>
+  <div class="history-scroll">
+    <template x-for="h in history" :key="h.id">
+      <div class="history-card" @click="loadFromHistory(h.id)">
+        <div class="history-name" x-text="h.program?.name || 'Workout'"></div>
+        <div class="history-meta" x-text="fmtDur(h.total_duration) + ' \u00b7 ' + (h.program?.intervals?.length||0) + ' intervals'"></div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- Spacer -->
 <div class="spacer"></div>
 
 <!-- Stop -->
-<div class="stop-area" x-show="emulate && emu_speed > 0 && !programRunning">
+<div class="stop-area" x-show="emulate && (emu_speed > 0 || programRunning)">
   <button class="stop-btn" @click="emergencyStop()">Stop</button>
 </div>
 
-<!-- Chat -->
-<div class="chat">
-  <div class="chat-response" x-show="chatResponse">
-    <template x-if="chatThinking">
-      <span class="chat-thinking"></span>
-    </template>
-    <span x-html="chatResponse"></span>
-  </div>
+<!-- Chat toast (floating above chat bar) -->
+<div class="chat-toast" x-show="chatToastVisible" x-transition
+     x-html="chatToastText"></div>
+
+<!-- Chat thinking indicator (as toast) -->
+<div class="chat-toast" x-show="chatThinking" style="animation: none; opacity: 1;">
+  <span class="chat-thinking"></span> Thinking...
+</div>
+
+<!-- Chat pill (always visible at bottom) -->
+<div class="chat-pill" x-show="!chatOpen" @click="openChat()">
+  <div class="chat-pill-bar"></div>
+</div>
+
+<!-- Chat overlay -->
+<div class="chat-sheet-overlay" x-show="chatOpen" x-transition.opacity @click="closeChat()"></div>
+
+<!-- Chat bottom sheet -->
+<div class="chat-sheet" :class="{ open: chatOpen }">
+  <div class="chat-sheet-handle" @click="closeChat()"></div>
   <div class="chat-bar">
     <input type="text" class="chat-input" x-model="chatMsg"
            @keydown.enter="sendChat()"
            placeholder="Ask your AI coach..."
-           :disabled="chatThinking">
+           :disabled="chatThinking"
+           x-ref="chatInput">
+    <button class="mic-btn" :class="{ recording: recording }" @click="toggleRecording()" :disabled="chatThinking">
+      <svg x-show="!recording" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 1a3 3 0 00-3 3v6a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><path d="M12 19v4"/></svg>
+      <svg x-show="recording" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
     <button class="chat-send" @click="sendChat()" :disabled="chatThinking || !chatMsg.trim()">&#8593;</button>
   </div>
 </div>
@@ -376,11 +724,15 @@ body { display: flex; flex-direction: column; min-height: 100dvh; }
   <div>
     <div class="settings-overlay" @click="showSettings = false"></div>
     <div class="settings-panel">
-      <h3>Mode</h3>
-      <div class="mode-toggle">
-        <button class="mode-btn" :class="{ active: proxy }" @click="setMode('proxy')">Proxy</button>
-        <button class="mode-btn" :class="{ active: emulate, emu: emulate }" @click="setMode('emulate')">Emulate</button>
-      </div>
+      <template x-if="showDebug">
+        <div>
+          <h3>Mode</h3>
+          <div class="mode-toggle">
+            <button class="mode-btn" :class="{ active: proxy }" @click="setMode('proxy')">Proxy</button>
+            <button class="mode-btn" :class="{ active: emulate, emu: emulate }" @click="setMode('emulate')">Emulate</button>
+          </div>
+        </div>
+      </template>
 
       <h3>Speed Presets</h3>
       <div class="presets">
@@ -397,13 +749,18 @@ body { display: flex; flex-direction: column; min-height: 100dvh; }
                   @click="setInclineTo(p)" x-text="p"></button>
         </template>
       </div>
+
+      <h3>Import</h3>
+      <label style="display:flex;align-items:center;justify-content:center;height:44px;border-radius:var(--r-sm);background:var(--fill2);color:var(--text2);font-size:15px;font-weight:600;cursor:pointer">
+        Upload GPX Route
+        <input type="file" accept=".gpx" @change="uploadGpx($event)" style="display:none">
+      </label>
     </div>
   </div>
 </template>
 
 <script>
 function app() {
-  let idCounter = 0;
   return {
     // Connection
     ws: null, connected: false,
@@ -412,18 +769,26 @@ function app() {
     emu_speed: 0, emu_incline: 0,
     speed: null, incline: null,
     // Timer / distance
-    elapsed: 0, distance: 0, timerInterval: null,
+    elapsed: 0, distance: 0, vertFeet: 0, timerInterval: null,
     // Program
     program: null, programRunning: false, programPaused: false,
     programCurrentInterval: 0, programIntervalElapsed: 0,
     pgmTotalElapsed: 0, pgmTotalDuration: 0, pgmCompleted: false,
     // Chat
-    chatMsg: '', chatResponse: '', chatThinking: false,
+    chatMsg: '', chatThinking: false, chatOpen: false,
+    chatToastVisible: false, chatToastText: '', _toastTimer: null,
+    recording: false, _mediaRecorder: null, _audioChunks: [], _audioStream: null,
+    // History
+    history: [],
     // UI
     showSettings: false,
-    repeatTimer: null, repeatCount: 0,
+    showDebug: false,
+    _debugTaps: [],
+    pgmControlsExpanded: false,
+    repeatTimer: null, repeatCount: 0, _initialized: false,
 
     // --- Computed ---
+    get isLobby() { return this.elapsed === 0 && !this.programRunning && this.emu_speed === 0 && this.speedVal === 0; },
     get speedVal() {
       if (this.emulate) return this.emu_speed / 10;
       if (this.speed !== null) return this.speed;
@@ -437,11 +802,19 @@ function app() {
       return '0';
     },
     get elapsedDisplay() {
-      const s = this.elapsed, m = Math.floor(s / 60), sec = s % 60;
-      if (m >= 60) { const h = Math.floor(m/60); return `${h}:${String(m%60).padStart(2,'0')}:${String(sec).padStart(2,'0')}`; }
-      return `${m}:${String(sec).padStart(2,'0')}`;
+      if (this.programRunning) return this.fmtDur(this.pgmTotalElapsed);
+      return this.fmtDur(this.elapsed);
     },
     get distDisplay() { return this.distance.toFixed(2); },
+    get vertDisplay() { return Math.round(this.vertFeet).toLocaleString(); },
+    get paceDisplay() {
+      const spd = this.speedVal;
+      if (spd <= 0) return '--:--';
+      const minPerMile = 60 / spd;
+      const m = Math.floor(minPerMile);
+      const s = Math.round((minPerMile - m) * 60);
+      return `${m}:${String(s).padStart(2, '0')}`;
+    },
 
     // Program computed
     get pgmCurrentIv() {
@@ -473,16 +846,124 @@ function app() {
       return d ? Math.min(100, (this.pgmTotalElapsed / d) * 100) : 0;
     },
 
+    // Elevation profile
+    get elevSegments() {
+      if (!this.program) return [];
+      const ivs = this.program.intervals;
+      const totalDur = ivs.reduce((s, iv) => s + iv.duration, 0);
+      if (!totalDur) return [];
+      const W = 400, H = 140, pad = 10, maxInc = 15;
+      let x = 0;
+      return ivs.map(iv => {
+        const segW = (iv.duration / totalDur) * W;
+        const y = H - pad - (iv.incline / maxInc) * (H - pad * 2);
+        const area = `M${x},${H} L${x},${y} L${x+segW},${y} L${x+segW},${H} Z`;
+        const seg = { area, x1: x, x2: x + segW, y };
+        x += segW;
+        return seg;
+      });
+    },
+    get elevOutline() {
+      const segs = this.elevSegments;
+      if (!segs.length) return '';
+      // Build midpoints for smooth bezier curves
+      const pts = [];
+      segs.forEach(s => {
+        pts.push({ x: (s.x1 + s.x2) / 2, y: s.y });
+      });
+      if (!pts.length) return '';
+      let d = `M0,${pts[0].y}`;
+      d += ` L${pts[0].x},${pts[0].y}`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const cx = (pts[i].x + pts[i+1].x) / 2;
+        d += ` C${cx},${pts[i].y} ${cx},${pts[i+1].y} ${pts[i+1].x},${pts[i+1].y}`;
+      }
+      d += ` L400,${pts[pts.length-1].y}`;
+      return d;
+    },
+    get elevAreaPath() {
+      const outline = this.elevOutline;
+      if (!outline) return '';
+      return outline + ' L400,140 L0,140 Z';
+    },
+    get elevPosX() {
+      return Math.min(400, (this.pgmTimelinePos / 100) * 400);
+    },
+    _bezier(t, p0, p1, p2, p3) {
+      const u = 1 - t;
+      return u*u*u*p0 + 3*u*u*t*p1 + 3*u*t*t*p2 + t*t*t*p3;
+    },
+    get elevPosY() {
+      const segs = this.elevSegments;
+      if (!segs.length) return 70;
+      const x = this.elevPosX;
+      // Build midpoints matching elevOutline's bezier control points
+      const pts = segs.map(s => ({ x: (s.x1 + s.x2) / 2, y: s.y }));
+      if (!pts.length) return 70;
+      // Before first midpoint: flat
+      if (x <= pts[0].x) return pts[0].y;
+      // After last midpoint: flat
+      if (x >= pts[pts.length - 1].x) return pts[pts.length - 1].y;
+      // Find which bezier curve segment and evaluate
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (x >= pts[i].x && x <= pts[i+1].x) {
+          const cx = (pts[i].x + pts[i+1].x) / 2;
+          // Binary search for t where Bx(t) = x
+          let lo = 0, hi = 1;
+          for (let j = 0; j < 16; j++) {
+            const t = (lo + hi) / 2;
+            if (this._bezier(t, pts[i].x, cx, cx, pts[i+1].x) < x) lo = t; else hi = t;
+          }
+          const t = (lo + hi) / 2;
+          return this._bezier(t, pts[i].y, pts[i].y, pts[i+1].y, pts[i+1].y);
+        }
+      }
+      return pts[pts.length - 1].y;
+    },
+
     // --- Init ---
     init() {
+      if (this._initialized) return;
+      this._initialized = true;
       this.connect();
+      this.loadProgram();
+      this.loadHistory();
+      this.timerInterval = setInterval(() => {
+        const spd = this.emu_speed > 0 ? this.emu_speed / 10 : this.speedVal;
+        if (spd > 0) {
+          this.elapsed += 1;
+          const milesPerSec = spd / 3600;
+          this.distance += milesPerSec;
+          const inc = this.emu_incline || 0;
+          if (inc > 0) this.vertFeet += milesPerSec * (inc / 100) * 5280;
+        }
+      }, 1000);
+    },
+
+    loadProgram() {
       fetch('/api/program').then(r => r.json()).then(d => {
         if (d.program) { this._loadPgmState(d); }
       }).catch(() => {});
-      this.timerInterval = setInterval(() => {
-        const spd = this.speedVal;
-        if (spd > 0) { this.elapsed += 1; this.distance += spd / 3600; }
-      }, 1000);
+    },
+
+    async loadHistory() {
+      try {
+        const res = await fetch('/api/programs/history');
+        this.history = await res.json();
+      } catch (e) {}
+    },
+
+    async loadFromHistory(id) {
+      try {
+        const res = await this.post('/api/programs/history/' + id + '/load', {});
+        if (res?.ok) {
+          this.program = res.program;
+          this.programRunning = false;
+          this.pgmCompleted = false;
+          this.showToast(`Loaded "${res.program.name}". Tap Start to begin!`);
+          this.haptic(25);
+        }
+      } catch (e) {}
     },
 
     // --- WebSocket ---
@@ -515,6 +996,9 @@ function app() {
       this.programIntervalElapsed = d.interval_elapsed;
       this.pgmTotalElapsed = d.total_elapsed;
       this.pgmTotalDuration = d.total_duration;
+      if (d.encouragement) {
+        this.showToast(d.encouragement);
+      }
     },
 
     // --- API helpers ---
@@ -557,6 +1041,16 @@ function app() {
       clearTimeout(this.repeatTimer); clearInterval(this.repeatTimer);
       this.repeatTimer = null; this.repeatCount = 0;
     },
+    quickStart() {
+      this.emu_speed = 30;
+      this.emulate = true;
+      this.post('/api/speed', { value: 3.0 });
+      this.haptic([25, 30, 25]);
+    },
+    async startLoadedProgram() {
+      await this.post('/api/program/start', {});
+      this.haptic([25, 30, 25]);
+    },
     setMode(mode) {
       this.post(mode === 'emulate' ? '/api/emulate' : '/api/proxy', { enabled: true });
       this.haptic([25, 30, 25]);
@@ -572,23 +1066,115 @@ function app() {
     async pgmStop() { await this.post('/api/program/stop', {}); this.programRunning = false; this.haptic([50,30,50]); },
     async pgmPause() { await this.post('/api/program/pause', {}); this.haptic(25); },
     async pgmSkip() { await this.post('/api/program/skip', {}); this.haptic(25); },
+    async pgmExtend(secs) {
+      await this.post('/api/program/extend', { seconds: secs });
+      this.haptic(15);
+    },
 
     // --- Chat ---
+    openChat() {
+      this.chatOpen = true;
+      this.$nextTick(() => { this.$refs.chatInput?.focus(); });
+    },
+    closeChat() {
+      this.chatOpen = false;
+    },
+
+    // --- Voice recording ---
+    toggleRecording() {
+      if (this.recording) {
+        this.stopRecording();
+      } else {
+        this.startRecording();
+      }
+    },
+    async startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        this._audioStream = stream;
+        // Pick best supported format
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : MediaRecorder.isTypeSupported('audio/mp4')
+            ? 'audio/mp4'
+            : '';
+        this._mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+        this._audioChunks = [];
+        this._mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) this._audioChunks.push(e.data);
+        };
+        this._mediaRecorder.onstop = () => {
+          const actualType = this._mediaRecorder.mimeType || 'audio/webm';
+          const blob = new Blob(this._audioChunks, { type: actualType });
+          this._sendVoice(blob, actualType.split(';')[0]);
+          if (this._audioStream) {
+            this._audioStream.getTracks().forEach(t => t.stop());
+            this._audioStream = null;
+          }
+        };
+        this._mediaRecorder.start();
+        this.recording = true;
+        this.haptic(25);
+      } catch (e) {
+        console.error('Mic error:', e);
+        this.showToast('Microphone access denied');
+      }
+    },
+    stopRecording() {
+      if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+        this._mediaRecorder.stop();
+      }
+      this.recording = false;
+      this.haptic([25, 30, 25]);
+    },
+    async _sendVoice(blob, mimeType) {
+      this.chatThinking = true;
+      this.chatToastVisible = false;
+      this.closeChat();
+      try {
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        const res = await this.post('/api/chat/voice', { audio: base64, mime_type: mimeType });
+        this.chatThinking = false;
+        this.showToast(res?.text || 'No response');
+        this.pgmCompleted = false;
+        this.loadHistory();
+      } catch (e) {
+        this.chatThinking = false;
+        this.showToast('Error processing voice');
+      }
+      this.haptic(15);
+    },
+
     async sendChat() {
       const msg = this.chatMsg.trim();
       if (!msg || this.chatThinking) return;
       this.chatMsg = '';
       this.chatThinking = true;
-      this.chatResponse = '';
+      this.chatToastVisible = false;
+      this.closeChat();
       try {
         const res = await this.post('/api/chat', { message: msg });
-        this.chatResponse = res?.text || 'No response';
+        this.chatThinking = false;
+        this.showToast(res?.text || 'No response');
         this.pgmCompleted = false;
+        this.loadHistory();
       } catch (e) {
-        this.chatResponse = 'Error connecting to AI';
+        this.chatThinking = false;
+        this.showToast('Error connecting to AI');
       }
-      this.chatThinking = false;
       this.haptic(15);
+    },
+
+    showToast(text) {
+      this.chatToastText = text;
+      this.chatToastVisible = true;
+      clearTimeout(this._toastTimer);
+      this._toastTimer = setTimeout(() => { this.chatToastVisible = false; }, 8000);
     },
 
     // --- Helpers ---
@@ -600,15 +1186,49 @@ function app() {
       return `${m}:${String(s).padStart(2,'0')}`;
     },
     ivColor(iv) {
-      if (!iv) return '#444';
+      if (!iv) return 'rgba(124,154,130,0.3)';
       const n = (iv.name || '').toLowerCase();
-      if (n.includes('warm') || n.includes('cool')) return '#40C4FF';
+      if (n.includes('warm') || n.includes('cool')) return 'rgba(124,154,130,0.4)';
       const t = (iv.speed / 12 + iv.incline / 15) / 2;
-      if (t < 0.2) return '#26A69A';
-      if (t < 0.35) return '#00E676';
-      if (t < 0.5) return '#FFD740';
-      if (t < 0.65) return '#FF9100';
-      return '#FF5722';
+      const alpha = (0.3 + t * 0.7).toFixed(2);
+      return `rgba(124,154,130,${alpha})`;
+    },
+
+    // --- Debug mode (triple-tap) ---
+    debugTap() {
+      const now = Date.now();
+      this._debugTaps.push(now);
+      this._debugTaps = this._debugTaps.filter(t => now - t < 500);
+      if (this._debugTaps.length >= 3) {
+        this.showDebug = !this.showDebug;
+        this._debugTaps = [];
+        this.haptic(50);
+      }
+    },
+
+    // --- GPX upload ---
+    async uploadGpx(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const res = await fetch('/api/gpx/upload', { method: 'POST', body: form });
+        const data = await res.json();
+        if (data.ok) {
+          this.program = data.program;
+          this.programRunning = false;
+          this.pgmCompleted = false;
+          this.showToast(`Loaded GPX route "${data.program.name}". Tap Start to begin!`);
+          this.haptic(25);
+          this.loadHistory();
+        } else {
+          this.showToast('GPX upload failed: ' + (data.error || 'unknown error'));
+        }
+      } catch (e) {
+        this.showToast('GPX upload failed: ' + e.message);
+      }
+      event.target.value = '';
     },
   };
 }

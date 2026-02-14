@@ -22,5 +22,8 @@ venv/
 # Secrets
 .gemini_key
 
+# Runtime data
+program_history.json
+
 # Analysis/experimental scripts (not part of main tools)
 analysis/

@@ -14,8 +14,31 @@ import urllib.request
 
 log = logging.getLogger("program")
 
+ENCOURAGEMENT_MESSAGES = [
+    "Keep it up! You're doing great!",
+    "Strong effort! Stay with it!",
+    "Looking good! Keep pushing!",
+    "You've got this! Stay strong!",
+    "Nice work! Keep that pace!",
+    "Crushing it! Don't stop now!",
+    "Great form! Keep going!",
+    "Almost there! Stay focused!",
+]
+
+MILESTONE_MESSAGES = {
+    25: "Quarter of the way done — strong start!",
+    50: "Halfway there! You're killing it!",
+    75: "Three quarters done — the finish line is in sight!",
+}
+
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# Application-level limits (hardware supports wider ranges)
+MIN_SPEED = 0.5
+MAX_SPEED = 12.0
+MAX_INCLINE = 15
+MIN_DURATION = 10
 
 SYSTEM_PROMPT = """You are a treadmill interval training program designer. Generate structured workout programs as JSON.
 
@@ -51,6 +74,20 @@ def _read_api_key():
     return None
 
 
+def validate_interval(iv, index=None):
+    """Clamp speed/incline/duration to safe ranges and ensure required fields."""
+    for field in ("duration", "speed", "incline"):
+        if field not in iv:
+            label = f"Interval {index}" if index is not None else "Interval"
+            raise ValueError(f"{label} missing '{field}'")
+    iv["speed"] = round(max(MIN_SPEED, min(MAX_SPEED, float(iv["speed"]))), 1)
+    iv["incline"] = max(0, min(MAX_INCLINE, int(iv["incline"])))
+    iv["duration"] = max(MIN_DURATION, int(iv["duration"]))
+    if "name" not in iv:
+        iv["name"] = f"Interval {index + 1}" if index is not None else "Added"
+    return iv
+
+
 class ProgramState:
     """Manages interval training program execution."""
 
@@ -65,6 +102,9 @@ class ProgramState:
         self._task = None
         self._on_change = None
         self._on_update = None
+        self._encouragement_milestones = set()
+        self._last_encouragement_interval = -3
+        self._pending_encouragement = None
 
     @property
     def total_duration(self):
@@ -79,7 +119,7 @@ class ProgramState:
         return self.program["intervals"][self.current_interval]
 
     def to_dict(self):
-        return {
+        d = {
             "type": "program",
             "program": self.program,
             "running": self.running,
@@ -90,6 +130,10 @@ class ProgramState:
             "total_elapsed": self.total_elapsed,
             "total_duration": self.total_duration,
         }
+        if self._pending_encouragement:
+            d["encouragement"] = self._pending_encouragement
+            self._pending_encouragement = None
+        return d
 
     def load(self, program):
         self._cancel_task()
@@ -100,6 +144,9 @@ class ProgramState:
         self.current_interval = 0
         self.interval_elapsed = 0
         self.total_elapsed = 0
+        self._encouragement_milestones = set()
+        self._last_encouragement_interval = -3
+        self._pending_encouragement = None
 
     async def start(self, on_change, on_update):
         await self.stop()
@@ -113,6 +160,9 @@ class ProgramState:
         self.current_interval = 0
         self.interval_elapsed = 0
         self.total_elapsed = 0
+        self._encouragement_milestones = set()
+        self._last_encouragement_interval = -3
+        self._pending_encouragement = None
         iv = self.current_iv
         if iv and self._on_change:
             await self._on_change(iv["speed"], iv["incline"])
@@ -145,6 +195,31 @@ class ProgramState:
             await self._finish()
         await self._broadcast()
 
+    async def extend_current(self, seconds):
+        """Add or subtract seconds from the current interval's duration."""
+        if not self.running or not self.current_iv:
+            return False
+        iv = self.current_iv
+        new_dur = iv["duration"] + seconds
+        if new_dur < 10:
+            new_dur = 10
+        iv["duration"] = new_dur
+        await self._broadcast()
+        return True
+
+    async def add_intervals(self, intervals):
+        """Append intervals to the running program."""
+        if not self.program:
+            return False
+        for iv in intervals:
+            iv.setdefault("speed", 3)
+            iv.setdefault("incline", 0)
+            iv.setdefault("duration", 60)
+            validate_interval(iv)
+        self.program["intervals"].extend(intervals)
+        await self._broadcast()
+        return True
+
     async def _finish(self):
         self._cancel_task()
         self.running = False
@@ -160,6 +235,33 @@ class ProgramState:
         if self._task:
             self._task.cancel()
             self._task = None
+
+    def _check_encouragement(self):
+        """Set encouragement message at milestones or every 3 intervals."""
+        if not self.program or not self.running:
+            return
+        td = self.total_duration
+        if td <= 0:
+            return
+
+        # Milestone check (25/50/75%)
+        pct = (self.total_elapsed / td) * 100
+        for milestone, msg in MILESTONE_MESSAGES.items():
+            if pct >= milestone and milestone not in self._encouragement_milestones:
+                self._encouragement_milestones.add(milestone)
+                self._pending_encouragement = msg
+                return
+
+        # Every 3 intervals
+        if (
+            (self.current_interval - self._last_encouragement_interval) >= 3
+            and self.interval_elapsed == 0
+            and self.current_interval > 0
+        ):
+            self._last_encouragement_interval = self.current_interval
+            import random
+
+            self._pending_encouragement = random.choice(ENCOURAGEMENT_MESSAGES)
 
     async def _tick_loop(self):
         try:
@@ -188,6 +290,9 @@ class ProgramState:
                         await self._finish()
                         break
 
+                # Check encouragement milestones
+                self._check_encouragement()
+
                 await self._broadcast()
         except asyncio.CancelledError:
             pass
@@ -200,28 +305,9 @@ async def generate_program(prompt, api_key=None):
     if not api_key:
         raise ValueError("No Gemini API key. Set GEMINI_API_KEY or create .gemini_key file.")
 
-    url = f"{GEMINI_API_BASE}/{GEMINI_MODEL}:generateContent"
-    payload = {
-        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseMimeType": "application/json",
-            "temperature": 0.7,
-            "maxOutputTokens": 4096,
-        },
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-    }
-
-    def _call():
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
-
-    result = await asyncio.to_thread(_call)
+    contents = [{"parts": [{"text": prompt}]}]
+    gen_config = {"responseMimeType": "application/json", "maxOutputTokens": 4096}
+    result = await call_gemini(contents, SYSTEM_PROMPT, api_key=api_key, generation_config=gen_config)
 
     try:
         text = result["candidates"][0]["content"]["parts"][0]["text"]
@@ -243,14 +329,7 @@ async def generate_program(prompt, api_key=None):
         raise ValueError("Program has no intervals")
 
     for i, iv in enumerate(program["intervals"]):
-        for field in ("duration", "speed", "incline"):
-            if field not in iv:
-                raise ValueError(f"Interval {i} missing '{field}'")
-        iv["speed"] = round(max(0.5, min(12.0, float(iv["speed"]))), 1)
-        iv["incline"] = max(0, min(15, int(iv["incline"])))
-        iv["duration"] = max(10, int(iv["duration"]))
-        if "name" not in iv:
-            iv["name"] = f"Interval {i + 1}"
+        validate_interval(iv, index=i)
 
     if "name" not in program:
         program["name"] = "Custom Workout"
@@ -270,12 +349,17 @@ Tools:
 - stop_treadmill: emergency stop (speed 0, incline 0, end program)
 - pause_program / resume_program: pause/resume interval programs
 - skip_interval: skip to next interval
+- extend_interval: add or subtract seconds from current interval (positive = longer, negative = shorter)
+- add_time: add extra intervals at the end of the current program
 
 Guidelines:
 - For workout requests, use start_workout with a detailed description
 - For simple adjustments ("faster", "more incline"), use set_speed/set_incline
 - Walking: 2-4 mph. Jogging: 4-6 mph. Running: 6+ mph
 - If user says "stop", use stop_treadmill immediately
+- For "more time", "extend", "add 5 minutes" etc., use extend_interval or add_time
+- extend_interval changes the CURRENT interval's duration (e.g. +60 adds 1 min)
+- add_time appends new intervals at the END of the program
 - Always confirm what you did briefly"""
 
 TOOL_DECLARATIONS = [
@@ -328,12 +412,46 @@ TOOL_DECLARATIONS = [
                 "description": "Skip to next interval in program",
                 "parameters": {"type": "OBJECT", "properties": {}},
             },
+            {
+                "name": "extend_interval",
+                "description": "Add or subtract seconds from the current interval duration. Positive = longer, negative = shorter. Min 10s.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "seconds": {"type": "NUMBER", "description": "Seconds to add (positive) or subtract (negative)"}
+                    },
+                    "required": ["seconds"],
+                },
+            },
+            {
+                "name": "add_time",
+                "description": "Add extra intervals at the end of the running program",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "intervals": {
+                            "type": "ARRAY",
+                            "description": "Array of interval objects with name, duration (seconds), speed (mph), incline (%)",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "name": {"type": "STRING"},
+                                    "duration": {"type": "NUMBER"},
+                                    "speed": {"type": "NUMBER"},
+                                    "incline": {"type": "NUMBER"},
+                                },
+                            },
+                        }
+                    },
+                    "required": ["intervals"],
+                },
+            },
         ]
     }
 ]
 
 
-async def call_gemini(contents, system_prompt, tools=None, api_key=None):
+async def call_gemini(contents, system_prompt, tools=None, api_key=None, generation_config=None):
     """Low-level Gemini API call with optional function calling."""
     if not api_key:
         api_key = _read_api_key()
@@ -344,10 +462,7 @@ async def call_gemini(contents, system_prompt, tools=None, api_key=None):
     payload = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 1024,
-        },
+        "generationConfig": {**{"temperature": 0.7, "maxOutputTokens": 1024}, **(generation_config or {})},
     }
     if tools:
         payload["tools"] = tools

@@ -14,14 +14,23 @@ Usage:
 import asyncio
 import json
 import logging
+import os
+import time
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from program_engine import CHAT_SYSTEM_PROMPT, TOOL_DECLARATIONS, ProgramState, call_gemini, generate_program
+from program_engine import (
+    CHAT_SYSTEM_PROMPT,
+    TOOL_DECLARATIONS,
+    ProgramState,
+    call_gemini,
+    generate_program,
+    validate_interval,
+)
 from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
 
 logging.basicConfig(level=logging.INFO)
@@ -104,6 +113,39 @@ latest = {
 }
 
 chat_history: list = []
+
+HISTORY_FILE = "program_history.json"
+MAX_HISTORY = 10
+
+
+def _load_history():
+    try:
+        with open(HISTORY_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save_history(history):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+
+def _add_to_history(program, prompt=""):
+    history = _load_history()
+    entry = {
+        "id": f"{int(time.time())}",
+        "prompt": prompt,
+        "program": program,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "total_duration": sum(iv["duration"] for iv in program.get("intervals", [])),
+    }
+    # Deduplicate by name - replace if same name exists
+    history = [h for h in history if h["program"].get("name") != program.get("name")]
+    history.insert(0, entry)
+    history = history[:MAX_HISTORY]
+    _save_history(history)
+    return entry
 
 
 def _enqueue(msg):
@@ -228,6 +270,47 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class VoiceChatRequest(BaseModel):
+    audio: str  # base64-encoded audio
+    mime_type: str = "audio/webm"
+
+
+# --- Shared control helpers ---
+
+
+async def _apply_speed(mph):
+    """Core speed logic shared by REST endpoint and Gemini function calls."""
+    state["emu_speed"] = max(0, min(int(mph * 10), MAX_SPEED_TENTHS))
+    # Mirror C binary's auto-emulate: sending a speed command enables emulate mode
+    if mph > 0:
+        state["emulate"] = True
+        state["proxy"] = False
+    client.set_speed(mph)
+    await broadcast_status()
+
+
+async def _apply_incline(inc):
+    """Core incline logic shared by REST endpoint and Gemini function calls."""
+    state["emu_incline"] = max(0, min(inc, MAX_INCLINE))
+    # Mirror C binary's auto-emulate: sending an incline command enables emulate mode
+    if inc > 0:
+        state["emulate"] = True
+        state["proxy"] = False
+    client.set_incline(inc)
+    await broadcast_status()
+
+
+async def _apply_stop():
+    """Core stop logic shared by REST endpoint and Gemini function calls."""
+    if prog and prog.running:
+        await prog.stop()
+    state["emu_speed"] = 0
+    state["emu_incline"] = 0
+    client.set_speed(0)
+    client.set_incline(0)
+    await broadcast_status()
+
+
 # --- REST endpoints ---
 
 
@@ -238,17 +321,13 @@ async def get_status():
 
 @app.post("/api/speed")
 async def set_speed(req: SpeedRequest):
-    state["emu_speed"] = max(0, min(int(req.value * 10), MAX_SPEED_TENTHS))
-    client.set_speed(req.value)
-    await broadcast_status()
+    await _apply_speed(req.value)
     return build_status()
 
 
 @app.post("/api/incline")
 async def set_incline(req: InclineRequest):
-    state["emu_incline"] = max(0, min(req.value, MAX_INCLINE))
-    client.set_incline(req.value)
-    await broadcast_status()
+    await _apply_incline(req.value)
     return build_status()
 
 
@@ -286,6 +365,7 @@ async def api_generate_program(req: GenerateRequest):
     try:
         program = await generate_program(req.prompt)
         prog.load(program)
+        _add_to_history(program, req.prompt)
         return {"ok": True, "program": program}
     except Exception as e:
         log.error(f"Program generation failed: {e}")
@@ -296,22 +376,13 @@ async def api_generate_program(req: GenerateRequest):
 async def api_start_program():
     if not prog.program:
         return {"ok": False, "error": "No program loaded"}
-    state["proxy"] = False
-    state["emulate"] = True
-    client.set_emulate(True)
-    await broadcast_status()
     await prog.start(_prog_on_change(), _prog_on_update())
     return prog.to_dict()
 
 
 @app.post("/api/program/stop")
 async def api_stop_program():
-    await prog.stop()
-    state["emu_speed"] = 0
-    state["emu_incline"] = 0
-    client.set_speed(0)
-    client.set_incline(0)
-    await broadcast_status()
+    await _apply_stop()
     return prog.to_dict()
 
 
@@ -327,9 +398,152 @@ async def api_skip_program():
     return prog.to_dict()
 
 
+class ExtendRequest(BaseModel):
+    seconds: int
+
+
+@app.post("/api/program/extend")
+async def api_extend_interval(req: ExtendRequest):
+    if not prog or not prog.running:
+        return {"ok": False, "error": "No program running"}
+    ok = await prog.extend_current(req.seconds)
+    if ok:
+        await manager.broadcast(prog.to_dict())
+    return prog.to_dict()
+
+
 @app.get("/api/program")
 async def api_get_program():
     return prog.to_dict()
+
+
+@app.get("/api/programs/history")
+async def api_get_history():
+    return _load_history()
+
+
+@app.post("/api/programs/history/{entry_id}/load")
+async def api_load_from_history(entry_id: str):
+    history = _load_history()
+    entry = next((h for h in history if h["id"] == entry_id), None)
+    if not entry:
+        return {"ok": False, "error": "Not found"}
+    prog.load(entry["program"])
+    return {"ok": True, "program": entry["program"]}
+
+
+# --- GPX upload ---
+
+
+def _parse_gpx_to_intervals(gpx_bytes):
+    """Parse a GPX file into treadmill interval program."""
+    import math
+
+    try:
+        import gpxpy
+    except ImportError:
+        raise ValueError("gpxpy not installed — run: pip3 install gpxpy")
+
+    gpx = gpxpy.parse(gpx_bytes.decode("utf-8"))
+
+    points = []
+    for track in gpx.tracks:
+        for segment in track.segments:
+            for pt in segment.points:
+                if pt.elevation is not None:
+                    points.append((pt.latitude, pt.longitude, pt.elevation))
+
+    if len(points) < 2:
+        raise ValueError("GPX file needs at least 2 points with elevation data")
+
+    # Calculate segments with grade
+    segments = []
+    for i in range(1, len(points)):
+        lat1, lon1, ele1 = points[i - 1]
+        lat2, lon2, ele2 = points[i]
+        # Haversine distance
+        R = 6371000  # Earth radius in meters
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+        )
+        horiz = 2 * R * math.asin(math.sqrt(a))
+        if horiz < 1:
+            continue  # skip negligible segments
+        grade = ((ele2 - ele1) / horiz) * 100
+        segments.append({"distance": horiz, "grade": grade, "elevation": ele2})
+
+    if not segments:
+        raise ValueError("No valid segments found in GPX")
+
+    # Merge short segments (min 100m)
+    merged = []
+    accum_dist = 0
+    accum_grade_dist = 0
+    for seg in segments:
+        accum_dist += seg["distance"]
+        accum_grade_dist += seg["grade"] * seg["distance"]
+        if accum_dist >= 100:
+            avg_grade = accum_grade_dist / accum_dist if accum_dist > 0 else 0
+            merged.append({"distance": accum_dist, "grade": avg_grade})
+            accum_dist = 0
+            accum_grade_dist = 0
+    if accum_dist > 0:
+        avg_grade = accum_grade_dist / accum_dist if accum_dist > 0 else 0
+        merged.append({"distance": accum_dist, "grade": avg_grade})
+
+    # Convert to time-based intervals at base walking pace
+    BASE_SPEED_MPS = 3.1 * 0.44704  # 3.1 mph in m/s
+    intervals = []
+    for i, seg in enumerate(merged):
+        duration = int(seg["distance"] / BASE_SPEED_MPS)
+        incline = int(round(seg["grade"]))
+        speed = 3.1
+
+        # Label based on grade
+        grade = seg["grade"]
+        if i == 0:
+            label = "Start"
+        elif i == len(merged) - 1:
+            label = "Finish"
+        elif grade < 1:
+            label = "Flat"
+        elif grade < 3:
+            label = "Rolling"
+        elif grade < 6:
+            label = "Hill"
+        else:
+            label = "Steep Climb"
+
+        iv = {
+            "name": label,
+            "duration": duration,
+            "speed": speed,
+            "incline": incline,
+        }
+        validate_interval(iv)
+        intervals.append(iv)
+
+    total_dist = sum(s["distance"] for s in merged)
+    return {
+        "name": f"GPX Route ({total_dist/1000:.1f} km)",
+        "intervals": intervals,
+    }
+
+
+@app.post("/api/gpx/upload")
+async def api_gpx_upload(file: UploadFile = File(...)):
+    try:
+        gpx_bytes = await file.read()
+        program = _parse_gpx_to_intervals(gpx_bytes)
+        prog.load(program)
+        _add_to_history(program, f"GPX: {file.filename}")
+        return {"ok": True, "program": program}
+    except Exception as e:
+        log.error(f"GPX upload failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 # --- Chat endpoint (agentic Gemini) ---
@@ -361,24 +575,12 @@ async def _exec_fn(name, args):
     """Execute a treadmill function call from Gemini."""
     if name == "set_speed":
         mph = float(args.get("mph", 0))
-        state["emu_speed"] = max(0, min(int(mph * 10), MAX_SPEED_TENTHS))
-        client.set_speed(mph)
-        if not state["emulate"]:
-            state["proxy"] = False
-            state["emulate"] = True
-            client.set_emulate(True)
-        await broadcast_status()
+        await _apply_speed(mph)
         return f"Speed set to {mph} mph"
 
     elif name == "set_incline":
         inc = int(args.get("incline", 0))
-        state["emu_incline"] = max(0, min(inc, MAX_INCLINE))
-        client.set_incline(inc)
-        if not state["emulate"]:
-            state["proxy"] = False
-            state["emulate"] = True
-            client.set_emulate(True)
-        await broadcast_status()
+        await _apply_incline(inc)
         return f"Incline set to {inc}%"
 
     elif name == "start_workout":
@@ -386,10 +588,7 @@ async def _exec_fn(name, args):
         try:
             program = await generate_program(desc)
             prog.load(program)
-            state["proxy"] = False
-            state["emulate"] = True
-            client.set_emulate(True)
-            await broadcast_status()
+            _add_to_history(program, desc)
             await prog.start(_prog_on_change(), _prog_on_update())
             n = len(program["intervals"])
             mins = sum(iv["duration"] for iv in program["intervals"]) // 60
@@ -398,13 +597,7 @@ async def _exec_fn(name, args):
             return f"Failed: {e}"
 
     elif name == "stop_treadmill":
-        if prog and prog.running:
-            await prog.stop()
-        state["emu_speed"] = 0
-        state["emu_incline"] = 0
-        client.set_speed(0)
-        client.set_incline(0)
-        await broadcast_status()
+        await _apply_stop()
         return "Treadmill stopped"
 
     elif name == "pause_program":
@@ -426,14 +619,33 @@ async def _exec_fn(name, args):
             return f"Skipped to: {iv['name']}" if iv else "Program complete"
         return "No program running"
 
+    elif name == "extend_interval":
+        secs = int(args.get("seconds", 0))
+        if prog and prog.running:
+            ok = await prog.extend_current(secs)
+            if ok:
+                iv = prog.current_iv
+                return f"Interval now {iv['duration']}s ({'+' if secs > 0 else ''}{secs}s)"
+            return "No current interval"
+        return "No program running"
+
+    elif name == "add_time":
+        intervals = args.get("intervals", [])
+        if not intervals:
+            return "No intervals provided"
+        if prog and prog.program:
+            ok = await prog.add_intervals(intervals)
+            if ok:
+                added = sum(iv.get("duration", 0) for iv in intervals)
+                return f"Added {len(intervals)} interval(s), {added}s total. Program now {prog.total_duration}s."
+            return "Failed to add intervals"
+        return "No program loaded"
+
     return f"Unknown function: {name}"
 
 
-@app.post("/api/chat")
-async def api_chat(req: ChatRequest):
-    global chat_history
-
-    # Build treadmill state context
+def _build_chat_system():
+    """Build the system prompt with current treadmill state context."""
     treadmill_state = {
         "speed_mph": state["emu_speed"] / 10,
         "incline_pct": state["emu_incline"],
@@ -444,16 +656,30 @@ async def api_chat(req: ChatRequest):
             "name": prog.program.get("name"),
             "running": prog.running,
             "paused": prog.paused,
+            "current_interval_index": prog.current_interval,
             "interval": prog.current_iv.get("name") if prog.current_iv else None,
+            "interval_remaining_s": (prog.current_iv["duration"] - prog.interval_elapsed) if prog.current_iv else 0,
             "elapsed": prog.total_elapsed,
             "remaining": prog.total_duration - prog.total_elapsed,
+            "total_intervals": len(prog.program.get("intervals", [])),
         }
 
-    system = f"{CHAT_SYSTEM_PROMPT}\n\nCurrent state:\n{json.dumps(treadmill_state)}"
+    history = _load_history()
+    history_summary = ""
+    if history:
+        names = [h["program"].get("name", "?") for h in history[:5]]
+        history_summary = f"\n\nRecent programs: {', '.join(names)}"
 
-    chat_history.append({"role": "user", "parts": [{"text": req.message}]})
+    return f"{CHAT_SYSTEM_PROMPT}{history_summary}\n\nCurrent state:\n{json.dumps(treadmill_state)}"
 
+
+async def _run_chat_core():
+    """Run the Gemini function-calling loop using chat_history. Returns response dict."""
+    global chat_history
+
+    system = _build_chat_system()
     executed = []
+
     try:
         for _ in range(3):  # max function-calling turns
             result = await call_gemini(chat_history, system, TOOL_DECLARATIONS)
@@ -505,6 +731,29 @@ async def api_chat(req: ChatRequest):
         if len(chat_history) > 10:
             chat_history = chat_history[-10:]
         return {"text": f"Error: {e}", "actions": executed}
+
+
+@app.post("/api/chat")
+async def api_chat(req: ChatRequest):
+    chat_history.append({"role": "user", "parts": [{"text": req.message}]})
+    return await _run_chat_core()
+
+
+@app.post("/api/chat/voice")
+async def api_chat_voice(req: VoiceChatRequest):
+    # Add audio as user message — Gemini natively understands speech
+    audio_parts = [{"inlineData": {"mimeType": req.mime_type, "data": req.audio}}]
+    chat_history.append({"role": "user", "parts": audio_parts})
+
+    result = await _run_chat_core()
+
+    # Replace the audio blob in history with a text placeholder to save memory
+    for msg in chat_history:
+        if msg.get("parts") is audio_parts:
+            msg["parts"] = [{"text": "[voice message]"}]
+            break
+
+    return result
 
 
 # --- WebSocket endpoint ---
