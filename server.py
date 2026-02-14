@@ -275,6 +275,11 @@ class VoiceChatRequest(BaseModel):
     mime_type: str = "audio/webm"
 
 
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "Kore"
+
+
 # --- Shared control helpers ---
 
 
@@ -741,19 +746,120 @@ async def api_chat(req: ChatRequest):
 
 @app.post("/api/chat/voice")
 async def api_chat_voice(req: VoiceChatRequest):
-    # Add audio as user message — Gemini natively understands speech
+    # Step 1: Transcribe the audio with a separate Gemini call so we can show
+    # the user what was heard before the coach responds.
+    transcription = ""
+    try:
+        transcription = await _transcribe_audio(req.audio, req.mime_type)
+    except Exception as e:
+        log.warning(f"Transcription failed (proceeding with audio): {e}")
+
+    # Step 2: Add audio as user message — Gemini natively understands speech
     audio_parts = [{"inlineData": {"mimeType": req.mime_type, "data": req.audio}}]
     chat_history.append({"role": "user", "parts": audio_parts})
 
     result = await _run_chat_core()
 
-    # Replace the audio blob in history with a text placeholder to save memory
+    # Replace the audio blob in history with transcribed text to save memory
+    replacement_text = transcription if transcription else "[voice message]"
     for msg in chat_history:
         if msg.get("parts") is audio_parts:
-            msg["parts"] = [{"text": "[voice message]"}]
+            msg["parts"] = [{"text": replacement_text}]
             break
 
+    # Include transcription in the response
+    if transcription:
+        result["transcription"] = transcription
+
     return result
+
+
+async def _transcribe_audio(audio_b64, mime_type):
+    """Transcribe audio using Gemini — returns the text that was spoken."""
+    from program_engine import GEMINI_API_BASE, GEMINI_MODEL, _read_api_key
+
+    api_key = _read_api_key()
+    if not api_key:
+        return ""
+
+    contents = [
+        {
+            "parts": [
+                {"inlineData": {"mimeType": mime_type, "data": audio_b64}},
+                {
+                    "text": "Transcribe exactly what was said in this audio. Return ONLY the transcribed text, nothing else. If the audio is unclear or empty, return an empty string."
+                },
+            ]
+        }
+    ]
+
+    result = await call_gemini(
+        contents,
+        "You are a speech transcription tool. Return only the exact words spoken.",
+        api_key=api_key,
+        generation_config={"temperature": 0.1, "maxOutputTokens": 256},
+    )
+
+    try:
+        text = result["candidates"][0]["content"]["parts"][0]["text"]
+        return text.strip().strip('"').strip("'")
+    except (KeyError, IndexError):
+        return ""
+
+
+TTS_MODEL = "gemini-2.5-flash-preview-tts"
+
+
+@app.post("/api/tts")
+async def api_tts(req: TTSRequest):
+    """Generate speech audio from text using Gemini TTS."""
+    from program_engine import GEMINI_API_BASE, _read_api_key
+
+    api_key = _read_api_key()
+    if not api_key:
+        return {"ok": False, "error": "No API key"}
+
+    url = f"{GEMINI_API_BASE}/{TTS_MODEL}:generateContent"
+    payload = {
+        "contents": [{"parts": [{"text": req.text}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": req.voice,
+                    }
+                }
+            },
+        },
+    }
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+    def _call():
+        import urllib.request
+
+        data = json.dumps(payload).encode()
+        http_req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        with urllib.request.urlopen(http_req, timeout=30) as resp:
+            return json.loads(resp.read())
+
+    try:
+        result = await asyncio.to_thread(_call)
+        audio_data = result["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+        return {
+            "ok": True,
+            "audio": audio_data,  # base64-encoded PCM 24kHz 16-bit mono
+            "sample_rate": 24000,
+            "channels": 1,
+            "bit_depth": 16,
+        }
+    except Exception as e:
+        log.error(f"TTS failed: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 # --- WebSocket endpoint ---

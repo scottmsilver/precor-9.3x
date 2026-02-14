@@ -435,6 +435,81 @@ body { display: flex; flex-direction: column; overflow: hidden; height: 100dvh; 
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Voice recording overlay — waveform + duration */
+.voice-overlay {
+  position: fixed; bottom: 56px;
+  left: 16px; right: 16px;
+  max-width: 480px; margin: 0 auto;
+  background: var(--elevated);
+  border: 0.5px solid var(--separator);
+  border-radius: var(--r-md);
+  padding: 12px 16px;
+  z-index: 26;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  animation: toastSlideUp 200ms var(--ease-decel) forwards;
+}
+@keyframes toastSlideUp {
+  0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.voice-overlay-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.voice-overlay-label {
+  font-size: 13px; font-weight: 600; color: var(--red);
+  display: flex; align-items: center; gap: 6px;
+}
+.voice-overlay-label .rec-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+  animation: breathe 1.2s ease-in-out infinite;
+}
+.voice-overlay-duration {
+  font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums;
+}
+.voice-waveform {
+  display: flex; align-items: center; gap: 2px; height: 32px;
+}
+.voice-waveform-bar {
+  flex: 1; min-width: 2px; border-radius: 1px;
+  background: var(--red); opacity: 0.6;
+  transition: height 80ms ease-out;
+}
+
+/* Voice transcription toast — appears before the AI response */
+.voice-heard-toast {
+  position: fixed; bottom: 56px;
+  left: 16px; right: 16px;
+  max-width: 480px; margin: 0 auto;
+  background: var(--elevated);
+  border: 0.5px solid var(--separator);
+  border-radius: var(--r-md);
+  padding: 10px 14px; z-index: 25;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  animation: toastSlideUp 200ms var(--ease-decel) forwards;
+}
+.voice-heard-label {
+  font-size: 11px; color: var(--text3); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+.voice-heard-text {
+  font-size: 14px; color: var(--text); font-style: italic;
+  line-height: 1.4;
+}
+
+/* TTS speaker button inside toast */
+.tts-btn {
+  width: 28px; height: 28px; border-radius: 14px; border: none;
+  background: rgba(139,127,160,0.15); color: var(--purple);
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; float: right; margin-left: 8px; margin-top: -2px;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 100ms var(--ease), opacity 100ms var(--ease);
+}
+.tts-btn:active { transform: scale(0.88); }
+.tts-btn.playing { animation: micPulse 1.2s ease-in-out infinite; background: var(--purple); color: #fff; }
+
 /* Settings overlay */
 .settings-overlay {
   position: fixed; inset: 0; z-index: 50;
@@ -517,7 +592,42 @@ body::after {
     <div class="mode-badge" x-show="showDebug" :class="{ proxy: proxy, emu: emulate }"
          x-text="emulate ? 'Emulate' : proxy ? 'Proxy' : 'Off'"></div>
   </div>
-  <button class="gear" @click="showSettings = !showSettings">&#9881;</button>
+  <div style="display:flex;align-items:center;gap:4px">
+    <button class="gear" x-show="!isLobby" @click="goHome()" title="Home" style="font-size:1rem">&#8962;</button>
+    <button class="gear" @click="showSettings = !showSettings">&#9881;</button>
+  </div>
+</div>
+
+<!-- Debug Raw Data Panel -->
+<div x-show="showDebug" x-transition.opacity style="position:fixed;top:52px;left:8px;right:8px;bottom:8px;z-index:8;background:rgba(18,18,16,0.95);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-radius:var(--r-sm);border:1px solid var(--fill2);padding:0;font-family:'SF Mono',Menlo,monospace;font-size:11px;display:flex;flex-direction:column">
+  <!-- Motor cache (top) -->
+  <div style="flex-shrink:0;border-bottom:2px solid var(--fill2);padding:6px 8px">
+    <div style="color:var(--orange);font-size:10px;font-weight:600;margin-bottom:4px">MOTOR LAST VALUES</div>
+    <div style="display:flex;flex-wrap:wrap;gap:2px 10px">
+      <template x-for="key in Object.keys(debugMotorCache).sort()" :key="key">
+        <span><span style="color:var(--text4)" x-text="key"></span><span style="color:var(--text4)">:</span><span style="color:var(--orange)" x-text="debugMotorCache[key]"></span></span>
+      </template>
+    </div>
+    <div x-show="Object.keys(debugMotorCache).length === 0" style="color:var(--text4)">Waiting...</div>
+  </div>
+  <!-- Stream (bottom, scrolling) -->
+  <div style="flex-shrink:0;display:flex;padding:6px 8px 2px;align-items:center">
+    <span style="color:var(--text4);font-size:10px;font-weight:600">STREAM</span>
+    <span style="flex:1"></span>
+    <span style="color:var(--text4);font-size:9px" x-text="debugLog.length + ' msgs'"></span>
+  </div>
+  <div x-ref="debugLogScroll" style="flex:1;overflow-y:auto;padding:0">
+    <template x-for="(entry, i) in debugLog" :key="i">
+      <div style="display:flex;align-items:baseline;padding:1px 8px;border-bottom:1px solid rgba(255,255,255,0.02)">
+        <span style="width:50px;flex-shrink:0;color:var(--text4);font-size:10px" x-text="entry.ts"></span>
+        <span style="width:12px;flex-shrink:0;font-size:9px;text-align:center"
+              :style="entry.src === 'motor' ? 'color:var(--orange)' : 'color:var(--teal)'"
+              x-text="entry.src === 'motor' ? '◂' : '▸'"></span>
+        <span style="width:42px;flex-shrink:0;color:var(--text3)" x-text="entry.key"></span>
+        <span :style="entry.src === 'motor' ? 'color:var(--orange)' : 'color:var(--teal)'" x-text="entry.value"></span>
+      </div>
+    </template>
+  </div>
 </div>
 
 <!-- Hero Time (cockpit: large, lobby: smaller) -->
@@ -617,7 +727,10 @@ body::after {
         <div class="pgm-hud-top">
           <div class="pgm-hud-badge" :style="`background:${ivColor(pgmCurrentIv)}30;color:${ivColor(pgmCurrentIv)}`"
                x-text="pgmCurrentIv.name"></div>
-          <div class="pgm-hud-targets" x-text="`${pgmCurrentIv.speed} mph \u00b7 ${pgmCurrentIv.incline}%`"></div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <div class="pgm-hud-targets" x-text="`${pgmCurrentIv.speed} mph \u00b7 ${pgmCurrentIv.incline}%`"></div>
+            <button @click.stop="openTrailView()" style="width:28px;height:28px;border-radius:6px;border:none;background:rgba(120,120,128,0.2);backdrop-filter:blur(8px);color:var(--green);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent" title="Trail View">&#9968;</button>
+          </div>
         </div>
         <div class="pgm-hud-center"></div>
         <div class="pgm-hud-footer">
@@ -685,12 +798,31 @@ body::after {
   <button class="stop-btn" @click="emergencyStop()">Stop</button>
 </div>
 
+<!-- Voice recording overlay — waveform + duration -->
+<div class="voice-overlay" x-show="recording" x-transition>
+  <div class="voice-overlay-top">
+    <div class="voice-overlay-label"><span class="rec-dot"></span> Recording</div>
+    <div class="voice-overlay-duration" x-text="fmtDur(recordingDuration)"></div>
+  </div>
+  <div class="voice-waveform" x-ref="waveform">
+    <template x-for="(level, i) in waveformBars" :key="i">
+      <div class="voice-waveform-bar" :style="`height: ${Math.max(2, level * 32)}px`"></div>
+    </template>
+  </div>
+</div>
+
+<!-- Voice transcription toast — "Heard: ..." -->
+<div class="voice-heard-toast" x-show="voiceHeardVisible" x-transition>
+  <div class="voice-heard-label">Heard</div>
+  <div class="voice-heard-text" x-text="voiceHeardText"></div>
+</div>
+
 <!-- Chat toast (floating above chat bar) -->
 <div class="chat-toast" x-show="chatToastVisible" x-transition
-     x-html="chatToastText"></div>
+     x-html="chatToastHtml"></div>
 
 <!-- Chat thinking indicator (as toast) -->
-<div class="chat-toast" x-show="chatThinking" style="animation: none; opacity: 1;">
+<div class="chat-toast" x-show="chatThinking && !voiceHeardVisible" style="animation: none; opacity: 1;">
   <span class="chat-thinking"></span> Thinking...
 </div>
 
@@ -750,6 +882,17 @@ body::after {
         </template>
       </div>
 
+      <h3>Voice</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0">
+        <span style="font-size:14px;color:var(--text2)">AI speaks responses</span>
+        <button @click="voiceResponseEnabled = !voiceResponseEnabled; haptic(15)"
+                style="width:48px;height:28px;border-radius:14px;border:none;cursor:pointer;transition:background 200ms var(--ease);padding:2px"
+                :style="voiceResponseEnabled ? 'background:var(--purple)' : 'background:var(--fill2)'">
+          <div style="width:24px;height:24px;border-radius:12px;background:#fff;transition:transform 200ms var(--ease)"
+               :style="voiceResponseEnabled ? 'transform:translateX(20px)' : 'transform:translateX(0)'"></div>
+        </button>
+      </div>
+
       <h3>Import</h3>
       <label style="display:flex;align-items:center;justify-content:center;height:44px;border-radius:var(--r-sm);background:var(--fill2);color:var(--text2);font-size:15px;font-weight:600;cursor:pointer">
         Upload GPX Route
@@ -776,14 +919,24 @@ function app() {
     pgmTotalElapsed: 0, pgmTotalDuration: 0, pgmCompleted: false,
     // Chat
     chatMsg: '', chatThinking: false, chatOpen: false,
-    chatToastVisible: false, chatToastText: '', _toastTimer: null,
+    chatToastVisible: false, chatToastText: '', chatToastHtml: '', _toastTimer: null,
     recording: false, _mediaRecorder: null, _audioChunks: [], _audioStream: null,
+    // Enhanced voice state
+    recordingDuration: 0, _recordingTimer: null,
+    waveformBars: new Array(32).fill(0), _analyser: null, _audioCtx: null, _waveformRaf: null,
+    _silenceStart: 0, _silenceThreshold: 0.01, _silenceTimeout: 2000,
+    voiceHeardVisible: false, voiceHeardText: '',
+    ttsPlaying: false, _ttsAudioCtx: null, _ttsSource: null,
+    voiceResponseEnabled: true,
     // History
     history: [],
     // UI
     showSettings: false,
     showDebug: false,
     _debugTaps: [],
+    motorRaw: {},
+    debugLog: [],
+    debugMotorCache: {},
     pgmControlsExpanded: false,
     repeatTimer: null, repeatCount: 0, _initialized: false,
 
@@ -975,12 +1128,22 @@ function app() {
       this.ws.onerror = () => { this.ws.close(); };
       this.ws.onmessage = (evt) => {
         const msg = JSON.parse(evt.data);
-        if (msg.type === 'status') {
+        if (msg.type === 'kv' && this.showDebug) {
+          const ts = msg.ts != null ? msg.ts.toFixed(2) : '';
+          this.debugLog.push({ ts, src: msg.source, key: msg.key, value: msg.value });
+          if (this.debugLog.length > 500) this.debugLog.splice(0, 100);
+          if (msg.source === 'motor') {
+            this.debugMotorCache[msg.key] = msg.value;
+            this.debugMotorCache = { ...this.debugMotorCache };
+          }
+          this.$nextTick(() => { const el = this.$refs.debugLogScroll; if (el) el.scrollTop = el.scrollHeight; });
+        } else if (msg.type === 'status') {
           this.proxy = msg.proxy; this.emulate = msg.emulate;
           if (msg.emu_speed != null) this.emu_speed = msg.emu_speed;
           if (msg.emu_incline != null) this.emu_incline = msg.emu_incline;
           if (msg.speed != null) this.speed = msg.speed;
           if (msg.incline != null) this.incline = msg.incline;
+          if (msg.motor) this.motorRaw = msg.motor;
         } else if (msg.type === 'program') {
           this._loadPgmState(msg);
         }
@@ -1041,6 +1204,17 @@ function app() {
       clearTimeout(this.repeatTimer); clearInterval(this.repeatTimer);
       this.repeatTimer = null; this.repeatCount = 0;
     },
+    goHome() {
+      // Reset session and return to lobby
+      if (this.programRunning) this.pgmStop();
+      if (this.emu_speed > 0) this.emergencyStop();
+      this.elapsed = 0;
+      this.distance = 0;
+      this.vertFeet = 0;
+      this.pgmCompleted = false;
+      this.pgmControlsExpanded = false;
+      this.haptic(25);
+    },
     quickStart() {
       this.emu_speed = 30;
       this.emulate = true;
@@ -1071,6 +1245,34 @@ function app() {
       this.haptic(15);
     },
 
+    // --- Trail View ---
+    _trailWindow: null,
+    _trailSyncInterval: null,
+    openTrailView() {
+      if (!this.program) return;
+      const ivData = btoa(JSON.stringify(this.program.intervals));
+      const pos = this.pgmTimelinePos / 100;
+      const spd = this.speedVal;
+      const url = `/terrain3d.html#intervals=${ivData}&pos=${pos}&speed=${spd}`;
+      this._trailWindow = window.open(url, 'trailview', 'width=800,height=600');
+      // Sync position every 2 seconds
+      clearInterval(this._trailSyncInterval);
+      this._trailSyncInterval = setInterval(() => {
+        if (!this._trailWindow || this._trailWindow.closed) {
+          clearInterval(this._trailSyncInterval);
+          this._trailWindow = null;
+          return;
+        }
+        this._trailWindow.postMessage({
+          type: 'update',
+          pos: this.pgmTimelinePos / 100,
+          speed: this.speedVal,
+          incline: this.emu_incline,
+        }, '*');
+      }, 2000);
+      this.haptic(25);
+    },
+
     // --- Chat ---
     openChat() {
       this.chatOpen = true;
@@ -1080,7 +1282,7 @@ function app() {
       this.chatOpen = false;
     },
 
-    // --- Voice recording ---
+    // --- Voice recording (enhanced with waveform, silence detection, transcription) ---
     toggleRecording() {
       if (this.recording) {
         this.stopRecording();
@@ -1089,9 +1291,21 @@ function app() {
       }
     },
     async startRecording() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        this.showToast('Mic requires HTTPS. In Chrome: chrome://flags → "Insecure origins treated as secure" → add http://rpi:8000');
+        return;
+      }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         this._audioStream = stream;
+
+        // Set up Web Audio API analyser for waveform + silence detection
+        this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = this._audioCtx.createMediaStreamSource(stream);
+        this._analyser = this._audioCtx.createAnalyser();
+        this._analyser.fftSize = 64;
+        source.connect(this._analyser);
+
         // Pick best supported format
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
           ? 'audio/webm;codecs=opus'
@@ -1107,17 +1321,66 @@ function app() {
           const actualType = this._mediaRecorder.mimeType || 'audio/webm';
           const blob = new Blob(this._audioChunks, { type: actualType });
           this._sendVoice(blob, actualType.split(';')[0]);
-          if (this._audioStream) {
-            this._audioStream.getTracks().forEach(t => t.stop());
-            this._audioStream = null;
-          }
+          this._cleanupRecording();
         };
         this._mediaRecorder.start();
         this.recording = true;
+        this.recordingDuration = 0;
+        this._silenceStart = 0;
+        this.waveformBars = new Array(32).fill(0);
+
+        // Duration timer
+        this._recordingTimer = setInterval(() => { this.recordingDuration += 1; }, 1000);
+
+        // Waveform + silence detection loop
+        this._updateWaveform();
+
         this.haptic(25);
       } catch (e) {
         console.error('Mic error:', e);
         this.showToast('Microphone access denied');
+      }
+    },
+    _updateWaveform() {
+      if (!this.recording || !this._analyser) return;
+      const data = new Uint8Array(this._analyser.frequencyBinCount);
+      this._analyser.getByteFrequencyData(data);
+
+      // Normalize to 0-1 for bar heights
+      const bars = [];
+      const binCount = Math.min(data.length, 32);
+      let maxLevel = 0;
+      for (let i = 0; i < 32; i++) {
+        const idx = Math.floor((i / 32) * binCount);
+        const level = data[idx] / 255;
+        bars.push(level);
+        if (level > maxLevel) maxLevel = level;
+      }
+      this.waveformBars = bars;
+
+      // Silence detection: auto-stop after sustained silence (only if we have recorded >1s)
+      if (this.recordingDuration >= 1) {
+        if (maxLevel < this._silenceThreshold) {
+          if (!this._silenceStart) this._silenceStart = Date.now();
+          else if (Date.now() - this._silenceStart > this._silenceTimeout) {
+            this.stopRecording();
+            return;
+          }
+        } else {
+          this._silenceStart = 0;
+        }
+      }
+
+      this._waveformRaf = requestAnimationFrame(() => this._updateWaveform());
+    },
+    _cleanupRecording() {
+      if (this._recordingTimer) { clearInterval(this._recordingTimer); this._recordingTimer = null; }
+      if (this._waveformRaf) { cancelAnimationFrame(this._waveformRaf); this._waveformRaf = null; }
+      if (this._audioCtx) { this._audioCtx.close().catch(() => {}); this._audioCtx = null; }
+      this._analyser = null;
+      if (this._audioStream) {
+        this._audioStream.getTracks().forEach(t => t.stop());
+        this._audioStream = null;
       }
     },
     stopRecording() {
@@ -1130,6 +1393,8 @@ function app() {
     async _sendVoice(blob, mimeType) {
       this.chatThinking = true;
       this.chatToastVisible = false;
+      this.voiceHeardVisible = false;
+      this.voiceHeardText = '';
       this.closeChat();
       try {
         const base64 = await new Promise((resolve, reject) => {
@@ -1139,15 +1404,83 @@ function app() {
           reader.readAsDataURL(blob);
         });
         const res = await this.post('/api/chat/voice', { audio: base64, mime_type: mimeType });
+
+        // Show transcription first ("Heard: ...")
+        if (res?.transcription) {
+          this.voiceHeardText = res.transcription;
+          this.voiceHeardVisible = true;
+          // Keep the "heard" toast briefly visible before showing the response
+          await new Promise(r => setTimeout(r, 1500));
+          this.voiceHeardVisible = false;
+        }
+
         this.chatThinking = false;
-        this.showToast(res?.text || 'No response');
+        const responseText = res?.text || 'No response';
+        this.showToast(responseText);
         this.pgmCompleted = false;
         this.loadHistory();
+
+        // Optional TTS: speak the response aloud
+        if (this.voiceResponseEnabled && responseText && responseText !== 'No response') {
+          this._speakResponse(responseText);
+        }
       } catch (e) {
         this.chatThinking = false;
+        this.voiceHeardVisible = false;
         this.showToast('Error processing voice');
       }
       this.haptic(15);
+    },
+
+    // --- TTS playback ---
+    async _speakResponse(text) {
+      try {
+        const res = await this.post('/api/tts', { text, voice: 'Kore' });
+        if (!res?.ok || !res?.audio) return;
+        await this._playPcmAudio(res.audio, res.sample_rate || 24000);
+      } catch (e) {
+        console.warn('TTS playback failed:', e);
+      }
+    },
+    async _playPcmAudio(base64Pcm, sampleRate) {
+      // Decode base64 to raw PCM bytes
+      const binaryStr = atob(base64Pcm);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+      // Convert 16-bit PCM to float32 for Web Audio API
+      const int16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+      // Create audio buffer and play
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const buffer = ctx.createBuffer(1, float32.length, sampleRate);
+      buffer.getChannelData(0).set(float32);
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+
+      this.ttsPlaying = true;
+      source.onended = () => {
+        this.ttsPlaying = false;
+        ctx.close().catch(() => {});
+      };
+      source.start();
+      this._ttsAudioCtx = ctx;
+      this._ttsSource = source;
+    },
+    stopTts() {
+      if (this._ttsSource) {
+        try { this._ttsSource.stop(); } catch (e) {}
+        this._ttsSource = null;
+      }
+      if (this._ttsAudioCtx) {
+        this._ttsAudioCtx.close().catch(() => {});
+        this._ttsAudioCtx = null;
+      }
+      this.ttsPlaying = false;
     },
 
     async sendChat() {
@@ -1172,6 +1505,8 @@ function app() {
 
     showToast(text) {
       this.chatToastText = text;
+      // Build HTML with optional TTS replay button
+      this.chatToastHtml = text;
       this.chatToastVisible = true;
       clearTimeout(this._toastTimer);
       this._toastTimer = setTimeout(() => { this.chatToastVisible = false; }, 8000);
@@ -1201,6 +1536,7 @@ function app() {
       this._debugTaps = this._debugTaps.filter(t => now - t < 500);
       if (this._debugTaps.length >= 3) {
         this.showDebug = !this.showDebug;
+        if (this.showDebug) { this.debugLog = []; this.debugMotorCache = {}; }
         this._debugTaps = [];
         this.haptic(50);
       }

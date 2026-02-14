@@ -1,0 +1,1391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Trail View</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: #121210; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: #121210; color: rgba(232,228,223,0.6); font-family: -apple-system, system-ui, sans-serif;
+    font-size: 14px; z-index: 10; transition: opacity 0.6s;
+  }
+  #loading.done { opacity: 0; pointer-events: none; }
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 5;
+    padding: 16px 20px 12px; pointer-events: none;
+    background: linear-gradient(rgba(13,18,16,0.6) 0%, transparent 100%);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex; justify-content: space-between; align-items: flex-start;
+  }
+  #hud-interval {
+    font-size: 13px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.03em; color: rgba(124,154,130,0.9);
+    padding: 4px 10px; border-radius: 6px;
+    background: rgba(124,154,130,0.12);
+  }
+  #hud-speed {
+    font-size: 28px; font-weight: 700; color: rgba(232,228,223,0.85);
+    font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  #hud-speed-unit {
+    font-size: 11px; font-weight: 500; color: rgba(232,228,223,0.4);
+    margin-left: 2px;
+  }
+  #hud-progress {
+    position: fixed; bottom: 0; left: 0; right: 0; height: 3px; z-index: 5;
+    background: rgba(124,154,130,0.1); pointer-events: none;
+  }
+  #hud-progress-fill {
+    height: 100%; background: rgba(124,154,130,0.5);
+    border-radius: 0 2px 2px 0; transition: width 0.5s linear;
+  }
+</style>
+</head>
+<body>
+<div id="loading">Loading trail...</div>
+<div id="hud">
+  <div id="hud-interval"></div>
+  <div><span id="hud-speed">0.0</span><span id="hud-speed-unit">mph</span></div>
+</div>
+<button id="close-btn" onclick="window.close();if(!window.closed)history.back()" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:6;width:36px;height:36px;border-radius:50%;border:none;background:rgba(30,29,27,0.7);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:rgba(232,228,223,0.7);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent">&#10005;</button>
+<div id="hud-progress"><div id="hud-progress-fill" style="width:0%"></div></div>
+<script src="/three.min.js"></script>
+<script>
+window.onerror = function(msg, url, line) {
+  document.getElementById('loading').textContent = 'Error: ' + msg + ' (line ' + line + ')';
+};
+</script>
+<script>
+
+// ─── Configuration ───────────────────────────────────────────────────────────
+
+const PALETTE = {
+  bg: 0x121210,
+  green: 0x7C9A82,
+  orange: 0xA69882,
+  text: 0xE8E4DF,
+  red: 0xC45C52,
+  teal: 0x6B8F8B,
+  purple: 0x8B7FA0,
+  darkGreen: 0x3A5A3E,
+  brown: 0x5C4A3A,
+  earth: 0x2A2520,
+};
+
+const PATH_WIDTH = 2.2;
+const UNITS_PER_SECOND = 0.8;  // path length per second of interval duration
+const MAX_INCLINE = 15;
+const TREE_COUNT = 600;
+const GRASS_COUNT = 2000;
+const ROCK_COUNT = 200;
+
+// ─── Parse URL Data ──────────────────────────────────────────────────────────
+
+function parseHashParams() {
+  const hash = location.hash.slice(1);
+  const params = new URLSearchParams(hash);
+  let intervals = null;
+  let pos = 0;
+  let speed = 0;
+
+  if (params.has('intervals')) {
+    try {
+      intervals = JSON.parse(atob(params.get('intervals')));
+    } catch (e) {
+      console.warn('Failed to parse intervals:', e);
+    }
+  }
+  if (params.has('pos')) pos = parseFloat(params.get('pos')) || 0;
+  if (params.has('speed')) speed = parseFloat(params.get('speed')) || 0;
+
+  return { intervals, pos, speed };
+}
+
+// Default demo intervals if none provided
+const DEFAULT_INTERVALS = [
+  { name: 'Warm Up', duration: 120, speed: 3.0, incline: 1 },
+  { name: 'Easy Jog', duration: 180, speed: 5.0, incline: 2 },
+  { name: 'Hill Climb', duration: 120, speed: 4.5, incline: 8 },
+  { name: 'Summit Push', duration: 60, speed: 4.0, incline: 12 },
+  { name: 'Descent', duration: 90, speed: 6.0, incline: 3 },
+  { name: 'Tempo Run', duration: 180, speed: 7.0, incline: 4 },
+  { name: 'Hill Repeats', duration: 90, speed: 5.5, incline: 10 },
+  { name: 'Recovery', duration: 60, speed: 4.0, incline: 2 },
+  { name: 'Final Push', duration: 120, speed: 8.0, incline: 6 },
+  { name: 'Cool Down', duration: 120, speed: 3.0, incline: 0 },
+];
+
+let { intervals, pos: currentPos, speed: currentSpeed } = parseHashParams();
+const hadExternalData = intervals !== null || currentPos > 0 || currentSpeed > 0;
+if (!intervals) intervals = DEFAULT_INTERVALS;
+
+// ─── Build Trail Path ────────────────────────────────────────────────────────
+
+function buildTrailPath(intervals) {
+  const totalDuration = intervals.reduce((s, iv) => s + iv.duration, 0);
+  const totalLength = totalDuration * UNITS_PER_SECOND;
+
+  // Build raw elevation points at interval boundaries
+  const rawPoints = [];
+  let dist = 0;
+  for (const iv of intervals) {
+    const segLen = iv.duration * UNITS_PER_SECOND;
+    rawPoints.push({ dist, elevation: iv.incline / MAX_INCLINE });
+    dist += segLen;
+  }
+  rawPoints.push({ dist, elevation: intervals[intervals.length - 1].incline / MAX_INCLINE });
+
+  // Create smooth path with cubic bezier interpolation
+  // Sample many points along the path
+  const SAMPLES = Math.max(200, Math.floor(totalLength * 2));
+  const pathPoints = [];
+
+  for (let i = 0; i <= SAMPLES; i++) {
+    const t = i / SAMPLES;
+    const d = t * totalLength;
+
+    // Find which segment we're in
+    let segIdx = 0;
+    let segStart = 0;
+    for (let j = 0; j < rawPoints.length - 1; j++) {
+      if (d >= rawPoints[j].dist && d <= rawPoints[j + 1].dist) {
+        segIdx = j;
+        segStart = rawPoints[j].dist;
+        break;
+      }
+    }
+
+    const segEnd = rawPoints[segIdx + 1].dist;
+    const segLen = segEnd - segStart;
+    const localT = segLen > 0 ? (d - segStart) / segLen : 0;
+
+    // Smooth step interpolation between elevations
+    const e0 = rawPoints[segIdx].elevation;
+    const e1 = rawPoints[segIdx + 1].elevation;
+    const smooth = localT * localT * (3 - 2 * localT); // smoothstep
+    const elevation = e0 + (e1 - e0) * smooth;
+
+    // Height: max elevation of ~12 units for incline 15
+    const y = elevation * 12;
+
+    // Gentle S-curve winding path
+    const windFreq = 0.015;
+    const windAmp = 6;
+    const x = Math.sin(d * windFreq) * windAmp + Math.sin(d * windFreq * 2.3) * windAmp * 0.3;
+    const z = -d;
+
+    pathPoints.push(new THREE.Vector3(x, y, z));
+  }
+
+  return { pathPoints, totalLength, totalDuration };
+}
+
+const { pathPoints, totalLength, totalDuration } = buildTrailPath(intervals);
+
+// ─── Scene Setup ─────────────────────────────────────────────────────────────
+
+let renderer;
+try {
+  const canvas = document.createElement('canvas');
+  const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+  if (!gl) throw new Error('WebGL not available');
+  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+} catch (e) {
+  document.getElementById('loading').innerHTML =
+    'WebGL not available on this device.<br><br>' +
+    '<span style="font-size:12px;opacity:0.6">Try on your phone — mobile GPUs support WebGL.<br>' +
+    'On desktop: check chrome://gpu for driver issues.</span>';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x0D1210);
+renderer.shadowMap.enabled = false;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.6;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0D1210, 0.008);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 200);
+
+// ─── Lighting ────────────────────────────────────────────────────────────────
+
+const ambientLight = new THREE.AmbientLight(0x667788, 1.2);
+scene.add(ambientLight);
+
+const dirLight = new THREE.DirectionalLight(0xFFE8CC, 1.5);
+dirLight.position.set(20, 40, 10);
+scene.add(dirLight);
+
+// Fill light from below-behind for atmosphere
+const fillLight = new THREE.DirectionalLight(0x88AACC, 0.4);
+fillLight.position.set(-10, 5, -20);
+scene.add(fillLight);
+
+// Hemisphere light: sky vs ground
+const hemiLight = new THREE.HemisphereLight(0x8899AA, 0x443322, 0.8);
+scene.add(hemiLight);
+
+// Warm point light following the runner
+const runnerLight = new THREE.PointLight(0xFFDDBB, 1.5, 25, 1.5);
+scene.add(runnerLight);
+
+// ─── Ground Plane ────────────────────────────────────────────────────────────
+
+const groundGeo = new THREE.PlaneGeometry(300, totalLength + 100);
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x252820 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.set(0, -0.35, -(totalLength / 2));
+scene.add(ground);
+
+// ─── Sky Dome ────────────────────────────────────────────────────────────────
+
+const skyGeo = new THREE.SphereGeometry(120, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+const skyCanvas = document.createElement('canvas');
+skyCanvas.width = 2;
+skyCanvas.height = 256;
+const skyCtx = skyCanvas.getContext('2d');
+const skyGrad = skyCtx.createLinearGradient(0, 0, 0, 256);
+skyGrad.addColorStop(0, '#1A2030');     // deep blue-grey at top
+skyGrad.addColorStop(0.4, '#151A18');   // dark teal-grey
+skyGrad.addColorStop(0.8, '#121510');   // matches scene bg
+skyGrad.addColorStop(1, '#0D1210');
+skyCtx.fillStyle = skyGrad;
+skyCtx.fillRect(0, 0, 2, 256);
+const skyTex = new THREE.CanvasTexture(skyCanvas);
+const skyMat = new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide, fog: false });
+const sky = new THREE.Mesh(skyGeo, skyMat);
+sky.position.y = -2;
+scene.add(sky);
+
+// ─── Trail Mesh ──────────────────────────────────────────────────────────────
+
+function buildTrailMesh(points) {
+  const positions = [];
+  const colors = [];
+  const indices = [];
+  const normals = [];
+
+  const halfW = PATH_WIDTH / 2;
+  const color = new THREE.Color();
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+
+    // Calculate forward direction
+    let forward;
+    if (i < points.length - 1) {
+      forward = new THREE.Vector3().subVectors(points[i + 1], p).normalize();
+    } else {
+      forward = new THREE.Vector3().subVectors(p, points[i - 1]).normalize();
+    }
+
+    // Right vector (perpendicular on XZ plane)
+    const right = new THREE.Vector3(-forward.z, 0, forward.x).normalize();
+
+    // Left and right vertices
+    const left = new THREE.Vector3().copy(p).addScaledVector(right, -halfW);
+    const rightPt = new THREE.Vector3().copy(p).addScaledVector(right, halfW);
+
+    // Slightly lower edges for trail crown
+    left.y -= 0.05;
+    rightPt.y -= 0.05;
+
+    positions.push(left.x, left.y, left.z);
+    positions.push(rightPt.x, rightPt.y, rightPt.z);
+
+    // Color based on intensity (incline)
+    const t = i / (points.length - 1);
+    // Find current interval
+    let cumDur = 0;
+    let ivIdx = 0;
+    const totalDur = intervals.reduce((s, iv) => s + iv.duration, 0);
+    for (let j = 0; j < intervals.length; j++) {
+      cumDur += intervals[j].duration;
+      if (t <= cumDur / totalDur) { ivIdx = j; break; }
+    }
+    const intensity = intervals[ivIdx].incline / MAX_INCLINE;
+
+    // Lerp between earthy brown and warm green based on intensity
+    color.lerpColors(
+      new THREE.Color(0x6B5E4E),  // earthy brown (brighter)
+      new THREE.Color(0x8FB895),  // bright trail green
+      0.3 + intensity * 0.5
+    );
+    colors.push(color.r, color.g, color.b);
+    colors.push(color.r, color.g, color.b);
+
+    // Normal pointing up
+    normals.push(0, 1, 0, 0, 1, 0);
+
+    if (i < points.length - 1) {
+      const base = i * 2;
+      indices.push(base, base + 1, base + 2);
+      indices.push(base + 1, base + 3, base + 2);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setIndex(indices);
+
+  const mat = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide,
+  });
+
+  return new THREE.Mesh(geo, mat);
+}
+
+const trailMesh = buildTrailMesh(pathPoints);
+scene.add(trailMesh);
+
+// Trail border lines for definition
+function buildTrailEdges(points) {
+  const leftPts = [];
+  const rightPts = [];
+  const halfW = PATH_WIDTH / 2 + 0.1;
+
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    let forward;
+    if (i < points.length - 1) {
+      forward = new THREE.Vector3().subVectors(points[i + 1], p).normalize();
+    } else {
+      forward = new THREE.Vector3().subVectors(p, points[i - 1]).normalize();
+    }
+    const right = new THREE.Vector3(-forward.z, 0, forward.x).normalize();
+    leftPts.push(new THREE.Vector3().copy(p).addScaledVector(right, -halfW));
+    rightPts.push(new THREE.Vector3().copy(p).addScaledVector(right, halfW));
+    leftPts[leftPts.length - 1].y -= 0.03;
+    rightPts[rightPts.length - 1].y -= 0.03;
+  }
+
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x556655, transparent: true, opacity: 0.25 });
+  const leftGeo = new THREE.BufferGeometry().setFromPoints(leftPts);
+  const rightGeo = new THREE.BufferGeometry().setFromPoints(rightPts);
+
+  scene.add(new THREE.Line(leftGeo, lineMat));
+  scene.add(new THREE.Line(rightGeo, lineMat));
+}
+
+buildTrailEdges(pathPoints);
+
+// ─── Terrain Banks (sloped sides) ────────────────────────────────────────────
+
+function buildTerrainBanks(points) {
+  const bankWidth = 40;
+  const halfW = PATH_WIDTH / 2 + 0.1;
+
+  for (const side of [-1, 1]) {
+    const positions = [];
+    const indices = [];
+
+    for (let i = 0; i < points.length; i += 2) {
+      const p = points[i];
+      let forward;
+      if (i < points.length - 1) {
+        forward = new THREE.Vector3().subVectors(points[Math.min(i + 1, points.length - 1)], p).normalize();
+      } else {
+        forward = new THREE.Vector3().subVectors(p, points[i - 1]).normalize();
+      }
+      const right = new THREE.Vector3(-forward.z, 0, forward.x).normalize();
+
+      // Inner edge (at trail edge)
+      const inner = new THREE.Vector3().copy(p).addScaledVector(right, halfW * side);
+      inner.y -= 0.05;
+      // Outer edge (slopes down gently to ground level)
+      const outer = new THREE.Vector3().copy(p).addScaledVector(right, (halfW + bankWidth) * side);
+      outer.y = Math.max(-0.4, p.y * 0.3 - 0.3);
+
+      const idx = positions.length / 3;
+      positions.push(inner.x, inner.y, inner.z);
+      positions.push(outer.x, outer.y, outer.z);
+
+      if (i > 0) {
+        indices.push(idx - 2, idx - 1, idx);
+        indices.push(idx - 1, idx + 1, idx);
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshLambertMaterial({
+      color: 0x333828,
+      side: THREE.DoubleSide,
+    });
+
+    scene.add(new THREE.Mesh(geo, mat));
+  }
+}
+
+buildTerrainBanks(pathPoints);
+
+// ─── Trees (Instanced) ──────────────────────────────────────────────────────
+
+function createTrees() {
+  // Simple cone + cylinder tree
+  const trunkGeo = new THREE.CylinderGeometry(0.08, 0.12, 1.2, 5);
+  const trunkMat = new THREE.MeshLambertMaterial({ color: PALETTE.brown });
+
+  const canopyGeo = new THREE.ConeGeometry(0.8, 2.5, 6);
+  const canopyMat = new THREE.MeshLambertMaterial({ color: PALETTE.darkGreen });
+
+  const trunkMesh = new THREE.InstancedMesh(trunkGeo, trunkMat, TREE_COUNT);
+  const canopyMesh = new THREE.InstancedMesh(canopyGeo, canopyMat, TREE_COUNT);
+
+  const dummy = new THREE.Object3D();
+  const canopyColor = new THREE.Color();
+
+  let placed = 0;
+  for (let i = 0; i < TREE_COUNT * 3 && placed < TREE_COUNT; i++) {
+    // Pick a random position along the path
+    const pathT = Math.random();
+    const pathIdx = Math.floor(pathT * (pathPoints.length - 1));
+    const basePoint = pathPoints[pathIdx];
+
+    // Offset to the side (not on the path)
+    const sideOffset = (Math.random() > 0.5 ? 1 : -1) * (PATH_WIDTH + 2 + Math.random() * 30);
+    let forward;
+    if (pathIdx < pathPoints.length - 1) {
+      forward = new THREE.Vector3().subVectors(pathPoints[pathIdx + 1], basePoint).normalize();
+    } else {
+      forward = new THREE.Vector3(0, 0, -1);
+    }
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+
+    const x = basePoint.x + right.x * sideOffset + (Math.random() - 0.5) * 4;
+    const z = basePoint.z + right.z * sideOffset + (Math.random() - 0.5) * 4;
+    const y = Math.max(basePoint.y - 2, -0.5);
+
+    const scale = 0.6 + Math.random() * 1.2;
+
+    // Trunk
+    dummy.position.set(x, y + scale * 0.6, z);
+    dummy.scale.set(scale, scale, scale);
+    dummy.rotation.y = Math.random() * Math.PI * 2;
+    dummy.updateMatrix();
+    trunkMesh.setMatrixAt(placed, dummy.matrix);
+
+    // Canopy
+    dummy.position.set(x, y + scale * 1.85, z);
+    dummy.updateMatrix();
+    canopyMesh.setMatrixAt(placed, dummy.matrix);
+
+    // Vary canopy color
+    const greenVar = 0.6 + Math.random() * 0.4;
+    canopyColor.setRGB(0.18 * greenVar, 0.38 * greenVar, 0.20 * greenVar);
+    canopyMesh.setColorAt(placed, canopyColor);
+
+    placed++;
+  }
+
+  trunkMesh.instanceMatrix.needsUpdate = true;
+  canopyMesh.instanceMatrix.needsUpdate = true;
+  if (canopyMesh.instanceColor) canopyMesh.instanceColor.needsUpdate = true;
+
+  scene.add(trunkMesh);
+  scene.add(canopyMesh);
+}
+
+createTrees();
+
+// ─── Ground Cover (Grass Tufts — Instanced) ─────────────────────────────────
+
+function createGroundCover() {
+  // Small grass blades as thin triangles
+  const grassGeo = new THREE.ConeGeometry(0.06, 0.35, 3);
+  const grassMat = new THREE.MeshLambertMaterial({ color: 0x4A6B4A });
+  const grassMesh = new THREE.InstancedMesh(grassGeo, grassMat, GRASS_COUNT);
+
+  const dummy = new THREE.Object3D();
+  const grassColor = new THREE.Color();
+
+  for (let i = 0; i < GRASS_COUNT; i++) {
+    const pathT = Math.random();
+    const pathIdx = Math.floor(pathT * (pathPoints.length - 1));
+    const basePoint = pathPoints[pathIdx];
+
+    const sideOffset = (Math.random() > 0.5 ? 1 : -1) * (PATH_WIDTH * 0.6 + Math.random() * 12);
+    let forward;
+    if (pathIdx < pathPoints.length - 1) {
+      forward = new THREE.Vector3().subVectors(pathPoints[pathIdx + 1], basePoint).normalize();
+    } else {
+      forward = new THREE.Vector3(0, 0, -1);
+    }
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+
+    const x = basePoint.x + right.x * sideOffset + (Math.random() - 0.5) * 2;
+    const z = basePoint.z + right.z * sideOffset + (Math.random() - 0.5) * 2;
+    const y = Math.max(basePoint.y - 1, -0.5);
+    const scale = 0.5 + Math.random() * 1.5;
+
+    dummy.position.set(x, y + scale * 0.15, z);
+    dummy.scale.set(scale, scale, scale);
+    dummy.rotation.set((Math.random() - 0.5) * 0.3, Math.random() * Math.PI * 2, 0);
+    dummy.updateMatrix();
+    grassMesh.setMatrixAt(i, dummy.matrix);
+
+    const g = 0.2 + Math.random() * 0.15;
+    grassColor.setRGB(g * 0.6, g, g * 0.5);
+    grassMesh.setColorAt(i, grassColor);
+  }
+
+  grassMesh.instanceMatrix.needsUpdate = true;
+  if (grassMesh.instanceColor) grassMesh.instanceColor.needsUpdate = true;
+  scene.add(grassMesh);
+
+  // Rocks
+  const rockGeo = new THREE.DodecahedronGeometry(0.3, 0);
+  const rockMat = new THREE.MeshLambertMaterial({ color: 0x3A3830 });
+  const rockMesh = new THREE.InstancedMesh(rockGeo, rockMat, ROCK_COUNT);
+  const rockColor = new THREE.Color();
+
+  for (let i = 0; i < ROCK_COUNT; i++) {
+    const pathT = Math.random();
+    const pathIdx = Math.floor(pathT * (pathPoints.length - 1));
+    const basePoint = pathPoints[pathIdx];
+
+    const sideOffset = (Math.random() > 0.5 ? 1 : -1) * (PATH_WIDTH * 0.5 + Math.random() * 8);
+    let forward;
+    if (pathIdx < pathPoints.length - 1) {
+      forward = new THREE.Vector3().subVectors(pathPoints[pathIdx + 1], basePoint).normalize();
+    } else {
+      forward = new THREE.Vector3(0, 0, -1);
+    }
+    const right = new THREE.Vector3(-forward.z, 0, forward.x);
+
+    const x = basePoint.x + right.x * sideOffset;
+    const z = basePoint.z + right.z * sideOffset;
+    const y = Math.max(basePoint.y - 1, -0.5);
+    const scale = 0.3 + Math.random() * 0.8;
+
+    dummy.position.set(x, y, z);
+    dummy.scale.set(scale * (0.7 + Math.random() * 0.6), scale * 0.5, scale * (0.7 + Math.random() * 0.6));
+    dummy.rotation.set(Math.random(), Math.random(), Math.random());
+    dummy.updateMatrix();
+    rockMesh.setMatrixAt(i, dummy.matrix);
+
+    const rv = 0.15 + Math.random() * 0.1;
+    rockColor.setRGB(rv, rv * 0.95, rv * 0.85);
+    rockMesh.setColorAt(i, rockColor);
+  }
+
+  rockMesh.instanceMatrix.needsUpdate = true;
+  if (rockMesh.instanceColor) rockMesh.instanceColor.needsUpdate = true;
+  scene.add(rockMesh);
+}
+
+createGroundCover();
+
+// ─── Particle Dust / Fireflies ───────────────────────────────────────────────
+
+function createParticles() {
+  const count = 150;
+  const positions = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    const pathT = Math.random();
+    const pathIdx = Math.floor(pathT * (pathPoints.length - 1));
+    const bp = pathPoints[pathIdx];
+
+    positions[i * 3] = bp.x + (Math.random() - 0.5) * 30;
+    positions[i * 3 + 1] = bp.y + 1 + Math.random() * 6;
+    positions[i * 3 + 2] = bp.z + (Math.random() - 0.5) * 10;
+    sizes[i] = 0.05 + Math.random() * 0.1;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+  const mat = new THREE.PointsMaterial({
+    color: 0xCCBB88,
+    size: 0.12,
+    transparent: true,
+    opacity: 0.3,
+    sizeAttenuation: true,
+  });
+
+  const particles = new THREE.Points(geo, mat);
+  scene.add(particles);
+  return particles;
+}
+
+const particles = createParticles();
+
+// ─── Runner Character ────────────────────────────────────────────────────────
+
+function createRunner() {
+  const runner = new THREE.Group();
+
+  // Materials
+  const skinMat = new THREE.MeshLambertMaterial({ color: 0xD4A574 });      // warm skin tone
+  const shirtMat = new THREE.MeshLambertMaterial({ color: PALETTE.green }); // green running shirt
+  const shortsMat = new THREE.MeshLambertMaterial({ color: 0x2A2A2A });    // dark running shorts
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x333338 });      // dark shoes
+  const hairMat = new THREE.MeshLambertMaterial({ color: 0x3A2A1A });      // dark brown hair
+
+  // --- Torso (two-part: upper chest + lower hips) ---
+  const upperTorsoGeo = new THREE.BoxGeometry(0.34, 0.26, 0.18);
+  // Round the edges slightly with scale
+  const upperTorso = new THREE.Mesh(upperTorsoGeo, shirtMat);
+  upperTorso.position.y = 1.22;
+  runner.add(upperTorso);
+
+  const lowerTorsoGeo = new THREE.BoxGeometry(0.28, 0.18, 0.16);
+  const lowerTorso = new THREE.Mesh(lowerTorsoGeo, shirtMat);
+  lowerTorso.position.y = 1.0;
+  runner.add(lowerTorso);
+
+  // Torso pivot (for lean and twist) - wraps both torso pieces
+  const torsoPivot = new THREE.Group();
+  torsoPivot.position.y = 0; // pivot at hip level
+  runner.add(torsoPivot);
+
+  // --- Neck ---
+  const neckGeo = new THREE.CylinderGeometry(0.045, 0.055, 0.08, 6);
+  const neck = new THREE.Mesh(neckGeo, skinMat);
+  neck.position.y = 1.39;
+  runner.add(neck);
+
+  // --- Head ---
+  const headGeo = new THREE.SphereGeometry(0.105, 10, 8);
+  const head = new THREE.Mesh(headGeo, skinMat);
+  head.position.y = 1.53;
+  runner.add(head);
+
+  // Hair cap on top of head
+  const hairGeo = new THREE.SphereGeometry(0.108, 10, 6, 0, Math.PI * 2, 0, Math.PI * 0.55);
+  const hair = new THREE.Mesh(hairGeo, hairMat);
+  hair.position.y = 1.535;
+  runner.add(hair);
+
+  // --- Left Arm: shoulder -> upper arm -> elbow -> forearm -> hand ---
+  const upperArmGeo = new THREE.CapsuleGeometry(0.04, 0.20, 4, 6);
+  const forearmGeo = new THREE.CapsuleGeometry(0.035, 0.18, 4, 6);
+  const handGeo = new THREE.SphereGeometry(0.035, 5, 4);
+
+  const leftShoulder = new THREE.Group();
+  leftShoulder.position.set(-0.20, 1.32, 0);
+  runner.add(leftShoulder);
+
+  const leftUpperArmMesh = new THREE.Mesh(upperArmGeo, skinMat);
+  leftUpperArmMesh.position.y = -0.13;
+  leftShoulder.add(leftUpperArmMesh);
+
+  const leftElbow = new THREE.Group();
+  leftElbow.position.set(0, -0.28, 0);
+  leftShoulder.add(leftElbow);
+
+  const leftForearmMesh = new THREE.Mesh(forearmGeo, skinMat);
+  leftForearmMesh.position.y = -0.11;
+  leftElbow.add(leftForearmMesh);
+
+  const leftHand = new THREE.Mesh(handGeo, skinMat);
+  leftHand.position.set(0, -0.22, 0);
+  leftElbow.add(leftHand);
+
+  // --- Right Arm ---
+  const rightShoulder = new THREE.Group();
+  rightShoulder.position.set(0.20, 1.32, 0);
+  runner.add(rightShoulder);
+
+  const rightUpperArmMesh = new THREE.Mesh(upperArmGeo, skinMat);
+  rightUpperArmMesh.position.y = -0.13;
+  rightShoulder.add(rightUpperArmMesh);
+
+  const rightElbow = new THREE.Group();
+  rightElbow.position.set(0, -0.28, 0);
+  rightShoulder.add(rightElbow);
+
+  const rightForearmMesh = new THREE.Mesh(forearmGeo, skinMat);
+  rightForearmMesh.position.y = -0.11;
+  rightElbow.add(rightForearmMesh);
+
+  const rightHand = new THREE.Mesh(handGeo, skinMat);
+  rightHand.position.set(0, -0.22, 0);
+  rightElbow.add(rightHand);
+
+  // --- Left Leg: hip -> thigh -> knee -> shin -> ankle -> foot ---
+  const thighGeo = new THREE.CapsuleGeometry(0.065, 0.30, 4, 6);
+  const shinGeo = new THREE.CapsuleGeometry(0.050, 0.28, 4, 6);
+  const footGeo = new THREE.BoxGeometry(0.09, 0.055, 0.22);
+
+  const leftHip = new THREE.Group();
+  leftHip.position.set(-0.09, 0.88, 0);
+  runner.add(leftHip);
+
+  // Short upper part of thigh gets shorts color
+  const leftThighShortsMesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.068, 0.10, 4, 6), shortsMat
+  );
+  leftThighShortsMesh.position.y = -0.06;
+  leftHip.add(leftThighShortsMesh);
+
+  const leftThighMesh = new THREE.Mesh(thighGeo, skinMat);
+  leftThighMesh.position.y = -0.18;
+  leftHip.add(leftThighMesh);
+
+  const leftKnee = new THREE.Group();
+  leftKnee.position.set(0, -0.38, 0);
+  leftHip.add(leftKnee);
+
+  const leftShinMesh = new THREE.Mesh(shinGeo, skinMat);
+  leftShinMesh.position.y = -0.17;
+  leftKnee.add(leftShinMesh);
+
+  const leftAnkle = new THREE.Group();
+  leftAnkle.position.set(0, -0.35, 0);
+  leftKnee.add(leftAnkle);
+
+  const leftFoot = new THREE.Mesh(footGeo, shoeMat);
+  leftFoot.position.set(0, -0.02, 0.06);
+  leftAnkle.add(leftFoot);
+
+  // --- Right Leg ---
+  const rightHip = new THREE.Group();
+  rightHip.position.set(0.09, 0.88, 0);
+  runner.add(rightHip);
+
+  const rightThighShortsMesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.068, 0.10, 4, 6), shortsMat
+  );
+  rightThighShortsMesh.position.y = -0.06;
+  rightHip.add(rightThighShortsMesh);
+
+  const rightThighMesh = new THREE.Mesh(thighGeo, skinMat);
+  rightThighMesh.position.y = -0.18;
+  rightHip.add(rightThighMesh);
+
+  const rightKnee = new THREE.Group();
+  rightKnee.position.set(0, -0.38, 0);
+  rightHip.add(rightKnee);
+
+  const rightShinMesh = new THREE.Mesh(shinGeo, skinMat);
+  rightShinMesh.position.y = -0.17;
+  rightKnee.add(rightShinMesh);
+
+  const rightAnkle = new THREE.Group();
+  rightAnkle.position.set(0, -0.35, 0);
+  rightKnee.add(rightAnkle);
+
+  const rightFoot = new THREE.Mesh(footGeo, shoeMat);
+  rightFoot.position.set(0, -0.02, 0.06);
+  rightAnkle.add(rightFoot);
+
+  runner.scale.set(1.15, 1.15, 1.15);
+  scene.add(runner);
+
+  return {
+    group: runner,
+    upperTorso, lowerTorso, torsoPivot,
+    neck, head, hair,
+    leftShoulder, leftElbow, leftHand,
+    rightShoulder, rightElbow, rightHand,
+    leftHip, leftKnee, leftAnkle, leftFoot,
+    rightHip, rightKnee, rightAnkle, rightFoot,
+  };
+}
+
+const runner = createRunner();
+
+// ─── Runner Animation ────────────────────────────────────────────────────────
+
+let strideClock = 0;
+
+// Gait curve: interpolate keyframed joint angles with smoothstep
+function gaitCurve(phase, keyframes) {
+  const t = ((phase / (Math.PI * 2)) % 1 + 1) % 1; // normalize to 0-1, handle negatives
+  // Find the two keyframes we're between
+  for (let i = 0; i < keyframes.length - 1; i++) {
+    if (t >= keyframes[i].t && t < keyframes[i + 1].t) {
+      const local = (t - keyframes[i].t) / (keyframes[i + 1].t - keyframes[i].t);
+      const smooth = local * local * (3 - 2 * local); // smoothstep
+      return keyframes[i].v + (keyframes[i + 1].v - keyframes[i].v) * smooth;
+    }
+  }
+  return keyframes[keyframes.length - 1].v;
+}
+
+// Lerp between two keyframe sets based on blend factor (0-1)
+function blendGait(phase, kfA, kfB, blend) {
+  return gaitCurve(phase, kfA) * (1 - blend) + gaitCurve(phase, kfB) * blend;
+}
+
+// ── Walking keyframes (< 4 mph) ──
+// Hip flexion/extension
+const hipWalk = [
+  { t: 0.0,  v:  0.30 },  // heel strike: ~17deg flexion
+  { t: 0.15, v:  0.05 },  // midstance: nearly vertical
+  { t: 0.4,  v: -0.20 },  // toe-off: ~12deg extension
+  { t: 0.55, v:  0.15 },  // mid-swing: moderate flexion
+  { t: 0.8,  v:  0.35 },  // terminal swing: ~20deg flexion
+  { t: 1.0,  v:  0.30 },  // wrap to heel strike
+];
+// Knee flexion (always positive = bent)
+const kneeWalk = [
+  { t: 0.0,  v: 0.10 },  // heel strike: nearly straight
+  { t: 0.15, v: 0.15 },  // midstance: slight bend absorbing
+  { t: 0.4,  v: 0.30 },  // toe-off: moderate bend
+  { t: 0.6,  v: 0.65 },  // mid-swing: ~37deg (clearing ground)
+  { t: 0.85, v: 0.15 },  // extending for strike
+  { t: 1.0,  v: 0.10 },
+];
+// Ankle dorsiflexion/plantarflexion
+const ankleWalk = [
+  { t: 0.0,  v:  0.10 },  // heel strike: slight dorsiflex
+  { t: 0.15, v:  0.0  },  // foot flat
+  { t: 0.35, v: -0.15 },  // toe-off: plantarflexed
+  { t: 0.5,  v:  0.05 },  // swing: neutral
+  { t: 0.85, v:  0.10 },  // preparing for strike
+  { t: 1.0,  v:  0.10 },
+];
+// Shoulder (arm swing) - opposite to legs
+const shoulderWalk = [
+  { t: 0.0,  v: -0.15 },  // arm back (opposite leg forward)
+  { t: 0.25, v:  0.0  },
+  { t: 0.5,  v:  0.15 },  // arm forward
+  { t: 0.75, v:  0.0  },
+  { t: 1.0,  v: -0.15 },
+];
+// Elbow bend during walking (relatively straight)
+const elbowWalk = [
+  { t: 0.0,  v: -0.35 },
+  { t: 0.25, v: -0.25 },
+  { t: 0.5,  v: -0.35 },
+  { t: 0.75, v: -0.25 },
+  { t: 1.0,  v: -0.35 },
+];
+// Vertical bounce walking (very subtle)
+const bounceWalk = [
+  { t: 0.0,  v:  0.0   },
+  { t: 0.15, v: -0.008 },  // midstance: slightly lower
+  { t: 0.35, v:  0.005 },  // push off
+  { t: 0.5,  v:  0.0   },  // double support
+  { t: 0.65, v: -0.008 },  // other midstance
+  { t: 0.85, v:  0.005 },
+  { t: 1.0,  v:  0.0   },
+];
+
+// ── Running keyframes (>= 7 mph) ──
+// Hip flexion/extension - asymmetric, fast extension, slower flexion
+const hipRun = [
+  { t: 0.0,  v:  0.45 },  // heel strike: ~25deg flexion
+  { t: 0.12, v:  0.05 },  // midstance: nearly vertical
+  { t: 0.35, v: -0.35 },  // toe-off: ~20deg extension (fast push)
+  { t: 0.50, v:  0.30 },  // early swing: hip driving forward fast
+  { t: 0.70, v:  1.05 },  // peak flexion: ~60deg (high knee drive)
+  { t: 0.85, v:  0.70 },  // terminal swing: extending for strike
+  { t: 1.0,  v:  0.45 },  // back to heel strike
+];
+// Knee flexion running - complex: slight at contact, huge during swing
+const kneeRun = [
+  { t: 0.0,  v: 0.25 },  // heel strike: ~15deg bend
+  { t: 0.12, v: 0.18 },  // midstance: ~10deg (absorbing)
+  { t: 0.30, v: 0.55 },  // toe-off: ~32deg (pushing)
+  { t: 0.45, v: 1.80 },  // early swing: ~103deg (foot tucked up)
+  { t: 0.60, v: 2.10 },  // mid-swing peak: ~120deg (tight tuck)
+  { t: 0.78, v: 1.20 },  // extending: ~69deg
+  { t: 0.92, v: 0.40 },  // nearly extended for strike
+  { t: 1.0,  v: 0.25 },  // back to heel strike
+];
+// Ankle running
+const ankleRun = [
+  { t: 0.0,  v:  0.15 },  // heel strike: dorsiflexed
+  { t: 0.12, v:  0.0  },  // foot flat
+  { t: 0.30, v: -0.35 },  // toe-off: strong plantarflexion
+  { t: 0.45, v:  0.10 },  // swing: relaxed dorsiflex
+  { t: 0.70, v:  0.15 },  // mid-swing
+  { t: 0.90, v:  0.15 },  // preparing for strike
+  { t: 1.0,  v:  0.15 },
+];
+// Shoulder (arm pump) running - opposite to legs, vigorous
+const shoulderRun = [
+  { t: 0.0,  v: -0.40 },  // arm back (opposite leg at heel strike)
+  { t: 0.15, v: -0.20 },
+  { t: 0.35, v:  0.15 },
+  { t: 0.55, v:  0.50 },  // arm far forward (driving)
+  { t: 0.75, v:  0.10 },
+  { t: 0.90, v: -0.30 },
+  { t: 1.0,  v: -0.40 },
+];
+// Elbow running - stays bent ~85-95deg, pumps slightly
+const elbowRun = [
+  { t: 0.0,  v: -1.45 },
+  { t: 0.20, v: -1.30 },
+  { t: 0.40, v: -1.50 },
+  { t: 0.55, v: -1.55 },  // tighter when arm forward
+  { t: 0.75, v: -1.35 },
+  { t: 1.0,  v: -1.45 },
+];
+// Vertical bounce running (distinct: lowest at midstance, highest during flight)
+const bounceRun = [
+  { t: 0.0,  v:  0.0   },  // heel strike
+  { t: 0.12, v: -0.030 },  // midstance: lowest (absorbing)
+  { t: 0.30, v:  0.005 },  // toe-off: pushing up
+  { t: 0.45, v:  0.035 },  // flight: highest
+  { t: 0.60, v:  0.010 },  // descending to other foot
+  { t: 0.75, v: -0.020 },  // other foot midstance
+  { t: 0.90, v:  0.020 },  // second flight
+  { t: 1.0,  v:  0.0   },
+];
+
+// ── Jogging keyframes (4-6 mph) - blend between walk and run ──
+const hipJog = [
+  { t: 0.0,  v:  0.38 },
+  { t: 0.13, v:  0.03 },
+  { t: 0.38, v: -0.28 },
+  { t: 0.52, v:  0.20 },
+  { t: 0.72, v:  0.75 },
+  { t: 0.88, v:  0.50 },
+  { t: 1.0,  v:  0.38 },
+];
+const kneeJog = [
+  { t: 0.0,  v: 0.20 },
+  { t: 0.13, v: 0.17 },
+  { t: 0.35, v: 0.45 },
+  { t: 0.50, v: 1.40 },
+  { t: 0.65, v: 1.60 },
+  { t: 0.80, v: 0.80 },
+  { t: 0.93, v: 0.30 },
+  { t: 1.0,  v: 0.20 },
+];
+const ankleJog = [
+  { t: 0.0,  v:  0.12 },
+  { t: 0.13, v:  0.0  },
+  { t: 0.32, v: -0.25 },
+  { t: 0.48, v:  0.08 },
+  { t: 0.70, v:  0.12 },
+  { t: 0.90, v:  0.12 },
+  { t: 1.0,  v:  0.12 },
+];
+const shoulderJog = [
+  { t: 0.0,  v: -0.28 },
+  { t: 0.18, v: -0.10 },
+  { t: 0.40, v:  0.10 },
+  { t: 0.55, v:  0.30 },
+  { t: 0.78, v:  0.05 },
+  { t: 0.92, v: -0.20 },
+  { t: 1.0,  v: -0.28 },
+];
+const elbowJog = [
+  { t: 0.0,  v: -0.90 },
+  { t: 0.25, v: -0.75 },
+  { t: 0.50, v: -0.95 },
+  { t: 0.75, v: -0.80 },
+  { t: 1.0,  v: -0.90 },
+];
+const bounceJog = [
+  { t: 0.0,  v:  0.0   },
+  { t: 0.13, v: -0.018 },
+  { t: 0.32, v:  0.003 },
+  { t: 0.48, v:  0.020 },
+  { t: 0.62, v: -0.010 },
+  { t: 0.80, v:  0.012 },
+  { t: 1.0,  v:  0.0   },
+];
+
+// ── Torso twist keyframes (counter-rotates to hip) ──
+const torsoTwistWalk = [
+  { t: 0.0, v: -0.02 }, { t: 0.25, v: 0.0 }, { t: 0.5, v: 0.02 },
+  { t: 0.75, v: 0.0 }, { t: 1.0, v: -0.02 },
+];
+const torsoTwistRun = [
+  { t: 0.0, v: -0.06 }, { t: 0.25, v: 0.0 }, { t: 0.5, v: 0.06 },
+  { t: 0.75, v: 0.0 }, { t: 1.0, v: -0.06 },
+];
+
+function animateRunner(speed, dt) {
+  const isIdle = speed < 0.5;
+
+  // Stride frequency varies with speed
+  let strideFreq;
+  if (isIdle) {
+    strideFreq = 0;
+  } else if (speed < 4.0) {
+    // Walking: 0.9 - 1.1 Hz
+    strideFreq = 0.9 + (speed / 4.0) * 0.2;
+  } else if (speed < 6.0) {
+    // Jogging: 1.3 - 1.5 Hz
+    strideFreq = 1.3 + ((speed - 4.0) / 2.0) * 0.2;
+  } else if (speed < 9.0) {
+    // Running: 1.5 - 1.6 Hz
+    strideFreq = 1.5 + ((speed - 6.0) / 3.0) * 0.1;
+  } else {
+    // Fast: 1.6 - 1.8 Hz
+    strideFreq = 1.6 + Math.min((speed - 9.0) / 3.0, 1.0) * 0.2;
+  }
+
+  strideClock += dt * strideFreq * Math.PI * 2;
+  const phase = strideClock;
+  const phaseOpp = phase + Math.PI; // opposite leg
+
+  // Compute blend factor for keyframe interpolation
+  // 0 = walking, 0.5 = jogging, 1.0 = full running
+  let blend;
+  if (speed < 4.0) {
+    blend = 0.0;
+  } else if (speed < 6.0) {
+    blend = (speed - 4.0) / 2.0 * 0.5; // 0 -> 0.5
+  } else {
+    blend = 0.5 + Math.min((speed - 6.0) / 3.0, 1.0) * 0.5; // 0.5 -> 1.0
+  }
+
+  // Select keyframe sets based on blend
+  // For 3-way blend: walk <-> jog <-> run
+  function threeWayBlend(ph, walkKf, jogKf, runKf) {
+    if (blend <= 0.5) {
+      const b = blend / 0.5;
+      return gaitCurve(ph, walkKf) * (1 - b) + gaitCurve(ph, jogKf) * b;
+    } else {
+      const b = (blend - 0.5) / 0.5;
+      return gaitCurve(ph, jogKf) * (1 - b) + gaitCurve(ph, runKf) * b;
+    }
+  }
+
+  // Scale animation amplitude when idle (fade to standing pose)
+  const amp = isIdle ? 0 : Math.min(speed / 2.0, 1.0);
+
+  // ── Legs ──
+  const leftHipAngle  = threeWayBlend(phase,    hipWalk, hipJog, hipRun) * amp;
+  const rightHipAngle = threeWayBlend(phaseOpp, hipWalk, hipJog, hipRun) * amp;
+  const leftKneeAngle  = threeWayBlend(phase,    kneeWalk, kneeJog, kneeRun) * amp;
+  const rightKneeAngle = threeWayBlend(phaseOpp, kneeWalk, kneeJog, kneeRun) * amp;
+  const leftAnkleAngle  = threeWayBlend(phase,    ankleWalk, ankleJog, ankleRun) * amp;
+  const rightAnkleAngle = threeWayBlend(phaseOpp, ankleWalk, ankleJog, ankleRun) * amp;
+
+  runner.leftHip.rotation.x  = leftHipAngle;
+  runner.rightHip.rotation.x = rightHipAngle;
+  runner.leftKnee.rotation.x  = -leftKneeAngle;   // negative = bends backward
+  runner.rightKnee.rotation.x = -rightKneeAngle;
+  runner.leftAnkle.rotation.x  = leftAnkleAngle;
+  runner.rightAnkle.rotation.x = rightAnkleAngle;
+
+  // ── Arms (opposite to legs) ──
+  const leftShoulderAngle  = threeWayBlend(phaseOpp, shoulderWalk, shoulderJog, shoulderRun) * amp;
+  const rightShoulderAngle = threeWayBlend(phase,    shoulderWalk, shoulderJog, shoulderRun) * amp;
+  const leftElbowAngle  = threeWayBlend(phaseOpp, elbowWalk, elbowJog, elbowRun);
+  const rightElbowAngle = threeWayBlend(phase,    elbowWalk, elbowJog, elbowRun);
+
+  // Forward lean: more at higher speed
+  const leanForward = isIdle ? 0 : (speed < 4.0 ? 0.05 : 0.08 + Math.min((speed - 4.0) / 8.0, 1.0) * 0.12);
+
+  runner.leftShoulder.rotation.x  = leftShoulderAngle + leanForward;
+  runner.rightShoulder.rotation.x = rightShoulderAngle + leanForward;
+  // Elbow: blend from relaxed (walking) to tightly bent (running)
+  const elbowBlendAmp = isIdle ? 0.3 : 1.0;
+  runner.leftElbow.rotation.x  = leftElbowAngle * elbowBlendAmp;
+  runner.rightElbow.rotation.x = rightElbowAngle * elbowBlendAmp;
+  // Slight lateral arm sway for realism
+  runner.leftShoulder.rotation.z  =  0.05 + Math.sin(phase) * 0.02 * amp;
+  runner.rightShoulder.rotation.z = -0.05 - Math.sin(phase) * 0.02 * amp;
+
+  // ── Vertical bounce ──
+  const bounceVal = threeWayBlend(phase, bounceWalk, bounceJog, bounceRun) * amp;
+  // Scale bounce with speed
+  const bounceScale = isIdle ? 0 : (speed < 4.0 ? 1.0 : 1.0 + (speed - 4.0) * 0.15);
+  const verticalOffset = bounceVal * bounceScale;
+
+  // Apply vertical to whole body parts (not the group - group position is set by path)
+  const baseUpperTorsoY = 1.22 + verticalOffset;
+  const baseLowerTorsoY = 1.0 + verticalOffset;
+  const baseNeckY = 1.39 + verticalOffset;
+  const baseHeadY = 1.53 + verticalOffset;
+
+  runner.upperTorso.position.y = baseUpperTorsoY;
+  runner.lowerTorso.position.y = baseLowerTorsoY;
+  runner.neck.position.y = baseNeckY;
+  runner.head.position.y = baseHeadY;
+  runner.hair.position.y = baseHeadY + 0.005;
+
+  // Shift hip joints with bounce too
+  runner.leftHip.position.y  = 0.88 + verticalOffset;
+  runner.rightHip.position.y = 0.88 + verticalOffset;
+  runner.leftShoulder.position.y  = 1.32 + verticalOffset;
+  runner.rightShoulder.position.y = 1.32 + verticalOffset;
+
+  // ── Torso lean ──
+  runner.upperTorso.rotation.x = leanForward;
+  runner.lowerTorso.rotation.x = leanForward * 0.6;
+  runner.neck.rotation.x = leanForward * 0.3;
+  runner.head.rotation.x = leanForward * 0.2; // head stays more level
+
+  // ── Torso counter-rotation (twist opposite to hips) ──
+  const twistVal = blendGait(phase, torsoTwistWalk, torsoTwistRun, blend) * amp;
+  runner.upperTorso.rotation.y = twistVal;
+  runner.lowerTorso.rotation.y = -twistVal * 0.3; // hips twist opposite, less
+  runner.head.rotation.y = -twistVal * 0.2; // head stays relatively stable
+
+  // ── Subtle lateral sway ──
+  const lateralSway = Math.sin(phase) * 0.008 * amp;
+  runner.upperTorso.position.x = lateralSway;
+  runner.lowerTorso.position.x = lateralSway * 0.5;
+}
+
+// ─── Path Following ──────────────────────────────────────────────────────────
+
+function getPositionOnPath(t) {
+  t = Math.max(0, Math.min(1, t));
+  const idx = t * (pathPoints.length - 1);
+  const i0 = Math.floor(idx);
+  const i1 = Math.min(i0 + 1, pathPoints.length - 1);
+  const frac = idx - i0;
+
+  const pos = new THREE.Vector3().lerpVectors(pathPoints[i0], pathPoints[i1], frac);
+
+  // Forward direction
+  let forward;
+  if (i1 < pathPoints.length - 1) {
+    forward = new THREE.Vector3().subVectors(pathPoints[i1 + 1], pathPoints[i0]).normalize();
+  } else {
+    forward = new THREE.Vector3().subVectors(pathPoints[i1], pathPoints[Math.max(0, i0 - 1)]).normalize();
+  }
+
+  // Get slope angle for character tilt
+  const slopeAngle = Math.atan2(forward.y, Math.sqrt(forward.x * forward.x + forward.z * forward.z));
+
+  return { pos, forward, slopeAngle };
+}
+
+// ─── Camera Controls ─────────────────────────────────────────────────────────
+
+let cameraOrbitAngle = 0;      // horizontal orbit (radians from behind)
+let cameraOrbitPitch = 0.35;   // vertical angle
+let cameraDist = 7;
+
+let isDragging = false;
+let lastTouchX = 0, lastTouchY = 0;
+let pinchDist = 0;
+
+const canvas = renderer.domElement;
+
+canvas.addEventListener('pointerdown', (e) => {
+  isDragging = true;
+  lastTouchX = e.clientX;
+  lastTouchY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (!isDragging) return;
+  const dx = e.clientX - lastTouchX;
+  const dy = e.clientY - lastTouchY;
+  lastTouchX = e.clientX;
+  lastTouchY = e.clientY;
+
+  cameraOrbitAngle += dx * 0.005;
+  cameraOrbitPitch = Math.max(0.05, Math.min(1.2, cameraOrbitPitch + dy * 0.005));
+});
+
+canvas.addEventListener('pointerup', () => { isDragging = false; });
+canvas.addEventListener('pointercancel', () => { isDragging = false; });
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  cameraDist = Math.max(3, Math.min(15, cameraDist + e.deltaY * 0.01));
+}, { passive: false });
+
+// Pinch zoom
+canvas.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    pinchDist = Math.sqrt(dx * dx + dy * dy);
+  }
+}, { passive: true });
+
+canvas.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const newDist = Math.sqrt(dx * dx + dy * dy);
+    const scale = pinchDist / newDist;
+    cameraDist = Math.max(3, Math.min(15, cameraDist * scale));
+    pinchDist = newDist;
+  }
+}, { passive: true });
+
+// ─── Smooth Camera ───────────────────────────────────────────────────────────
+
+const smoothCamPos = new THREE.Vector3();
+const smoothCamTarget = new THREE.Vector3();
+let cameraInitialized = false;
+
+function updateCamera(runnerPos, runnerForward) {
+  // Camera behind and above the runner
+  const behindDir = runnerForward.clone().negate();
+  behindDir.y = 0;
+  behindDir.normalize();
+
+  // Apply orbit
+  const cosA = Math.cos(cameraOrbitAngle);
+  const sinA = Math.sin(cameraOrbitAngle);
+  const orbited = new THREE.Vector3(
+    behindDir.x * cosA - behindDir.z * sinA,
+    0,
+    behindDir.x * sinA + behindDir.z * cosA
+  );
+
+  const height = Math.sin(cameraOrbitPitch) * cameraDist;
+  const horizontalDist = Math.cos(cameraOrbitPitch) * cameraDist;
+
+  const targetCamPos = new THREE.Vector3(
+    runnerPos.x + orbited.x * horizontalDist,
+    runnerPos.y + height + 1,
+    runnerPos.z + orbited.z * horizontalDist
+  );
+
+  // Look slightly ahead of the runner
+  const lookAhead = runnerForward.clone().normalize();
+  const targetLookAt = new THREE.Vector3(
+    runnerPos.x + lookAhead.x * 3,
+    runnerPos.y + 1.5,
+    runnerPos.z + lookAhead.z * 3
+  );
+
+  if (!cameraInitialized) {
+    smoothCamPos.copy(targetCamPos);
+    smoothCamTarget.copy(targetLookAt);
+    cameraInitialized = true;
+  }
+
+  // Smooth interpolation
+  const smoothing = 0.04;
+  smoothCamPos.lerp(targetCamPos, smoothing);
+  smoothCamTarget.lerp(targetLookAt, smoothing);
+
+  camera.position.copy(smoothCamPos);
+  camera.lookAt(smoothCamTarget);
+}
+
+// ─── postMessage Listener ────────────────────────────────────────────────────
+
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'update') {
+    receivedExternalUpdate = true;
+    if (e.data.pos !== undefined) currentPos = e.data.pos;
+    if (e.data.speed !== undefined) currentSpeed = e.data.speed;
+  }
+});
+
+// Hash change listener
+window.addEventListener('hashchange', () => {
+  const parsed = parseHashParams();
+  receivedExternalUpdate = true;
+  if (parsed.pos !== undefined) currentPos = parsed.pos;
+  if (parsed.speed !== undefined) currentSpeed = parsed.speed;
+});
+
+// ─── Auto-advance when no external updates ───────────────────────────────────
+
+let receivedExternalUpdate = hadExternalData;
+let demoTime = 0;
+
+// ─── Animation Loop ─────────────────────────────────────────────────────────
+
+const clock = new THREE.Clock();
+let frameCount = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05); // cap delta
+
+  if (!receivedExternalUpdate) {
+    // Demo mode: smoothly advance through the trail
+    demoTime += dt;
+    // Vary speed sinusoidally for visual interest
+    currentSpeed = 5.5 + Math.sin(demoTime * 0.2) * 4.5;
+    // Advance at a steady pace through the course (~90 seconds full traversal)
+    currentPos = Math.min(0.98, currentPos + dt / 90);
+  } else if (currentSpeed > 0) {
+    // External speed-driven advance
+    const progressPerSec = (currentSpeed / 3600 * 5280) / totalLength;
+    currentPos = Math.min(1, currentPos + progressPerSec * dt * 30);
+  }
+
+  // Position runner on path
+  const { pos, forward, slopeAngle } = getPositionOnPath(currentPos);
+
+  runner.group.position.copy(pos);
+  runner.group.position.y += 0.02; // slight offset above trail
+
+  // Face direction of travel
+  const angle = Math.atan2(forward.x, forward.z);
+  runner.group.rotation.y = angle;
+
+  // Tilt for slope
+  runner.group.rotation.x = -slopeAngle * 0.5;
+
+  // Animate limbs
+  animateRunner(currentSpeed, dt);
+
+  // Runner light follows
+  runnerLight.position.set(pos.x, pos.y + 3, pos.z);
+
+  // Sky dome follows runner horizontally
+  sky.position.x = pos.x;
+  sky.position.z = pos.z;
+
+  // Update camera
+  updateCamera(pos, forward);
+
+  // Subtle particle drift
+  if (frameCount % 2 === 0) {
+    const posAttr = particles.geometry.getAttribute('position');
+    for (let i = 0; i < posAttr.count; i++) {
+      posAttr.setY(i, posAttr.getY(i) + Math.sin(frameCount * 0.01 + i) * 0.003);
+    }
+    posAttr.needsUpdate = true;
+  }
+
+  // Update HUD every 10 frames
+  if (frameCount % 10 === 0) {
+    // Find current interval
+    const totalDur = intervals.reduce((s, iv) => s + iv.duration, 0);
+    let cumDur = 0;
+    let currentIv = intervals[0];
+    for (const iv of intervals) {
+      cumDur += iv.duration;
+      if (currentPos <= cumDur / totalDur) { currentIv = iv; break; }
+    }
+    document.getElementById('hud-interval').textContent = currentIv.name;
+    document.getElementById('hud-speed').textContent = currentSpeed.toFixed(1);
+    document.getElementById('hud-progress-fill').style.width = (currentPos * 100) + '%';
+  }
+
+  renderer.render(scene, camera);
+  frameCount++;
+}
+
+// ─── Resize ──────────────────────────────────────────────────────────────────
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ─── Start ───────────────────────────────────────────────────────────────────
+
+document.getElementById('loading').classList.add('done');
+setTimeout(() => document.getElementById('loading').remove(), 700);
+animate();
+
+</script>
+</body>
+</html>

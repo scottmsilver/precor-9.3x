@@ -198,6 +198,10 @@ static volatile int emu_incline = 0;      /* incline percentage (0-99) */
 static char last_console_hmph[32] = "";  /* last seen hmph value from console */
 static char last_console_inc[32] = "";   /* last seen inc value from console */
 
+/* Forward declarations */
+static void stop_emulate(void);
+static void start_emulate_thread(void);
+
 static volatile uint32_t console_bytes = 0;  /* total bytes received from console */
 static volatile uint32_t motor_bytes = 0;    /* total bytes received from motor */
 
