@@ -25,5 +25,21 @@ venv/
 # Runtime data
 program_history.json
 
+# C++ build artifacts
+*.o
+*.gcda
+*.gcno
+*.gcov
+treadmill_io
+tests/test_kv_protocol
+tests/test_ipc_protocol
+tests/test_ring_buffer
+tests/test_mode_state
+tests/test_emulation
+tests/test_integration
+tests/test_ipc_server
+tests/test_controller_live
+tests/test_*_cov
+
 # Analysis/experimental scripts (not part of main tools)
 analysis/
