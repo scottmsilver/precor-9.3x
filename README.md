@@ -1,176 +1,297 @@
-# Precor 9.3x Treadmill Serial Protocol Tools
+# Precor 9.3x Treadmill — Reverse Engineering & AI Control
 
-Reverse-engineering and control tools for the Precor 9.31 (and similar) treadmill serial bus between the console (Upper PCA) and motor controller (Lower PCA).
+A Raspberry Pi intercepts the serial bus on a ~2005 Precor 9.31 treadmill, giving it phone control, interval programs, and an AI coach powered by Gemini.
 
-## Architecture
+---
 
-A C binary (`treadmill_io`) handles all GPIO I/O directly via libpigpio, cutting out the pigpiod daemon for lower latency. Python tools connect via a Unix domain socket for monitoring and control.
+## 1. The Hardware
 
-```
-┌──────────────────────────────────┐
-│  treadmill_io (C, runs as root)  │
-│  Links libpigpio directly        │
-│                                  │
-│  GPIO 27 read ──┐                │
-│                 ├→ proxy → GPIO 22 write
-│  GPIO 17 read   │                │
-│  Emulate cycle ─┘                │
-│  Unix socket server              │
-└──────────┬───────────────────────┘
-           │ /tmp/treadmill_io.sock
-┌──────────┴───────────────────────┐
-│  Python clients                  │
-│  dual_monitor.py — curses TUI    │
-│  server.py — FastAPI/WebSocket   │
-│  listen.py — simple CLI          │
-└──────────────────────────────────┘
-```
+### Two Computers, One Cable
 
-## Hardware Setup
+The treadmill has two independent circuit boards:
 
-The console and motor communicate over a 6-pin cable at 9600 baud, 8N1, using RS-485 signaling (idle LOW, inverted polarity). Both pins carry the same KV text protocol:
+- **Console (Upper PCA)** — the display and buttons. It decides what speed and incline to request.
+- **Motor controller (Lower PCA)** — drives the belt motor and lift motor. It reports back sensor readings.
 
-- **Pin 6** (Controller to Motor) — `[key:value]` commands, 0xFF delimited
-- **Pin 3** (Motor to Controller) — `[key:value]` responses
+They talk over a single 8P8C cable (the same connector as an Ethernet cable, but this is not Ethernet).
 
-Pin 6 is **cut** and wired through the Raspberry Pi's GPIO, allowing it to intercept and proxy (or replace) controller commands. Pin 3 is **tapped** passively.
+### Cable Pinout
 
-```
-Console ──pin6──> [GPIO 27] Pi [GPIO 22] ──pin6──> Motor
-                               Motor ──pin3──> [GPIO 17] Pi (tap)
-```
+| Pin | Function | Notes |
+|-----|----------|-------|
+| 1 | Ground | |
+| 2 | VCC (~8V) | Power from motor controller to console |
+| 3 | Motor → Console | 3.3V serial, RS-485 inverted polarity |
+| 4 | Unknown | Possibly clock — unconfirmed |
+| 5 | Safety interlock | Connected to the safety strap magnet; open circuit = motor stops |
+| 6 | Console → Motor | 3.3V serial, RS-485 inverted polarity |
+| 7 | Ground | |
+| 8 | VCC (~8V) | |
 
-GPIO pin assignments are configured in `gpio.json`:
+Pins 3 and 6 are the interesting ones — they carry the serial protocol.
 
-| Logical Name    | GPIO | Physical Pin | Role                              |
-|-----------------|------|--------------|-----------------------------------|
-| `console_read`  | 27   | 13           | Reads KV commands from console    |
-| `motor_write`   | 22   | 15           | Writes KV commands to motor       |
-| `motor_read`    | 17   | 11           | Reads KV responses from motor     |
+### The Protocol
 
-## Protocol
+Both directions use the same text format: `[key:value]` pairs at 9600 baud, 8N1.
 
-### KV Text Protocol
-
-Both directions use `[key:value]` text framing. The console sends a repeating 14-key cycle to the motor, in bursts with ~100ms gaps:
+**Console → Motor** (pin 6): The console sends a repeating 14-key cycle in 5 bursts, with ~100ms gaps between bursts. Each message is terminated by `0xFF`.
 
 ```
-inc, hmph, amps, err, belt, vbus, lift, lfts, lftg, part, ver, type, diag, loop
+[inc:0]     set incline (decimal)
+[hmph:0]    set speed (mph × 100, uppercase hex)
+[amps]      query current draw
+[err]       query error status
+[belt]      query belt counter
+[vbus]      query bus voltage
+[lift]      query lift position
+[lfts]      query lift status
+[lftg]      query lift goal
+[part:6]    report part number
+[ver]       query firmware version
+[type]      query machine type
+[diag:0]    diagnostic mode
+[loop:5550] loop counter
 ```
 
-Commands with values: `[key:value]\xff` — Commands without: `[key]\xff`
+Keys with a colon set/report a value. Bare keys (no colon) are queries.
 
-The motor responds with `[key:value]` (no 0xFF delimiter).
+**Motor → Console** (pin 3): The motor responds with `[key:value]` — same format, but no `0xFF` delimiter.
 
-### Speed Encoding
-
-Speed is sent via the `hmph` key as mph x 100, in uppercase hex:
-
-| Speed  | hmph value |
-|--------|-----------|
-| 1.2 mph | `78`     |
-| 1.5 mph | `96`     |
-| 2.5 mph | `FA`     |
-
-## Prerequisites
-
-```bash
-sudo apt install pigpio    # libpigpio for C binary
-pip install fastapi uvicorn  # for web UI only
+```
+[belt:14]   belt counter (hex)
+[inc:0]     incline position
+[hmph:69]   current speed (hex, 0x69 = 105 = 1.05 mph)
+[amps:FF]   current draw (hex)
+[ver:19A]   firmware version
+[lift:28]   lift position (hex)
+[type:20]   machine type
 ```
 
-## Building
+**Speed encoding:** The `hmph` key carries speed as mph × 100 in uppercase hex. For example: 1.2 mph = 120 decimal = `78` hex. 2.5 mph = 250 = `FA`. Incline is a plain decimal integer.
 
-```bash
-make                # builds treadmill_io C binary
+### RS-485 Polarity — The Gotcha
+
+These serial lines use RS-485 signaling, which idles LOW. Standard UART idles HIGH. If you connect a normal TTL serial adapter, you'll see what looks like binary garbage — it's actually the KV text with every bit flipped, and byte boundaries shifted because the start/stop bits are inverted too.
+
+The full forensic investigation is in [`RS485_DISCOVERY.md`](RS485_DISCOVERY.md). The short version: we spent days analyzing a "binary protocol" that turned out to be regular ASCII read with the wrong polarity.
+
+---
+
+## 2. Tapping In
+
+### What You Need
+
+- Raspberry Pi (any model with GPIO)
+- RJ45 pass-through breakout board ([example](https://www.amazon.com/dp/B0CQKBPGB6))
+- Jumper wires
+
+### Three Connections
+
+The Pi connects to three points on the cable:
+
 ```
+Console ──pin 6──▶ [GPIO 27] Pi [GPIO 22] ──pin 6──▶ Motor
+                                Motor ──pin 3──▶ [GPIO 17] Pi (tap)
+```
+
+| Connection | Cable Pin | GPIO | Physical Pin | What It Does |
+|------------|-----------|------|--------------|--------------|
+| Console read | Pin 6 (console side) | 27 | 13 | Reads commands from console |
+| Motor write | Pin 6 (motor side) | 22 | 15 | Sends commands to motor |
+| Motor read | Pin 3 | 17 | 11 | Reads responses from motor |
+
+Pin assignments are configured in [`gpio.json`](gpio.json) — the C binary reads this at startup.
+
+### Why Cut Pin 6
+
+Pin 6 (Console → Motor) is **cut** — the Pi sits in the middle. This lets us either forward the console's commands unchanged (proxy mode) or replace them entirely with our own (emulate mode).
+
+Pin 3 (Motor → Console) is only **tapped** — the console still receives motor responses directly. We never need to fake motor responses, so a passive tap is enough.
+
+If we only tapped pin 6, we could listen but not control anything. Cutting gives us the ability to intercept and substitute.
+
+### Debugging Tools
+
+If you're investigating the protocol or something isn't working:
+
+- **Logic analyzer** + [`analyze_logic.py`](analyze_logic.py) / [`decode_inverted.py`](decode_inverted.py) — decode captured CSV traces. `decode_inverted.py` handles the RS-485 polarity inversion automatically.
+- **`dual_monitor.py`** — live curses TUI showing both channels side-by-side. Console commands on the left, motor responses on the right.
+- **`listen.py`** — simple CLI listener. Use `--changes` to only show value changes, `--source motor` to filter by direction.
+
+---
+
+## 3. What We Built
+
+### The Goal
+
+Turn a 20-year-old dumb treadmill into a smart one — phone control, interval programs, AI coaching, voice commands — without modifying the treadmill itself.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│              Web UI (Alpine.js)                  │
+│         static/index.html — display only         │
+└──────────────────────┬──────────────────────────┘
+                       │ WebSocket + REST
+┌──────────────────────┴──────────────────────────┐
+│              server.py (FastAPI)                  │
+│  All business logic: sessions, programs, chat    │
+│  Speed/incline control, GPX import, voice TTS    │
+├──────────────┬───────────────────────────────────┤
+│ program_engine.py    │    treadmill_client.py     │
+│ Intervals + Gemini   │    Thin IPC wrapper        │
+└──────────────┘       └───────────┬───────────────┘
+                                   │ Unix socket
+               ┌───────────────────┴───────────────┐
+               │     treadmill_io (C++, root)       │
+               │  GPIO serial I/O, proxy, emulate   │
+               │  Safety: watchdog, 3h timeout,     │
+               │  auto proxy on console button      │
+               └───────────────────────────────────┘
+```
+
+### Why These Layers
+
+**C++ binary** ([`src/`](src/)) — This is the safety-critical layer. It handles bit-banged serial I/O at 9600 baud and nothing else. The important safety features live here — not in Python — because they must work even if the server crashes:
+
+- **3-hour timeout:** If no speed/incline change for 3 hours, belt stops. You can't leave a treadmill running forever by accident.
+- **IPC watchdog:** If the Python server disconnects (no heartbeat for 4 seconds), belt stops automatically.
+- **Auto proxy/emulate:** When the Pi is controlling the belt (emulate mode) and someone presses a button on the physical console, it instantly switches back to proxy mode. The physical controls always win.
+- **Zero-on-start:** Entering emulate mode always zeros speed and incline. The belt never starts unexpectedly.
+
+C++20 compiled with `-fno-exceptions -fno-rtti`. Hot paths (serial read/write) are zero-allocation — stack buffers only.
+
+**Python client** ([`treadmill_client.py`](treadmill_client.py)) — Thin wrapper over the Unix socket. Auto-reconnects with exponential backoff. Sends heartbeats on a background thread to keep the watchdog alive.
+
+**Server** ([`server.py`](server.py)) — FastAPI on port 8000. This is the single source of truth for all application state: workout sessions (elapsed time, distance, vertical feet), program execution, AI chat history, speed/incline validation. Multiple clients (web UI, future watch app, future CLI) all go through the same server.
+
+**Program engine** ([`program_engine.py`](program_engine.py)) — Manages interval program execution and Gemini AI calls. Runs a 1-second tick loop, tracks interval progress, sends encouragement at 25/50/75% milestones. No HTTP, no GPIO — it only knows about intervals and the AI.
+
+**Web UI** ([`static/index.html`](static/index.html)) — Alpine.js, no build step. Display layer only — every decision happens server-side. The UI shows what the server tells it and sends API calls when you tap buttons. Warm dark palette, touch-first, designed for a phone mounted on the treadmill console.
+
+### Proxy vs Emulate
+
+The two operating modes:
+
+- **Proxy mode** — the Pi forwards console commands to the motor unchanged. You can monitor everything, but the console stays in control.
+- **Emulate mode** — the Pi replaces the console entirely, sending its own speed/incline commands. This is how phone control and AI programs work.
+
+Transitions are automatic. Sending a speed or incline command from the server switches to emulate. Pressing a button on the physical console switches back to proxy. No manual toggle needed (though one exists in the debug panel).
+
+### AI Coach
+
+The AI coach uses Gemini 2.5 Flash with function calling. You can chat with it via text or voice, and it can directly control the treadmill.
+
+**Available tools** (Gemini function calls):
+- `set_speed` / `set_incline` — direct control
+- `start_workout` — describe what you want ("30 minute hill workout") and it generates a structured interval program
+- `stop_treadmill` / `pause_program` / `resume_program` / `skip_interval`
+- `extend_interval` / `add_time` — modify a running program
+
+**Voice:** Audio is transcribed by Gemini, then processed through the same function-calling pipeline. TTS responses use `gemini-2.5-flash-preview-tts`.
+
+**GPX import:** Upload a GPX route file and the server converts elevation changes into an incline-based interval program.
+
+Programs are saved to `program_history.json` (last 10, deduplicated by name) and shown in the UI for quick reload.
+
+---
 
 ## Quick Start
 
+### Prerequisites
+
 ```bash
-# 1. Start the C I/O binary (must be root for GPIO access)
+# On the Pi
+sudo apt install libpigpio-dev g++    # C++ build dependencies
+pip install fastapi uvicorn gpxpy      # Python server dependencies
+```
+
+### Build and Run
+
+```bash
+# Build the C++ binary
+make
+
+# Start the I/O binary (must be root for GPIO)
 sudo ./treadmill_io
 
-# 2. Run any Python client (no root needed)
-python3 dual_monitor.py          # curses TUI
-python3 server.py                # web UI at http://<pi-ip>:8000
-python3 listen.py                # simple CLI listener
-python3 listen.py --source motor # motor responses only
-python3 listen.py --changes      # only show value changes
+# In another terminal, start the server
+python3 server.py
+# Web UI at http://<pi-ip>:8000
 ```
 
-**Note:** `pigpiod` must NOT be running — `treadmill_io` links libpigpio directly and they conflict.
+`treadmill_io` links libpigpio directly — `pigpiod` must NOT be running (they conflict).
 
-## Files
+### Other Tools
 
-| File                | Description                                              |
-|---------------------|----------------------------------------------------------|
-| `treadmill_io.c`    | C binary: GPIO I/O, KV parsing, proxy, emulate, IPC     |
-| `Makefile`          | Builds `treadmill_io` with `-lpigpio -lrt -pthread`      |
-| `treadmill_client.py` | Python client library for the C binary (Unix socket)   |
-| `dual_monitor.py`   | Side-by-side curses TUI with proxy and emulation         |
-| `server.py`         | FastAPI web server with WebSocket for phone control      |
-| `listen.py`         | Simple KV listener with source/changes/unique filtering  |
-| `gpio.json`         | GPIO pin assignments (read by `treadmill_io` at startup) |
-| `static/index.html` | Mobile-responsive web UI (Alpine.js)                     |
-
-### Modes
-
-- **Proxy mode** (default) — forwards intercepted console commands to the motor unchanged
-- **Emulate mode** — replaces the console entirely, sending synthesized KV commands with adjustable speed/incline
-
-Proxy and emulate are mutually exclusive.
-
-### IPC Protocol
-
-Python tools communicate with `treadmill_io` via newline-delimited JSON over `/tmp/treadmill_io.sock`.
-
-**C → Python:**
-```json
-{"type":"kv","ts":1.23,"source":"console","key":"hmph","value":"78"}
-{"type":"kv","ts":1.23,"source":"motor","key":"belt","value":"14"}
-{"type":"status","proxy":true,"emulate":false,"emu_speed":0,"emu_incline":0}
+```bash
+python3 dual_monitor.py              # Curses TUI — both channels live
+python3 listen.py                    # Simple CLI listener
+python3 listen.py --changes          # Only show value changes
+python3 listen.py --source motor     # Motor responses only
 ```
 
-**Python → C:**
-```json
-{"cmd":"proxy","enabled":true}
-{"cmd":"emulate","enabled":true}
-{"cmd":"speed","value":1.2}
-{"cmd":"incline","value":5}
-{"cmd":"status"}
+## Testing
+
+```bash
+# C++ unit tests (local, no hardware, <2s)
+make test
+
+# Deploy to Pi + hardware integration tests
+make test-pi
+
+# Both
+make test-all
+
+# Python unit tests (mocked, <1s)
+python3 -m pytest tests/test_program_engine.py tests/test_server_integration.py -v
+
+# Python live integration tests (real timing, ~45s)
+python3 -m pytest tests/test_live_program.py -v
 ```
 
-### dual_monitor.py
+## API Reference
 
-The primary tool. Left pane shows console commands (or emulated commands), right pane shows motor responses.
+### Control
 
-```
- Console→Motor (via treadmill_io) [PROXY]│  Motor responses
-─────────────────────────────────────────┼──────────────────────────────
-   0.1  inc      0                       │   0.1  inc      0
-   0.1  hmph     0                       │   0.2  belt     12A4
-   0.1  amps     23                      │   0.2  type     6
-```
+| Method | Endpoint | Body | Description |
+|--------|----------|------|-------------|
+| GET | `/api/status` | — | Current speed, incline, mode, motor KV data |
+| GET | `/api/session` | — | Elapsed time, distance, vertical feet |
+| POST | `/api/speed` | `{"value": 3.5}` | Set belt speed (mph) |
+| POST | `/api/incline` | `{"value": 5}` | Set incline grade (0-15) |
+| POST | `/api/emulate` | `{"enabled": true}` | Toggle emulate mode (debug) |
+| POST | `/api/proxy` | `{"enabled": true}` | Toggle proxy mode (debug) |
 
-Key bindings:
+### Programs
 
-| Key       | Action                                        |
-|-----------|-----------------------------------------------|
-| `e`       | Toggle emulate mode (replace controller)      |
-| `+` / `-` | Adjust speed by 0.5 mph (emulate mode)       |
-| `]` / `[` | Adjust incline (emulate mode)                 |
-| `p`       | Toggle proxy (forward controller to motor)    |
-| `f`       | Toggle follow / pause scrolling               |
-| `c`       | Show only changed values                      |
-| `u`       | Show only unique values                       |
-| `j` / `k` | Scroll down / up                              |
-| `q`       | Quit                                          |
+| Method | Endpoint | Body | Description |
+|--------|----------|------|-------------|
+| GET | `/api/program` | — | Current program state |
+| POST | `/api/program/generate` | `{"prompt": "..."}` | Generate program via Gemini |
+| POST | `/api/program/start` | — | Start loaded program |
+| POST | `/api/program/stop` | — | Stop program, zero speed/incline |
+| POST | `/api/program/pause` | — | Toggle pause/resume |
+| POST | `/api/program/skip` | — | Skip to next interval |
+| POST | `/api/program/extend` | `{"seconds": 60}` | Adjust current interval duration |
+| GET | `/api/programs/history` | — | List recent programs (max 10) |
+| POST | `/api/programs/history/{id}/load` | — | Reload a saved program |
+| POST | `/api/gpx/upload` | multipart file | Upload GPX route file |
 
-### Analysis Tools (offline)
+### Chat
 
-- `analyze_logic.py` — decodes logic analyzer CSVs with standard UART polarity
-- `decode_inverted.py` — decodes logic analyzer CSVs with inverted polarity detection
+| Method | Endpoint | Body | Description |
+|--------|----------|------|-------------|
+| POST | `/api/chat` | `{"message": "..."}` | Text chat with AI coach |
+| POST | `/api/chat/voice` | `{"audio": "base64...", "mime": "..."}` | Voice chat (transcribe + respond) |
+| POST | `/api/tts` | `{"text": "...", "voice": "Kore"}` | Text-to-speech |
+
+### WebSocket
+
+| Endpoint | Description |
+|----------|-------------|
+| `/ws` | Real-time stream: KV data, program state, session metrics |
 
 ## License
 
