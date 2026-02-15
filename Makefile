@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++17 -fno-exceptions -fno-rtti -Wall -Wextra -O2 -pthread \
+CXXFLAGS = -std=c++20 -fno-exceptions -fno-rtti -Wall -Wextra -O2 -pthread \
            -Wno-format-truncation
 INCLUDES = -Isrc -Ithird_party/rapidjson -Ithird_party
 LDFLAGS = -lpigpio -lrt -pthread
@@ -70,9 +70,31 @@ src/%.test.o: src/%.cpp
 tests/%.o: tests/%.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
 
+PI_HOST = rpi
+
+# Deploy to Pi, build, restart binary, run hardware tests
+test-pi: test
+	@echo "=== Deploying to Pi ==="
+	rsync -az src/ $(PI_HOST):~/src/
+	rsync -az third_party/ $(PI_HOST):~/third_party/
+	rsync -az tests/ $(PI_HOST):~/tests/
+	scp Makefile gpio.json treadmill_client.py pyproject.toml $(PI_HOST):~/
+	@echo "=== Building on Pi ==="
+	ssh $(PI_HOST) 'cd ~ && make'
+	@echo "=== Restarting treadmill_io ==="
+	-ssh $(PI_HOST) 'sudo pkill -9 treadmill_io; sleep 1'
+	ssh -f $(PI_HOST) 'sudo ./treadmill_io > /tmp/treadmill_io.log 2>&1'
+	sleep 3
+	ssh $(PI_HOST) 'pgrep treadmill_io > /dev/null' || (echo "ERROR: treadmill_io failed to start"; exit 1)
+	@echo "=== Running hardware tests ==="
+	ssh $(PI_HOST) 'cd ~ && ~/.local/bin/pytest tests/test_hardware_integration.py -v -s -m hardware'
+
+# Full pre-commit gate: local unit tests + Pi hardware tests
+test-all: test test-pi
+
 clean:
 	rm -f $(TARGET) $(TEST_BINS) src/*.o src/*.test.o tests/*.o
 	rm -f src/*.gcda src/*.gcno tests/*.gcda tests/*.gcno *.gcov
 	rm -f tests/test_*_cov
 
-.PHONY: all clean test
+.PHONY: all clean test test-pi test-all

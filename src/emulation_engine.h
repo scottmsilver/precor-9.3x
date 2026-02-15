@@ -9,8 +9,9 @@
 #pragma once
 
 #include <cstdio>
-#include <cstring>
 #include <ctime>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -55,7 +56,7 @@ static constexpr int BURSTS[5][4] = {
 template <typename Port>
 class EmulationEngine {
 public:
-    using KvEventCallback = std::function<void(const char* key, const char* value)>;
+    using KvEventCallback = std::function<void(std::string_view key, std::string_view value)>;
 
     EmulationEngine(SerialWriter<Port>& writer, ModeStateMachine& mode)
         : writer_(writer), mode_(mode) {}
@@ -90,19 +91,14 @@ private:
         nanosleep(&ts, nullptr);
     }
 
-    const char* value_for(int idx, const StateSnapshot& snap) {
-        static thread_local char vbuf[32];
+    std::string value_for(int idx, const StateSnapshot& snap) {
         switch (idx) {
-            case 0:  // inc — decimal incline
-                std::snprintf(vbuf, sizeof(vbuf), "%d", snap.incline);
-                return vbuf;
-            case 1:  // hmph — speed as mph*100, uppercase hex
-                std::snprintf(vbuf, sizeof(vbuf), "%X", snap.speed_raw);
-                return vbuf;
+            case 0:  return std::to_string(snap.incline);      // inc
+            case 1:  return encode_speed_hex(snap.speed_tenths); // hmph
             case 9:  return "6";     // part
             case 12: return "0";     // diag
             case 13: return "5550";  // loop
-            default: return nullptr;
+            default: return {};
         }
     }
 
@@ -135,8 +131,8 @@ private:
                     if (idx < 0) break;
                     if (!running_.load(std::memory_order_relaxed) || !mode_.is_emulating()) goto done;
 
-                    const char* key = KV_CYCLE[idx].key;
-                    const char* value = nullptr;
+                    std::string_view key(KV_CYCLE[idx].key);
+                    std::string value;
                     if (KV_CYCLE[idx].has_value) {
                         value = value_for(idx, snap);
                     }
@@ -144,7 +140,7 @@ private:
                     writer_.write_kv(key, value);
 
                     if (kv_cb_) {
-                        kv_cb_(key, value ? value : "");
+                        kv_cb_(key, value);
                     }
                 }
                 sleep_ms(100);  // ~100ms gap between bursts

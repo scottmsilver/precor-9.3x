@@ -9,9 +9,12 @@
 #pragma once
 
 #include <cstdio>
-#include <cstring>
+#include <cstdint>
 #include <ctime>
 #include <csignal>
+#include <span>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <atomic>
 
@@ -22,16 +25,11 @@
 #include "ipc_server.h"
 #include "ipc_protocol.h"
 #include "kv_protocol.h"
+#include "config.h"
 
-// GPIO pin config loaded from gpio.json
-struct GpioConfig {
-    int console_read = -1;
-    int motor_write = -1;
-    int motor_read = -1;
-};
-
-// Parse gpio.json and fill GpioConfig. Returns true on success.
-bool load_gpio_config(const char* path, GpioConfig* cfg);
+// Heartbeat watchdog timeout: if emulating and no command received
+// for this long, safety-reset and return to proxy.
+constexpr int HEARTBEAT_TIMEOUT_SEC = 4;
 
 template <typename Port>
 class TreadmillController {
@@ -46,6 +44,7 @@ public:
         , ipc_(ring_)
     {
         clock_gettime(CLOCK_MONOTONIC, &start_ts_);
+        last_cmd_time_ = start_ts_;
     }
 
     // Wire up all callbacks and start threads
@@ -60,56 +59,66 @@ public:
         });
 
         // Emulation engine: push KV events to ring
-        emu_engine_.on_kv_event([this](const char* key, const char* value) {
+        emu_engine_.on_kv_event([this](std::string_view key, std::string_view value) {
             push_kv_event("emulate", key, value);
         });
 
         // Console reader: proxy + parse + auto-detect
-        console_reader_.on_raw([this](const uint8_t* data, int len) {
-            mode_.add_console_bytes(len);
+        console_reader_.on_raw([this](std::span<const uint8_t> data) {
+            mode_.add_console_bytes(static_cast<uint32_t>(data.size()));
             // Proxy: forward raw bytes to motor (low latency)
             if (mode_.is_proxy() && !mode_.is_emulating()) {
-                motor_writer_.write_bytes(data, len);
+                motor_writer_.write_bytes(data);
             }
         });
 
         console_reader_.on_kv([this](const KvPair& kv) {
-            push_kv_event("console", kv.key, kv.value);
+            auto key = kv.key_view();
+            auto value = kv.value_view();
+            push_kv_event("console", key, value);
 
             // Auto-detect: console change while emulating -> switch to proxy
-            if (std::strcmp(kv.key, "hmph") == 0) {
+            if (key == "hmph") {
                 auto result = mode_.auto_proxy_on_console_change(
-                    kv.key, last_console_hmph_, kv.value);
+                    key, last_console_hmph_, value);
                 if (result.changed) {
                     std::fprintf(stderr, "[auto] console hmph changed %s -> %s, switching to proxy\n",
-                                 last_console_hmph_, kv.value);
+                                 last_console_hmph_.c_str(), std::string(value).c_str());
                     push_status();
                 }
-                std::snprintf(last_console_hmph_, sizeof(last_console_hmph_), "%s", kv.value);
-            } else if (std::strcmp(kv.key, "inc") == 0) {
+                last_console_hmph_ = value;
+            } else if (key == "inc") {
                 auto result = mode_.auto_proxy_on_console_change(
-                    kv.key, last_console_inc_, kv.value);
+                    key, last_console_inc_, value);
                 if (result.changed) {
                     std::fprintf(stderr, "[auto] console inc changed %s -> %s, switching to proxy\n",
-                                 last_console_inc_, kv.value);
+                                 last_console_inc_.c_str(), std::string(value).c_str());
                     push_status();
                 }
-                std::snprintf(last_console_inc_, sizeof(last_console_inc_), "%s", kv.value);
+                last_console_inc_ = value;
             }
         });
 
         // Motor reader: parse only
-        motor_reader_.on_raw([this](const uint8_t* /*data*/, int len) {
-            mode_.add_motor_bytes(len);
+        motor_reader_.on_raw([this](std::span<const uint8_t> data) {
+            mode_.add_motor_bytes(static_cast<uint32_t>(data.size()));
         });
 
         motor_reader_.on_kv([this](const KvPair& kv) {
-            push_kv_event("motor", kv.key, kv.value);
+            push_kv_event("motor", kv.key_view(), kv.value_view());
         });
 
         // IPC: dispatch commands
         ipc_.on_command([this](const IpcCommand& cmd) {
             handle_command(cmd);
+        });
+
+        // IPC: client disconnect watchdog (Layer 1)
+        ipc_.on_client_disconnect([this](int remaining) {
+            if (remaining == 0 && mode_.is_emulating()) {
+                std::fprintf(stderr, "[watchdog] all clients disconnected — exiting emulate, returning to proxy\n");
+                watchdog_reset();
+            }
         });
 
         // Open serial readers
@@ -176,11 +185,9 @@ private:
                (now.tv_nsec - start_ts_.tv_nsec) / 1e9;
     }
 
-    void push_kv_event(const char* source, const char* key, const char* value) {
-        char msg[256];
+    void push_kv_event(std::string_view source, std::string_view key, std::string_view value) {
         KvEvent ev{source, key, value, elapsed_sec()};
-        build_kv_event(ev, msg, sizeof(msg));
-        ring_.push(msg);
+        ring_.push(build_kv_event(ev));
     }
 
     void push_status() {
@@ -192,12 +199,13 @@ private:
         ev.emu_incline = snap.incline;
         ev.console_bytes = mode_.console_bytes();
         ev.motor_bytes = mode_.motor_bytes();
-        char msg[256];
-        build_status_event(ev, msg, sizeof(msg));
-        ring_.push(msg);
+        ring_.push(build_status_event(ev));
     }
 
     void handle_command(const IpcCommand& cmd) {
+        // Every command is an implicit heartbeat
+        clock_gettime(CLOCK_MONOTONIC, &last_cmd_time_);
+
         switch (cmd.type) {
             case CmdType::Proxy:
                 mode_.request_proxy(cmd.bool_value);
@@ -217,6 +225,9 @@ private:
                 break;
             case CmdType::Status:
                 push_status();
+                break;
+            case CmdType::Heartbeat:
+                // Timestamp already updated above; no further action needed
                 break;
             case CmdType::Quit:
                 running_.store(false, std::memory_order_relaxed);
@@ -242,15 +253,37 @@ private:
         }
     }
 
+    void watchdog_reset() {
+        // Use watchdog_reset_to_proxy() instead of request_emulate(false)
+        // to avoid firing the emulate callback (which would join the emulate
+        // thread from the IPC thread — racing with the main thread's stop()).
+        // The emulate thread will exit naturally when it sees is_emulating()==false.
+        mode_.watchdog_reset_to_proxy();
+        push_status();
+    }
+
     void ipc_loop() {
         while (running_.load(std::memory_order_relaxed)) {
             ipc_.poll();
+
+            // Layer 2: heartbeat timeout watchdog
+            if (mode_.is_emulating()) {
+                struct timespec now;
+                clock_gettime(CLOCK_MONOTONIC, &now);
+                double since_cmd = (now.tv_sec - last_cmd_time_.tv_sec) +
+                                   (now.tv_nsec - last_cmd_time_.tv_nsec) / 1e9;
+                if (since_cmd > HEARTBEAT_TIMEOUT_SEC) {
+                    std::fprintf(stderr, "[watchdog] heartbeat timeout (%.1fs) — exiting emulate, returning to proxy\n", since_cmd);
+                    watchdog_reset();
+                }
+            }
         }
     }
 
     Port& port_;
     GpioConfig cfg_;
     struct timespec start_ts_{};
+    struct timespec last_cmd_time_{};
 
     RingBuffer<> ring_;
     ModeStateMachine mode_;
@@ -265,6 +298,6 @@ private:
     std::thread motor_thread_;
     std::thread ipc_thread_;
 
-    char last_console_hmph_[32]{};
-    char last_console_inc_[32]{};
+    std::string last_console_hmph_;
+    std::string last_console_inc_;
 };

@@ -132,7 +132,7 @@ TEST_CASE("IPC proxy command disables emulate") {
 
     // Switch to proxy
     send_json(fd, "{\"cmd\":\"proxy\",\"enabled\":true}");
-    std::string data = read_available(fd, 100);
+    std::string data = read_available(fd, 200);
 
     CHECK(data.find("\"proxy\":true") != std::string::npos);
     CHECK(data.find("\"emulate\":false") != std::string::npos);

@@ -6,9 +6,9 @@
 #define DOCTEST_CONFIG_NO_EXCEPTIONS
 #include <doctest.h>
 #include "ring_buffer.h"
-#include <cstring>
 #include <thread>
-#include <vector>
+#include <cstdio>
+#include <string>
 
 TEST_CASE("empty ring buffer") {
     RingBuffer<> ring;
@@ -24,7 +24,7 @@ TEST_CASE("push and snapshot") {
     auto snap = ring.snapshot();
     CHECK(snap.head == 1);
     CHECK(snap.count == 1);
-    CHECK(std::strcmp(ring.at(0), "hello\n") == 0);
+    CHECK(ring.at(0) == "hello\n");
 }
 
 TEST_CASE("multiple pushes") {
@@ -36,9 +36,9 @@ TEST_CASE("multiple pushes") {
     auto snap = ring.snapshot();
     CHECK(snap.head == 3);
     CHECK(snap.count == 3);
-    CHECK(std::strcmp(ring.at(0), "msg1\n") == 0);
-    CHECK(std::strcmp(ring.at(1), "msg2\n") == 0);
-    CHECK(std::strcmp(ring.at(2), "msg3\n") == 0);
+    CHECK(ring.at(0) == "msg1\n");
+    CHECK(ring.at(1) == "msg2\n");
+    CHECK(ring.at(2) == "msg3\n");
 }
 
 TEST_CASE("wrap-around") {
@@ -52,8 +52,8 @@ TEST_CASE("wrap-around") {
     auto snap = ring.snapshot();
     CHECK(snap.head == 1);  // wrapped around to index 1
     CHECK(snap.count == 5);
-    CHECK(std::strcmp(ring.at(0), "e\n") == 0);  // index 0 was overwritten
-    CHECK(std::strcmp(ring.at(1), "b\n") == 0);
+    CHECK(ring.at(0) == "e\n");  // index 0 was overwritten
+    CHECK(ring.at(1) == "b\n");
 }
 
 TEST_CASE("message truncation") {
@@ -61,8 +61,8 @@ TEST_CASE("message truncation") {
     ring.push("this is a very long message that exceeds the buffer");
 
     // Should be truncated to 7 chars + null
-    const char* msg = ring.at(0);
-    CHECK(std::strlen(msg) <= 7);
+    auto msg = ring.at(0);
+    CHECK(msg.size() <= 7);
 }
 
 TEST_CASE("concurrent push and snapshot") {

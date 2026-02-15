@@ -25,8 +25,8 @@ TEST_CASE("emulation engine sends 14-key cycle") {
     EmulationEngine<MockGpioPort> engine(writer, mode);
 
     std::vector<std::string> keys_sent;
-    engine.on_kv_event([&](const char* key, const char* /*value*/) {
-        keys_sent.push_back(key);
+    engine.on_kv_event([&](std::string_view key, std::string_view /*value*/) {
+        keys_sent.emplace_back(key);
     });
 
     engine.start();
@@ -41,20 +41,20 @@ TEST_CASE("emulation engine sends 14-key cycle") {
 
     // Verify the first 14 keys match the cycle order
     if (keys_sent.size() >= 14) {
-        CHECK(keys_sent[0] == "inc");
-        CHECK(keys_sent[1] == "hmph");
-        CHECK(keys_sent[2] == "amps");
-        CHECK(keys_sent[3] == "err");
-        CHECK(keys_sent[4] == "belt");
-        CHECK(keys_sent[5] == "vbus");
-        CHECK(keys_sent[6] == "lift");
-        CHECK(keys_sent[7] == "lfts");
-        CHECK(keys_sent[8] == "lftg");
-        CHECK(keys_sent[9] == "part");
-        CHECK(keys_sent[10] == "ver");
-        CHECK(keys_sent[11] == "type");
-        CHECK(keys_sent[12] == "diag");
-        CHECK(keys_sent[13] == "loop");
+        CHECK(keys_sent.at(0) == "inc");
+        CHECK(keys_sent.at(1) == "hmph");
+        CHECK(keys_sent.at(2) == "amps");
+        CHECK(keys_sent.at(3) == "err");
+        CHECK(keys_sent.at(4) == "belt");
+        CHECK(keys_sent.at(5) == "vbus");
+        CHECK(keys_sent.at(6) == "lift");
+        CHECK(keys_sent.at(7) == "lfts");
+        CHECK(keys_sent.at(8) == "lftg");
+        CHECK(keys_sent.at(9) == "part");
+        CHECK(keys_sent.at(10) == "ver");
+        CHECK(keys_sent.at(11) == "type");
+        CHECK(keys_sent.at(12) == "diag");
+        CHECK(keys_sent.at(13) == "loop");
     }
 }
 
@@ -75,8 +75,8 @@ TEST_CASE("emulation engine applies speed and incline") {
     EmulationEngine<MockGpioPort> engine(writer, mode);
 
     std::vector<std::pair<std::string, std::string>> kv_events;
-    engine.on_kv_event([&](const char* key, const char* value) {
-        kv_events.emplace_back(key, value);
+    engine.on_kv_event([&](std::string_view key, std::string_view value) {
+        kv_events.emplace_back(std::string(key), std::string(value));
     });
 
     engine.start();
@@ -118,6 +118,42 @@ TEST_CASE("emulation engine stops when mode changes") {
     CHECK_FALSE(engine.is_running());
     // Clean up
     engine.stop();
+}
+
+TEST_CASE("emulation engine stops after watchdog_reset_to_proxy") {
+    MockGpioPort port;
+    port.initialise();
+
+    ModeStateMachine mode;
+    mode.set_emulate_callback([](bool) {});
+    mode.request_emulate(true);
+    mode.set_speed(50);  // 5.0 mph — belt is running
+
+    SerialWriter<MockGpioPort> writer(port, 22);
+    EmulationEngine<MockGpioPort> engine(writer, mode);
+
+    int kv_count = 0;
+    engine.on_kv_event([&](std::string_view, std::string_view) {
+        kv_count++;
+    });
+
+    engine.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(kv_count > 0);  // engine is actively sending
+
+    // Simulate watchdog trigger: controller lost, reset to proxy
+    mode.watchdog_reset_to_proxy();
+
+    // Engine should stop because is_emulating() is now false
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK_FALSE(engine.is_running());
+
+    // Speed and incline are zeroed
+    CHECK(mode.speed_tenths() == 0);
+    CHECK(mode.incline() == 0);
+    CHECK(mode.is_proxy() == true);
+
+    engine.stop();  // clean up (should be no-op since already stopped)
 }
 
 TEST_CASE("emulation engine start/stop lifecycle") {

@@ -88,9 +88,8 @@ TEST_CASE("client connects and receives initial status") {
     CHECK(ipc.create());
 
     // Push a status message before client connects
-    char status[256];
     StatusEvent ev{true, false, 0, 0, 0, 0};
-    build_status_event(ev, status, sizeof(status));
+    auto status = build_status_event(ev);
     ring.push(status);
 
     int client_fd = connect_client();
@@ -100,10 +99,6 @@ TEST_CASE("client connects and receives initial status") {
     poll_for(ipc, 50);
 
     std::string data = read_all(client_fd, 50);
-    // The ring had a status event before connect; after connect,
-    // the cursor starts at current position so we might not see it.
-    // But IpcServer::accept_client doesn't push status automatically
-    // (that's TreadmillController's job). Just verify connect worked.
     CHECK(client_fd >= 0);
 
     close(client_fd);
@@ -181,10 +176,10 @@ TEST_CASE("server dispatches emulate and proxy commands") {
     poll_for(ipc, 80);
 
     CHECK(cmds.size() == 4);
-    CHECK(cmds[0] == CmdType::Emulate);
-    CHECK(cmds[1] == CmdType::Proxy);
-    CHECK(cmds[2] == CmdType::Status);
-    CHECK(cmds[3] == CmdType::Quit);
+    CHECK(cmds.at(0) == CmdType::Emulate);
+    CHECK(cmds.at(1) == CmdType::Proxy);
+    CHECK(cmds.at(2) == CmdType::Status);
+    CHECK(cmds.at(3) == CmdType::Quit);
 
     close(fd);
     ipc.shutdown();
@@ -226,14 +221,11 @@ TEST_CASE("server flushes ring buffer events to connected client") {
     poll_for(ipc, 30);  // accept
 
     // Push KV events to the ring
-    char msg[256];
     KvEvent ev{"console", "hmph", "78", 1.0};
-    build_kv_event(ev, msg, sizeof(msg));
-    ring.push(msg);
+    ring.push(build_kv_event(ev));
 
     KvEvent ev2{"motor", "belt", "0", 1.1};
-    build_kv_event(ev2, msg, sizeof(msg));
-    ring.push(msg);
+    ring.push(build_kv_event(ev2));
 
     poll_for(ipc, 50);  // flush
 
@@ -256,10 +248,8 @@ TEST_CASE("multiple clients each receive ring events") {
     int fd2 = connect_client();
     poll_for(ipc, 30);
 
-    char msg[256];
     KvEvent ev{"emulate", "inc", "5", 2.0};
-    build_kv_event(ev, msg, sizeof(msg));
-    ring.push(msg);
+    ring.push(build_kv_event(ev));
 
     poll_for(ipc, 50);
 
@@ -299,10 +289,8 @@ TEST_CASE("server handles client disconnect gracefully") {
     CHECK(cmd_count == 1);
 
     // Ring events should still flush to fd2
-    char msg[256];
     KvEvent ev{"motor", "ver", "1", 3.0};
-    build_kv_event(ev, msg, sizeof(msg));
-    ring.push(msg);
+    ring.push(build_kv_event(ev));
     poll_for(ipc, 50);
 
     std::string data = read_all(fd2, 30);
@@ -362,6 +350,61 @@ TEST_CASE("server ignores malformed JSON") {
     poll_for(ipc, 50);
 
     CHECK(cmd_count == 1);  // only the valid command dispatched
+
+    close(fd);
+    ipc.shutdown();
+}
+
+TEST_CASE("disconnect callback fires with remaining count") {
+    RingBuffer<> ring;
+    IpcServer ipc(ring);
+    CHECK(ipc.create());
+
+    int callback_count = 0;
+    int last_remaining = -1;
+    ipc.on_client_disconnect([&](int remaining) {
+        callback_count++;
+        last_remaining = remaining;
+    });
+
+    int fd1 = connect_client();
+    int fd2 = connect_client();
+    poll_for(ipc, 30);
+
+    // Disconnect first client — should fire with remaining=1
+    close(fd1);
+    poll_for(ipc, 50);
+
+    CHECK(callback_count == 1);
+    CHECK(last_remaining == 1);
+
+    // Disconnect second client — should fire with remaining=0
+    close(fd2);
+    poll_for(ipc, 50);
+
+    CHECK(callback_count == 2);
+    CHECK(last_remaining == 0);
+
+    ipc.shutdown();
+}
+
+TEST_CASE("heartbeat command dispatches to callback") {
+    RingBuffer<> ring;
+    IpcServer ipc(ring);
+    CHECK(ipc.create());
+
+    CmdType received_type = CmdType::Unknown;
+    ipc.on_command([&](const IpcCommand& cmd) {
+        received_type = cmd.type;
+    });
+
+    int fd = connect_client();
+    poll_for(ipc, 30);
+
+    send_cmd(fd, "{\"cmd\":\"heartbeat\"}");
+    poll_for(ipc, 50);
+
+    CHECK(received_type == CmdType::Heartbeat);
 
     close(fd);
     ipc.shutdown();

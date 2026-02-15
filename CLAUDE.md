@@ -25,7 +25,8 @@ python3 server.py              # FastAPI web server on port 8000
 - `fastapi`, `uvicorn`, `python-multipart` — web server (server.py)
 - `gpxpy` — GPX route parsing (server.py)
 - `pytest`, `pytest-asyncio` — test suite
-- Build: `make` (gcc, libpigpio-dev)
+- Build: `make` (g++ with C++20, libpigpio-dev)
+- Test deps (header-only, vendored): `doctest` (testing), `rapidjson` (JSON)
 
 ## Architecture
 
@@ -46,7 +47,7 @@ The serial bus uses RS-485 signaling which idles LOW (opposite of standard UART)
 
 ### C Binary — `treadmill_io`
 
-All GPIO I/O is handled by a C binary that links libpigpio directly (no daemon). It reads pin assignments from `gpio.json`, handles KV parsing, proxy forwarding, and emulation, and serves data to Python clients over a Unix domain socket (`/tmp/treadmill_io.sock`). See `treadmill_client.py` for the Python IPC client library.
+All GPIO I/O is handled by a C++20 binary (`src/`) that links libpigpio directly (no daemon). It reads pin assignments from `gpio.json`, handles KV parsing, proxy forwarding, and emulation, and serves data to Python clients over a Unix domain socket (`/tmp/treadmill_io.sock`). See `treadmill_client.py` for the Python IPC client library.
 
 ### Protocol
 
@@ -96,16 +97,23 @@ This logic lives in the C binary (not Python) so that mode transitions work even
 ## Testing
 
 ```bash
-# Fast unit tests (mocked sleep, <1s)
+# C++ unit tests (local, no hardware needed, <2s)
+make test
+
+# Deploy to Pi, build, restart binary, run hardware integration tests
+# Requires: Pi reachable at `rpi`, treadmill powered on
+make test-pi
+
+# Full pre-commit gate: local unit tests + Pi hardware tests
+make test-all
+
+# Python unit tests (mocked sleep, <1s)
 python3 -m pytest tests/test_program_engine.py tests/test_server_integration.py -v
 
-# Live integration tests (real asyncio.sleep, ~45s)
+# Python live integration tests (real asyncio.sleep, ~45s)
 python3 -m pytest tests/test_live_program.py -v
 
-# Hardware tests (Pi only, treadmill must be connected)
-python3 -m pytest tests/test_hardware_integration.py -v -s -m hardware
-
-# All non-hardware tests
+# All non-hardware Python tests
 python3 -m pytest -m "not hardware" -v
 ```
 
@@ -167,14 +175,39 @@ When reviewing or writing code in this project, enforce these principles:
 - Don't duplicate logic between `_exec_fn()` and REST endpoints — they should share the same code path.
 - If you see the same 3+ lines in two places, extract it.
 
+### C++ Safety Rules
+
+All C++ code in `src/` must follow these rules. The environment is resource-constrained (Raspberry Pi) and timing-critical (9600 baud serial).
+
+#### Memory & Performance
+
+- **C++20**, compiled with `-std=c++20 -fno-exceptions -fno-rtti`. Use RAII for all resource management (locks, threads, file descriptors).
+- **Hot path = zero allocation**: the serial read/write loop and emulate cycle must never use `new`, `malloc`, `std::string`, `std::vector`, or `std::stringstream`. Stack and static only — `std::array`, pre-allocated fixed buffers.
+- **Cold path (IPC)** may use `std::string` for JSON building and `std::string` for config parsing — these paths are orders of magnitude slower than serial timing.
+
+#### Type Safety
+
+- **`std::string_view`** for input parameters, **`std::string`** for internal processing on cold paths. No raw `const char*` crossing function boundaries.
+- **`std::span<const uint8_t>`** for binary data buffers (serial reads). View, don't copy — create subspans to reference parts of a buffer. Raw `uint8_t*` only at the pigpio C API boundary.
+- **`.at()`** for all container/array indexing (bounds-checked; terminates on out-of-range with `-fno-exceptions`, safer than silent UB from `[]`).
+- **No C-style casts**. Use `static_cast` for numeric conversions. Use `std::bit_cast` for type-punning (e.g., bytes → numeric). **Known exceptions**: `reinterpret_cast<const char*>(uint8_t*)` for `string_view` construction (standard-allowed character aliasing), and `reinterpret_cast<sockaddr*>` (POSIX socket API requirement).
+- **`uint8_t`** for binary data (not `char`). `std::byte` is acceptable but verbose for bitwise operations.
+
+#### Safety & Error Handling
+
+- **No exceptions** (`-fno-exceptions`). Errors are expected control flow (noisy serial line), not exceptional events.
+- **`std::optional<T>`** or `bool` + out-param for fallible functions. Prefer `std::optional` for new code.
+- **No raw pointers or C-style string functions** (`strcmp`, `strstr`, `strlen`, `sscanf`, `snprintf`, `memcpy`). Use `std::string_view` operations, `std::from_chars`/`std::to_chars`, `.copy()`. **Exception**: the pigpio hardware boundary — keep it as thin as possible.
+- **Input length validation**: all functions accepting external input (IPC commands, config files, serial data) must check maximum allowed length before processing.
+
 ### Clear Layers
 
-**C binary** (`treadmill_io.c`): Transport layer only. This code must be:
+**C++ binary** (`src/`): Transport layer only. This code must be:
 - **Incredibly narrow in scope**: GPIO I/O, KV protocol parsing, proxy forwarding, emulation cycle. Nothing else.
 - **Very fast**: bit-banged serial at 9600 baud with DMA waveforms. No allocations in hot paths, no blocking.
 - **Safety-critical**: the 3-hour timeout, the zero-speed-on-emulate-start, and auto proxy/emulate detection live here because they must work even if Python is dead.
 - No application logic, no knowledge of programs/workouts/AI. It just moves bytes and manages modes.
-- Note: The C binary accepts incline 0-99 (hardware range). The application layer (Python/Gemini) enforces 0-15 for safety.
+- Note: The C++ binary accepts incline 0-99 (hardware range). The application layer (Python/Gemini) enforces 0-15 for safety.
 
 **Python client** (`treadmill_client.py`): Thin IPC wrapper to the C binary. No business logic.
 

@@ -558,6 +558,34 @@ body { display: flex; flex-direction: column; overflow: hidden; height: 100dvh; 
 .preset.active { background: rgba(124,154,130,0.2); color: var(--green); }
 .preset.active.inc { background: rgba(166,152,130,0.2); color: var(--orange); }
 
+/* Treadmill disconnected banner */
+.disconnect-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+  background: rgba(196,92,82,0.15); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(196,92,82,0.3);
+  padding: 10px 16px; text-align: center;
+  font-size: 13px; font-weight: 600; color: var(--red);
+  animation: bannerSlideDown 300ms var(--ease-decel) forwards;
+}
+@keyframes bannerSlideDown {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(0); }
+}
+.reconnect-flash {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+  background: rgba(124,154,130,0.15); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(124,154,130,0.3);
+  padding: 10px 16px; text-align: center;
+  font-size: 13px; font-weight: 600; color: var(--green);
+  animation: reconnectFlash 3s var(--ease) forwards;
+}
+@keyframes reconnectFlash {
+  0% { opacity: 0; transform: translateY(-100%); }
+  10% { opacity: 1; transform: translateY(0); }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-8px); }
+}
+
 /* Card appear animation */
 @keyframes cardAppear {
   0% { opacity: 0; transform: scale(0.92) translateY(8px); }
@@ -596,6 +624,14 @@ body::after {
     <button class="gear" x-show="!isLobby" @click="goHome()" title="Home" style="font-size:1rem">&#8962;</button>
     <button class="gear" @click="showSettings = !showSettings">&#9881;</button>
   </div>
+</div>
+
+<!-- Treadmill disconnected banner -->
+<div class="disconnect-banner" x-show="treadmillDisconnected" x-transition>
+  Treadmill disconnected — reconnecting...
+</div>
+<div class="reconnect-flash" x-show="treadmillReconnected" x-transition>
+  Reconnected
 </div>
 
 <!-- Debug Raw Data Panel -->
@@ -665,7 +701,8 @@ body::after {
 </div>
 
 <!-- Speed & Incline controls (cockpit only, not during program) -->
-<div class="controls" x-show="!isLobby && (!programRunning || pgmControlsExpanded)">
+<div class="controls" x-show="!isLobby && (!programRunning || pgmControlsExpanded)"
+     :style="treadmillDisconnected ? 'opacity:0.3;pointer-events:none' : ''">
   <div class="ctrl-panel speed">
     <div class="ctrl-btns">
       <button class="ctrl-btn" @pointerdown="startRepeat('speed', -1)" @pointerup="stopRepeat()" @pointerleave="stopRepeat()">&#8722;</button>
@@ -938,6 +975,7 @@ function app() {
     debugLog: [],
     debugMotorCache: {},
     pgmControlsExpanded: false,
+    treadmillDisconnected: false, treadmillReconnected: false, _reconnectTimer: null,
     repeatTimer: null, repeatCount: 0, _initialized: false,
 
     // --- Computed ---
@@ -1144,8 +1182,29 @@ function app() {
           if (msg.speed != null) this.speed = msg.speed;
           if (msg.incline != null) this.incline = msg.incline;
           if (msg.motor) this.motorRaw = msg.motor;
+          if (msg.treadmill_connected != null) {
+            if (!msg.treadmill_connected && !this.treadmillDisconnected) {
+              this.treadmillDisconnected = true;
+              this.treadmillReconnected = false;
+            } else if (msg.treadmill_connected && this.treadmillDisconnected) {
+              this.treadmillDisconnected = false;
+              this.treadmillReconnected = true;
+              clearTimeout(this._reconnectTimer);
+              this._reconnectTimer = setTimeout(() => { this.treadmillReconnected = false; }, 3000);
+            }
+          }
         } else if (msg.type === 'program') {
           this._loadPgmState(msg);
+        } else if (msg.type === 'connection') {
+          if (msg.connected) {
+            this.treadmillDisconnected = false;
+            this.treadmillReconnected = true;
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = setTimeout(() => { this.treadmillReconnected = false; }, 3000);
+          } else {
+            this.treadmillDisconnected = true;
+            this.treadmillReconnected = false;
+          }
         }
       };
     },
@@ -1168,6 +1227,10 @@ function app() {
     async post(path, body) {
       try {
         const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (res.status === 503) {
+          this.treadmillDisconnected = true;
+          return null;
+        }
         return await res.json();
       } catch (e) { console.error('POST failed:', path, e); }
     },

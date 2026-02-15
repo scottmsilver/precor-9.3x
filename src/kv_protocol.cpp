@@ -3,11 +3,10 @@
  */
 
 #include "kv_protocol.h"
-#include <cstdio>
-#include <cstring>
-#include <cstdlib>
+#include <charconv>
 
-int kv_parse(const uint8_t* buf, int len, KvPair* pairs, int max_pairs, int* consumed) {
+int kv_parse(std::span<const uint8_t> buf, KvPair* pairs, int max_pairs, int* consumed) {
+    int len = static_cast<int>(buf.size());
     int i = 0, n = 0;
 
     while (i < len && n < max_pairs) {
@@ -34,22 +33,33 @@ int kv_parse(const uint8_t* buf, int len, KvPair* pairs, int max_pairs, int* con
                 }
             }
 
-            if (printable && raw_len > 0 && raw_len < 64) {
-                char content[128];
-                std::memcpy(content, buf + i + 1, raw_len);
-                content[raw_len] = '\0';
+            if (printable && raw_len > 0 && raw_len < KV_FIELD_SIZE) {
+                // Extract content between brackets as a string_view
+                // reinterpret_cast: uint8_t -> char aliasing (standard-allowed)
+                std::string_view content(reinterpret_cast<const char*>(buf.data() + i + 1), raw_len);
 
-                char* colon = std::strchr(content, ':');
-                if (colon) {
-                    *colon = '\0';
-                    std::snprintf(pairs[n].key, sizeof(pairs[n].key), "%s", content);
-                    std::snprintf(pairs[n].value, sizeof(pairs[n].value), "%s", colon + 1);
-                    n++;
+                auto colon_pos = content.find(':');
+                auto& pair = pairs[n];
+
+                if (colon_pos != std::string_view::npos) {
+                    auto key_part = content.substr(0, colon_pos);
+                    auto val_part = content.substr(colon_pos + 1);
+                    // Safe copy into fixed arrays with bounds check
+                    if (key_part.size() < KV_FIELD_SIZE && val_part.size() < KV_FIELD_SIZE) {
+                        key_part.copy(pair.key.data(), key_part.size());
+                        pair.key.at(key_part.size()) = '\0';
+                        val_part.copy(pair.value.data(), val_part.size());
+                        pair.value.at(val_part.size()) = '\0';
+                        n++;
+                    }
                 } else {
-                    // Bare key with no value, e.g. [amps]
-                    std::snprintf(pairs[n].key, sizeof(pairs[n].key), "%s", content);
-                    pairs[n].value[0] = '\0';
-                    n++;
+                    // Bare key with no value
+                    if (content.size() < KV_FIELD_SIZE) {
+                        content.copy(pair.key.data(), content.size());
+                        pair.key.at(content.size()) = '\0';
+                        pair.value.at(0) = '\0';
+                        n++;
+                    }
                 }
             }
             i = end + 1;
@@ -62,34 +72,40 @@ int kv_parse(const uint8_t* buf, int len, KvPair* pairs, int max_pairs, int* con
     return n;
 }
 
-int kv_build(char* out, int out_size, const char* key, const char* value) {
-    int len;
-    if (value && value[0]) {
-        len = std::snprintf(out, out_size, "[%s:%s]", key, value);
-    } else {
-        len = std::snprintf(out, out_size, "[%s]", key);
+std::string kv_build(std::string_view key, std::string_view value) {
+    std::string result;
+    result.reserve(key.size() + value.size() + 4);
+    result += '[';
+    result += key;
+    if (!value.empty()) {
+        result += ':';
+        result += value;
     }
-    if (len >= 0 && len < out_size - 1) {
-        out[len] = static_cast<char>(0xFF);
-        len++;
-        out[len] = '\0';
-    }
-    return len;
+    result += ']';
+    result += static_cast<char>(0xFF);
+    return result;
 }
 
-int encode_speed_hex(int tenths_mph, char* out, int out_size) {
+std::string encode_speed_hex(int tenths_mph) {
     // Speed wire format: mph * 100, in uppercase hex
     // tenths_mph is in tenths, so multiply by 10 to get hundredths
     int hundredths = tenths_mph * 10;
-    return std::snprintf(out, out_size, "%X", hundredths);
+    std::array<char, 16> buf{};
+    auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), hundredths, 16);
+    std::string result(buf.data(), ptr);
+    // Convert to uppercase
+    for (auto& c : result) {
+        if (c >= 'a' && c <= 'f') c -= 32;
+    }
+    return result;
 }
 
-int decode_speed_hex(const char* hex) {
-    if (!hex || !hex[0]) return -1;
+int decode_speed_hex(std::string_view hex) {
+    if (hex.empty() || hex.size() > 10) return -1;
 
-    char* end = nullptr;
-    long val = std::strtol(hex, &end, 16);
-    if (end == hex || val < 0) return -1;
+    unsigned long val = 0;
+    auto [ptr, ec] = std::from_chars(hex.data(), hex.data() + hex.size(), val, 16);
+    if (ec != std::errc{} || ptr != hex.data() + hex.size()) return -1;
 
     // val is in hundredths of mph, convert to tenths (round)
     return static_cast<int>((val + 5) / 10);

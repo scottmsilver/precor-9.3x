@@ -8,10 +8,12 @@
 #pragma once
 
 #include <cstdint>
-#include <cstring>
+#include <span>
+#include <string_view>
 #include <vector>
 #include <deque>
 #include <mutex>
+#include <algorithm>
 #include <string>
 #include "gpio_port.h"
 
@@ -44,26 +46,28 @@ struct MockGpioPort {
     std::deque<std::vector<uint8_t>> pin_inject_data[64];
 
     // Legacy: inject data that any serial_read call can consume
-    void inject_serial_data(const uint8_t* data, int len) {
+    void inject_serial_data(std::span<const uint8_t> data) {
         std::lock_guard<std::mutex> lk(inject_mu);
-        inject_data.emplace_back(data, data + len);
+        inject_data.emplace_back(data.begin(), data.end());
     }
 
-    void inject_serial_data(const char* str) {
-        inject_serial_data(reinterpret_cast<const uint8_t*>(str),
-                           static_cast<int>(std::strlen(str)));
+    void inject_serial_data(std::string_view str) {
+        // reinterpret_cast: char -> uint8_t aliasing (standard-allowed)
+        inject_serial_data(std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(str.data()), str.size()));
     }
 
     // Per-pin: inject data only readable by serial_read(pin, ...)
-    void inject_serial_data_pin(int pin, const uint8_t* data, int len) {
+    void inject_serial_data_pin(int pin, std::span<const uint8_t> data) {
         std::lock_guard<std::mutex> lk(inject_mu);
         if (pin >= 0 && pin < 64)
-            pin_inject_data[pin].emplace_back(data, data + len);
+            pin_inject_data[pin].emplace_back(data.begin(), data.end());
     }
 
-    void inject_serial_data_pin(int pin, const char* str) {
-        inject_serial_data_pin(pin, reinterpret_cast<const uint8_t*>(str),
-                               static_cast<int>(std::strlen(str)));
+    void inject_serial_data_pin(int pin, std::string_view str) {
+        // reinterpret_cast: char -> uint8_t aliasing (standard-allowed)
+        inject_serial_data_pin(pin, std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(str.data()), str.size()));
     }
 
     // --- Wave write recording ---
@@ -102,14 +106,16 @@ struct MockGpioPort {
         if (pin >= 0 && pin < 64) pins[pin].serial_invert = invert;
     }
 
+    // serial_read: pigpio C API boundary — takes void*, returns data
     int serial_read(int pin, void* buf, int bufsize) {
         std::lock_guard<std::mutex> lk(inject_mu);
+        auto* dst = static_cast<uint8_t*>(buf);
         // Check per-pin queue first
         if (pin >= 0 && pin < 64 && !pin_inject_data[pin].empty()) {
             auto& front = pin_inject_data[pin].front();
             int n = static_cast<int>(front.size());
             if (n > bufsize) n = bufsize;
-            std::memcpy(buf, front.data(), n);
+            std::copy_n(front.data(), n, dst);
             pin_inject_data[pin].pop_front();
             return n;
         }
@@ -118,7 +124,7 @@ struct MockGpioPort {
         auto& front = inject_data.front();
         int n = static_cast<int>(front.size());
         if (n > bufsize) n = bufsize;
-        std::memcpy(buf, front.data(), n);
+        std::copy_n(front.data(), n, dst);
         inject_data.pop_front();
         return n;
     }
@@ -161,7 +167,7 @@ struct MockGpioPort {
             // Skip start bit (pulse i), decode 8 data bits (i+1..i+8)
             uint8_t byte_val = 0;
             for (int bit = 0; bit < 8; bit++) {
-                auto& p = pending_pulses[i + 1 + bit];
+                auto& p = pending_pulses.at(static_cast<size_t>(i + 1 + bit));
                 // Inverted: gpioOff means "1" (LOW = 1)
                 if (p.gpioOff) byte_val |= (1u << bit);
             }

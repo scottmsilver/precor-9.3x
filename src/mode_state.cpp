@@ -151,16 +151,16 @@ TransitionResult ModeStateMachine::set_incline(int val) {
 }
 
 TransitionResult ModeStateMachine::auto_proxy_on_console_change(
-    const char* key, const char* old_val, const char* new_val)
+    std::string_view key, std::string_view old_val, std::string_view new_val)
 {
     TransitionResult result{};
 
-    if (!old_val[0] || std::strcmp(old_val, new_val) == 0) {
+    if (old_val.empty() || old_val == new_val) {
         return result;  // no change or first value
     }
 
     // Only trigger for hmph and inc keys
-    if (std::strcmp(key, "hmph") != 0 && std::strcmp(key, "inc") != 0) {
+    if (key != "hmph" && key != "inc") {
         return result;
     }
 
@@ -188,6 +188,17 @@ void ModeStateMachine::safety_timeout_reset() {
     speed_raw_ = 0;
     incline_ = 0;
     update_snap_locked();
+}
+
+void ModeStateMachine::watchdog_reset_to_proxy() {
+    std::lock_guard<std::mutex> lk(mu_);
+    speed_tenths_ = 0;
+    speed_raw_ = 0;
+    incline_ = 0;
+    mode_ = Mode::Proxy;
+    update_snap_locked();
+    // No emulate callback — emulate thread will see is_emulating()==false
+    // and exit its loop naturally. The controller's stop() joins it later.
 }
 
 void ModeStateMachine::add_console_bytes(uint32_t n) {

@@ -8,21 +8,24 @@
 
 #pragma once
 
-#include <cstring>
-#include <cstdio>
+#include <string>
+#include <string_view>
+#include <array>
 #include <mutex>
+#include <algorithm>
 
 template <int Size = 2048, int MsgSize = 256>
 class RingBuffer {
 public:
-    RingBuffer() {
-        std::memset(msgs_, 0, sizeof(msgs_));
-    }
+    RingBuffer() = default;
 
     // Push a message into the ring. Thread-safe.
-    void push(const char* msg) {
+    void push(std::string_view msg) {
         std::lock_guard<std::mutex> lk(mu_);
-        std::snprintf(msgs_[head_], MsgSize, "%s", msg);
+        auto& slot = msgs_.at(head_);
+        auto copy_len = std::min(static_cast<int>(msg.size()), MsgSize - 1);
+        msg.copy(slot.data(), copy_len);
+        slot.at(copy_len) = '\0';
         head_ = (head_ + 1) % Size;
         count_++;
     }
@@ -40,13 +43,15 @@ public:
 
     // Access a message by ring index (caller must hold no lock; message
     // content may be stale if ring wraps — acceptable for best-effort IPC)
-    const char* at(int idx) const { return msgs_[idx % Size]; }
+    std::string_view at(int idx) const {
+        return msgs_.at(idx % Size).data();
+    }
 
     static constexpr int size() { return Size; }
     static constexpr int msg_size() { return MsgSize; }
 
 private:
-    char msgs_[Size][MsgSize]{};
+    std::array<std::array<char, MsgSize>, Size> msgs_{};
     int head_ = 0;
     unsigned int count_ = 0;
     mutable std::mutex mu_;

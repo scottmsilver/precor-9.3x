@@ -9,6 +9,9 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 
 // --- Inbound commands (Python -> C++) ---
 
@@ -18,6 +21,7 @@ enum class CmdType : uint8_t {
     Emulate,
     Proxy,
     Status,
+    Heartbeat,
     Quit,
     Unknown
 };
@@ -29,19 +33,20 @@ struct IpcCommand {
     bool bool_value = false;    // emulate/proxy enabled
 };
 
+static constexpr size_t MAX_IPC_COMMAND_LEN = 1024;
+
 /*
  * Parse a JSON command string into a typed IpcCommand.
- * Uses RapidJSON in-situ parsing (modifies input buffer).
- * Returns true if a valid command was parsed.
+ * Returns the parsed command, or std::nullopt on failure.
  */
-bool parse_command(char* json, int len, IpcCommand* out);
+std::optional<IpcCommand> parse_command(std::string_view json);
 
 // --- Outbound events (C++ -> Python) ---
 
 struct KvEvent {
-    const char* source;  // "console", "motor", or "emulate"
-    const char* key;
-    const char* value;
+    std::string_view source;  // "console", "motor", or "emulate"
+    std::string_view key;
+    std::string_view value;
     double ts;
 };
 
@@ -55,19 +60,8 @@ struct StatusEvent {
 };
 
 /*
- * Build a JSON KV event string.
- * Returns the number of bytes written (including trailing \n).
+ * Build JSON event strings into a std::string.
  */
-int build_kv_event(const KvEvent& ev, char* out, int out_len);
-
-/*
- * Build a JSON status event string.
- * Returns the number of bytes written (including trailing \n).
- */
-int build_status_event(const StatusEvent& ev, char* out, int out_len);
-
-/*
- * Build an error event string.
- * Returns the number of bytes written (including trailing \n).
- */
-int build_error_event(const char* msg, char* out, int out_len);
+std::string build_kv_event(const KvEvent& ev);
+std::string build_status_event(const StatusEvent& ev);
+std::string build_error_event(std::string_view msg);

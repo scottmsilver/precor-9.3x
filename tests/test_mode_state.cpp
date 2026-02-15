@@ -263,6 +263,107 @@ TEST_CASE("safety_timeout_reset zeros speed and incline") {
     CHECK(mode.incline() == 0);
 }
 
+// ── Watchdog reset to proxy ──────────────────────────────────────────
+
+TEST_CASE("watchdog_reset_to_proxy zeros speed/incline and returns to proxy") {
+    ModeStateMachine mode;
+    mode.set_emulate_callback([](bool) {});
+
+    // Set up: emulating at speed 50 tenths, incline 7
+    mode.request_emulate(true);
+    mode.set_speed(50);
+    mode.set_incline(7);
+
+    CHECK(mode.is_emulating() == true);
+    CHECK(mode.speed_tenths() == 50);
+    CHECK(mode.incline() == 7);
+
+    // Watchdog fires
+    mode.watchdog_reset_to_proxy();
+
+    // Belt stopped: speed and incline zeroed
+    CHECK(mode.speed_tenths() == 0);
+    CHECK(mode.incline() == 0);
+
+    // Mode switched to proxy (console regains control)
+    CHECK(mode.is_proxy() == true);
+    CHECK(mode.is_emulating() == false);
+
+    auto snap = mode.snapshot();
+    CHECK(snap.mode == Mode::Proxy);
+    CHECK(snap.speed_tenths == 0);
+    CHECK(snap.speed_raw == 0);
+    CHECK(snap.incline == 0);
+}
+
+TEST_CASE("watchdog_reset_to_proxy does NOT fire emulate callback") {
+    ModeStateMachine mode;
+    int callback_count = 0;
+    mode.set_emulate_callback([&](bool) { callback_count++; });
+
+    mode.request_emulate(true);
+    CHECK(callback_count == 1);  // start callback
+
+    // Watchdog fires — must NOT fire stop callback
+    // (avoids double thread::join between IPC thread and main thread)
+    mode.watchdog_reset_to_proxy();
+    CHECK(callback_count == 1);  // still 1 — no stop callback fired
+
+    CHECK(mode.is_proxy() == true);
+    CHECK(mode.is_emulating() == false);
+}
+
+TEST_CASE("watchdog_reset_to_proxy is safe when already in proxy") {
+    ModeStateMachine mode;
+    int callback_count = 0;
+    mode.set_emulate_callback([&](bool) { callback_count++; });
+
+    // Already in proxy mode (default), watchdog fires anyway
+    CHECK(mode.is_proxy() == true);
+    mode.watchdog_reset_to_proxy();
+
+    // No crash, no callback, still in proxy
+    CHECK(callback_count == 0);
+    CHECK(mode.is_proxy() == true);
+    CHECK(mode.speed_tenths() == 0);
+}
+
+TEST_CASE("watchdog_reset_to_proxy is safe when in idle mode") {
+    ModeStateMachine mode;
+    mode.set_emulate_callback([](bool) {});
+
+    // Put in idle mode
+    mode.request_proxy(false);
+    CHECK(mode.is_proxy() == false);
+    CHECK(mode.is_emulating() == false);
+
+    mode.watchdog_reset_to_proxy();
+
+    // Switched to proxy (safe default), no crash
+    CHECK(mode.is_proxy() == true);
+}
+
+TEST_CASE("emulate can be re-enabled after watchdog reset") {
+    ModeStateMachine mode;
+    bool emulate_started = false;
+    mode.set_emulate_callback([&](bool start) {
+        if (start) emulate_started = true;
+    });
+
+    // Emulate → watchdog reset → emulate again
+    mode.request_emulate(true);
+    CHECK(emulate_started == true);
+    emulate_started = false;
+
+    mode.watchdog_reset_to_proxy();
+    CHECK(mode.is_proxy() == true);
+
+    // Re-enable emulate — should work normally
+    mode.request_emulate(true);
+    CHECK(emulate_started == true);
+    CHECK(mode.is_emulating() == true);
+}
+
 // ── Byte counters ───────────────────────────────────────────────────
 
 TEST_CASE("byte counters") {

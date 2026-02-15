@@ -4,7 +4,6 @@
 
 #include "ipc_server.h"
 #include <cstdio>
-#include <cstring>
 #include <cerrno>
 #include <unistd.h>
 #include <sys/socket.h>
@@ -12,6 +11,7 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <algorithm>
 
 IpcServer::IpcServer(RingBuffer<>& ring) : ring_(ring) {}
 
@@ -30,7 +30,11 @@ bool IpcServer::create() {
 
     struct sockaddr_un addr{};
     addr.sun_family = AF_UNIX;
-    std::strncpy(addr.sun_path, SOCK_PATH, sizeof(addr.sun_path) - 1);
+    // sockaddr_un.sun_path is a C array — this is the POSIX socket boundary
+    std::string_view path(SOCK_PATH);
+    auto copy_len = std::min(path.size(), sizeof(addr.sun_path) - 1);
+    path.copy(addr.sun_path, copy_len);
+    addr.sun_path[copy_len] = '\0';
 
     if (bind(server_fd_, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
         std::perror("bind");
@@ -59,9 +63,8 @@ void IpcServer::accept_client() {
     if (cfd < 0) return;
 
     if (num_clients_ >= MAX_CLIENTS) {
-        char errbuf[256];
-        int errlen = build_error_event("too many clients", errbuf, sizeof(errbuf));
-        ssize_t wr = write(cfd, errbuf, errlen);
+        auto errmsg = build_error_event("too many clients");
+        ssize_t wr = write(cfd, errmsg.data(), errmsg.size());
         (void)wr;  // best-effort error message
         close(cfd);
         return;
@@ -70,7 +73,7 @@ void IpcServer::accept_client() {
     int flags = fcntl(cfd, F_GETFL, 0);
     fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
 
-    Client& c = clients_[num_clients_];
+    auto& c = clients_.at(num_clients_);
     c.fd = cfd;
     c.buf_len = 0;
     auto snap = ring_.snapshot();
@@ -81,22 +84,28 @@ void IpcServer::accept_client() {
 }
 
 void IpcServer::remove_client(int idx) {
-    close(clients_[idx].fd);
+    std::fprintf(stderr, "[ipc] client removed (fd=%d, remaining=%d)\n",
+                 clients_.at(idx).fd, num_clients_ - 1);
+    close(clients_.at(idx).fd);
     for (int i = idx; i < num_clients_ - 1; i++) {
-        clients_[i] = clients_[i + 1];
+        clients_.at(i) = clients_.at(i + 1);
     }
     num_clients_--;
+
+    if (disconnect_cb_) {
+        disconnect_cb_(num_clients_);
+    }
 }
 
 void IpcServer::read_client(int idx) {
-    Client& c = clients_[idx];
+    auto& c = clients_.at(idx);
     int space = CMD_BUF_SIZE - c.buf_len - 1;
     if (space <= 0) {
         c.buf_len = 0;
         space = CMD_BUF_SIZE - 1;
     }
 
-    ssize_t n = read(c.fd, c.buf + c.buf_len, space);
+    ssize_t n = read(c.fd, c.buf.data() + c.buf_len, space);
     if (n <= 0) {
         std::fprintf(stderr, "[ipc] client disconnected (fd=%d)\n", c.fd);
         remove_client(idx);
@@ -104,31 +113,32 @@ void IpcServer::read_client(int idx) {
     }
 
     c.buf_len += static_cast<int>(n);
-    c.buf[c.buf_len] = '\0';
+    c.buf.at(c.buf_len) = '\0';
 
     // Process complete newline-delimited JSON commands
-    char* start = c.buf;
-    char* nl;
-    while ((nl = std::strchr(start, '\n')) != nullptr) {
-        *nl = '\0';
-        int line_len = static_cast<int>(nl - start);
-        if (line_len > 0 && cmd_cb_) {
-            IpcCommand cmd;
-            // Make a mutable copy for in-situ parsing
-            char line_copy[CMD_BUF_SIZE];
-            std::strncpy(line_copy, start, sizeof(line_copy) - 1);
-            line_copy[sizeof(line_copy) - 1] = '\0';
-            if (parse_command(line_copy, line_len, &cmd)) {
-                cmd_cb_(cmd);
+    std::string_view buf_view(c.buf.data(), c.buf_len);
+    size_t processed = 0;
+
+    while (true) {
+        auto nl_pos = buf_view.find('\n', processed);
+        if (nl_pos == std::string_view::npos) break;
+
+        auto line = buf_view.substr(processed, nl_pos - processed);
+        processed = nl_pos + 1;
+
+        if (!line.empty() && cmd_cb_) {
+            if (auto cmd = parse_command(line)) {
+                cmd_cb_(*cmd);
             }
         }
-        start = nl + 1;
     }
 
-    // Shift unprocessed data to front
-    int remaining = c.buf_len - static_cast<int>(start - c.buf);
-    if (remaining > 0 && start != c.buf) {
-        std::memmove(c.buf, start, remaining);
+    // Shift unprocessed data to front (dst < src, std::copy is safe)
+    int remaining = c.buf_len - static_cast<int>(processed);
+    if (remaining > 0 && processed > 0) {
+        std::copy(c.buf.data() + processed,
+                  c.buf.data() + processed + remaining,
+                  c.buf.data());
     }
     c.buf_len = remaining;
 }
@@ -140,7 +150,7 @@ void IpcServer::flush_ring_to_clients() {
     constexpr int RING_SZ = RingBuffer<>::size();
 
     for (int ci = 0; ci < num_clients_; ) {
-        Client& c = clients_[ci];
+        auto& c = clients_.at(ci);
 
         unsigned int pending = total - c.ring_cursor;
         if (pending == 0) { ci++; continue; }
@@ -154,10 +164,9 @@ void IpcServer::flush_ring_to_clients() {
 
         for (unsigned int i = 0; i < pending && !failed; i++) {
             int ri = (start_idx + static_cast<int>(i)) % RING_SZ;
-            const char* msg = ring_.at(ri);
-            int msg_len = static_cast<int>(std::strlen(msg));
-            if (msg_len > 0) {
-                ssize_t w = write(c.fd, msg, msg_len);
+            auto msg = ring_.at(ri);
+            if (!msg.empty()) {
+                ssize_t w = write(c.fd, msg.data(), msg.size());
                 if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
                     break;
                 } else if (w <= 0) {
@@ -185,8 +194,8 @@ void IpcServer::poll() {
     int maxfd = server_fd_;
 
     for (int i = 0; i < num_clients_; i++) {
-        FD_SET(clients_[i].fd, &rfds);
-        if (clients_[i].fd > maxfd) maxfd = clients_[i].fd;
+        FD_SET(clients_.at(i).fd, &rfds);
+        if (clients_.at(i).fd > maxfd) maxfd = clients_.at(i).fd;
     }
 
     struct timeval tv = { 0, 20000 };  // 20ms poll interval
@@ -198,7 +207,7 @@ void IpcServer::poll() {
         }
 
         for (int i = 0; i < num_clients_; ) {
-            if (FD_ISSET(clients_[i].fd, &rfds)) {
+            if (FD_ISSET(clients_.at(i).fd, &rfds)) {
                 int prev = num_clients_;
                 read_client(i);
                 if (num_clients_ < prev) {
@@ -212,13 +221,13 @@ void IpcServer::poll() {
     flush_ring_to_clients();
 }
 
-void IpcServer::push_to_ring(const char* msg) {
+void IpcServer::push_to_ring(std::string_view msg) {
     ring_.push(msg);
 }
 
 void IpcServer::shutdown() {
     for (int i = 0; i < num_clients_; i++) {
-        close(clients_[i].fd);
+        close(clients_.at(i).fd);
     }
     num_clients_ = 0;
 

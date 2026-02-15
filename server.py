@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -68,14 +69,38 @@ async def lifespan(application):
 
     client.on_message = on_message
 
+    def on_disconnect():
+        state["treadmill_connected"] = False
+        log.warning("treadmill_io disconnected")
+        # Push disconnect event to WebSocket clients
+        push_msg({"type": "connection", "connected": False})
+        # Auto-pause program if running
+        if prog and prog.running and not prog.paused:
+            asyncio.run_coroutine_threadsafe(prog.toggle_pause(), loop)
+
+    def on_reconnect():
+        state["treadmill_connected"] = True
+        log.info("treadmill_io reconnected")
+        push_msg({"type": "connection", "connected": True})
+        # Request fresh status from C binary
+        try:
+            client.request_status()
+        except ConnectionError:
+            pass
+
+    client.on_disconnect = on_disconnect
+    client.on_reconnect = on_reconnect
+
     try:
         client.connect()
+        state["treadmill_connected"] = True
         log.info("Connected to treadmill_io")
     except Exception as e:
         log.error(f"Cannot connect to treadmill_io: {e}")
         raise RuntimeError("treadmill_io not running. Start: sudo ./treadmill_io")
 
     broadcast_task = asyncio.create_task(broadcast_loop())
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
 
     log.info("Server started — open http://<host>:8000 in browser")
 
@@ -84,6 +109,7 @@ async def lifespan(application):
     # Shutdown
     state["running"] = False
     broadcast_task.cancel()
+    heartbeat_task.cancel()
     if prog and prog.running:
         await prog.stop()
     client.close()
@@ -105,6 +131,7 @@ state = {
     "emulate": False,
     "emu_speed": 0,  # tenths of mph
     "emu_incline": 0,
+    "treadmill_connected": False,
 }
 
 latest = {
@@ -225,11 +252,25 @@ def build_status():
         "speed": speed,
         "incline": incline,
         "motor": latest["last_motor"],
+        "treadmill_connected": state["treadmill_connected"],
     }
 
 
 async def broadcast_status():
     await manager.broadcast(build_status())
+
+
+async def _heartbeat_loop():
+    """Send heartbeats to treadmill_io to keep the watchdog alive."""
+    while state["running"]:
+        try:
+            if state["treadmill_connected"]:
+                client.heartbeat()
+        except ConnectionError:
+            pass
+        except Exception:
+            pass
+        await asyncio.sleep(1)
 
 
 async def broadcast_loop():
@@ -290,7 +331,10 @@ async def _apply_speed(mph):
     if mph > 0:
         state["emulate"] = True
         state["proxy"] = False
-    client.set_speed(mph)
+    try:
+        client.set_speed(mph)
+    except ConnectionError:
+        log.warning("Cannot set speed: treadmill_io disconnected")
     await broadcast_status()
 
 
@@ -301,7 +345,10 @@ async def _apply_incline(inc):
     if inc > 0:
         state["emulate"] = True
         state["proxy"] = False
-    client.set_incline(inc)
+    try:
+        client.set_incline(inc)
+    except ConnectionError:
+        log.warning("Cannot set incline: treadmill_io disconnected")
     await broadcast_status()
 
 
@@ -311,8 +358,11 @@ async def _apply_stop():
         await prog.stop()
     state["emu_speed"] = 0
     state["emu_incline"] = 0
-    client.set_speed(0)
-    client.set_incline(0)
+    try:
+        client.set_speed(0)
+        client.set_incline(0)
+    except ConnectionError:
+        log.warning("Cannot send stop: treadmill_io disconnected")
     await broadcast_status()
 
 
@@ -326,38 +376,52 @@ async def get_status():
 
 @app.post("/api/speed")
 async def set_speed(req: SpeedRequest):
+    if not state["treadmill_connected"]:
+        return JSONResponse({"error": "treadmill_io disconnected"}, status_code=503)
     await _apply_speed(req.value)
     return build_status()
 
 
 @app.post("/api/incline")
 async def set_incline(req: InclineRequest):
+    if not state["treadmill_connected"]:
+        return JSONResponse({"error": "treadmill_io disconnected"}, status_code=503)
     await _apply_incline(req.value)
     return build_status()
 
 
 @app.post("/api/emulate")
 async def set_emulate(req: EmulateRequest):
-    if req.enabled:
-        state["proxy"] = False
-        state["emulate"] = True
-        client.set_emulate(True)
-    else:
-        state["emulate"] = False
-        client.set_emulate(False)
+    if not state["treadmill_connected"]:
+        return JSONResponse({"error": "treadmill_io disconnected"}, status_code=503)
+    try:
+        if req.enabled:
+            state["proxy"] = False
+            state["emulate"] = True
+            client.set_emulate(True)
+        else:
+            state["emulate"] = False
+            client.set_emulate(False)
+    except ConnectionError:
+        return JSONResponse({"error": "treadmill_io disconnected"}, status_code=503)
     await broadcast_status()
     return build_status()
 
 
 @app.post("/api/proxy")
 async def set_proxy(req: ProxyRequest):
-    if req.enabled:
-        state["emulate"] = False
-        state["proxy"] = True
-        client.set_proxy(True)
-    else:
-        state["proxy"] = False
-        client.set_proxy(False)
+    if not state["treadmill_connected"]:
+        return JSONResponse({"error": "treadmill_io disconnected"}, status_code=503)
+    try:
+        if req.enabled:
+            state["emulate"] = False
+            state["proxy"] = True
+            client.set_proxy(True)
+        else:
+            state["proxy"] = False
+            client.set_proxy(False)
+    except ConnectionError:
+        return JSONResponse({"error": "treadmill_io disconnected"}, status_code=503)
     await broadcast_status()
     return build_status()
 
@@ -560,8 +624,11 @@ def _prog_on_change():
     async def on_change(speed, incline):
         state["emu_speed"] = max(0, min(int(speed * 10), MAX_SPEED_TENTHS))
         state["emu_incline"] = max(0, min(int(incline), MAX_INCLINE))
-        client.set_speed(speed)
-        client.set_incline(incline)
+        try:
+            client.set_speed(speed)
+            client.set_incline(incline)
+        except ConnectionError:
+            log.warning("Cannot apply program change: treadmill_io disconnected")
         await broadcast_status()
 
     return on_change

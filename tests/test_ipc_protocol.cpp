@@ -6,156 +6,146 @@
 #define DOCTEST_CONFIG_NO_EXCEPTIONS
 #include <doctest.h>
 #include "ipc_protocol.h"
-#include <cstring>
-#include <cstdio>
-
-// Helper: parse a command from a string literal (copies to mutable buffer)
-static bool parse(const char* json, IpcCommand* cmd) {
-    char buf[1024];
-    int len = std::snprintf(buf, sizeof(buf), "%s", json);
-    return parse_command(buf, len, cmd);
-}
+#include <string>
 
 // ── Command parsing tests ───────────────────────────────────────────
 
 TEST_CASE("parse speed command") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"speed\",\"value\":1.2}", &cmd));
-    CHECK(cmd.type == CmdType::Speed);
-    CHECK(cmd.float_value == doctest::Approx(1.2));
+    auto cmd = parse_command("{\"cmd\":\"speed\",\"value\":1.2}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Speed);
+    CHECK(cmd->float_value == doctest::Approx(1.2));
 }
 
 TEST_CASE("parse speed command with int value") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"speed\",\"value\":5}", &cmd));
-    CHECK(cmd.type == CmdType::Speed);
-    CHECK(cmd.float_value == doctest::Approx(5.0));
+    auto cmd = parse_command("{\"cmd\":\"speed\",\"value\":5}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Speed);
+    CHECK(cmd->float_value == doctest::Approx(5.0));
 }
 
 TEST_CASE("parse incline command") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"incline\",\"value\":5}", &cmd));
-    CHECK(cmd.type == CmdType::Incline);
-    CHECK(cmd.int_value == 5);
+    auto cmd = parse_command("{\"cmd\":\"incline\",\"value\":5}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Incline);
+    CHECK(cmd->int_value == 5);
 }
 
 TEST_CASE("parse incline command with float value truncates") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"incline\",\"value\":3.7}", &cmd));
-    CHECK(cmd.type == CmdType::Incline);
-    CHECK(cmd.int_value == 3);  // truncated (matches C sscanf %d behavior)
+    auto cmd = parse_command("{\"cmd\":\"incline\",\"value\":3.7}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Incline);
+    CHECK(cmd->int_value == 3);  // truncated
 }
 
 TEST_CASE("parse emulate enable") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"emulate\",\"enabled\":true}", &cmd));
-    CHECK(cmd.type == CmdType::Emulate);
-    CHECK(cmd.bool_value == true);
+    auto cmd = parse_command("{\"cmd\":\"emulate\",\"enabled\":true}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Emulate);
+    CHECK(cmd->bool_value == true);
 }
 
 TEST_CASE("parse emulate disable") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"emulate\",\"enabled\":false}", &cmd));
-    CHECK(cmd.type == CmdType::Emulate);
-    CHECK(cmd.bool_value == false);
+    auto cmd = parse_command("{\"cmd\":\"emulate\",\"enabled\":false}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Emulate);
+    CHECK(cmd->bool_value == false);
 }
 
 TEST_CASE("parse proxy enable") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"proxy\",\"enabled\":true}", &cmd));
-    CHECK(cmd.type == CmdType::Proxy);
-    CHECK(cmd.bool_value == true);
+    auto cmd = parse_command("{\"cmd\":\"proxy\",\"enabled\":true}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Proxy);
+    CHECK(cmd->bool_value == true);
 }
 
 TEST_CASE("parse proxy disable") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"proxy\",\"enabled\":false}", &cmd));
-    CHECK(cmd.type == CmdType::Proxy);
-    CHECK(cmd.bool_value == false);
+    auto cmd = parse_command("{\"cmd\":\"proxy\",\"enabled\":false}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Proxy);
+    CHECK(cmd->bool_value == false);
 }
 
 TEST_CASE("parse status command") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"status\"}", &cmd));
-    CHECK(cmd.type == CmdType::Status);
+    auto cmd = parse_command("{\"cmd\":\"status\"}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Status);
+}
+
+TEST_CASE("parse heartbeat command") {
+    auto cmd = parse_command("{\"cmd\":\"heartbeat\"}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Heartbeat);
 }
 
 TEST_CASE("parse quit command") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"quit\"}", &cmd));
-    CHECK(cmd.type == CmdType::Quit);
+    auto cmd = parse_command("{\"cmd\":\"quit\"}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Quit);
 }
 
 TEST_CASE("parse unknown command") {
-    IpcCommand cmd;
-    CHECK_FALSE(parse("{\"cmd\":\"foobar\"}", &cmd));
+    CHECK_FALSE(parse_command("{\"cmd\":\"foobar\"}").has_value());
 }
 
 TEST_CASE("parse missing cmd field") {
-    IpcCommand cmd;
-    CHECK_FALSE(parse("{\"value\":123}", &cmd));
+    CHECK_FALSE(parse_command("{\"value\":123}").has_value());
 }
 
 TEST_CASE("parse empty object") {
-    IpcCommand cmd;
-    CHECK_FALSE(parse("{}", &cmd));
+    CHECK_FALSE(parse_command("{}").has_value());
 }
 
 TEST_CASE("parse malformed JSON") {
-    IpcCommand cmd;
-    CHECK_FALSE(parse("not json at all", &cmd));
+    CHECK_FALSE(parse_command("not json at all").has_value());
 }
 
 TEST_CASE("parse empty string") {
-    IpcCommand cmd;
-    CHECK_FALSE(parse("", &cmd));
+    CHECK_FALSE(parse_command("").has_value());
 }
 
 TEST_CASE("parse speed without value field") {
-    IpcCommand cmd;
-    CHECK(parse("{\"cmd\":\"speed\"}", &cmd));
-    CHECK(cmd.type == CmdType::Speed);
-    CHECK(cmd.float_value == doctest::Approx(0.0));
+    auto cmd = parse_command("{\"cmd\":\"speed\"}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Speed);
+    CHECK(cmd->float_value == doctest::Approx(0.0));
 }
 
 // ── Event building tests ────────────────────────────────────────────
 
 TEST_CASE("build KV event") {
-    char buf[512];
     KvEvent ev{"console", "hmph", "78", 1.23};
-    int len = build_kv_event(ev, buf, sizeof(buf));
+    auto result = build_kv_event(ev);
 
-    CHECK(len > 0);
-    CHECK(std::strstr(buf, "\"type\":\"kv\"") != nullptr);
-    CHECK(std::strstr(buf, "\"source\":\"console\"") != nullptr);
-    CHECK(std::strstr(buf, "\"key\":\"hmph\"") != nullptr);
-    CHECK(std::strstr(buf, "\"value\":\"78\"") != nullptr);
-    CHECK(std::strstr(buf, "\"ts\":") != nullptr);
-    CHECK(buf[len - 1] == '\n');  // newline terminated
+    CHECK(!result.empty());
+    CHECK(result.find("\"type\":\"kv\"") != std::string::npos);
+    CHECK(result.find("\"source\":\"console\"") != std::string::npos);
+    CHECK(result.find("\"key\":\"hmph\"") != std::string::npos);
+    CHECK(result.find("\"value\":\"78\"") != std::string::npos);
+    CHECK(result.find("\"ts\":") != std::string::npos);
+    CHECK(result.back() == '\n');  // newline terminated
 }
 
 TEST_CASE("build status event") {
-    char buf[512];
     StatusEvent ev{true, false, 12, 5, 1234, 567};
-    int len = build_status_event(ev, buf, sizeof(buf));
+    auto result = build_status_event(ev);
 
-    CHECK(len > 0);
-    CHECK(std::strstr(buf, "\"type\":\"status\"") != nullptr);
-    CHECK(std::strstr(buf, "\"proxy\":true") != nullptr);
-    CHECK(std::strstr(buf, "\"emulate\":false") != nullptr);
-    CHECK(std::strstr(buf, "\"emu_speed\":12") != nullptr);
-    CHECK(std::strstr(buf, "\"emu_incline\":5") != nullptr);
-    CHECK(std::strstr(buf, "\"console_bytes\":1234") != nullptr);
-    CHECK(std::strstr(buf, "\"motor_bytes\":567") != nullptr);
-    CHECK(buf[len - 1] == '\n');
+    CHECK(!result.empty());
+    CHECK(result.find("\"type\":\"status\"") != std::string::npos);
+    CHECK(result.find("\"proxy\":true") != std::string::npos);
+    CHECK(result.find("\"emulate\":false") != std::string::npos);
+    CHECK(result.find("\"emu_speed\":12") != std::string::npos);
+    CHECK(result.find("\"emu_incline\":5") != std::string::npos);
+    CHECK(result.find("\"console_bytes\":1234") != std::string::npos);
+    CHECK(result.find("\"motor_bytes\":567") != std::string::npos);
+    CHECK(result.back() == '\n');
 }
 
 TEST_CASE("build error event") {
-    char buf[512];
-    int len = build_error_event("too many clients", buf, sizeof(buf));
+    auto result = build_error_event("too many clients");
 
-    CHECK(len > 0);
-    CHECK(std::strstr(buf, "\"type\":\"error\"") != nullptr);
-    CHECK(std::strstr(buf, "\"msg\":\"too many clients\"") != nullptr);
-    CHECK(buf[len - 1] == '\n');
+    CHECK(!result.empty());
+    CHECK(result.find("\"type\":\"error\"") != std::string::npos);
+    CHECK(result.find("\"msg\":\"too many clients\"") != std::string::npos);
+    CHECK(result.back() == '\n');
 }

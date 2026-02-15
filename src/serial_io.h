@@ -13,7 +13,11 @@
 #pragma once
 
 #include <cstdint>
-#include <cstring>
+#include <span>
+#include <string>
+#include <string_view>
+#include <array>
+#include <algorithm>
 #include <mutex>
 #include <functional>
 #include "kv_protocol.h"
@@ -34,7 +38,7 @@ template <typename Port>
 class SerialReader {
 public:
     using KvCallback = std::function<void(const KvPair&)>;
-    using RawCallback = std::function<void(const uint8_t*, int)>;
+    using RawCallback = std::function<void(std::span<const uint8_t>)>;
 
     SerialReader(Port& port, int gpio_pin)
         : port_(port), pin_(gpio_pin), parse_len_(0) {}
@@ -60,24 +64,26 @@ public:
     // Calls raw callback first, then parses and calls kv callback.
     int poll() {
         uint8_t rawbuf[512];
+        // port_.serial_read takes void* — pigpio C API boundary
         int count = port_.serial_read(pin_, rawbuf, sizeof(rawbuf));
         if (count <= 0) return 0;
 
         // Fire raw callback before parsing (low-latency proxy path)
         if (raw_cb_) {
-            raw_cb_(rawbuf, count);
+            raw_cb_(std::span<const uint8_t>(rawbuf, static_cast<size_t>(count)));
         }
 
         // Append to parse buffer
-        int space = static_cast<int>(sizeof(parsebuf_)) - parse_len_;
+        int space = static_cast<int>(parsebuf_.size()) - parse_len_;
         if (count > space) count = space;
-        std::memcpy(parsebuf_ + parse_len_, rawbuf, count);
+        std::copy_n(rawbuf, count, parsebuf_.data() + parse_len_);
         parse_len_ += count;
 
         // Parse KV pairs
         KvPair pairs[32];
         int consumed = 0;
-        int n = kv_parse(parsebuf_, parse_len_, pairs, 32, &consumed);
+        int n = kv_parse(std::span<const uint8_t>(parsebuf_.data(), static_cast<size_t>(parse_len_)),
+                         pairs, 32, &consumed);
 
         if (kv_cb_) {
             for (int i = 0; i < n; i++) {
@@ -85,9 +91,11 @@ public:
             }
         }
 
-        // Shift unconsumed bytes to front
+        // Shift unconsumed bytes to front (dst < src, so std::copy is safe)
         if (consumed > 0 && consumed < parse_len_) {
-            std::memmove(parsebuf_, parsebuf_ + consumed, parse_len_ - consumed);
+            std::copy(parsebuf_.data() + consumed,
+                      parsebuf_.data() + parse_len_,
+                      parsebuf_.data());
         }
         parse_len_ -= consumed;
 
@@ -97,7 +105,7 @@ public:
 private:
     Port& port_;
     int pin_;
-    uint8_t parsebuf_[4096]{};
+    std::array<uint8_t, 4096> parsebuf_{};
     int parse_len_;
     KvCallback kv_cb_;
     RawCallback raw_cb_;
@@ -107,21 +115,18 @@ private:
 template <typename Port>
 class SerialWriter {
 public:
-    // gpioPulse_t type — use the one from PigpioPort or MockGpioPort
-    // Both define compatible structures via pigpio.h or gpio_mock.h
-
     SerialWriter(Port& port, int gpio_pin)
         : port_(port), pin_(gpio_pin) {}
 
     // Write bytes using inverted RS-485 DMA waveforms.
     // Thread-safe: serialized by internal mutex.
-    void write_bytes(const uint8_t* data, int len) {
-        if (len <= 0) return;
+    void write_bytes(std::span<const uint8_t> data) {
+        if (data.empty()) return;
 
+        int len = static_cast<int>(data.size());
         uint32_t mask = 1u << pin_;
 
-        // Use gpioPulse_t from whatever Port provides
-        // Both PigpioPort (via pigpio.h) and MockGpioPort define this
+        // VLA for pulse array — hot path, no heap allocation
         gpioPulse_t pulses[len * 10 + 1];
         int np = 0;
 
@@ -172,10 +177,11 @@ public:
         }
     }
 
-    void write_kv(const char* key, const char* value) {
-        char cmd[128];
-        int cmd_len = kv_build(cmd, sizeof(cmd), key, value);
-        write_bytes(reinterpret_cast<const uint8_t*>(cmd), cmd_len);
+    void write_kv(std::string_view key, std::string_view value = {}) {
+        auto cmd = kv_build(key, value);
+        // reinterpret_cast: char -> uint8_t aliasing (standard-allowed wire boundary)
+        write_bytes(std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t*>(cmd.data()), cmd.size()));
     }
 
 private:

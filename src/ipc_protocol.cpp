@@ -11,92 +11,103 @@
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
 #include <rapidjson/stringbuffer.h>
-#include <cstring>
-#include <cstdio>
 
-bool parse_command(char* json, int /*len*/, IpcCommand* out) {
-    *out = IpcCommand{};
+std::optional<IpcCommand> parse_command(std::string_view json) {
+    if (json.empty() || json.size() > MAX_IPC_COMMAND_LEN) return std::nullopt;
+
+    // RapidJSON in-situ needs a mutable, null-terminated buffer
+    std::string buf(json);
 
     rapidjson::Document doc;
-    // In-situ parsing: modifies the input buffer (zero allocation)
-    doc.ParseInsitu(json);
-    if (doc.HasParseError() || !doc.IsObject()) return false;
+    doc.ParseInsitu(buf.data());
+    if (doc.HasParseError() || !doc.IsObject()) return std::nullopt;
 
     // Extract "cmd" field
     auto cmd_it = doc.FindMember("cmd");
-    if (cmd_it == doc.MemberEnd() || !cmd_it->value.IsString()) return false;
+    if (cmd_it == doc.MemberEnd() || !cmd_it->value.IsString()) return std::nullopt;
 
-    const char* cmd = cmd_it->value.GetString();
+    std::string_view cmd(cmd_it->value.GetString(), cmd_it->value.GetStringLength());
 
-    if (std::strcmp(cmd, "speed") == 0) {
-        out->type = CmdType::Speed;
+    IpcCommand out{};
+
+    if (cmd == "speed") {
+        out.type = CmdType::Speed;
         auto val_it = doc.FindMember("value");
         if (val_it != doc.MemberEnd()) {
             if (val_it->value.IsDouble())
-                out->float_value = val_it->value.GetDouble();
+                out.float_value = val_it->value.GetDouble();
             else if (val_it->value.IsInt())
-                out->float_value = static_cast<double>(val_it->value.GetInt());
+                out.float_value = static_cast<double>(val_it->value.GetInt());
             else if (val_it->value.IsUint())
-                out->float_value = static_cast<double>(val_it->value.GetUint());
+                out.float_value = static_cast<double>(val_it->value.GetUint());
         }
-        return true;
+        return out;
     }
-    else if (std::strcmp(cmd, "incline") == 0) {
-        out->type = CmdType::Incline;
+    else if (cmd == "incline") {
+        out.type = CmdType::Incline;
         auto val_it = doc.FindMember("value");
         if (val_it != doc.MemberEnd()) {
             if (val_it->value.IsInt())
-                out->int_value = val_it->value.GetInt();
+                out.int_value = val_it->value.GetInt();
             else if (val_it->value.IsUint())
-                out->int_value = static_cast<int>(val_it->value.GetUint());
+                out.int_value = static_cast<int>(val_it->value.GetUint());
             else if (val_it->value.IsDouble())
-                out->int_value = static_cast<int>(val_it->value.GetDouble());
+                out.int_value = static_cast<int>(val_it->value.GetDouble());
         }
-        return true;
+        return out;
     }
-    else if (std::strcmp(cmd, "emulate") == 0) {
-        out->type = CmdType::Emulate;
+    else if (cmd == "emulate") {
+        out.type = CmdType::Emulate;
         auto val_it = doc.FindMember("enabled");
         if (val_it != doc.MemberEnd() && val_it->value.IsBool())
-            out->bool_value = val_it->value.GetBool();
-        return true;
+            out.bool_value = val_it->value.GetBool();
+        return out;
     }
-    else if (std::strcmp(cmd, "proxy") == 0) {
-        out->type = CmdType::Proxy;
+    else if (cmd == "proxy") {
+        out.type = CmdType::Proxy;
         auto val_it = doc.FindMember("enabled");
         if (val_it != doc.MemberEnd() && val_it->value.IsBool())
-            out->bool_value = val_it->value.GetBool();
-        return true;
+            out.bool_value = val_it->value.GetBool();
+        return out;
     }
-    else if (std::strcmp(cmd, "status") == 0) {
-        out->type = CmdType::Status;
-        return true;
+    else if (cmd == "status") {
+        out.type = CmdType::Status;
+        return out;
     }
-    else if (std::strcmp(cmd, "quit") == 0) {
-        out->type = CmdType::Quit;
-        return true;
+    else if (cmd == "heartbeat") {
+        out.type = CmdType::Heartbeat;
+        return out;
+    }
+    else if (cmd == "quit") {
+        out.type = CmdType::Quit;
+        return out;
     }
 
-    return false;
+    return std::nullopt;
 }
 
-int build_kv_event(const KvEvent& ev, char* out, int out_len) {
+static std::string rj_to_string(rapidjson::StringBuffer& sb) {
+    std::string result(sb.GetString(), sb.GetSize());
+    result += '\n';
+    return result;
+}
+
+std::string build_kv_event(const KvEvent& ev) {
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> w(sb);
 
     w.StartObject();
     w.Key("type"); w.String("kv");
     w.Key("ts"); w.Double(ev.ts);
-    w.Key("source"); w.String(ev.source);
-    w.Key("key"); w.String(ev.key);
-    w.Key("value"); w.String(ev.value);
+    w.Key("source"); w.String(ev.source.data(), static_cast<unsigned>(ev.source.size()));
+    w.Key("key"); w.String(ev.key.data(), static_cast<unsigned>(ev.key.size()));
+    w.Key("value"); w.String(ev.value.data(), static_cast<unsigned>(ev.value.size()));
     w.EndObject();
 
-    int written = std::snprintf(out, out_len, "%s\n", sb.GetString());
-    return written < out_len ? written : out_len - 1;
+    return rj_to_string(sb);
 }
 
-int build_status_event(const StatusEvent& ev, char* out, int out_len) {
+std::string build_status_event(const StatusEvent& ev) {
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> w(sb);
 
@@ -110,19 +121,17 @@ int build_status_event(const StatusEvent& ev, char* out, int out_len) {
     w.Key("motor_bytes"); w.Uint(ev.motor_bytes);
     w.EndObject();
 
-    int written = std::snprintf(out, out_len, "%s\n", sb.GetString());
-    return written < out_len ? written : out_len - 1;
+    return rj_to_string(sb);
 }
 
-int build_error_event(const char* msg, char* out, int out_len) {
+std::string build_error_event(std::string_view msg) {
     rapidjson::StringBuffer sb;
     rapidjson::Writer<rapidjson::StringBuffer> w(sb);
 
     w.StartObject();
     w.Key("type"); w.String("error");
-    w.Key("msg"); w.String(msg);
+    w.Key("msg"); w.String(msg.data(), static_cast<unsigned>(msg.size()));
     w.EndObject();
 
-    int written = std::snprintf(out, out_len, "%s\n", sb.GetString());
-    return written < out_len ? written : out_len - 1;
+    return rj_to_string(sb);
 }

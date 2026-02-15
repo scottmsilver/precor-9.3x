@@ -11,6 +11,9 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <array>
 #include <functional>
 #include "ipc_protocol.h"
 #include "ring_buffer.h"
@@ -22,12 +25,16 @@ constexpr const char* SOCK_PATH = "/tmp/treadmill_io.sock";
 class IpcServer {
 public:
     using CommandCallback = std::function<void(const IpcCommand&)>;
+    using DisconnectCallback = std::function<void(int remaining_clients)>;
 
     IpcServer(RingBuffer<>& ring);
     ~IpcServer();
 
     // Set handler for parsed commands
     void on_command(CommandCallback cb) { cmd_cb_ = std::move(cb); }
+
+    // Set handler for client disconnects
+    void on_client_disconnect(DisconnectCallback cb) { disconnect_cb_ = std::move(cb); }
 
     // Create and bind the server socket. Returns true on success.
     bool create();
@@ -36,8 +43,8 @@ public:
     // Call this in a loop from the IPC thread.
     void poll();
 
-    // Push a status event into the ring (convenience for triggering status updates)
-    void push_to_ring(const char* msg);
+    // Push a message into the ring
+    void push_to_ring(std::string_view msg);
 
     // Cleanup
     void shutdown();
@@ -45,7 +52,7 @@ public:
 private:
     struct Client {
         int fd = -1;
-        char buf[CMD_BUF_SIZE]{};
+        std::array<char, CMD_BUF_SIZE> buf{};
         int buf_len = 0;
         unsigned int ring_cursor = 0;
     };
@@ -57,7 +64,8 @@ private:
 
     RingBuffer<>& ring_;
     int server_fd_ = -1;
-    Client clients_[MAX_CLIENTS]{};
+    std::array<Client, MAX_CLIENTS> clients_{};
     int num_clients_ = 0;
     CommandCallback cmd_cb_;
+    DisconnectCallback disconnect_cb_;
 };

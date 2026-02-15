@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 #include <mutex>
 #include <atomic>
 #include <functional>
@@ -65,12 +66,18 @@ public:
 
     // Called from console read thread when hmph/inc value changes
     // while in emulate mode — switches back to proxy
-    TransitionResult auto_proxy_on_console_change(const char* key,
-                                                   const char* old_val,
-                                                   const char* new_val);
+    TransitionResult auto_proxy_on_console_change(std::string_view key,
+                                                   std::string_view old_val,
+                                                   std::string_view new_val);
 
     // Safety timeout: zeros speed/incline (called from emulate thread)
     void safety_timeout_reset();
+
+    // Watchdog reset: zero speed/incline and exit emulate to proxy.
+    // Does NOT fire the emulate callback — the emulate thread will
+    // exit on its own when it checks is_emulating(). This is safe to
+    // call from any thread (avoids double-join on emulate thread).
+    void watchdog_reset_to_proxy();
 
     // Byte counters (not mode-related but shared state)
     void add_console_bytes(uint32_t n);
