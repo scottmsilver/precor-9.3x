@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import time
 from contextlib import asynccontextmanager
 
@@ -61,10 +62,16 @@ async def lifespan(application):
                 latest["last_console"][key] = value
             push_msg(msg)
         elif msg_type == "status":
+            was_emulating = state["emulate"]
             state["proxy"] = msg.get("proxy", False)
             state["emulate"] = msg.get("emulate", False)
             state["emu_speed"] = msg.get("emu_speed", 0)
             state["emu_incline"] = msg.get("emu_incline", 0)
+            # Detect watchdog / auto-proxy killing emulate while session active
+            if was_emulating and not state["emulate"] and session["active"]:
+                reason = "auto_proxy" if state["proxy"] else "watchdog"
+                _end_session(reason)
+                push_msg(build_session())
             push_msg(msg)
 
     client.on_message = on_message
@@ -72,6 +79,10 @@ async def lifespan(application):
     def on_disconnect():
         state["treadmill_connected"] = False
         log.warning("treadmill_io disconnected")
+        # End active session
+        if session["active"]:
+            _end_session("disconnect")
+            push_msg(build_session())
         # Push disconnect event to WebSocket clients
         push_msg({"type": "connection", "connected": False})
         # Auto-pause program if running
@@ -100,7 +111,8 @@ async def lifespan(application):
         raise RuntimeError("treadmill_io not running. Start: sudo ./treadmill_io")
 
     broadcast_task = asyncio.create_task(broadcast_loop())
-    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    session_tick_task = asyncio.create_task(_session_tick_loop())
+    client.start_heartbeat()
 
     log.info("Server started — open http://<host>:8000 in browser")
 
@@ -109,7 +121,8 @@ async def lifespan(application):
     # Shutdown
     state["running"] = False
     broadcast_task.cancel()
-    heartbeat_task.cancel()
+    session_tick_task.cancel()
+    client.stop_heartbeat()
     if prog and prog.running:
         await prog.stop()
     client.close()
@@ -137,6 +150,19 @@ state = {
 latest = {
     "last_console": {},
     "last_motor": {},
+}
+
+# --- Session state (server-authoritative) ---
+session = {
+    "active": False,
+    "started_at": 0.0,  # monotonic
+    "wall_started_at": "",  # ISO wall clock for display
+    "paused_at": 0.0,  # monotonic when paused, 0 if not paused
+    "total_paused": 0.0,  # accumulated pause seconds
+    "elapsed": 0.0,
+    "distance": 0.0,  # miles
+    "vert_feet": 0.0,
+    "end_reason": None,  # "user_stop" | "watchdog" | "auto_proxy" | "disconnect"
 }
 
 chat_history: list = []
@@ -192,6 +218,92 @@ def _enqueue(msg):
 def push_msg(msg):
     if loop and msg_queue:
         loop.call_soon_threadsafe(_enqueue, msg)
+
+
+# --- Session lifecycle ---
+
+
+def _start_session():
+    """Begin a new workout session. Idempotent if already active."""
+    if session["active"]:
+        return
+    session["active"] = True
+    session["started_at"] = time.monotonic()
+    session["wall_started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    session["paused_at"] = 0.0
+    session["total_paused"] = 0.0
+    session["elapsed"] = 0.0
+    session["distance"] = 0.0
+    session["vert_feet"] = 0.0
+    session["end_reason"] = None
+    log.info("Session started")
+
+
+def _end_session(reason):
+    """End the current workout session with a reason."""
+    if not session["active"]:
+        return
+    # Final tick to capture last elapsed/distance
+    _session_tick_compute()
+    session["active"] = False
+    session["end_reason"] = reason
+    log.info(f"Session ended: {reason}")
+
+
+def _session_tick_compute():
+    """Compute elapsed/distance/vert from monotonic clock and current speed/incline."""
+    if not session["active"]:
+        return
+    now = time.monotonic()
+    if session["paused_at"] > 0:
+        # Paused — don't advance
+        return
+    raw_elapsed = now - session["started_at"] - session["total_paused"]
+    session["elapsed"] = max(0.0, raw_elapsed)
+
+    # Accumulate distance and vert from current speed/incline
+    speed_mph = state["emu_speed"] / 10
+    if speed_mph > 0:
+        miles_per_sec = speed_mph / 3600
+        session["distance"] += miles_per_sec
+        inc = state["emu_incline"]
+        if inc > 0:
+            session["vert_feet"] += miles_per_sec * (inc / 100) * 5280
+
+
+def build_session():
+    """Build session state dict for WebSocket broadcast."""
+    return {
+        "type": "session",
+        "active": session["active"],
+        "elapsed": session["elapsed"],
+        "distance": session["distance"],
+        "vert_feet": session["vert_feet"],
+        "wall_started_at": session["wall_started_at"],
+        "end_reason": session["end_reason"],
+    }
+
+
+async def _session_tick_loop():
+    """1/sec loop: compute session metrics and broadcast to all WS clients."""
+    while state["running"]:
+        if session["active"]:
+            _session_tick_compute()
+            await manager.broadcast(build_session())
+        await asyncio.sleep(1)
+
+
+def _pause_session():
+    """Pause session timer (for program pauses)."""
+    if session["active"] and session["paused_at"] == 0:
+        session["paused_at"] = time.monotonic()
+
+
+def _resume_session():
+    """Resume session timer after pause."""
+    if session["active"] and session["paused_at"] > 0:
+        session["total_paused"] += time.monotonic() - session["paused_at"]
+        session["paused_at"] = 0.0
 
 
 # --- WebSocket manager ---
@@ -260,19 +372,6 @@ async def broadcast_status():
     await manager.broadcast(build_status())
 
 
-async def _heartbeat_loop():
-    """Send heartbeats to treadmill_io to keep the watchdog alive."""
-    while state["running"]:
-        try:
-            if state["treadmill_connected"]:
-                client.heartbeat()
-        except ConnectionError:
-            pass
-        except Exception:
-            pass
-        await asyncio.sleep(1)
-
-
 async def broadcast_loop():
     while state["running"]:
         try:
@@ -331,6 +430,10 @@ async def _apply_speed(mph):
     if mph > 0:
         state["emulate"] = True
         state["proxy"] = False
+        _start_session()
+    elif mph == 0 and session["active"]:
+        _end_session("user_stop")
+        await manager.broadcast(build_session())
     try:
         client.set_speed(mph)
     except ConnectionError:
@@ -358,6 +461,9 @@ async def _apply_stop():
         await prog.stop()
     state["emu_speed"] = 0
     state["emu_incline"] = 0
+    if session["active"]:
+        _end_session("user_stop")
+        await manager.broadcast(build_session())
     try:
         client.set_speed(0)
         client.set_incline(0)
@@ -372,6 +478,32 @@ async def _apply_stop():
 @app.get("/api/status")
 async def get_status():
     return build_status()
+
+
+@app.get("/api/session")
+async def get_session():
+    return build_session()
+
+
+@app.get("/api/log")
+async def get_log(lines: int = 100):
+    """Return last N lines of /tmp/treadmill_io.log."""
+    log_path = "/tmp/treadmill_io.log"
+
+    def _read_log():
+        try:
+            result = subprocess.run(
+                ["tail", "-n", str(lines), log_path],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.stdout.splitlines() if result.returncode == 0 else []
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return []
+
+    log_lines = await asyncio.to_thread(_read_log)
+    return {"lines": log_lines}
 
 
 @app.post("/api/speed")
@@ -445,6 +577,7 @@ async def api_generate_program(req: GenerateRequest):
 async def api_start_program():
     if not prog.program:
         return {"ok": False, "error": "No program loaded"}
+    _start_session()
     await prog.start(_prog_on_change(), _prog_on_update())
     return prog.to_dict()
 
@@ -458,6 +591,10 @@ async def api_stop_program():
 @app.post("/api/program/pause")
 async def api_pause_program():
     await prog.toggle_pause()
+    if prog.paused:
+        _pause_session()
+    else:
+        _resume_session()
     return prog.to_dict()
 
 
@@ -937,6 +1074,10 @@ async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         await ws.send_text(json.dumps(build_status()))
+        if session["active"]:
+            await ws.send_text(json.dumps(build_session()))
+        if prog and prog.program:
+            await ws.send_text(json.dumps(prog.to_dict()))
     except Exception:
         pass
     try:

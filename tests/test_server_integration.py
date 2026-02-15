@@ -45,8 +45,20 @@ def test_app(mock_client):
     server.state["emulate"] = False
     server.state["emu_speed"] = 0
     server.state["emu_incline"] = 0
+    server.state["treadmill_connected"] = True
     server.latest["last_motor"] = {}
     server.latest["last_console"] = {}
+
+    # Reset session
+    server.session["active"] = False
+    server.session["started_at"] = 0.0
+    server.session["wall_started_at"] = ""
+    server.session["paused_at"] = 0.0
+    server.session["total_paused"] = 0.0
+    server.session["elapsed"] = 0.0
+    server.session["distance"] = 0.0
+    server.session["vert_feet"] = 0.0
+    server.session["end_reason"] = None
 
     from starlette.testclient import TestClient
 

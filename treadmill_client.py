@@ -42,6 +42,8 @@ class TreadmillClient:
         self._lock = threading.Lock()
         self._reader_thread = None
         self._reconnect_thread = None
+        self._heartbeat_thread = None
+        self._heartbeat_running = False
         self._running = False
         self._connected = False
         self.on_message = None  # callback(msg_dict)
@@ -67,9 +69,40 @@ class TreadmillClient:
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader_thread.start()
 
+    def start_heartbeat(self, interval=1.0):
+        """Start a dedicated OS thread that sends heartbeats via time.sleep.
+
+        Immune to asyncio event loop stalls (e.g. serving large static files).
+        """
+        self.stop_heartbeat()
+        self._heartbeat_running = True
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, args=(interval,), daemon=True)
+        self._heartbeat_thread.start()
+
+    def stop_heartbeat(self):
+        """Stop the heartbeat thread and wait for it to finish."""
+        self._heartbeat_running = False
+        t = self._heartbeat_thread
+        if t and t.is_alive():
+            t.join(timeout=3.0)
+        self._heartbeat_thread = None
+
+    def _heartbeat_loop(self, interval):
+        """Background thread: send heartbeats at fixed interval using OS sleep."""
+        while self._heartbeat_running and self._running:
+            try:
+                if self._connected:
+                    self.heartbeat()
+            except (ConnectionError, OSError):
+                pass
+            except Exception:
+                pass
+            time.sleep(interval)
+
     def close(self):
-        """Disconnect from the socket. Stops reconnection."""
+        """Disconnect from the socket. Stops reconnection and heartbeat."""
         self._running = False
+        self.stop_heartbeat()
         self._close_socket()
 
     def _close_socket(self):

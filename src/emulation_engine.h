@@ -103,19 +103,27 @@ private:
     }
 
     void thread_fn() {
-        struct timespec start_ts;
-        clock_gettime(CLOCK_MONOTONIC, &start_ts);
+        struct timespec last_activity_ts;
+        clock_gettime(CLOCK_MONOTONIC, &last_activity_ts);
+        int prev_speed = -1, prev_incline = -1;
 
         while (running_.load(std::memory_order_relaxed) && mode_.is_emulating()) {
-            // Safety timeout: reset speed/incline to 0 after 3 hours
+            // Reset 3-hour timer whenever speed or incline changes
+            auto snap_check = mode_.snapshot();
+            if (snap_check.speed_tenths != prev_speed || snap_check.incline != prev_incline) {
+                clock_gettime(CLOCK_MONOTONIC, &last_activity_ts);
+                prev_speed = snap_check.speed_tenths;
+                prev_incline = snap_check.incline;
+            }
+
+            // Safety timeout: reset speed/incline to 0 after 3 hours of no changes
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
-            double elapsed = (now.tv_sec - start_ts.tv_sec) +
-                             (now.tv_nsec - start_ts.tv_nsec) / 1e9;
+            double elapsed = (now.tv_sec - last_activity_ts.tv_sec) +
+                             (now.tv_nsec - last_activity_ts.tv_nsec) / 1e9;
 
             if (elapsed >= EMU_TIMEOUT_SEC) {
-                auto snap = mode_.snapshot();
-                if (snap.speed_tenths != 0 || snap.incline != 0) {
+                if (snap_check.speed_tenths != 0 || snap_check.incline != 0) {
                     mode_.safety_timeout_reset();
                     std::fprintf(stderr, "[emulate] 3-hour safety timeout — speed/incline reset to 0\n");
                 }
