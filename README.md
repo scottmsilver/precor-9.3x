@@ -32,42 +32,64 @@ Pins 3 and 6 are the interesting ones — they carry the serial protocol.
 
 ### The Protocol
 
-Both directions use the same text format: `[key:value]` pairs at 9600 baud, 8N1.
+Both directions use 9600 baud, 8N1 serial. Messages are plain ASCII text wrapped in square brackets.
 
-**Console → Motor** (pin 6): The console sends a repeating 14-key cycle in 5 bursts, with ~100ms gaps between bursts. Each message is terminated by `0xFF`.
+#### Wire Format
 
-```
-[inc:0]     set incline (decimal)
-[hmph:0]    set speed (mph × 100, uppercase hex)
-[amps]      query current draw
-[err]       query error status
-[belt]      query belt counter
-[vbus]      query bus voltage
-[lift]      query lift position
-[lfts]      query lift status
-[lftg]      query lift goal
-[part:6]    report part number
-[ver]       query firmware version
-[type]      query machine type
-[diag:0]    diagnostic mode
-[loop:5550] loop counter
-```
-
-Keys with a colon set/report a value. Bare keys (no colon) are queries.
-
-**Motor → Console** (pin 3): The motor responds with `[key:value]` — same format, but no `0xFF` delimiter.
+Every message is a bracket-delimited key-value pair. On the wire, each byte is standard ASCII:
 
 ```
-[belt:14]   belt counter (hex)
-[inc:0]     incline position
-[hmph:69]   current speed (hex, 0x69 = 105 = 1.05 mph)
-[amps:FF]   current draw (hex)
-[ver:19A]   firmware version
-[lift:28]   lift position (hex)
-[type:20]   machine type
+Set command:   [  k  e  y  :  v  a  l  u  e  ]  0xFF
+               5B 6B 65 79 3A 76 61 6C 75 65 5D FF
+
+Query command: [  k  e  y  ]  0xFF
+               5B 6B 65 79 5D FF
 ```
 
-**Speed encoding:** The `hmph` key carries speed as mph × 100 in uppercase hex. For example: 1.2 mph = 120 decimal = `78` hex. 2.5 mph = 250 = `FA`. Incline is a plain decimal integer.
+A **set command** has a colon between key and value: `[inc:3]`. A **query** has no colon, just the key: `[amps]`. The `0xFF` byte terminates each message on pin 6 (console → motor). Pin 3 (motor → console) uses the same bracket format but omits the `0xFF`.
+
+#### Console → Motor (pin 6)
+
+The console sends a repeating cycle of 14 keys, grouped into 5 bursts with ~100ms pauses between them. Here's one full cycle as it appears on the wire, at 2.5 mph and incline 3:
+
+```
+Burst 1:  [inc:3] FF  [hmph:FA] FF              ← incline + speed
+          ~100ms pause
+Burst 2:  [amps] FF  [err] FF  [belt] FF        ← sensor queries
+          ~100ms pause
+Burst 3:  [vbus] FF  [lift] FF  [lfts] FF  [lftg] FF
+          ~100ms pause
+Burst 4:  [part:6] FF  [ver] FF  [type] FF      ← identity queries
+          ~100ms pause
+Burst 5:  [diag:0] FF  [loop:5550] FF           ← diagnostics
+```
+
+Then the whole cycle repeats. The console sends this continuously, roughly once per second.
+
+Four keys always carry a fixed value (`inc`, `hmph`, `part`, `diag`, `loop`). The rest are bare queries — the console is asking the motor to report back.
+
+#### Motor → Console (pin 3)
+
+The motor responds to queries with the same bracket format, no `0xFF`:
+
+```
+[belt:14] [inc:0] [hmph:69] [amps:FF] [ver:19A] [lift:28] [type:20]
+```
+
+Responses arrive interleaved with the console's bursts.
+
+#### Speed Encoding
+
+The `hmph` key encodes speed as **mph × 100, in uppercase hex**:
+
+| mph | × 100 | Hex | Wire bytes |
+|-----|--------|-----|------------|
+| 0 (stopped) | 0 | `0` | `[hmph:0]` → `5B 68 6D 70 68 3A 30 5D FF` |
+| 1.2 | 120 | `78` | `[hmph:78]` → `5B 68 6D 70 68 3A 37 38 5D FF` |
+| 2.5 | 250 | `FA` | `[hmph:FA]` → `5B 68 6D 70 68 3A 46 41 5D FF` |
+| 6.0 | 600 | `258` | `[hmph:258]` → `5B 68 6D 70 68 3A 32 35 38 5D FF` |
+
+Incline is a plain decimal integer: `[inc:3]` means incline 3.
 
 ### RS-485 Polarity — The Gotcha
 
