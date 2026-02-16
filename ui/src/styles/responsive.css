@@ -1,0 +1,65 @@
+/* Mobile-first (default) — all base styles live in components */
+
+/* Ensure touch targets are 44px+ on all interactive elements */
+button, [role="button"], a, input, select, textarea {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* History cards: vertical full-width on mobile */
+.history-section .history-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Tablet: 768px+ */
+@media (min-width: 768px) {
+  .hero-time { font-size: 120px !important; }
+  .metrics-ro { max-width: 480px; margin-left: auto; margin-right: auto; }
+  .controls { max-width: 480px; margin-left: auto; margin-right: auto; }
+  .pgm-section { max-width: 480px; margin-left: auto; margin-right: auto; }
+  .stop-area { max-width: 480px; margin-left: auto; margin-right: auto; width: 100%; }
+  .chat-pill { max-width: 480px; margin-left: auto; margin-right: auto; }
+  .chat-sheet { max-width: 480px; margin-left: auto; margin-right: auto; }
+  .history-section { max-width: 600px; margin-left: auto; margin-right: auto; }
+  .lobby-content { max-width: 600px; margin-left: auto; margin-right: auto; }
+
+  /* History: 2-column grid on tablet */
+  .history-section .history-scroll {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  /* Debug screen: wider monospace readability */
+  .debug-screen {
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+/* Desktop: 1200px+ */
+@media (min-width: 1200px) {
+  .running-layout {
+    display: grid;
+    grid-template-columns: 1fr 2fr 1fr;
+    gap: 24px;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  .lobby-content { max-width: 800px; }
+
+  /* Debug screen: comfortable width on large screens */
+  .debug-screen {
+    max-width: 960px;
+  }
+
+  /* History: 3-column grid on desktop */
+  .history-section .history-scroll {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}

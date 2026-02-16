@@ -4,7 +4,6 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from program_engine import ProgramState
 from tests.helpers import make_program
 
@@ -249,6 +248,62 @@ class TestSkip:
         await prog.skip()
         assert prog.completed is True
         assert prog.running is False
+
+
+class TestPrev:
+    @pytest.mark.asyncio
+    async def test_prev_goes_back(self, loaded_prog):
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+        loaded_prog.running = True
+        loaded_prog._on_change = on_change
+        loaded_prog._on_update = on_update
+        # Start at interval 1
+        loaded_prog.current_interval = 1
+        loaded_prog.interval_elapsed = 30
+        await loaded_prog.prev()
+        assert loaded_prog.current_interval == 0
+        assert loaded_prog.interval_elapsed == 0
+        on_change.assert_called_with(2.0, 0)  # Warmup speed/incline
+
+    @pytest.mark.asyncio
+    async def test_prev_at_first_stays(self, loaded_prog):
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+        loaded_prog.running = True
+        loaded_prog._on_change = on_change
+        loaded_prog._on_update = on_update
+        loaded_prog.current_interval = 0
+        loaded_prog.interval_elapsed = 15
+        await loaded_prog.prev()
+        assert loaded_prog.current_interval == 0
+        assert loaded_prog.interval_elapsed == 0
+        on_change.assert_called_with(2.0, 0)  # Warmup, restarted
+
+    @pytest.mark.asyncio
+    async def test_prev_when_not_running_is_noop(self, loaded_prog):
+        on_change = AsyncMock()
+        loaded_prog._on_change = on_change
+        loaded_prog.running = False
+        loaded_prog.current_interval = 1
+        await loaded_prog.prev()
+        assert loaded_prog.current_interval == 1
+        on_change.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_skip_then_prev_roundtrip(self, loaded_prog):
+        """Skip forward then prev back should return to original interval."""
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+        loaded_prog.running = True
+        loaded_prog._on_change = on_change
+        loaded_prog._on_update = on_update
+        assert loaded_prog.current_interval == 0
+        await loaded_prog.skip()
+        assert loaded_prog.current_interval == 1
+        await loaded_prog.prev()
+        assert loaded_prog.current_interval == 0
+        assert loaded_prog.interval_elapsed == 0
 
 
 class TestExtend:

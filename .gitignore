@@ -43,3 +43,15 @@ tests/test_*_cov
 
 # Analysis/experimental scripts (not part of main tools)
 analysis/
+
+# Screenshots (dev artifacts)
+screenshots/
+
+# Three.js (vendored, large)
+static/three.module.js
+
+# Node modules
+node_modules/
+
+# Claude config (local)
+.claude/

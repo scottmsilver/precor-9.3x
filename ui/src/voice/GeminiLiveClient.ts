@@ -1,0 +1,269 @@
+/**
+ * WebSocket client for Gemini Live (BidiGenerateContent) API.
+ *
+ * Manages the bidirectional streaming connection:
+ * - Sends setup message with model config, tools, system prompt
+ * - Streams mic audio as base64 PCM chunks
+ * - Receives audio responses and tool calls
+ * - Handles barge-in (interruption)
+ */
+import { TOOL_DECLARATIONS, VOICE_SYSTEM_PROMPT } from './voiceTools';
+import type { FunctionCall } from './functionBridge';
+import { executeFunctionCall } from './functionBridge';
+
+export type ClientState = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+export interface GeminiLiveCallbacks {
+  onStateChange: (state: ClientState) => void;
+  onAudioChunk: (pcmBase64: string) => void;
+  onSpeakingStart: () => void;
+  onSpeakingEnd: () => void;
+  onInterrupted: () => void;
+  onError: (msg: string) => void;
+}
+
+interface SetupMessage {
+  setup: {
+    model: string;
+    system_instruction: { parts: { text: string }[] };
+    tools: { function_declarations: typeof TOOL_DECLARATIONS };
+    generation_config: {
+      speech_config: {
+        voice_config: { prebuilt_voice_config: { voice_name: string } };
+      };
+      response_modalities: string[];
+    };
+  };
+}
+
+const GEMINI_WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
+
+export class GeminiLiveClient {
+  private ws: WebSocket | null = null;
+  private callbacks: GeminiLiveCallbacks;
+  private apiKey: string;
+  private model: string;
+  private voice: string;
+  private stateContext: string;
+  private _state: ClientState = 'disconnected';
+  private setupDone = false;
+  private receivingAudio = false;
+  private turnCompleteTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    apiKey: string,
+    model: string,
+    voice: string,
+    callbacks: GeminiLiveCallbacks,
+    stateContext = '',
+  ) {
+    this.apiKey = apiKey;
+    this.model = model;
+    this.voice = voice;
+    this.callbacks = callbacks;
+    this.stateContext = stateContext;
+  }
+
+  get state(): ClientState {
+    return this._state;
+  }
+
+  private setState(s: ClientState): void {
+    this._state = s;
+    this.callbacks.onStateChange(s);
+  }
+
+  /** Update the treadmill state context for the system prompt. */
+  updateStateContext(ctx: string): void {
+    this.stateContext = ctx;
+  }
+
+  connect(): void {
+    if (this.ws) return;
+    this.setState('connecting');
+
+    const url = `${GEMINI_WS_BASE}?key=${this.apiKey}`;
+    this.ws = new WebSocket(url);
+    this.setupDone = false;
+
+    this.ws.onopen = () => {
+      console.log('[Voice] WebSocket connected, sending setup...');
+      this.sendSetup();
+    };
+
+    this.ws.onmessage = (evt) => {
+      this.handleMessage(evt.data);
+    };
+
+    this.ws.onerror = (e) => {
+      console.error('[Voice] WebSocket error:', e);
+      this.callbacks.onError('WebSocket connection error');
+      this.cleanup();
+      this.setState('error');
+    };
+
+    this.ws.onclose = (e) => {
+      console.log('[Voice] WebSocket closed:', e.code, e.reason);
+      this.cleanup();
+      if (this._state !== 'error') {
+        this.setState('disconnected');
+      }
+    };
+  }
+
+  disconnect(): void {
+    if (this.ws) {
+      this.ws.close();
+      this.cleanup();
+    }
+    this.setState('disconnected');
+  }
+
+  private cleanup(): void {
+    this.ws = null;
+    this.setupDone = false;
+    this.receivingAudio = false;
+    if (this.turnCompleteTimeout) {
+      clearTimeout(this.turnCompleteTimeout);
+      this.turnCompleteTimeout = null;
+    }
+  }
+
+  private sendSetup(): void {
+    const systemText = this.stateContext
+      ? `${VOICE_SYSTEM_PROMPT}\n\nCurrent treadmill state:\n${this.stateContext}`
+      : VOICE_SYSTEM_PROMPT;
+
+    const setup: SetupMessage = {
+      setup: {
+        model: `models/${this.model}`,
+        system_instruction: { parts: [{ text: systemText }] },
+        tools: [{ function_declarations: TOOL_DECLARATIONS }],
+        generation_config: {
+          speech_config: {
+            voice_config: { prebuilt_voice_config: { voice_name: this.voice } },
+          },
+          response_modalities: ['AUDIO'],
+        },
+      },
+    };
+
+    this.ws?.send(JSON.stringify(setup));
+  }
+
+  private async handleMessage(raw: string | ArrayBuffer | Blob): Promise<void> {
+    let text: string;
+    if (raw instanceof Blob) {
+      text = await raw.text();
+    } else if (raw instanceof ArrayBuffer) {
+      text = new TextDecoder().decode(raw);
+    } else {
+      text = raw;
+    }
+
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(text);
+    } catch {
+      return;
+    }
+
+    // Setup complete
+    if ('setupComplete' in msg || 'setup_complete' in msg) {
+      console.log('[Voice] Setup complete, ready for audio');
+      this.setupDone = true;
+      this.setState('connected');
+      return;
+    }
+
+    // Log unrecognized messages for debugging
+    if (!('serverContent' in msg || 'server_content' in msg || 'toolCall' in msg || 'tool_call' in msg)) {
+      console.log('[Voice] Unhandled message:', JSON.stringify(msg).slice(0, 200));
+    }
+
+    // Server content (audio, turn complete, interrupted)
+    const serverContent = (msg.serverContent ?? msg.server_content) as Record<string, unknown> | undefined;
+    if (serverContent) {
+      // Interrupted
+      if (serverContent.interrupted === true) {
+        this.receivingAudio = false;
+        this.callbacks.onInterrupted();
+        return;
+      }
+
+      // Turn complete
+      if (serverContent.turnComplete === true || serverContent.turn_complete === true) {
+        // Small delay to let last audio chunks finish
+        if (this.turnCompleteTimeout) clearTimeout(this.turnCompleteTimeout);
+        this.turnCompleteTimeout = setTimeout(() => {
+          if (this.receivingAudio) {
+            this.receivingAudio = false;
+            this.callbacks.onSpeakingEnd();
+          }
+        }, 200);
+        return;
+      }
+
+      // Model turn — audio parts
+      const modelTurn = (serverContent.modelTurn ?? serverContent.model_turn) as Record<string, unknown> | undefined;
+      if (modelTurn?.parts) {
+        const parts = modelTurn.parts as Array<Record<string, unknown>>;
+        for (const part of parts) {
+          const inlineData = (part.inlineData ?? part.inline_data) as { mimeType?: string; mime_type?: string; data?: string } | undefined;
+          if (inlineData?.data) {
+            if (!this.receivingAudio) {
+              this.receivingAudio = true;
+              this.callbacks.onSpeakingStart();
+            }
+            if (this.turnCompleteTimeout) {
+              clearTimeout(this.turnCompleteTimeout);
+              this.turnCompleteTimeout = null;
+            }
+            this.callbacks.onAudioChunk(inlineData.data);
+          }
+        }
+      }
+    }
+
+    // Tool call
+    const toolCall = (msg.toolCall ?? msg.tool_call) as { functionCalls?: Array<{ name: string; args: Record<string, unknown> }> } | undefined;
+    if (toolCall?.functionCalls) {
+      for (const fc of toolCall.functionCalls) {
+        const call: FunctionCall = { name: fc.name, args: fc.args ?? {} };
+        const result = await executeFunctionCall(call);
+        this.sendToolResponse(result.name, result.response);
+      }
+    }
+  }
+
+  /** Send tool response back to Gemini. */
+  private sendToolResponse(name: string, response: { result: string }): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = {
+      toolResponse: {
+        functionResponses: [{ name, response }],
+      },
+    };
+    this.ws.send(JSON.stringify(msg));
+  }
+
+  /** Send a PCM16 audio chunk (base64 encoded) to Gemini. */
+  sendAudio(pcmBase64: string): void {
+    if (!this.ws || !this.setupDone || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = {
+      realtimeInput: {
+        mediaChunks: [
+          {
+            mimeType: 'audio/pcm;rate=16000',
+            data: pcmBase64,
+          },
+        ],
+      },
+    };
+    this.ws.send(JSON.stringify(msg));
+  }
+
+  get isConnected(): boolean {
+    return this._state === 'connected' && this.setupDone;
+  }
+}

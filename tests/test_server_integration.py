@@ -149,6 +149,44 @@ class TestProgramFlow:
         assert resp.status_code == 200
         assert resp.json()["current_interval"] == 1
 
+    def test_prev_goes_back(self, test_app):
+        client, server, _ = test_app
+        server.prog.load(
+            {
+                "name": "Test",
+                "intervals": [
+                    {"name": "A", "duration": 60, "speed": 3.0, "incline": 0},
+                    {"name": "B", "duration": 60, "speed": 5.0, "incline": 2},
+                ],
+            }
+        )
+        server.prog.running = True
+        server.prog.current_interval = 1
+        server.prog._on_change = AsyncMock()
+        server.prog._on_update = AsyncMock()
+        resp = client.post("/api/program/prev")
+        assert resp.status_code == 200
+        assert resp.json()["current_interval"] == 0
+
+    def test_prev_at_zero_stays(self, test_app):
+        client, server, _ = test_app
+        server.prog.load(
+            {
+                "name": "Test",
+                "intervals": [
+                    {"name": "A", "duration": 60, "speed": 3.0, "incline": 0},
+                    {"name": "B", "duration": 60, "speed": 5.0, "incline": 2},
+                ],
+            }
+        )
+        server.prog.running = True
+        server.prog.current_interval = 0
+        server.prog._on_change = AsyncMock()
+        server.prog._on_update = AsyncMock()
+        resp = client.post("/api/program/prev")
+        assert resp.status_code == 200
+        assert resp.json()["current_interval"] == 0
+
 
 class TestProgOnChange:
     def test_prog_on_change_calls_client(self, test_app):

@@ -20,15 +20,18 @@ import time
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from program_engine import (
     CHAT_SYSTEM_PROMPT,
+    GEMINI_MODEL,
     TOOL_DECLARATIONS,
     ProgramState,
+    _read_api_key,
     call_gemini,
     generate_program,
     validate_interval,
@@ -130,6 +133,15 @@ async def lifespan(application):
 
 
 app = FastAPI(title="Treadmill Controller", lifespan=lifespan)
+
+# CORS for Vite dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Async bridge ---
 loop: asyncio.AbstractEventLoop = None
@@ -306,6 +318,20 @@ def _resume_session():
         session["paused_at"] = 0.0
 
 
+def _reset_session():
+    """Zero all session data for a full reset."""
+    session["active"] = False
+    session["started_at"] = 0.0
+    session["wall_started_at"] = ""
+    session["paused_at"] = 0.0
+    session["total_paused"] = 0.0
+    session["elapsed"] = 0.0
+    session["distance"] = 0.0
+    session["vert_feet"] = 0.0
+    session["end_reason"] = None
+    log.info("Session reset")
+
+
 # --- WebSocket manager ---
 
 
@@ -423,6 +449,26 @@ class TTSRequest(BaseModel):
 # --- Shared control helpers ---
 
 
+async def _ensure_manual_program(speed=3.0, incline=0, duration_minutes=60):
+    """Auto-create and start a manual program if none is running."""
+    if prog.running:
+        return
+    program = {
+        "name": f"{duration_minutes}-Min Manual",
+        "manual": True,
+        "intervals": [
+            {
+                "name": "Seg 1",
+                "duration": duration_minutes * 60,
+                "speed": speed,
+                "incline": incline,
+            }
+        ],
+    }
+    prog.load(program)
+    await prog.start(_prog_on_change(), _prog_on_update())
+
+
 async def _apply_speed(mph):
     """Core speed logic shared by REST endpoint and Gemini function calls."""
     state["emu_speed"] = max(0, min(int(mph * 10), MAX_SPEED_TENTHS))
@@ -431,9 +477,14 @@ async def _apply_speed(mph):
         state["emulate"] = True
         state["proxy"] = False
         _start_session()
+        # Every workout has a program — auto-create manual if none running
+        await _ensure_manual_program(speed=mph, incline=state["emu_incline"])
     elif mph == 0 and session["active"]:
         _end_session("user_stop")
         await manager.broadcast(build_session())
+    # Split manual program interval to record course
+    if prog.is_manual and prog.running and mph > 0:
+        await prog.split_for_manual(mph, state["emu_incline"])
     try:
         client.set_speed(mph)
     except ConnectionError:
@@ -448,6 +499,9 @@ async def _apply_incline(inc):
     if inc > 0:
         state["emulate"] = True
         state["proxy"] = False
+    # Split manual program interval to record course
+    if prog.is_manual and prog.running:
+        await prog.split_for_manual(state["emu_speed"] / 10, inc)
     try:
         client.set_incline(inc)
     except ConnectionError:
@@ -483,6 +537,21 @@ async def get_status():
 @app.get("/api/session")
 async def get_session():
     return build_session()
+
+
+GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+
+@app.get("/api/config")
+async def get_config():
+    """Return client config (API key, model, voice) for Gemini Live."""
+    api_key = _read_api_key() or ""
+    return {
+        "gemini_api_key": api_key,
+        "gemini_model": GEMINI_MODEL,
+        "gemini_live_model": GEMINI_LIVE_MODEL,
+        "gemini_voice": "Kore",
+    }
 
 
 @app.get("/api/log")
@@ -582,18 +651,59 @@ async def api_start_program():
     return prog.to_dict()
 
 
+class QuickStartRequest(BaseModel):
+    speed: float = 3.0
+    incline: int = 0
+    duration_minutes: int = 60
+
+
+@app.post("/api/program/quick-start")
+async def api_quick_start(req: QuickStartRequest):
+    """Create a simple single-interval program and start it immediately."""
+    _start_session()
+    await _ensure_manual_program(speed=req.speed, incline=req.incline, duration_minutes=req.duration_minutes)
+    return {"ok": True, **prog.to_dict()}
+
+
 @app.post("/api/program/stop")
 async def api_stop_program():
     await _apply_stop()
     return prog.to_dict()
 
 
+@app.post("/api/reset")
+async def api_reset():
+    """Full reset: stop belt, clear program, zero session."""
+    await prog.reset()
+    state["emu_speed"] = 0
+    state["emu_incline"] = 0
+    _reset_session()
+    try:
+        client.set_speed(0)
+        client.set_incline(0)
+    except ConnectionError:
+        log.warning("Cannot send stop: treadmill_io disconnected")
+    await manager.broadcast(build_session())
+    await broadcast_status()
+    return {"ok": True}
+
+
 @app.post("/api/program/pause")
 async def api_pause_program():
+    was_paused = prog.paused
     await prog.toggle_pause()
     if prog.paused:
+        # Pause: stop the belt, remember speed for resume
         _pause_session()
+        state["_paused_speed"] = state["emu_speed"]
+        state["emu_speed"] = 0
+        try:
+            client.set_speed(0)
+        except ConnectionError:
+            pass
+        await broadcast_status()
     else:
+        # Resume: session timer resumes, speed restored by program engine's on_change
         _resume_session()
     return prog.to_dict()
 
@@ -601,6 +711,12 @@ async def api_pause_program():
 @app.post("/api/program/skip")
 async def api_skip_program():
     await prog.skip()
+    return prog.to_dict()
+
+
+@app.post("/api/program/prev")
+async def api_prev_program():
+    await prog.prev()
     return prog.to_dict()
 
 
@@ -613,6 +729,21 @@ async def api_extend_interval(req: ExtendRequest):
     if not prog or not prog.running:
         return {"ok": False, "error": "No program running"}
     ok = await prog.extend_current(req.seconds)
+    if ok:
+        await manager.broadcast(prog.to_dict())
+    return prog.to_dict()
+
+
+class DurationAdjustRequest(BaseModel):
+    delta_seconds: int
+
+
+@app.post("/api/program/adjust-duration")
+async def api_adjust_duration(req: DurationAdjustRequest):
+    """Adjust manual program total duration by adding/removing time from last interval."""
+    if not prog or not prog.is_manual or not prog.running:
+        return {"ok": False, "error": "No manual program running"}
+    ok = await prog.adjust_duration(req.delta_seconds)
     if ok:
         await manager.broadcast(prog.to_dict())
     return prog.to_dict()
@@ -776,6 +907,19 @@ def _prog_on_update():
 
     async def on_update(prog_state):
         await manager.broadcast(prog_state)
+        # When program completes, stop the treadmill and end the session
+        if prog_state.get("completed") and not prog_state.get("running"):
+            state["emu_speed"] = 0
+            state["emu_incline"] = 0
+            try:
+                client.set_speed(0)
+                client.set_incline(0)
+            except ConnectionError:
+                pass
+            if session["active"]:
+                _end_session("user_stop")
+                await manager.broadcast(build_session())
+            await broadcast_status()
 
     return on_update
 
@@ -1089,8 +1233,22 @@ async def websocket_endpoint(ws: WebSocket):
         manager.disconnect(ws)
 
 
-# Mount static files AFTER api routes
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+# Mount static files AFTER api routes, then SPA catch-all
+app.mount("/assets", StaticFiles(directory="static/assets"), name="static-assets")
+
+
+@app.get("/{full_path:path}")
+async def spa_catch_all(request: Request, full_path: str):
+    """Serve static files or fall back to index.html for SPA routing."""
+    static_dir = os.path.join(os.path.dirname(__file__) or ".", "static")
+    file_path = os.path.join(static_dir, full_path)
+    if full_path and os.path.isfile(file_path):
+        return FileResponse(file_path)
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    return JSONResponse({"error": "not found"}, status_code=404)
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

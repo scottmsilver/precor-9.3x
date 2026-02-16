@@ -178,8 +178,31 @@ class ProgramState:
             await self._on_change(0, 0)
         await self._broadcast()
 
+    async def reset(self):
+        """Full reset: stop, clear program and completed state."""
+        self._cancel_task()
+        was_running = self.running
+        self.program = None
+        self.running = False
+        self.paused = False
+        self.completed = False
+        self.current_interval = 0
+        self.interval_elapsed = 0
+        self.total_elapsed = 0
+        self._encouragement_milestones = set()
+        self._last_encouragement_interval = -3
+        self._pending_encouragement = None
+        if was_running and self._on_change:
+            await self._on_change(0, 0)
+        await self._broadcast()
+
     async def toggle_pause(self):
         self.paused = not self.paused
+        # On resume, re-apply current interval's speed/incline
+        if not self.paused and self.running:
+            iv = self.current_iv
+            if iv and self._on_change:
+                await self._on_change(iv["speed"], iv["incline"])
         await self._broadcast()
 
     async def skip(self):
@@ -195,6 +218,17 @@ class ProgramState:
             await self._finish()
         await self._broadcast()
 
+    async def prev(self):
+        if not self.running:
+            return
+        if self.current_interval > 0:
+            self.current_interval -= 1
+        self.interval_elapsed = 0
+        iv = self.current_iv
+        if iv and self._on_change:
+            await self._on_change(iv["speed"], iv["incline"])
+        await self._broadcast()
+
     async def extend_current(self, seconds):
         """Add or subtract seconds from the current interval's duration."""
         if not self.running or not self.current_iv:
@@ -204,6 +238,55 @@ class ProgramState:
         if new_dur < 10:
             new_dur = 10
         iv["duration"] = new_dur
+        await self._broadcast()
+        return True
+
+    @property
+    def is_manual(self):
+        return bool(self.program and self.program.get("manual"))
+
+    async def split_for_manual(self, speed, incline):
+        """Split current interval in a manual program to record course changes."""
+        if not self.running or not self.is_manual or not self.current_iv:
+            return False
+        iv = self.current_iv
+        elapsed = max(1, int(self.interval_elapsed))
+        remaining = iv["duration"] - elapsed
+        if remaining < 1:
+            return False
+        # Same values — no split needed
+        if abs(iv["speed"] - speed) < 0.05 and iv["incline"] == incline:
+            return False
+        # Trim current interval to what's been completed
+        iv["duration"] = elapsed
+        # Count existing manual segments for naming
+        seg_num = self.current_interval + 2
+        # Insert new interval with remaining time at new settings
+        new_iv = {
+            "name": f"Seg {seg_num}",
+            "duration": remaining,
+            "speed": speed,
+            "incline": incline,
+        }
+        self.program["intervals"].insert(self.current_interval + 1, new_iv)
+        # Advance to the new interval
+        self.current_interval += 1
+        self.interval_elapsed = 0
+        await self._broadcast()
+        return True
+
+    async def adjust_duration(self, delta_seconds):
+        """Add or remove time from the manual program's last interval."""
+        if not self.running or not self.is_manual or not self.program:
+            return False
+        intervals = self.program["intervals"]
+        if not intervals:
+            return False
+        last = intervals[-1]
+        new_dur = last["duration"] + delta_seconds
+        if new_dur < 10:
+            new_dur = 10
+        last["duration"] = new_dur
         await self._broadcast()
         return True
 
