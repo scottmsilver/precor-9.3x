@@ -28,13 +28,15 @@ from pydantic import BaseModel
 
 from program_engine import (
     CHAT_SYSTEM_PROMPT,
-    GEMINI_API_BASE,
     GEMINI_MODEL,
     TOOL_DECLARATIONS,
+    TTS_MODEL,
     ProgramState,
+    build_tts_config,
     call_gemini,
     extract_intent_from_text,
     generate_program,
+    get_client,
     read_api_key,
     validate_interval,
 )
@@ -1157,50 +1159,24 @@ async def _transcribe_audio(audio_b64, mime_type):
         return ""
 
 
-TTS_MODEL = "gemini-2.5-flash-preview-tts"
-
-
 @app.post("/api/tts")
 async def api_tts(req: TTSRequest):
     """Generate speech audio from text using Gemini TTS."""
-    api_key = read_api_key()
-    if not api_key:
-        return {"ok": False, "error": "No API key"}
-
-    url = f"{GEMINI_API_BASE}/{TTS_MODEL}:generateContent"
-    payload = {
-        "contents": [{"parts": [{"text": req.text}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": req.voice,
-                    }
-                }
-            },
-        },
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-    }
-
-    def _call():
-        import urllib.request
-
-        data = json.dumps(payload).encode()
-        http_req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(http_req, timeout=30) as resp:
-            return json.loads(resp.read())
-
     try:
-        result = await asyncio.to_thread(_call)
-        audio_data = result["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+        client = get_client()
+        config = build_tts_config(voice=req.voice)
+        resp = await client.aio.models.generate_content(
+            model=TTS_MODEL,
+            contents=req.text,
+            config=config,
+        )
+        audio_data = resp.candidates[0].content.parts[0].inline_data.data
+        import base64
+
+        audio_b64 = base64.b64encode(audio_data).decode("ascii")
         return {
             "ok": True,
-            "audio": audio_data,  # base64-encoded PCM 24kHz 16-bit mono
+            "audio": audio_b64,  # base64-encoded PCM 24kHz 16-bit mono
             "sample_rate": 24000,
             "channels": 1,
             "bit_depth": 16,

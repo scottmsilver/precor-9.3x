@@ -76,9 +76,26 @@ export class GeminiLiveClient {
     this.callbacks.onStateChange(s);
   }
 
-  /** Update the treadmill state context for the system prompt. */
+  /** Update the treadmill state context. Sends to Gemini mid-session if connected. */
   updateStateContext(ctx: string): void {
+    if (ctx === this.stateContext) return;
     this.stateContext = ctx;
+    this.sendStateUpdate(ctx);
+  }
+
+  /** Inject a state update into the live session so Gemini knows about button taps. */
+  private sendStateUpdate(ctx: string): void {
+    if (!this.ws || !this.setupDone || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = {
+      client_content: {
+        turns: [{
+          role: 'user',
+          parts: [{ text: `[State update — do not respond]\n${ctx}` }],
+        }],
+        turn_complete: true,
+      },
+    };
+    this.ws.send(JSON.stringify(msg));
   }
 
   connect(): void {
@@ -203,22 +220,22 @@ export class GeminiLiveClient {
 
       // Turn complete
       if (serverContent.turnComplete === true || serverContent.turn_complete === true) {
-        // Small delay to let last audio chunks finish
+        // Fire text fallback immediately — don't let audio timing delay it
+        const textJoined = this.turnTextParts.join(' ');
+        console.log(`[Voice] Turn complete: toolCalls=[${this.turnToolCalls}], text=${textJoined || '(none)'}`);
+        if (this.turnTextParts.length > 0) {
+          this.callbacks.onTextFallback?.(textJoined, [...this.turnToolCalls]);
+        }
+        this.turnTextParts = [];
+        this.turnToolCalls = [];
+
+        // Small delay to let last audio chunks finish before signaling speaking end
         if (this.turnCompleteTimeout) clearTimeout(this.turnCompleteTimeout);
         this.turnCompleteTimeout = setTimeout(() => {
           if (this.receivingAudio) {
             this.receivingAudio = false;
             this.callbacks.onSpeakingEnd();
           }
-          // Summary of this turn
-          const textJoined = this.turnTextParts.join(' ');
-          console.log(`[Voice] Turn complete: toolCalls=[${this.turnToolCalls}], text=${textJoined || '(none)'}`);
-          // Fallback: send text to Flash if there's narration (even with partial tool calls)
-          if (this.turnTextParts.length > 0) {
-            this.callbacks.onTextFallback?.(textJoined, this.turnToolCalls);
-          }
-          this.turnTextParts = [];
-          this.turnToolCalls = [];
         }, 200);
         return;
       }
@@ -258,6 +275,14 @@ export class GeminiLiveClient {
         const call: FunctionCall = { name: fc.name, args: fc.args ?? {} };
         const result = await executeFunctionCall(call);
         this.sendToolResponse(result.name, result.response);
+      }
+      // Fire fallback immediately if there was narration text alongside tool calls.
+      // turnComplete won't arrive until after the tool response cycle, which is too late.
+      if (this.turnTextParts.length > 0) {
+        const textJoined = this.turnTextParts.join(' ');
+        console.log(`[Voice] Fallback (post-toolCall): already_executed=[${this.turnToolCalls}]`);
+        this.callbacks.onTextFallback?.(textJoined, [...this.turnToolCalls]);
+        this.turnTextParts = []; // prevent double-fire on turnComplete
       }
     }
   }

@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useState, useEffect } from 'react';
 import { useTreadmillState, useTreadmillActions } from '../state/TreadmillContext';
 import { haptic } from '../utils/haptics';
 
@@ -36,18 +36,42 @@ function DoubleChevronDown({ sw = 2.5 }: { sw?: number }) {
 
 // Clean pill button — matches Home/Voice style
 const btn: React.CSSProperties = {
-  width: 38, height: 40, borderRadius: 10,
+  width: 38, height: 54, borderRadius: 10,
   border: 'none', background: 'var(--fill)',
   cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
   WebkitTapHighlightColor: 'transparent',
   fontFamily: 'inherit',
 };
 
+type PulseDir = 'up' | 'down' | null;
+
+/** Track a value and return which direction it pulsed, auto-clearing after 500ms. */
+function usePulse(value: number): PulseDir {
+  const prev = useRef(value);
+  const [dir, setDir] = useState<PulseDir>(null);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    if (value !== prev.current) {
+      setDir(value > prev.current ? 'up' : 'down');
+      prev.current = value;
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setDir(null), 500);
+    }
+    return () => clearTimeout(timer.current);
+  }, [value]);
+
+  return dir;
+}
+
 export default function SpeedInclineControls(): React.ReactElement {
   const { status } = useTreadmillState();
   const actions = useTreadmillActions();
   const repeatTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatCount = useRef(0);
+
+  const speedPulse = usePulse(status.emuSpeed);
+  const inclinePulse = usePulse(status.emuIncline);
 
   const startRepeat = useCallback((type: 'speed' | 'incline', delta: number) => {
     repeatCount.current = 0;
@@ -78,6 +102,12 @@ export default function SpeedInclineControls(): React.ReactElement {
     onPointerLeave: stopRepeat,
   });
 
+  // Pulse class helper — uses key to force re-trigger animation on rapid changes
+  const pulseBtn = (pulse: PulseDir, dir: 'up' | 'down') =>
+    pulse === dir ? 'pulse-btn' : '';
+  const pulseVal = (pulse: PulseDir) =>
+    pulse ? 'pulse-value' : '';
+
   return (
     <div className="controls" style={{
       display: 'flex', gap: 10, padding: '0 12px', flexShrink: 0,
@@ -90,15 +120,15 @@ export default function SpeedInclineControls(): React.ReactElement {
         background: 'var(--card)', borderRadius: 'var(--r-lg)', padding: '6px 5px',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', 1)}>
+          <button key={`su1-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'up')} style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', 1)}>
             <ChevronUp />
           </button>
-          <button style={{ ...btn, color: 'var(--green)' }} {...ph('speed', 10)}>
+          <button key={`su10-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'up')} style={{ ...btn, color: 'var(--green)' }} {...ph('speed', 10)}>
             <DoubleChevronUp />
           </button>
         </div>
-        <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
-          <div style={{
+        <div style={{ flex: 1, textAlign: 'center', minWidth: 0, padding: '10px 0' }}>
+          <div key={`sv-${status.emuSpeed}`} className={pulseVal(speedPulse)} style={{
             fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
             lineHeight: 1.1, color: 'var(--green)',
           }}>
@@ -107,10 +137,10 @@ export default function SpeedInclineControls(): React.ReactElement {
           <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>mph</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', -1)}>
+          <button key={`sd1-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'down')} style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', -1)}>
             <ChevronDown />
           </button>
-          <button style={{ ...btn, color: 'var(--green)' }} {...ph('speed', -10)}>
+          <button key={`sd10-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'down')} style={{ ...btn, color: 'var(--green)' }} {...ph('speed', -10)}>
             <DoubleChevronDown />
           </button>
         </div>
@@ -122,15 +152,15 @@ export default function SpeedInclineControls(): React.ReactElement {
         background: 'var(--card)', borderRadius: 'var(--r-lg)', padding: '6px 5px',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 1)}>
+          <button key={`iu1-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'up')} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 1)}>
             <ChevronUp />
           </button>
-          <button style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 5)}>
+          <button key={`iu5-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'up')} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 5)}>
             <DoubleChevronUp />
           </button>
         </div>
-        <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
-          <div style={{
+        <div style={{ flex: 1, textAlign: 'center', minWidth: 0, padding: '10px 0' }}>
+          <div key={`iv-${status.emuIncline}`} className={pulseVal(inclinePulse)} style={{
             fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
             lineHeight: 1.1, color: 'var(--orange)',
           }}>
@@ -139,10 +169,10 @@ export default function SpeedInclineControls(): React.ReactElement {
           <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>incline</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -1)}>
+          <button key={`id1-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'down')} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -1)}>
             <ChevronDown />
           </button>
-          <button style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -5)}>
+          <button key={`id5-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'down')} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -5)}>
             <DoubleChevronDown />
           </button>
         </div>

@@ -85,3 +85,18 @@ body::after {
   50% { opacity: 0.5; transform: translateY(-50%) scale(1.15); }
   100% { opacity: 0; transform: translateY(-50%) scale(1.2); }
 }
+
+@keyframes valuePulse {
+  0% { filter: brightness(1); transform: scale(1); }
+  30% { filter: brightness(1.6); transform: scale(1.12); }
+  100% { filter: brightness(1); transform: scale(1); }
+}
+
+@keyframes btnGlow {
+  0% { box-shadow: none; filter: brightness(1); }
+  30% { box-shadow: 0 0 12px 2px currentColor; filter: brightness(1.5); }
+  100% { box-shadow: none; filter: brightness(1); }
+}
+
+.pulse-value { animation: valuePulse 500ms var(--ease) forwards; }
+.pulse-btn { animation: btnGlow 500ms var(--ease) forwards; }

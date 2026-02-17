@@ -36,36 +36,33 @@ export function useVoice(): UseVoiceReturn {
   const configRef = useRef<AppConfig | null>(null);
   const treadmillState = useTreadmillState();
 
-  // Build state context string for system prompt
+  // Build state context string — only push to Gemini when speed/incline change
   const stateContextRef = useRef('');
+  const lastSpeedRef = useRef(0);
+  const lastInclineRef = useRef(0);
   useEffect(() => {
     const s = treadmillState.status;
     const p = treadmillState.program;
     const parts: string[] = [];
-    if (s.emulate) {
-      parts.push(`Speed: ${(s.emuSpeed / 10).toFixed(1)} mph`);
-      parts.push(`Incline: ${s.emuIncline}%`);
-    } else if (s.speed != null) {
-      parts.push(`Speed: ${s.speed.toFixed(1)} mph`);
-      if (s.incline != null) parts.push(`Incline: ${s.incline}%`);
-    }
+    const speed = s.emulate ? s.emuSpeed : (s.speed != null ? Math.round(s.speed * 10) : 0);
+    const incline = s.emulate ? s.emuIncline : (s.incline ?? 0);
+    parts.push(`Speed: ${(speed / 10).toFixed(1)} mph`);
+    parts.push(`Incline: ${incline}%`);
     parts.push(`Mode: ${s.emulate ? 'emulate' : 'proxy'}`);
     if (p.running) {
       parts.push(`Program: "${p.program?.name ?? 'unnamed'}" running`);
       if (p.program) {
         const iv = p.program.intervals[p.currentInterval];
-        if (iv) {
-          parts.push(`Current interval: "${iv.name}" (${iv.speed} mph, ${iv.incline}%)`);
-          parts.push(`Interval time: ${p.intervalElapsed}/${iv.duration}s`);
-        }
+        if (iv) parts.push(`Current interval: "${iv.name}"`);
       }
-      parts.push(`Total: ${p.totalElapsed}/${p.totalDuration}s`);
       if (p.paused) parts.push('PAUSED');
     }
     stateContextRef.current = parts.join('\n');
 
-    // Update live client if connected
-    if (clientRef.current) {
+    // Only push to Gemini when speed or incline actually changes
+    if (clientRef.current && (speed !== lastSpeedRef.current || incline !== lastInclineRef.current)) {
+      lastSpeedRef.current = speed;
+      lastInclineRef.current = incline;
       clientRef.current.updateStateContext(stateContextRef.current);
     }
   }, [treadmillState]);
@@ -202,8 +199,7 @@ export function useVoice(): UseVoiceReturn {
           const { actions, text: responseText } = await extractIntent(text, executedCalls);
           console.log('[Voice] Fallback result:', { actions, text: responseText });
           if (actions.length > 0) {
-            const desc = actions.map(a => a.result || a.name).join(', ');
-            showToast(desc);
+            console.log('[Voice] Fallback executed:', actions.map(a => `${a.name} → ${a.result}`));
           }
         } catch (err) {
           console.error('[Voice] Intent extraction failed:', err);

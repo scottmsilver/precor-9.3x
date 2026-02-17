@@ -43,6 +43,20 @@ SAMPLES = {
         "expected_names": {"set_incline"},
         "expected_args": {"set_incline": {"incline": 5}},
     },
+    "partial_toolcall_incline_missing": {
+        # Real scenario: Gemini Live emitted set_speed toolCall but only narrated set_incline
+        "text": (
+            "**Initiating Treadmill Run**\n\n"
+            "Okay, I'm setting the treadmill to 5 mph speed now. After that's "
+            "done, I'll adjust the incline to 3%. It's important to do it in that "
+            "order, to ensure the settings are established correctly. I'll provide "
+            "a positive confirmation once the adjustments are completed, to keep "
+            "things feeling right!"
+        ),
+        "already_executed": ["set_speed"],
+        "expected_names": {"set_incline"},
+        "expected_args": {"set_incline": {"incline": 3}},
+    },
     "single_speed": {
         "text": (
             "**Adjusting Speed to Target**\n\n"

@@ -8,19 +8,14 @@ Usage:
     python3 tests/generate_voice_audio.py "set speed to 5"   # generate single phrase
 """
 
-import base64
-import json
 import os
 import sys
-import urllib.request
 
 # Add project root to path so we can import program_engine
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from program_engine import read_api_key
+from program_engine import TTS_MODEL, build_tts_config, get_client
 
-GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-TTS_MODEL = "gemini-2.5-flash-preview-tts"
 TTS_VOICE = "Kore"  # default voice
 
 AUDIO_DIR = os.path.join(os.path.dirname(__file__), "voice_audio")
@@ -51,43 +46,21 @@ def generate_audio(text: str, output_path: str, voice: str = TTS_VOICE) -> str:
     Raises:
         RuntimeError: If API key is missing or API call fails.
     """
-    api_key = read_api_key()
-    if not api_key:
-        raise RuntimeError("No Gemini API key found. Set GEMINI_API_KEY or create .gemini_key")
-
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    url = f"{GEMINI_API_BASE}/{TTS_MODEL}:generateContent"
-    payload = {
-        "contents": [{"parts": [{"text": f"Say the following aloud exactly as written: {text}"}]}],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": voice,
-                    }
-                }
-            },
-        },
-    }
-
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-    }
-
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read())
+    client = get_client()
+    config = build_tts_config(voice=voice)
+    resp = client.models.generate_content(
+        model=TTS_MODEL,
+        contents=f"Say the following aloud exactly as written: {text}",
+        config=config,
+    )
 
     try:
-        audio_b64 = result["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
-    except (KeyError, IndexError) as e:
-        raise RuntimeError(f"Unexpected API response: {e}\n{json.dumps(result, indent=2)}")
+        pcm_bytes = resp.candidates[0].content.parts[0].inline_data.data
+    except (AttributeError, IndexError) as e:
+        raise RuntimeError(f"Unexpected API response: {e}")
 
-    pcm_bytes = base64.b64decode(audio_b64)
     with open(output_path, "wb") as f:
         f.write(pcm_bytes)
 

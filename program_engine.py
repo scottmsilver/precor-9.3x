@@ -11,7 +11,9 @@ import json
 import logging
 import os
 import re
-import urllib.request
+
+from google import genai
+from google.genai import types
 
 log = logging.getLogger("program")
 
@@ -33,7 +35,36 @@ MILESTONE_MESSAGES = {
 }
 
 GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+TTS_MODEL = "gemini-2.5-flash-preview-tts"
+
+
+def build_tts_config(voice: str = "Kore") -> types.GenerateContentConfig:
+    """Build a GenerateContentConfig for Gemini TTS. Shared by server and tests."""
+    return types.GenerateContentConfig(
+        responseModalities=["AUDIO"],
+        speechConfig=types.SpeechConfig(
+            voiceConfig=types.VoiceConfig(
+                prebuiltVoiceConfig=types.PrebuiltVoiceConfig(
+                    voiceName=voice,
+                )
+            )
+        ),
+    )
+
+
+_client: genai.Client | None = None
+
+
+def get_client() -> genai.Client:
+    """Lazy singleton for the Gemini SDK client."""
+    global _client
+    if _client is None:
+        api_key = read_api_key()
+        if not api_key:
+            raise ValueError("No Gemini API key. Set GEMINI_API_KEY or create .gemini_key file.")
+        _client = genai.Client(api_key=api_key)
+    return _client
+
 
 # Application-level limits (hardware supports wider ranges)
 MIN_SPEED = 0.5
@@ -436,6 +467,8 @@ Tools:
 - extend_interval: add or subtract seconds from current interval (positive = longer, negative = shorter)
 - add_time: add extra intervals at the end of the current program
 
+CRITICAL RULE — never change speed, incline, or any treadmill setting unless the user explicitly asks you to. Do NOT proactively adjust settings to "push" or "challenge" the user. Only use tools in direct response to a clear user request.
+
 Guidelines:
 - For workout requests, use start_workout with a detailed description
 - For simple adjustments ("faster", "more incline"), use set_speed/set_incline
@@ -536,33 +569,28 @@ TOOL_DECLARATIONS = [
 
 
 async def call_gemini(contents, system_prompt, tools=None, api_key=None, generation_config=None):
-    """Low-level Gemini API call with optional function calling."""
-    if not api_key:
-        api_key = read_api_key()
-    if not api_key:
-        raise ValueError("No Gemini API key")
+    """Low-level Gemini API call with optional function calling.
 
-    url = f"{GEMINI_API_BASE}/{GEMINI_MODEL}:generateContent"
-    payload = {
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "contents": contents,
-        "generationConfig": {**{"temperature": 0.7, "maxOutputTokens": 1024}, **(generation_config or {})},
-    }
+    Returns a dict matching the REST API camelCase format so callers
+    don't need to change.
+    """
+    client = get_client()
+
+    config_kwargs = {"temperature": 0.7, "maxOutputTokens": 1024}
+    if generation_config:
+        config_kwargs.update(generation_config)
+    config_kwargs["systemInstruction"] = system_prompt
     if tools:
-        payload["tools"] = tools
+        config_kwargs["tools"] = tools
 
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key,
-    }
+    config = types.GenerateContentConfig(**config_kwargs)
 
-    def _call():
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
-
-    return await asyncio.to_thread(_call)
+    resp = await client.aio.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=contents,
+        config=config,
+    )
+    return resp.model_dump(by_alias=True, exclude_none=True)
 
 
 # --- Voice intent extraction ---

@@ -71,6 +71,11 @@ src/tests/%.o: src/tests/%.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
 
 PI_HOST = rpi
+VENV_DIR = .venv
+
+# Deploy Python server + static assets to Pi
+deploy:
+	./deploy.sh
 
 # Deploy to Pi, build, restart binary, run hardware tests
 test-pi: test
@@ -87,7 +92,7 @@ test-pi: test
 	sleep 3
 	ssh $(PI_HOST) 'pgrep treadmill_io > /dev/null' || (echo "ERROR: treadmill_io failed to start"; exit 1)
 	@echo "=== Running hardware tests ==="
-	ssh $(PI_HOST) 'cd ~ && ~/.local/bin/pytest tests/test_hardware_integration.py -v -s -m hardware'
+	ssh $(PI_HOST) 'cd ~ && source $(VENV_DIR)/bin/activate && pytest tests/test_hardware_integration.py -v -s -m hardware'
 
 # Full pre-commit gate: local unit tests + Pi hardware tests
 test-all: test test-pi
@@ -96,4 +101,4 @@ clean:
 	rm -f $(TARGET) $(TEST_BINS) src/*.o src/*.test.o src/tests/*.o
 	rm -f src/*.gcda src/*.gcno src/tests/*.gcda src/tests/*.gcno *.gcov
 
-.PHONY: all clean test test-pi test-all
+.PHONY: all clean test test-pi test-all deploy
