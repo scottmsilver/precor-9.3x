@@ -31,15 +31,15 @@ program_history.json
 *.gcno
 *.gcov
 treadmill_io
-tests/test_kv_protocol
-tests/test_ipc_protocol
-tests/test_ring_buffer
-tests/test_mode_state
-tests/test_emulation
-tests/test_integration
-tests/test_ipc_server
-tests/test_controller_live
-tests/test_*_cov
+src/tests/test_kv_protocol
+src/tests/test_ipc_protocol
+src/tests/test_ring_buffer
+src/tests/test_mode_state
+src/tests/test_emulation
+src/tests/test_integration
+src/tests/test_ipc_server
+src/tests/test_controller_live
+src/tests/test_*_cov
 
 # Analysis/experimental scripts (not part of main tools)
 analysis/

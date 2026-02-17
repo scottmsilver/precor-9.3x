@@ -32,7 +32,7 @@ Filter by test name: `pytest -k "speed_set_5"`
 
 ## C++ Tests
 
-C++ test binaries are built by `make test` (not pytest). They live in `tests/test_*.cpp` and use doctest.
+C++ tests live in `src/tests/` (not here). Built by `make test`, use doctest. See `src/tests/*.cpp`.
 
 ## Voice Test Conventions
 

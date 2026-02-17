@@ -18,7 +18,7 @@ TEST_LIB_OBJS = $(patsubst src/%.cpp,src/%.test.o,$(TEST_LIB_SRCS))
 TEST_NAMES = test_kv_protocol test_ipc_protocol test_ring_buffer \
              test_mode_state test_emulation test_integration \
              test_ipc_server test_controller_live
-TEST_BINS = $(addprefix tests/,$(TEST_NAMES))
+TEST_BINS = $(addprefix src/tests/,$(TEST_NAMES))
 
 TARGET = treadmill_io
 
@@ -34,28 +34,28 @@ test: $(TEST_BINS)
 	@echo "=== All tests passed ==="
 
 # Individual test binaries
-tests/test_kv_protocol: tests/test_kv_protocol.o src/kv_protocol.test.o
+src/tests/test_kv_protocol: src/tests/test_kv_protocol.o src/kv_protocol.test.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
-tests/test_ipc_protocol: tests/test_ipc_protocol.o src/kv_protocol.test.o src/ipc_protocol.test.o
+src/tests/test_ipc_protocol: src/tests/test_ipc_protocol.o src/kv_protocol.test.o src/ipc_protocol.test.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
-tests/test_ring_buffer: tests/test_ring_buffer.o
+src/tests/test_ring_buffer: src/tests/test_ring_buffer.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
-tests/test_mode_state: tests/test_mode_state.o src/mode_state.test.o
+src/tests/test_mode_state: src/tests/test_mode_state.o src/mode_state.test.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
-tests/test_emulation: tests/test_emulation.o src/kv_protocol.test.o src/mode_state.test.o
+src/tests/test_emulation: src/tests/test_emulation.o src/kv_protocol.test.o src/mode_state.test.o
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
-tests/test_integration: tests/test_integration.o $(TEST_LIB_OBJS)
+src/tests/test_integration: src/tests/test_integration.o $(TEST_LIB_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
-tests/test_ipc_server: tests/test_ipc_server.o $(TEST_LIB_OBJS)
+src/tests/test_ipc_server: src/tests/test_ipc_server.o $(TEST_LIB_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
-tests/test_controller_live: tests/test_controller_live.o $(TEST_LIB_OBJS)
+src/tests/test_controller_live: src/tests/test_controller_live.o $(TEST_LIB_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
 # Production object files
@@ -67,7 +67,7 @@ src/%.test.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -DTESTING -c -o $@ $<
 
 # Test object files
-tests/%.o: tests/%.cpp
+src/tests/%.o: src/tests/%.cpp
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
 
 PI_HOST = rpi
@@ -93,8 +93,7 @@ test-pi: test
 test-all: test test-pi
 
 clean:
-	rm -f $(TARGET) $(TEST_BINS) src/*.o src/*.test.o tests/*.o
-	rm -f src/*.gcda src/*.gcno tests/*.gcda tests/*.gcno *.gcov
-	rm -f tests/test_*_cov
+	rm -f $(TARGET) $(TEST_BINS) src/*.o src/*.test.o src/tests/*.o
+	rm -f src/*.gcda src/*.gcno src/tests/*.gcda src/tests/*.gcno *.gcov
 
 .PHONY: all clean test test-pi test-all
