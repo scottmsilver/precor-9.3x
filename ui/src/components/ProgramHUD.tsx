@@ -38,8 +38,8 @@ export default function ProgramHUD(): React.ReactElement | null {
 
   return (
     <div className="pgm-section" style={{
-      padding: '0 16px 4px', display: 'flex', flexDirection: 'column',
-      flex: 1, minHeight: 0,
+      padding: '4px 16px 6px', display: 'flex', flexDirection: 'column',
+      flex: '1 1 0', minHeight: 0, maxHeight: 280,
     }}>
       {/* Elevation profile card — fills available space */}
       <div
@@ -76,10 +76,10 @@ export default function ProgramHUD(): React.ReactElement | null {
             animation: 'toastSlideUp 150ms var(--ease-decel) forwards',
           }}>
             <button style={skipBtn} onClick={() => { actions.prevInterval(); haptic(25); }}>
-              \u00ab Prev
+              {'\u00ab'} Prev
             </button>
             <button style={skipBtn} onClick={() => { actions.skipInterval(); haptic(25); }}>
-              Next \u00bb
+              Next {'\u00bb'}
             </button>
           </div>
         )}

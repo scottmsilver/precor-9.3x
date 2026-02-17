@@ -24,8 +24,6 @@ from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
 from program_engine import (
     CHAT_SYSTEM_PROMPT,
     GEMINI_MODEL,
@@ -36,6 +34,7 @@ from program_engine import (
     generate_program,
     validate_interval,
 )
+from pydantic import BaseModel
 from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
 
 logging.basicConfig(level=logging.INFO)
@@ -238,6 +237,8 @@ def push_msg(msg):
 def _start_session():
     """Begin a new workout session. Idempotent if already active."""
     if session["active"]:
+        # Clear any stale pause (e.g. new program started while paused)
+        session["paused_at"] = 0.0
         return
     session["active"] = True
     session["started_at"] = time.monotonic()
@@ -1251,4 +1252,10 @@ async def spa_catch_all(request: Request, full_path: str):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    ssl_args = {}
+    cert = os.path.join(os.path.dirname(__file__) or ".", "cert.pem")
+    key = os.path.join(os.path.dirname(__file__) or ".", "key.pem")
+    if os.path.isfile(cert) and os.path.isfile(key):
+        ssl_args = {"ssl_keyfile": key, "ssl_certfile": cert}
+        log.info("HTTPS enabled (cert.pem + key.pem)")
+    uvicorn.run(app, host="0.0.0.0", port=8000, **ssl_args)

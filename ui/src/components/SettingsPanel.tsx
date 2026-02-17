@@ -1,26 +1,48 @@
-import React, { useState, useRef } from 'react';
-import { useTreadmillState, useTreadmillActions } from '../state/TreadmillContext';
-import { useToast } from '../state/TreadmillContext';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { useLocation } from 'wouter';
+import { useTreadmillState, useTreadmillActions, useToast } from '../state/TreadmillContext';
 import * as api from '../state/api';
 import { haptic } from '../utils/haptics';
 
 interface SettingsPanelProps {
   open: boolean;
   onClose: () => void;
-  showDebug: boolean;
 }
 
-export default function SettingsPanel({ open, onClose, showDebug }: SettingsPanelProps): React.ReactElement | null {
+const rowStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+  height: 48, padding: '0 4px',
+  borderBottom: '1px solid var(--separator)',
+  cursor: 'pointer',
+  WebkitTapHighlightColor: 'transparent',
+};
+
+export default function SettingsPanel({ open, onClose }: SettingsPanelProps): React.ReactElement | null {
   const { status } = useTreadmillState();
   const actions = useTreadmillActions();
   const showToast = useToast();
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [debugUnlocked, setDebugUnlocked] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const debugTaps = useRef<number[]>([]);
+  const [, setLocation] = useLocation();
+
+  // Reset debug unlock when panel closes
+  useEffect(() => {
+    if (!open) setDebugUnlocked(false);
+  }, [open]);
+
+  const handleHeaderTap = useCallback(() => {
+    const now = Date.now();
+    debugTaps.current.push(now);
+    debugTaps.current = debugTaps.current.filter(t => now - t < 500);
+    if (debugTaps.current.length >= 3) {
+      debugTaps.current = [];
+      setDebugUnlocked(true);
+      haptic(50);
+    }
+  }, []);
 
   if (!open) return null;
-
-  const speedPresets = [2, 3, 4, 5, 6, 7, 8, 10];
-  const inclinePresets = [0, 2, 4, 6, 8, 10, 12, 15];
 
   const handleGpxUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -31,6 +53,7 @@ export default function SettingsPanel({ open, onClose, showDebug }: SettingsPane
         const name = (data.program as { name?: string }).name || 'Route';
         showToast(`Loaded GPX route "${name}". Tap Start to begin!`);
         haptic(25);
+        onClose();
       } else {
         showToast('GPX upload failed: ' + (data.error || 'unknown error'));
       }
@@ -40,29 +63,13 @@ export default function SettingsPanel({ open, onClose, showDebug }: SettingsPane
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const presetStyle = (active: boolean, isIncline = false): React.CSSProperties => ({
-    height: 44, borderRadius: 'var(--r-sm)',
-    border: 'none',
-    background: active
-      ? (isIncline ? 'rgba(166,152,130,0.2)' : 'rgba(107,200,155,0.2)')
-      : 'var(--fill2)',
-    color: active
-      ? (isIncline ? 'var(--orange)' : 'var(--green)')
-      : 'var(--text2)',
-    fontSize: 15, fontWeight: 600,
-    fontVariantNumeric: 'tabular-nums', fontFamily: 'inherit',
-    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-    WebkitTapHighlightColor: 'transparent',
-    transition: 'transform 100ms var(--ease), background 100ms var(--ease)',
-  });
-
   return (
     <>
       {/* Overlay */}
       <div
         onClick={onClose}
         style={{
-          position: 'fixed', inset: 0, zIndex: 50,
+          position: 'fixed', inset: 0, zIndex: 300,
           background: 'rgba(18,18,16,0.6)',
           backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
         }}
@@ -70,14 +77,49 @@ export default function SettingsPanel({ open, onClose, showDebug }: SettingsPane
 
       {/* Panel */}
       <div style={{
-        position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 51,
+        position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 301,
         width: 'min(320px, 85vw)', background: '#1E1D1B',
         borderRadius: 'var(--r-xl) 0 0 var(--r-xl)',
         padding: '24px 16px', overflowY: 'auto',
       }}>
-        {/* Mode toggle (debug only) */}
-        {showDebug && (
-          <>
+        {/* Header — triple-tap unlocks debug */}
+        <h2
+          onClick={handleHeaderTap}
+          style={{
+            fontSize: 18, fontWeight: 700, color: 'var(--text)',
+            margin: '0 0 20px', cursor: 'default',
+            WebkitTapHighlightColor: 'transparent',
+            userSelect: 'none',
+          }}
+        >
+          Settings
+        </h2>
+
+        {/* Import GPX */}
+        <label style={rowStyle}>
+          <span style={{ fontSize: 15, color: 'var(--text)' }}>Import GPX Route</span>
+          <span style={{ fontSize: 13, color: 'var(--text3)' }}>&#8250;</span>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".gpx"
+            onChange={handleGpxUpload}
+            style={{ display: 'none' }}
+          />
+        </label>
+
+        {/* Debug Console */}
+        <div
+          onClick={() => { setLocation('/debug'); onClose(); haptic(25); }}
+          style={rowStyle}
+        >
+          <span style={{ fontSize: 15, color: 'var(--text)' }}>Debug Console</span>
+          <span style={{ fontSize: 13, color: 'var(--text3)' }}>&#8250;</span>
+        </div>
+
+        {/* Mode toggle (unlocked by triple-tap) */}
+        {debugUnlocked && (
+          <div style={{ marginTop: 24 }}>
             <h3 style={{
               fontSize: 13, fontWeight: 600, color: 'var(--text3)',
               textTransform: 'uppercase' as const, letterSpacing: '0.02em',
@@ -87,111 +129,29 @@ export default function SettingsPanel({ open, onClose, showDebug }: SettingsPane
               display: 'flex', borderRadius: 'var(--r-sm)', overflow: 'hidden',
               background: 'var(--fill2)',
             }}>
-              <button
-                onClick={() => { actions.setMode('proxy'); haptic([25, 30, 25]); }}
-                style={{
-                  flex: 1, height: 44, border: 'none',
-                  background: status.proxy ? 'var(--green)' : 'transparent',
-                  color: status.proxy ? '#000' : 'var(--text3)',
-                  fontSize: 15, fontWeight: 600, fontFamily: 'inherit',
-                  cursor: 'pointer', borderRadius: 'var(--r-sm)',
-                  WebkitTapHighlightColor: 'transparent',
-                  transition: 'all 200ms var(--ease)',
-                }}
-              >Proxy</button>
-              <button
-                onClick={() => { actions.setMode('emulate'); haptic([25, 30, 25]); }}
-                style={{
-                  flex: 1, height: 44, border: 'none',
-                  background: status.emulate ? 'var(--purple)' : 'transparent',
-                  color: status.emulate ? '#fff' : 'var(--text3)',
-                  fontSize: 15, fontWeight: 600, fontFamily: 'inherit',
-                  cursor: 'pointer', borderRadius: 'var(--r-sm)',
-                  WebkitTapHighlightColor: 'transparent',
-                  transition: 'all 200ms var(--ease)',
-                }}
-              >Emulate</button>
+              {(['proxy', 'emulate'] as const).map(mode => {
+                const active = mode === 'proxy' ? status.proxy : status.emulate;
+                const bg = mode === 'proxy' ? 'var(--green)' : 'var(--purple)';
+                const fg = mode === 'proxy' ? '#000' : '#fff';
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => { actions.setMode(mode); haptic([25, 30, 25]); }}
+                    style={{
+                      flex: 1, height: 44, border: 'none',
+                      background: active ? bg : 'transparent',
+                      color: active ? fg : 'var(--text3)',
+                      fontSize: 15, fontWeight: 600, fontFamily: 'inherit',
+                      cursor: 'pointer', borderRadius: 'var(--r-sm)',
+                      WebkitTapHighlightColor: 'transparent',
+                      transition: 'all 200ms var(--ease)',
+                    }}
+                  >{mode === 'proxy' ? 'Proxy' : 'Emulate'}</button>
+                );
+              })}
             </div>
-          </>
+          </div>
         )}
-
-        {/* Speed presets */}
-        <h3 style={{
-          fontSize: 13, fontWeight: 600, color: 'var(--text3)',
-          textTransform: 'uppercase' as const, letterSpacing: '0.02em',
-          margin: '20px 0 8px',
-        }}>Speed Presets</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
-          {speedPresets.map(p => (
-            <button
-              key={p}
-              style={presetStyle(status.emuSpeed === p * 10)}
-              onClick={() => { actions.setSpeed(p); haptic(25); }}
-            >{p.toFixed(1)}</button>
-          ))}
-        </div>
-
-        {/* Incline presets */}
-        <h3 style={{
-          fontSize: 13, fontWeight: 600, color: 'var(--text3)',
-          textTransform: 'uppercase' as const, letterSpacing: '0.02em',
-          margin: '20px 0 8px',
-        }}>Incline Presets</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
-          {inclinePresets.map(p => (
-            <button
-              key={p}
-              style={presetStyle(status.emuIncline === p, true)}
-              onClick={() => { actions.setIncline(p); haptic(25); }}
-            >{p}</button>
-          ))}
-        </div>
-
-        {/* Voice toggle */}
-        <h3 style={{
-          fontSize: 13, fontWeight: 600, color: 'var(--text3)',
-          textTransform: 'uppercase' as const, letterSpacing: '0.02em',
-          margin: '20px 0 8px',
-        }}>Voice</h3>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0' }}>
-          <span style={{ fontSize: 14, color: 'var(--text2)' }}>AI speaks responses</span>
-          <button
-            onClick={() => { setVoiceEnabled(!voiceEnabled); haptic(15); }}
-            style={{
-              width: 48, height: 28, borderRadius: 14, border: 'none',
-              cursor: 'pointer', padding: 2,
-              transition: 'background 200ms var(--ease)',
-              background: voiceEnabled ? 'var(--purple)' : 'var(--fill2)',
-            }}
-          >
-            <div style={{
-              width: 24, height: 24, borderRadius: 12, background: '#fff',
-              transition: 'transform 200ms var(--ease)',
-              transform: voiceEnabled ? 'translateX(20px)' : 'translateX(0)',
-            }} />
-          </button>
-        </div>
-
-        {/* GPX upload */}
-        <h3 style={{
-          fontSize: 13, fontWeight: 600, color: 'var(--text3)',
-          textTransform: 'uppercase' as const, letterSpacing: '0.02em',
-          margin: '20px 0 8px',
-        }}>Import</h3>
-        <label style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          height: 44, borderRadius: 'var(--r-sm)', background: 'var(--fill2)',
-          color: 'var(--text2)', fontSize: 15, fontWeight: 600, cursor: 'pointer',
-        }}>
-          Upload GPX Route
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".gpx"
-            onChange={handleGpxUpload}
-            style={{ display: 'none' }}
-          />
-        </label>
       </div>
     </>
   );

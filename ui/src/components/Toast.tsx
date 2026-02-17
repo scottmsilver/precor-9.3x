@@ -13,7 +13,7 @@ export default function Toast({ message, visible }: ToastProps) {
       key={message}
       style={{
         position: 'fixed',
-        bottom: 56,
+        bottom: 80,
         left: 16, right: 16,
         maxWidth: 480,
         margin: '0 auto',
@@ -23,7 +23,7 @@ export default function Toast({ message, visible }: ToastProps) {
         padding: '10px 14px',
         fontSize: 13, color: 'var(--text2)',
         lineHeight: 1.4,
-        zIndex: 25,
+        zIndex: 400,
         animation: 'toastLife 8s var(--ease) forwards',
         pointerEvents: 'none' as const,
         backdropFilter: 'blur(12px)',

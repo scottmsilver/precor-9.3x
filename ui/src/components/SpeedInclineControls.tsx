@@ -90,11 +90,11 @@ export default function SpeedInclineControls(): React.ReactElement {
         background: 'var(--card)', borderRadius: 'var(--r-lg)', padding: '6px 5px',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', -1)}>
-            <ChevronDown />
+          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', 1)}>
+            <ChevronUp />
           </button>
-          <button style={{ ...btn, color: 'var(--green)' }} {...ph('speed', -10)}>
-            <DoubleChevronDown />
+          <button style={{ ...btn, color: 'var(--green)' }} {...ph('speed', 10)}>
+            <DoubleChevronUp />
           </button>
         </div>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
@@ -107,11 +107,11 @@ export default function SpeedInclineControls(): React.ReactElement {
           <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>mph</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', 1)}>
-            <ChevronUp />
+          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', -1)}>
+            <ChevronDown />
           </button>
-          <button style={{ ...btn, color: 'var(--green)' }} {...ph('speed', 10)}>
-            <DoubleChevronUp />
+          <button style={{ ...btn, color: 'var(--green)' }} {...ph('speed', -10)}>
+            <DoubleChevronDown />
           </button>
         </div>
       </div>
@@ -122,11 +122,11 @@ export default function SpeedInclineControls(): React.ReactElement {
         background: 'var(--card)', borderRadius: 'var(--r-lg)', padding: '6px 5px',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -1)}>
-            <ChevronDown />
+          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 1)}>
+            <ChevronUp />
           </button>
-          <button style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -5)}>
-            <DoubleChevronDown />
+          <button style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 5)}>
+            <DoubleChevronUp />
           </button>
         </div>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
@@ -139,11 +139,11 @@ export default function SpeedInclineControls(): React.ReactElement {
           <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>incline</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 1)}>
-            <ChevronUp />
+          <button style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -1)}>
+            <ChevronDown />
           </button>
-          <button style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 5)}>
-            <DoubleChevronUp />
+          <button style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -5)}>
+            <DoubleChevronDown />
           </button>
         </div>
       </div>

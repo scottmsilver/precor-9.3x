@@ -1,11 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useLocation } from 'wouter';
-import Header from './components/Header';
+import TabBar from './components/TabBar';
 import Toast from './components/Toast';
 import DisconnectBanner from './components/DisconnectBanner';
-import StopButton from './components/StopButton';
 import SettingsPanel from './components/SettingsPanel';
-import VoiceFAB from './components/VoiceFAB';
 import VoiceOverlay from './components/VoiceOverlay';
 import { ToastContext } from './state/TreadmillContext';
 import { useVoice } from './state/useVoice';
@@ -17,6 +15,8 @@ export default function App({ children }: { children: React.ReactNode }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
   const { voiceState, toggle: toggleVoice } = useVoice();
+
+  const isRun = location.startsWith('/run');
 
   const showToast = useCallback((message: string) => {
     setToastMsg(message);
@@ -31,16 +31,18 @@ export default function App({ children }: { children: React.ReactNode }) {
 
   return (
     <ToastContext.Provider value={showToast}>
-      <Header onSettingsToggle={() => setSettingsOpen(s => !s)} />
       <DisconnectBanner />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', paddingBottom: isRun ? 0 : 60 }}>
         {children}
       </div>
-      {location !== '/run' && <StopButton />}
-      {location !== '/run' && <VoiceFAB voiceState={voiceState} onTap={toggleVoice} />}
+      <TabBar
+        voiceState={voiceState}
+        onVoiceToggle={toggleVoice}
+        onSettingsToggle={() => setSettingsOpen(s => !s)}
+      />
       <VoiceOverlay voiceState={voiceState} />
       <Toast message={toastMsg} visible={toastVisible} />
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} showDebug={location === '/debug'} />
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </ToastContext.Provider>
   );
 }

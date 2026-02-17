@@ -19,7 +19,7 @@ export default function DisconnectBanner() {
   if (!status.treadmillConnected) {
     return (
       <div style={{
-        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 40,
+        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 200,
         background: 'rgba(196,92,82,0.15)', backdropFilter: 'blur(8px)',
         WebkitBackdropFilter: 'blur(8px)',
         borderBottom: '1px solid rgba(196,92,82,0.3)',
@@ -35,7 +35,7 @@ export default function DisconnectBanner() {
   if (showReconnect) {
     return (
       <div style={{
-        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 40,
+        position: 'fixed', top: 0, left: 0, right: 0, zIndex: 200,
         background: 'rgba(107,200,155,0.15)', backdropFilter: 'blur(8px)',
         WebkitBackdropFilter: 'blur(8px)',
         borderBottom: '1px solid rgba(107,200,155,0.3)',

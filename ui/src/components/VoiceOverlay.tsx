@@ -14,7 +14,7 @@ const overlayBase: React.CSSProperties = {
   top: 0,
   left: 0,
   right: 0,
-  zIndex: 25,
+  zIndex: 200,
   display: 'flex',
   justifyContent: 'center',
   pointerEvents: 'none',

@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useLocation } from 'wouter';
-import { useTreadmillState, useTreadmillActions } from '../state/TreadmillContext';
 import { useSession } from '../state/useSession';
 import { useProgram } from '../state/useProgram';
 import { useVoice } from '../state/useVoice';
@@ -8,10 +7,10 @@ import * as api from '../state/api';
 import { fmtDur } from '../utils/formatters';
 import { haptic } from '../utils/haptics';
 import MetricsRow from '../components/MetricsRow';
-import SpeedInclineControls from '../components/SpeedInclineControls';
 import ProgramHUD from '../components/ProgramHUD';
 import ProgramComplete from '../components/ProgramComplete';
 import HistoryList from '../components/HistoryList';
+import BottomBar from '../components/BottomBar';
 import { pillBtn, HomeIcon, MicIcon } from '../components/shared';
 
 function PathIcon() {
@@ -55,16 +54,13 @@ function EmptyRunCard({ onVoice }: { onVoice: () => void }) {
 }
 
 export default function Running(): React.ReactElement {
-  const { status, program } = useTreadmillState();
-  const actions = useTreadmillActions();
   const sess = useSession();
   const pgm = useProgram();
-  const { voiceState, toggle: toggleVoice } = useVoice();
+  const { toggle: toggleVoice } = useVoice();
   const [durationEditOpen, setDurationEditOpen] = useState(false);
 
   const isActive = sess.active || pgm.running;
   const isManual = pgm.program?.manual === true;
-  const isRunning = status.emulate && (status.emuSpeed > 0 || (program.running && !pgm.paused));
 
   const handleTimeTap = () => {
     if (isManual && pgm.running) {
@@ -77,8 +73,6 @@ export default function Running(): React.ReactElement {
     api.adjustDuration(deltaMins * 60);
     haptic(25);
   };
-
-  const voiceActive = voiceState === 'listening' || voiceState === 'speaking';
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -151,7 +145,7 @@ export default function Running(): React.ReactElement {
       <MetricsRow />
 
       {/* Elevation profile or empty state — fills available vertical space */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginTop: 6 }}>
         {pgm.program && pgm.running ? (
           <ProgramHUD />
         ) : pgm.completed ? (
@@ -165,87 +159,7 @@ export default function Running(): React.ReactElement {
         <HistoryList variant="compact" />
       )}
 
-      {/* ── Bottom bar: Controls then Stop/Pause/Mic ── */}
-      <div style={{ flexShrink: 0, paddingBottom: 8 }}>
-        {/* Speed & Incline controls */}
-        <div style={{ marginBottom: 8 }}>
-          <SpeedInclineControls />
-        </div>
-
-        {/* Stop / Resume+Reset + Mic row */}
-        <div style={{
-          display: 'flex', gap: 8, padding: '0 12px',
-          alignItems: 'stretch',
-        }}>
-          {pgm.paused ? (
-            /* Paused: Resume + Reset split */
-            <>
-              <button
-                onClick={() => { actions.pauseProgram(); haptic(25); }}
-                style={{
-                  flex: 2, height: 50, borderRadius: 14,
-                  border: 'none', background: 'var(--green)', color: '#fff',
-                  fontSize: 17, fontWeight: 600, fontFamily: 'inherit',
-                  cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
-                }}
-              >
-                Resume
-              </button>
-              <button
-                onClick={() => { actions.resetAll(); haptic([50, 30, 50]); }}
-                style={{
-                  flex: 1, height: 50, borderRadius: 14,
-                  border: 'none', background: 'rgba(196,92,82,0.15)', color: 'var(--red)',
-                  fontSize: 15, fontWeight: 600, fontFamily: 'inherit',
-                  cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
-                }}
-              >
-                Reset
-              </button>
-            </>
-          ) : (
-            /* Running: Stop active. Idle: Stop disabled */
-            <button
-              onClick={isRunning ? () => {
-                actions.pauseProgram();
-                haptic([50, 30, 50]);
-              } : undefined}
-              disabled={!isRunning}
-              style={{
-                flex: 1, height: 50, borderRadius: 14,
-                border: 'none',
-                background: isRunning ? 'var(--red)' : 'var(--fill)',
-                color: isRunning ? '#fff' : 'var(--text3)',
-                fontSize: 17, fontWeight: 600, fontFamily: 'inherit',
-                cursor: isRunning ? 'pointer' : 'default',
-                opacity: isRunning ? 1 : 0.4,
-                WebkitTapHighlightColor: 'transparent',
-              }}
-            >
-              Stop
-            </button>
-          )}
-
-          {/* Mic */}
-          <button
-            onClick={() => { haptic(voiceState === 'idle' ? 20 : 10); toggleVoice(); }}
-            style={{
-              width: 50, height: 50, borderRadius: 14, flexShrink: 0,
-              border: 'none',
-              background: voiceActive ? (voiceState === 'listening' ? 'var(--red)' : 'var(--purple)') : 'var(--elevated)',
-              color: voiceActive ? '#fff' : 'var(--text2)',
-              boxShadow: voiceActive ? `0 0 16px ${voiceState === 'listening' ? 'rgba(196,92,82,0.4)' : 'rgba(139,127,160,0.4)'}` : 'none',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              WebkitTapHighlightColor: 'transparent',
-              transition: 'background 0.2s var(--ease), box-shadow 0.2s var(--ease)',
-              fontFamily: 'inherit',
-            }}
-            aria-label={voiceState === 'idle' ? 'Start voice' : voiceState === 'listening' ? 'Stop voice' : 'Interrupt'}
-          >
-            <MicIcon size={22} />
-          </button>
-        </div>
-      </div>
+      <BottomBar />
     </div>
   );
 }

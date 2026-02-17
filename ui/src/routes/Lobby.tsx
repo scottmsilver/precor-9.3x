@@ -7,6 +7,21 @@ import { haptic } from '../utils/haptics';
 import MiniStatusCard from '../components/MiniStatusCard';
 import HistoryList from '../components/HistoryList';
 
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+const lobbyBtn: React.CSSProperties = {
+  height: 48, padding: '0 24px', borderRadius: 'var(--r-pill)',
+  border: 'none', fontSize: 15, fontWeight: 600,
+  fontFamily: 'inherit', cursor: 'pointer',
+  WebkitTapHighlightColor: 'transparent',
+  display: 'flex', alignItems: 'center', gap: 8,
+};
+
 export default function Lobby(): React.ReactElement {
   const { session, program } = useTreadmillState();
   const actions = useTreadmillActions();
@@ -17,41 +32,42 @@ export default function Lobby(): React.ReactElement {
 
   return (
     <div className="lobby-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Lobby prompt */}
+      {/* Greeting + action buttons */}
       <div style={{ textAlign: 'center', padding: '24px 16px 12px' }}>
-        <div style={{ marginBottom: 16, fontSize: 15, color: 'var(--text3)', fontWeight: 500 }}>
-          Choose a program or speak to your coach
+        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
+          {greeting()}
+        </div>
+        <div style={{ fontSize: 14, color: 'var(--text3)', marginBottom: 16 }}>
+          Ready for a run?
         </div>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center' }}>
           {workoutActive && (
             <button
               onClick={() => { setLocation('/run'); haptic(25); }}
-              style={{
-                height: 48, padding: '0 28px', borderRadius: 'var(--r-pill)',
-                border: 'none', background: 'var(--green)', color: '#000',
-                fontSize: 15, fontWeight: 700, fontFamily: 'inherit',
-                cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
-              }}
+              style={{ ...lobbyBtn, background: 'var(--green)', color: '#000', fontWeight: 700 }}
             >
               Return to Workout
             </button>
           )}
           {!workoutActive && (
-            <button
-              onClick={() => {
-                api.quickStart(3.0, 0, 60);
-                haptic([25, 30, 25]);
-                setLocation('/run');
-              }}
-              style={{
-                height: 48, padding: '0 28px', borderRadius: 'var(--r-pill)',
-                border: 'none', background: 'var(--fill)', color: 'var(--text)',
-                fontSize: 15, fontWeight: 600, fontFamily: 'inherit',
-                cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
-              }}
-            >
-              Just Start
-            </button>
+            <>
+              <button
+                onClick={() => { setLocation('/run'); haptic(25); }}
+                style={{ ...lobbyBtn, background: 'var(--fill)', color: 'var(--text)' }}
+              >
+                Quick
+              </button>
+              <button
+                onClick={() => {
+                  api.quickStart(3.0, 0, 60);
+                  haptic([25, 30, 25]);
+                  setLocation('/run');
+                }}
+                style={{ ...lobbyBtn, background: 'var(--green)', color: '#000', fontWeight: 700 }}
+              >
+                Manual
+              </button>
+            </>
           )}
           {pgm.program && !pgm.running && (
             <button
@@ -60,12 +76,7 @@ export default function Lobby(): React.ReactElement {
                 haptic([25, 30, 25]);
                 setLocation('/run');
               }}
-              style={{
-                height: 48, padding: '0 28px', borderRadius: 'var(--r-pill)',
-                border: 'none', background: 'var(--green)', color: '#000',
-                fontSize: 15, fontWeight: 700, fontFamily: 'inherit',
-                cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
-              }}
+              style={{ ...lobbyBtn, background: 'var(--green)', color: '#000', fontWeight: 700 }}
             >
               Start {pgm.program.name || 'Program'}
             </button>
@@ -91,6 +102,7 @@ export default function Lobby(): React.ReactElement {
           setLocation('/run');
         }} />
       </div>
+
     </div>
   );
 }
