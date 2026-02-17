@@ -54,6 +54,7 @@ function EmptyRunCard({ onVoice }: { onVoice: () => void }) {
 }
 
 export default function Running(): React.ReactElement {
+  const [, setLocation] = useLocation();
   const sess = useSession();
   const pgm = useProgram();
   const { toggle: toggleVoice } = useVoice();
@@ -78,9 +79,24 @@ export default function Running(): React.ReactElement {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Hero time with ambient glow */}
       <div style={{
-        textAlign: 'center', padding: '4px 16px', flexShrink: 0,
+        textAlign: 'center', padding: '12px 16px 4px', flexShrink: 0,
         position: 'relative',
       }}>
+        {/* Home — top-left, subtle */}
+        <button
+          onClick={() => { setLocation('/'); haptic(15); }}
+          style={{
+            position: 'absolute', top: 6, left: 16, zIndex: 2,
+            width: 44, height: 44,
+            background: 'none', border: 'none',
+            color: 'var(--text3)', opacity: 0.7,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            WebkitTapHighlightColor: 'transparent',
+          }}
+          aria-label="Home"
+        >
+          <HomeIcon size={20} />
+        </button>
         <div style={{
           position: 'absolute', top: '50%', left: '50%',
           width: 200, height: 140,

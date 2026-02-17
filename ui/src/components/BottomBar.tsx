@@ -1,18 +1,8 @@
 import React from 'react';
-import { useLocation } from 'wouter';
 import { useTreadmillState, useTreadmillActions } from '../state/TreadmillContext';
 import { useProgram } from '../state/useProgram';
 import { haptic } from '../utils/haptics';
 import SpeedInclineControls from './SpeedInclineControls';
-
-const homeBtnStyle: React.CSSProperties = {
-  width: 50, height: 50, borderRadius: 14, flexShrink: 0,
-  border: 'none', background: 'var(--fill)',
-  color: 'var(--text3)', fontSize: 18,
-  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-  WebkitTapHighlightColor: 'transparent',
-  fontFamily: 'inherit',
-};
 
 const actionBtn: React.CSSProperties = {
   height: 50, borderRadius: 14, border: 'none',
@@ -24,7 +14,6 @@ export default function BottomBar(): React.ReactElement {
   const { status, program } = useTreadmillState();
   const actions = useTreadmillActions();
   const pgm = useProgram();
-  const [, setLocation] = useLocation();
 
   const isRunning = status.emulate && (status.emuSpeed > 0 || (program.running && !pgm.paused));
 
@@ -38,14 +27,6 @@ export default function BottomBar(): React.ReactElement {
         display: 'flex', gap: 8, padding: '0 12px',
         alignItems: 'stretch',
       }}>
-        <button
-          onClick={() => { setLocation('/'); haptic(25); }}
-          style={homeBtnStyle}
-          aria-label="Home"
-        >
-          &#8962;
-        </button>
-
         {pgm.paused ? (
           <>
             <button
