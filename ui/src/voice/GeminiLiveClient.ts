@@ -20,6 +20,7 @@ export interface GeminiLiveCallbacks {
   onSpeakingEnd: () => void;
   onInterrupted: () => void;
   onError: (msg: string) => void;
+  onTextFallback?: (text: string, executedCalls: string[]) => void;
 }
 
 interface SetupMessage {
@@ -49,6 +50,8 @@ export class GeminiLiveClient {
   private setupDone = false;
   private receivingAudio = false;
   private turnCompleteTimeout: ReturnType<typeof setTimeout> | null = null;
+  private turnTextParts: string[] = [];
+  private turnToolCalls: string[] = [];
 
   constructor(
     apiKey: string,
@@ -123,6 +126,8 @@ export class GeminiLiveClient {
     this.ws = null;
     this.setupDone = false;
     this.receivingAudio = false;
+    this.turnTextParts = [];
+    this.turnToolCalls = [];
     if (this.turnCompleteTimeout) {
       clearTimeout(this.turnCompleteTimeout);
       this.turnCompleteTimeout = null;
@@ -176,6 +181,11 @@ export class GeminiLiveClient {
       return;
     }
 
+    // Tool call cancellation — Gemini cancelled a pending tool call (e.g. after barge-in)
+    if ('toolCallCancellation' in msg || 'tool_call_cancellation' in msg) {
+      return;
+    }
+
     // Log unrecognized messages for debugging
     if (!('serverContent' in msg || 'server_content' in msg || 'toolCall' in msg || 'tool_call' in msg)) {
       console.log('[Voice] Unhandled message:', JSON.stringify(msg).slice(0, 200));
@@ -200,15 +210,29 @@ export class GeminiLiveClient {
             this.receivingAudio = false;
             this.callbacks.onSpeakingEnd();
           }
+          // Summary of this turn
+          const textJoined = this.turnTextParts.join(' ');
+          console.log(`[Voice] Turn complete: toolCalls=[${this.turnToolCalls}], text=${textJoined || '(none)'}`);
+          // Fallback: send text to Flash if there's narration (even with partial tool calls)
+          if (this.turnTextParts.length > 0) {
+            this.callbacks.onTextFallback?.(textJoined, this.turnToolCalls);
+          }
+          this.turnTextParts = [];
+          this.turnToolCalls = [];
         }, 200);
         return;
       }
 
-      // Model turn — audio parts
+      // Model turn — audio and text parts
       const modelTurn = (serverContent.modelTurn ?? serverContent.model_turn) as Record<string, unknown> | undefined;
       if (modelTurn?.parts) {
         const parts = modelTurn.parts as Array<Record<string, unknown>>;
         for (const part of parts) {
+          // Collect text parts for fallback detection
+          if (typeof part.text === 'string' && part.text.trim()) {
+            console.log('[Voice] modelTurn text:', part.text);
+            this.turnTextParts.push(part.text);
+          }
           const inlineData = (part.inlineData ?? part.inline_data) as { mimeType?: string; mime_type?: string; data?: string } | undefined;
           if (inlineData?.data) {
             if (!this.receivingAudio) {
@@ -229,6 +253,8 @@ export class GeminiLiveClient {
     const toolCall = (msg.toolCall ?? msg.tool_call) as { functionCalls?: Array<{ name: string; args: Record<string, unknown> }> } | undefined;
     if (toolCall?.functionCalls) {
       for (const fc of toolCall.functionCalls) {
+        this.turnToolCalls.push(fc.name);
+        console.log(`[Voice] toolCall: ${fc.name}(${JSON.stringify(fc.args ?? {})})`);
         const call: FunctionCall = { name: fc.name, args: fc.args ?? {} };
         const result = await executeFunctionCall(call);
         this.sendToolResponse(result.name, result.response);

@@ -118,6 +118,18 @@ export async function sendVoiceChat(audio: string, mimeType: string): Promise<Ch
   return post('/api/chat/voice', { audio, mime_type: mimeType });
 }
 
+// --- Voice intent extraction ---
+
+export async function extractIntent(text: string, alreadyExecuted: string[] = []): Promise<{ actions: Action[]; text: string }> {
+  return post('/api/voice/extract-intent', { text, already_executed: alreadyExecuted });
+}
+
+interface Action {
+  name: string;
+  args: Record<string, unknown>;
+  result?: string;
+}
+
 // --- TTS ---
 
 export async function requestTts(text: string, voice = 'Kore'): Promise<{ ok: boolean; audio?: string; sample_rate?: number; error?: string }> {

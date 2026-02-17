@@ -53,5 +53,9 @@ static/three.module.js
 # Node modules
 node_modules/
 
+# Vite build output (hashed filenames)
+static/assets/*.js
+static/assets/*.css
+
 # Claude config (local)
 .claude/

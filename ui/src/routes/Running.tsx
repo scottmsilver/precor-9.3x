@@ -57,7 +57,7 @@ export default function Running(): React.ReactElement {
   const [, setLocation] = useLocation();
   const sess = useSession();
   const pgm = useProgram();
-  const { toggle: toggleVoice } = useVoice();
+  const { voiceState, toggle: toggleVoice } = useVoice();
   const [durationEditOpen, setDurationEditOpen] = useState(false);
 
   const isActive = sess.active || pgm.running;
@@ -96,6 +96,25 @@ export default function Running(): React.ReactElement {
           aria-label="Home"
         >
           <HomeIcon size={20} />
+        </button>
+        {/* Mic — top-right */}
+        <button
+          onClick={() => { haptic(voiceState === 'idle' ? 20 : 10); toggleVoice(); }}
+          style={{
+            position: 'absolute', top: 6, right: 16, zIndex: 2,
+            width: 44, height: 44,
+            background: 'none', border: 'none',
+            color: voiceState === 'listening' ? 'var(--red)'
+              : voiceState === 'speaking' ? 'var(--purple)'
+              : 'var(--text3)',
+            opacity: voiceState === 'idle' ? 0.7 : 1,
+            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            WebkitTapHighlightColor: 'transparent',
+            transition: 'color 0.2s, opacity 0.2s',
+          }}
+          aria-label={voiceState === 'idle' ? 'Voice' : voiceState === 'listening' ? 'Listening' : 'Speaking'}
+        >
+          <MicIcon size={20} />
         </button>
         <div style={{
           position: 'absolute', top: '50%', left: '50%',

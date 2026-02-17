@@ -7,4 +7,7 @@ requires-python = ">=3.9"
 asyncio_mode = "auto"
 markers = [
     "hardware: marks tests that require Pi hardware (deselect with '-m \"not hardware\"')",
+    "voice: marks voice command tests that call Gemini Live API",
+    "slow: marks tests that are slow (audio generation, network calls)",
+    "intent: marks intent extraction tests that call Gemini Flash API",
 ]

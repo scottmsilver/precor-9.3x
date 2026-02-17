@@ -24,17 +24,20 @@ from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
 from program_engine import (
     CHAT_SYSTEM_PROMPT,
+    GEMINI_API_BASE,
     GEMINI_MODEL,
     TOOL_DECLARATIONS,
     ProgramState,
-    _read_api_key,
     call_gemini,
+    extract_intent_from_text,
     generate_program,
+    read_api_key,
     validate_interval,
 )
-from pydantic import BaseModel
 from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
 
 logging.basicConfig(level=logging.INFO)
@@ -540,13 +543,13 @@ async def get_session():
     return build_session()
 
 
-GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
 
 
 @app.get("/api/config")
 async def get_config():
     """Return client config (API key, model, voice) for Gemini Live."""
-    api_key = _read_api_key() or ""
+    api_key = read_api_key() or ""
     return {
         "gemini_api_key": api_key,
         "gemini_model": GEMINI_MODEL,
@@ -1125,9 +1128,7 @@ async def api_chat_voice(req: VoiceChatRequest):
 
 async def _transcribe_audio(audio_b64, mime_type):
     """Transcribe audio using Gemini — returns the text that was spoken."""
-    from program_engine import GEMINI_API_BASE, GEMINI_MODEL, _read_api_key
-
-    api_key = _read_api_key()
+    api_key = read_api_key()
     if not api_key:
         return ""
 
@@ -1162,9 +1163,7 @@ TTS_MODEL = "gemini-2.5-flash-preview-tts"
 @app.post("/api/tts")
 async def api_tts(req: TTSRequest):
     """Generate speech audio from text using Gemini TTS."""
-    from program_engine import GEMINI_API_BASE, _read_api_key
-
-    api_key = _read_api_key()
+    api_key = read_api_key()
     if not api_key:
         return {"ok": False, "error": "No API key"}
 
@@ -1209,6 +1208,44 @@ async def api_tts(req: TTSRequest):
     except Exception as e:
         log.error(f"TTS failed: {e}")
         return {"ok": False, "error": str(e)}
+
+
+# --- Voice intent extraction ---
+
+
+class ExtractIntentRequest(BaseModel):
+    text: str
+    already_executed: list[str] = []  # function names already called by Live
+
+
+@app.post("/api/voice/extract-intent")
+async def api_extract_intent(req: ExtractIntentRequest):
+    """Extract function calls from Gemini Live 'thinks aloud' text, then execute them."""
+    log.info(f"[voice-fallback] text={req.text[:200]}")
+    log.info(f"[voice-fallback] already_executed={req.already_executed}")
+
+    try:
+        actions = await extract_intent_from_text(req.text, req.already_executed)
+    except Exception as e:
+        log.error(f"[voice-fallback] Flash call failed: {e}")
+        return {"actions": [], "text": f"Error: {e}"}
+
+    log.info(f"[voice-fallback] extracted: {[a['name'] for a in actions]}")
+
+    # Execute the extracted actions
+    for action in actions:
+        try:
+            result_str = await _exec_fn(action["name"], action["args"])
+            action["result"] = result_str
+            log.info(f"[voice-fallback] EXEC: {action['name']}({action['args']}) -> {result_str}")
+        except Exception as e:
+            action["result"] = f"Error: {e}"
+            log.error(f"[voice-fallback] EXEC failed: {action['name']}({action['args']}): {e}")
+
+    if not actions:
+        log.info("[voice-fallback] no actions extracted")
+
+    return {"actions": actions, "text": ""}
 
 
 # --- WebSocket endpoint ---

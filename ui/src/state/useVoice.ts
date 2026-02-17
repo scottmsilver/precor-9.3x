@@ -9,7 +9,7 @@ import { GeminiLiveClient } from '../voice/GeminiLiveClient';
 import type { ClientState, GeminiLiveCallbacks } from '../voice/GeminiLiveClient';
 import { AudioPlayerQueue } from '../voice/audioUtils';
 import { float32ToPcm16, uint8ToBase64 } from '../voice/audioUtils';
-import { getConfig } from './api';
+import { getConfig, extractIntent } from './api';
 import type { AppConfig } from './types';
 import { useTreadmillState, useToast } from './TreadmillContext';
 
@@ -194,11 +194,26 @@ export function useVoice(): UseVoiceReturn {
       onError: (_msg: string) => {
         // Error handling — state change will clean up
       },
+      onTextFallback: async (text: string, executedCalls: string[]) => {
+        console.log('[Voice] Text fallback triggered:', text);
+        console.log('[Voice] Already executed by Live:', executedCalls);
+        try {
+          console.log('[Voice] Extracting intent via Flash...');
+          const { actions, text: responseText } = await extractIntent(text, executedCalls);
+          console.log('[Voice] Fallback result:', { actions, text: responseText });
+          if (actions.length > 0) {
+            const desc = actions.map(a => a.result || a.name).join(', ');
+            showToast(desc);
+          }
+        } catch (err) {
+          console.error('[Voice] Intent extraction failed:', err);
+        }
+      },
     };
 
     const client = new GeminiLiveClient(
       config.gemini_api_key,
-      config.gemini_live_model || 'gemini-2.5-flash-native-audio-preview-12-2025',
+      config.gemini_live_model || 'gemini-2.5-flash-native-audio-latest',
       config.gemini_voice || 'Kore',
       callbacks,
       stateContextRef.current,

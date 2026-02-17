@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import urllib.request
 
 log = logging.getLogger("program")
@@ -61,7 +62,7 @@ Rules:
 - Return ONLY valid JSON"""
 
 
-def _read_api_key():
+def read_api_key():
     key = os.environ.get("GEMINI_API_KEY")
     if key:
         return key.strip()
@@ -384,7 +385,7 @@ class ProgramState:
 async def generate_program(prompt, api_key=None):
     """Call Gemini to generate an interval training program."""
     if not api_key:
-        api_key = _read_api_key()
+        api_key = read_api_key()
     if not api_key:
         raise ValueError("No Gemini API key. Set GEMINI_API_KEY or create .gemini_key file.")
 
@@ -537,7 +538,7 @@ TOOL_DECLARATIONS = [
 async def call_gemini(contents, system_prompt, tools=None, api_key=None, generation_config=None):
     """Low-level Gemini API call with optional function calling."""
     if not api_key:
-        api_key = _read_api_key()
+        api_key = read_api_key()
     if not api_key:
         raise ValueError("No Gemini API key")
 
@@ -562,3 +563,101 @@ async def call_gemini(contents, system_prompt, tools=None, api_key=None, generat
             return json.loads(resp.read())
 
     return await asyncio.to_thread(_call)
+
+
+# --- Voice intent extraction ---
+
+INTENT_TOOL_SCHEMA = json.dumps(
+    [
+        {"name": "set_speed", "args": {"mph": "number (e.g. 3.5)"}},
+        {"name": "set_incline", "args": {"incline": "integer 0-15"}},
+        {"name": "start_workout", "args": {"description": "string"}},
+        {"name": "stop_treadmill", "args": {}},
+        {"name": "pause", "args": {}},
+        {"name": "resume", "args": {}},
+        {"name": "skip_interval", "args": {}},
+    ],
+    indent=2,
+)
+
+
+async def extract_intent_from_text(text: str, already_executed: list[str] | None = None) -> list[dict]:
+    """Extract intended function calls from narration text via Gemini Flash JSON mode.
+
+    When Gemini Live narrates its intent as text instead of emitting a toolCall,
+    this function recovers by asking Flash to parse the intent using JSON extraction.
+
+    Returns [{"name": ..., "args": {...}}, ...]. Does not execute anything.
+    """
+    already = set(already_executed or [])
+
+    if already:
+        already_str = f"\n\nThese functions were ALREADY executed — exclude them: {', '.join(already)}"
+    else:
+        already_str = ""
+
+    prompt = (
+        "A voice assistant intended to control a treadmill but narrated its intent as text "
+        "instead of making function calls. Extract the intended function calls from the text below.\n\n"
+        f"Available functions:\n{INTENT_TOOL_SCHEMA}\n\n"
+        'Return a JSON array of objects with "name" and "args" fields. '
+        "Return ALL intended function calls. If no functions are intended, return an empty array []."
+        f"{already_str}\n\n"
+        f'Text: "{text}"'
+    )
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
+
+    result = await call_gemini(
+        contents,
+        "You extract structured data from text. Return valid JSON only.",
+        None,
+        generation_config={"responseMimeType": "application/json", "temperature": 0},
+    )
+    parts = result.get("candidates", [{}])[0].get("content", {}).get("parts", [])
+    raw_text = " ".join(p.get("text", "") for p in parts).strip()
+
+    actions = []
+    try:
+        clean = raw_text.strip()
+        if clean.startswith("```"):
+            clean = "\n".join(clean.split("\n")[1:])
+            if clean.endswith("```"):
+                clean = clean[:-3]
+            clean = clean.strip()
+        parsed = json.loads(clean)
+        if isinstance(parsed, dict) and "actions" in parsed:
+            parsed = parsed["actions"]
+        if not isinstance(parsed, list):
+            parsed = [parsed]
+        for item in parsed:
+            if not isinstance(item, dict) or "name" not in item:
+                continue
+            name = item["name"]
+            args = item.get("args", {})
+            if name in already:
+                continue
+            # Coerce numeric types
+            if name == "set_speed" and "mph" in args:
+                args["mph"] = float(args["mph"])
+            if name == "set_incline" and "incline" in args:
+                args["incline"] = int(float(args["incline"]))
+            actions.append({"name": name, "args": args})
+    except json.JSONDecodeError:
+        # Regex fallback for malformed JSON
+        for m in re.finditer(r'"name"\s*:\s*"(\w+)"', raw_text):
+            name = m.group(1)
+            if name in already:
+                continue
+            region = raw_text[m.start() : m.start() + 200]
+            args = {}
+            if name == "set_speed":
+                mph_m = re.search(r'"mph"\s*:\s*([\d.]+)', region)
+                if mph_m:
+                    args["mph"] = float(mph_m.group(1))
+            elif name == "set_incline":
+                inc_m = re.search(r'"incline"\s*:\s*([\d.]+)', region)
+                if inc_m:
+                    args["incline"] = int(float(inc_m.group(1)))
+            actions.append({"name": name, "args": args})
+
+    return actions
