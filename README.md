@@ -1,6 +1,6 @@
 # Precor 9.3x Treadmill — Reverse Engineering & AI Control
 
-A Raspberry Pi intercepts the serial bus on a ~2005 Precor 9.31 treadmill, giving it phone control, interval programs, and an AI coach powered by Gemini.
+A Raspberry Pi intercepts the serial bus on a ~2005 Precor 9.31 treadmill, giving it phone control, interval programs, voice commands, and an AI coach powered by Gemini. A Bluetooth FTMS daemon lets fitness apps like Zwift see it as a modern smart treadmill.
 
 ---
 
@@ -136,7 +136,7 @@ If we only tapped pin 6, we could listen but not control anything. Cutting gives
 
 If you're investigating the protocol or something isn't working:
 
-- **Logic analyzer** + [`analyze_logic.py`](analyze_logic.py) / [`decode_inverted.py`](decode_inverted.py) — decode captured CSV traces. `decode_inverted.py` handles the RS-485 polarity inversion automatically.
+- **Logic analyzer** + [`analyze_logic.py`](analyze_logic.py) / [`decode_inverted.py`](decode_inverted.py) — decode captured CSV traces. `decode_inverted.py` handles the RS-485 polarity inversion automatically. Raw captures live in `src/captures/`.
 - **`dual_monitor.py`** — live curses TUI showing both channels side-by-side. Console commands on the left, motor responses on the right.
 - **`listen.py`** — simple CLI listener. Use `--changes` to only show value changes, `--source motor` to filter by direction.
 
@@ -146,51 +146,67 @@ If you're investigating the protocol or something isn't working:
 
 ### The Goal
 
-Turn a 20-year-old dumb treadmill into a smart one — phone control, interval programs, AI coaching, voice commands — without modifying the treadmill itself.
+Turn a 20-year-old dumb treadmill into a smart one — phone control, interval programs, AI coaching, voice commands, Bluetooth fitness app support — without modifying the treadmill itself.
 
 ### Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│              Web UI (Alpine.js)                  │
-│         static/index.html — display only         │
-└──────────────────────┬──────────────────────────┘
-                       │ WebSocket + REST
-┌──────────────────────┴──────────────────────────┐
-│              server.py (FastAPI)                  │
-│  All business logic: sessions, programs, chat    │
-│  Speed/incline control, GPX import, voice TTS    │
-├──────────────┬───────────────────────────────────┤
-│ program_engine.py    │    treadmill_client.py     │
-│ Intervals + Gemini   │    Thin IPC wrapper        │
-└──────────────┘       └───────────┬───────────────┘
-                                   │ Unix socket
-               ┌───────────────────┴───────────────┐
-               │     treadmill_io (C++, root)       │
-               │  GPIO serial I/O, proxy, emulate   │
-               │  Safety: watchdog, 3h timeout,     │
-               │  auto proxy on console button      │
-               └───────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│            Web UI (React + Vite + TypeScript)        │
+│               Framer Motion animations               │
+│    Routes: Lobby, Running, Debug — display only      │
+├────────┬──────────────────────────────────────┬──────┤
+│  REST  │          WebSocket (real-time)       │ Live │
+│        │  status, session, program, kv        │ Voice│
+└────┬───┴──────────────────┬───────────────────┴──┬───┘
+     │                      │                      │
+     │    ┌─────────────────┴──────────────────┐   │
+     │    │         server.py (FastAPI)         │   │
+     │    │  Business logic: sessions, programs │   │
+     │    │  AI chat, speed/incline, GPX import │   │
+     │    ├──────────┬───────────┬──────────────┤   │
+     │    │workout_  │program_   │ treadmill_   │   │
+     │    │session.py│engine.py  │ client.py    │   │
+     │    │Lifecycle │Intervals  │ IPC wrapper  │   │
+     │    │dist/vert │+ Gemini   │              │   │
+     │    └──────────┘───────────┘──────┬───────┘   │
+     │                                  │ Unix sock  │
+     │           ┌──────────────────────┴────────┐   │
+     │           │   treadmill_io (C++20, root)  │   │
+     │           │ GPIO serial, proxy, emulate   │   │
+     │           │ Watchdog, 3h timeout, safety  │   │
+     │           └──────────────┬────────────────┘   │
+     │                          │                    │
+     │           ┌──────────────┴────────────────┐   │
+     │           │   ftms-daemon (Rust, root)    │   │
+     │           │ Bluetooth FTMS service for    │   │ Gemini Live
+     │           │ Zwift, Peloton, fitness apps  │   │ (browser →
+     │           └───────────────────────────────┘   │  Google WS)
+     └───────────────────────────────────────────────┘
 ```
 
 ### Why These Layers
 
-**C++ binary** ([`src/`](src/)) — This is the safety-critical layer. It handles bit-banged serial I/O at 9600 baud and nothing else. The important safety features live here — not in Python — because they must work even if the server crashes:
+**C++ binary** ([`src/`](src/)) — The safety-critical layer. Handles bit-banged serial I/O at 9600 baud and nothing else. Safety features live here so they work even if the server crashes:
 
-- **3-hour timeout:** If no speed/incline change for 3 hours, belt stops. You can't leave a treadmill running forever by accident.
-- **IPC watchdog:** If the Python server disconnects (no heartbeat for 4 seconds), belt stops automatically.
-- **Auto proxy/emulate:** When the Pi is controlling the belt (emulate mode) and someone presses a button on the physical console, it instantly switches back to proxy mode. The physical controls always win.
-- **Zero-on-start:** Entering emulate mode always zeros speed and incline. The belt never starts unexpectedly.
+- **3-hour timeout:** If no speed/incline change for 3 hours, belt stops.
+- **IPC watchdog:** If the Python server disconnects for 4 seconds, belt stops.
+- **Auto proxy/emulate:** When someone presses a physical console button during emulate mode, it instantly switches to proxy. Physical controls always win.
+- **Zero-on-start:** Entering emulate mode always zeros speed and incline.
 
 C++20 compiled with `-fno-exceptions -fno-rtti`. Hot paths (serial read/write) are zero-allocation — stack buffers only.
 
-**Python client** ([`treadmill_client.py`](treadmill_client.py)) — Thin wrapper over the Unix socket. Auto-reconnects with exponential backoff. Sends heartbeats on a background thread to keep the watchdog alive.
+**Python client** ([`treadmill_client.py`](treadmill_client.py)) — Thin wrapper over the Unix socket. Auto-reconnects with exponential backoff. Sends heartbeats on a background thread.
 
-**Server** ([`server.py`](server.py)) — FastAPI on port 8000. This is the single source of truth for all application state: workout sessions (elapsed time, distance, vertical feet), program execution, AI chat history, speed/incline validation. Multiple clients (web UI, future watch app, future CLI) all go through the same server.
+**Workout session** ([`workout_session.py`](workout_session.py)) — Owns the session lifecycle: start, end, pause, resume. Tracks elapsed time (wall clock minus pauses), distance (cumulative from speed ticks), and vertical feet (from incline). Owns the ProgramState instance. No HTTP, no GPIO.
 
-**Program engine** ([`program_engine.py`](program_engine.py)) — Manages interval program execution and Gemini AI calls. Runs a 1-second tick loop, tracks interval progress, sends encouragement at 25/50/75% milestones. No HTTP, no GPIO — it only knows about intervals and the AI.
+**Program engine** ([`program_engine.py`](program_engine.py)) — Interval program execution and Gemini AI calls. 1-second tick loop, interval progress tracking, encouragement at 25/50/75% milestones. No HTTP, no GPIO.
 
-**Web UI** ([`static/index.html`](static/index.html)) — Alpine.js, no build step. Display layer only — every decision happens server-side. The UI shows what the server tells it and sends API calls when you tap buttons. Warm dark palette, touch-first, designed for a phone mounted on the treadmill console.
+**Server** ([`server.py`](server.py)) — FastAPI on port 8000. Single source of truth for all application state. Coordinates workout sessions, program engine, and treadmill client. Multiple clients (web UI, future watch app) all go through the same server.
+
+**FTMS daemon** ([`ftms/`](ftms/)) — Rust binary that exposes the treadmill as a Bluetooth FTMS (Fitness Machine Service) device. Connects to the Python server via REST, advertises BLE GATT characteristics for speed, incline, distance, and elapsed time. Fitness apps like Zwift and Peloton see it as a standard smart treadmill.
+
+**Web UI** ([`ui/`](ui/)) — React 19 + TypeScript + Vite. Display layer only — every decision happens server-side. Touch-first, designed for a phone or tablet mounted on the treadmill console. Warm dark palette with Quicksand font. Framer Motion for layout animations and crossfade transitions.
 
 ### Proxy vs Emulate
 
@@ -203,7 +219,7 @@ Transitions are automatic. Sending a speed or incline command from the server sw
 
 ### AI Coach
 
-The AI coach uses Gemini 2.5 Flash with function calling. You can chat with it via text or voice, and it can directly control the treadmill.
+The AI coach uses Gemini 2.5 Flash with function calling. Chat via text or voice, and it directly controls the treadmill.
 
 **Available tools** (Gemini function calls):
 - `set_speed` / `set_incline` — direct control
@@ -211,11 +227,19 @@ The AI coach uses Gemini 2.5 Flash with function calling. You can chat with it v
 - `stop_treadmill` / `pause_program` / `resume_program` / `skip_interval`
 - `extend_interval` / `add_time` — modify a running program
 
-**Voice:** Audio is transcribed by Gemini, then processed through the same function-calling pipeline. TTS responses use `gemini-2.5-flash-preview-tts`.
-
 **GPX import:** Upload a GPX route file and the server converts elevation changes into an incline-based interval program.
 
 Programs are saved to `program_history.json` (last 10, deduplicated by name) and shown in the UI for quick reload.
+
+### Voice
+
+Two voice modes:
+
+**Gemini Live (primary)** — The browser opens a direct WebSocket to `generativelanguage.googleapis.com` using the `BidiGenerateContent` streaming API (`gemini-2.5-flash-native-audio-latest`). Audio goes straight from the mic to Gemini and back, with function calling for treadmill control. The server provides ephemeral API tokens (30-min expiry) via `/api/config`.
+
+**Text fallback** — Gemini Live sometimes "thinks aloud" (narrates intent as text instead of making a tool call). When detected, the client sends the text to `/api/voice/extract-intent`, which uses Gemini Flash to parse it into function calls and execute them.
+
+Voice requires HTTPS or Chrome's `--unsafely-treat-insecure-origin-as-secure` flag for `getUserMedia`. The server auto-detects `cert.pem`/`key.pem` and switches to HTTPS.
 
 ---
 
@@ -225,25 +249,39 @@ Programs are saved to `program_history.json` (last 10, deduplicated by name) and
 
 ```bash
 # On the Pi
-sudo apt install libpigpio-dev g++    # C++ build dependencies
-pip install fastapi uvicorn gpxpy      # Python server dependencies
+sudo apt install libpigpio-dev g++
+pip install google-genai fastapi uvicorn python-multipart gpxpy
 ```
+
+For the AI coach, create a `.gemini_key` file with your Gemini API key.
 
 ### Build and Run
 
 ```bash
-# Build the C++ binary
-make
-
-# Start the I/O binary (must be root for GPIO)
-sudo ./treadmill_io
-
-# In another terminal, start the server
-python3 server.py
-# Web UI at http://<pi-ip>:8000
+make                    # Build C++ binary
+sudo ./treadmill_io     # Start I/O (must be root, pigpiod must NOT be running)
+python3 server.py       # Start server — http://<pi-ip>:8000
 ```
 
-`treadmill_io` links libpigpio directly — `pigpiod` must NOT be running (they conflict).
+### Deploy to Pi
+
+The deploy script handles everything — builds, copies files, manages systemd services:
+
+```bash
+./deploy.sh             # Full deploy: C binary, Python, UI, venv, services
+./deploy.sh ui          # UI only (quick iteration)
+```
+
+This deploys to `~/treadmill/` on the Pi and manages three systemd services:
+- `treadmill_io.service` — C binary (root)
+- `treadmill-server.service` — Python server (user)
+- `ftms.service` — Bluetooth daemon (root, optional)
+
+### Build the UI
+
+```bash
+cd ui && npm install && npx vite build   # Outputs to static/
+```
 
 ### Other Tools
 
@@ -263,14 +301,18 @@ make test
 # Deploy to Pi + hardware integration tests
 make test-pi
 
-# Both
+# Both C++ tiers
 make test-all
 
-# Python unit tests (mocked, <1s)
-python3 -m pytest tests/test_program_engine.py tests/test_server_integration.py -v
+# Python tests (mocked, <1s)
+python3 -m pytest tests/test_program_engine.py tests/test_server_integration.py \
+                  tests/test_workout_session.py tests/test_session.py -v
 
 # Python live integration tests (real timing, ~45s)
 python3 -m pytest tests/test_live_program.py -v
+
+# FTMS Rust tests
+make test-ftms
 ```
 
 ## API Reference
@@ -279,10 +321,12 @@ python3 -m pytest tests/test_live_program.py -v
 
 | Method | Endpoint | Body | Description |
 |--------|----------|------|-------------|
-| GET | `/api/status` | — | Current speed, incline, mode, motor KV data |
+| GET | `/api/status` | — | Speed, incline, mode, motor KV data |
 | GET | `/api/session` | — | Elapsed time, distance, vertical feet |
+| GET | `/api/config` | — | Client config (ephemeral Gemini token for Live voice) |
 | POST | `/api/speed` | `{"value": 3.5}` | Set belt speed (mph) |
 | POST | `/api/incline` | `{"value": 5}` | Set incline grade (0-15) |
+| POST | `/api/reset` | — | Full reset: stop belt, zero speed/incline, end session |
 | POST | `/api/emulate` | `{"enabled": true}` | Toggle emulate mode (debug) |
 | POST | `/api/proxy` | `{"enabled": true}` | Toggle proxy mode (debug) |
 
@@ -292,28 +336,36 @@ python3 -m pytest tests/test_live_program.py -v
 |--------|----------|------|-------------|
 | GET | `/api/program` | — | Current program state |
 | POST | `/api/program/generate` | `{"prompt": "..."}` | Generate program via Gemini |
+| POST | `/api/program/quick-start` | `{"speed": 3.0, "incline": 0}` | Create manual program and start |
 | POST | `/api/program/start` | — | Start loaded program |
 | POST | `/api/program/stop` | — | Stop program, zero speed/incline |
 | POST | `/api/program/pause` | — | Toggle pause/resume |
 | POST | `/api/program/skip` | — | Skip to next interval |
+| POST | `/api/program/prev` | — | Go to previous interval |
 | POST | `/api/program/extend` | `{"seconds": 60}` | Adjust current interval duration |
-| GET | `/api/programs/history` | — | List recent programs (max 10) |
+| POST | `/api/program/adjust-duration` | `{"delta_seconds": 300}` | Adjust manual program total duration |
+| GET | `/api/programs/history` | — | Recent programs (max 10) |
 | POST | `/api/programs/history/{id}/load` | — | Reload a saved program |
 | POST | `/api/gpx/upload` | multipart file | Upload GPX route file |
 
-### Chat
+### Chat & Voice
 
 | Method | Endpoint | Body | Description |
 |--------|----------|------|-------------|
 | POST | `/api/chat` | `{"message": "..."}` | Text chat with AI coach |
-| POST | `/api/chat/voice` | `{"audio": "base64...", "mime": "..."}` | Voice chat (transcribe + respond) |
-| POST | `/api/tts` | `{"text": "...", "voice": "Kore"}` | Text-to-speech |
+| POST | `/api/chat/voice` | `{"audio": "base64...", "mime_type": "..."}` | Voice transcribe + respond |
+| POST | `/api/tts` | `{"text": "...", "voice": "Kore"}` | Text-to-speech via Gemini |
+| POST | `/api/voice/extract-intent` | `{"text": "..."}` | Extract function calls from voice text |
 
 ### WebSocket
 
-| Endpoint | Description |
-|----------|-------------|
-| `/ws` | Real-time stream: KV data, program state, session metrics |
+| Endpoint | Messages |
+|----------|----------|
+| `/ws` | `type: "status"` — speed, incline, mode |
+|        | `type: "session"` — elapsed, distance, vert feet |
+|        | `type: "program"` — interval progress, encouragement |
+|        | `type: "connection"` — treadmill_io connected/disconnected |
+|        | `type: "kv"` — raw serial bus key-value messages |
 
 ## License
 

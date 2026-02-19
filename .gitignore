@@ -6,10 +6,13 @@ __pycache__/
 venv/
 *.egg-info/
 
-# Captures and logs (large files)
+# Logs (large files)
 *.jsonl
 *.log
+
+# CSVs except logic analyzer captures
 *.csv
+!src/captures/*.csv
 
 # Editor backups
 *~
