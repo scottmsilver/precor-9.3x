@@ -8,6 +8,33 @@ import VoiceOverlay from './components/VoiceOverlay';
 import { ToastContext, registerToast } from './state/TreadmillContext';
 import { useVoice } from './state/useVoice';
 
+function useWakeLock() {
+  const wakeLock = useRef<WakeLockSentinel | null>(null);
+
+  useEffect(() => {
+    if (!('wakeLock' in navigator)) return;
+
+    const request = async () => {
+      try {
+        wakeLock.current = await navigator.wakeLock.request('screen');
+      } catch { /* user denied or not supported */ }
+    };
+
+    request();
+
+    // Re-acquire on tab focus (wake lock is released when tab is hidden)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') request();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      wakeLock.current?.release();
+    };
+  }, []);
+}
+
 export default function App({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const [toastMsg, setToastMsg] = useState('');
@@ -16,6 +43,7 @@ export default function App({ children }: { children: React.ReactNode }) {
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
   const { voiceState, toggle: toggleVoice } = useVoice();
 
+  useWakeLock();
   const isRun = location.startsWith('/run');
 
   const showToast = useCallback((message: string) => {
