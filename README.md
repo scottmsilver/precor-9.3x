@@ -13,7 +13,7 @@ The treadmill has two independent circuit boards:
 - **Console (Upper PCA)** — the display and buttons. It decides what speed and incline to request.
 - **Motor controller (Lower PCA)** — drives the belt motor and lift motor. It reports back sensor readings.
 
-They talk over a single 8P8C cable (the same connector as an Ethernet cable, but this is not Ethernet).
+They talk over a single RJ45 cable (the same connector as an Ethernet cable, but this is not Ethernet).
 
 ### Cable Pinout
 
@@ -123,6 +123,8 @@ Console ──pin 6──▶ [GPIO 27] Pi [GPIO 22] ──pin 6──▶ Motor
 | Motor read | Pin 3 | 17 | 11 | Reads responses from motor |
 
 Pin assignments are configured in [`gpio.json`](gpio.json) — the C binary reads this at startup.
+
+![Wiring Diagram](wiring_diagram.svg)
 
 ### Why Cut Pin 6
 
