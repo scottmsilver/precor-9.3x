@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useLocation } from 'wouter';
 import { useSession } from '../state/useSession';
 import { useProgram } from '../state/useProgram';
+import { useTreadmillState } from '../state/TreadmillContext';
 import { useVoice } from '../state/useVoice';
 import * as api from '../state/api';
 import { fmtDur } from '../utils/formatters';
@@ -9,62 +11,52 @@ import { haptic } from '../utils/haptics';
 import MetricsRow from '../components/MetricsRow';
 import ProgramHUD from '../components/ProgramHUD';
 import ProgramComplete from '../components/ProgramComplete';
+import IdleCard from '../components/IdleCard';
 import HistoryList from '../components/HistoryList';
 import BottomBar from '../components/BottomBar';
-import { pillBtn, HomeIcon, MicIcon } from '../components/shared';
-import { useMotivation } from '../state/useMotivation';
+import { HomeIcon, MicIcon } from '../components/shared';
 
-function PathIcon() {
-  return (
-    <svg width="48" height="32" viewBox="0 0 48 32" fill="none" style={{ opacity: 0.15 }}>
-      <path d="M2,28 C10,28 12,8 20,8 C28,8 26,20 34,20 C40,20 42,12 46,4"
-        stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
+const iconBtn: React.CSSProperties = {
+  width: 44, height: 44,
+  border: 'none', cursor: 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  WebkitTapHighlightColor: 'transparent',
+  borderRadius: 'var(--r-md)',
+};
 
-function EmptyRunCard({ onVoice }: { onVoice: () => void }) {
-  const [, navigate] = useLocation();
-  return (
-    <div style={{
-      margin: '0 16px 8px', flex: 1,
-      borderRadius: 'var(--r-lg)', background: 'var(--card)',
-      border: '1px solid rgba(255,255,255,0.25)',
-      display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
-      gap: 16, minHeight: 0,
-    }}>
-      <PathIcon />
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text2)' }}>
-          Ready when you are
-        </div>
-        <div style={{ fontSize: 12, color: 'var(--text3)', marginTop: 4 }}>
-          Set your speed below to start
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button style={pillBtn} onClick={() => navigate('/')}>
-          <HomeIcon /> Home
-        </button>
-        <button style={pillBtn} onClick={onVoice}>
-          <MicIcon /> Voice
-        </button>
-      </div>
-    </div>
-  );
-}
+const spring = { type: 'spring' as const, stiffness: 400, damping: 28 };
+const springBouncy = { type: 'spring' as const, stiffness: 300, damping: 20 };
 
 export default function Running(): React.ReactElement {
   const [, setLocation] = useLocation();
   const sess = useSession();
   const pgm = useProgram();
+  const { status } = useTreadmillState();
   const { voiceState, toggle: toggleVoice } = useVoice();
   const [durationEditOpen, setDurationEditOpen] = useState(false);
 
-  const isActive = sess.active || pgm.running;
-  const motivation = useMotivation(!isActive);
   const isManual = pgm.program?.manual === true;
+
+  // Delay the idle→HUD visual swap for manual programs so the user can
+  // finish tapping speed/incline without the layout shifting under them.
+  // Each speed/incline change restarts the settle timer.
+  const [visualActive, setVisualActive] = React.useState(false);
+  const settleTimer = React.useRef<ReturnType<typeof setTimeout>>();
+  const physicalActive = sess.active || pgm.running;
+
+  React.useEffect(() => {
+    clearTimeout(settleTimer.current);
+    if (physicalActive && isManual && !visualActive) {
+      settleTimer.current = setTimeout(() => setVisualActive(true), 1200);
+    } else if (physicalActive && !isManual) {
+      setVisualActive(true);
+    } else if (!physicalActive) {
+      setVisualActive(false);
+    }
+    return () => clearTimeout(settleTimer.current);
+  }, [physicalActive, isManual, status.emuSpeed, status.emuIncline]);
+
+  const isActive = visualActive;
 
   const handleTimeTap = () => {
     if (isManual && pgm.running) {
@@ -73,52 +65,71 @@ export default function Running(): React.ReactElement {
     }
   };
 
+  const adjustDurationGuard = React.useRef(false);
   const adjustDuration = (deltaMins: number) => {
+    if (adjustDurationGuard.current) return;
+    adjustDurationGuard.current = true;
+    setTimeout(() => { adjustDurationGuard.current = false; }, 400);
     api.adjustDuration(deltaMins * 60);
     haptic(25);
   };
 
+  const homeButton = (
+    <motion.button
+      layoutId="home-icon"
+      onClick={() => { setLocation('/'); haptic(15); }}
+      style={{
+        ...iconBtn,
+        background: isActive ? 'none' : 'var(--card)',
+        border: isActive ? 'none' : '1px solid rgba(255,255,255,0.25)',
+        color: 'var(--text3)', opacity: 0.7,
+      }}
+      transition={{ layout: springBouncy }}
+      aria-label="Home"
+    >
+      <HomeIcon size={20} />
+    </motion.button>
+  );
+
+  const voiceButton = (
+    <motion.button
+      layoutId="voice-icon"
+      onClick={() => { haptic(voiceState === 'idle' ? 20 : 10); toggleVoice(); }}
+      style={{
+        ...iconBtn,
+        background: isActive ? 'none' : 'var(--card)',
+        border: isActive ? 'none' : '1px solid rgba(255,255,255,0.25)',
+        color: voiceState === 'listening' ? 'var(--red)'
+          : voiceState === 'speaking' ? 'var(--purple)'
+          : 'var(--text3)',
+        opacity: voiceState === 'idle' ? 0.7 : 1,
+        transition: 'color 0.2s, opacity 0.2s',
+      }}
+      transition={{ layout: springBouncy }}
+      aria-label={voiceState === 'idle' ? 'Voice' : voiceState === 'listening' ? 'Listening' : 'Speaking'}
+    >
+      <MicIcon size={20} />
+    </motion.button>
+  );
+
   return (
-    <div className="run-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div className="run-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
       {/* Hero time with ambient glow */}
       <div className="run-header" style={{
         textAlign: 'center', padding: '12px 16px 4px', flexShrink: 0,
         position: 'relative',
       }}>
-        {/* Home — top-left, subtle */}
-        <button
-          onClick={() => { setLocation('/'); haptic(15); }}
-          style={{
-            position: 'absolute', top: 6, left: 16, zIndex: 2,
-            width: 44, height: 44,
-            background: 'none', border: 'none',
-            color: 'var(--text3)', opacity: 0.7,
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            WebkitTapHighlightColor: 'transparent',
-          }}
-          aria-label="Home"
-        >
-          <HomeIcon size={20} />
-        </button>
-        {/* Mic — top-right */}
-        <button
-          onClick={() => { haptic(voiceState === 'idle' ? 20 : 10); toggleVoice(); }}
-          style={{
-            position: 'absolute', top: 6, right: 16, zIndex: 2,
-            width: 44, height: 44,
-            background: 'none', border: 'none',
-            color: voiceState === 'listening' ? 'var(--red)'
-              : voiceState === 'speaking' ? 'var(--purple)'
-              : 'var(--text3)',
-            opacity: voiceState === 'idle' ? 0.7 : 1,
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            WebkitTapHighlightColor: 'transparent',
-            transition: 'color 0.2s, opacity 0.2s',
-          }}
-          aria-label={voiceState === 'idle' ? 'Voice' : voiceState === 'listening' ? 'Listening' : 'Speaking'}
-        >
-          <MicIcon size={20} />
-        </button>
+        {/* Home & Mic in header when active */}
+        {isActive && (
+          <>
+            <div style={{ position: 'absolute', top: 6, left: 16, zIndex: 2 }}>
+              {homeButton}
+            </div>
+            <div style={{ position: 'absolute', top: 6, right: 16, zIndex: 2 }}>
+              {voiceButton}
+            </div>
+          </>
+        )}
         <div style={{
           position: 'absolute', top: '50%', left: '50%',
           width: 200, height: 140,
@@ -130,74 +141,122 @@ export default function Running(): React.ReactElement {
           transition: 'opacity 0.6s var(--ease)',
           willChange: 'opacity',
         }} />
-        <div className="hero-slot" style={{
-          position: 'relative', zIndex: 1,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <div
-            className={isActive ? 'hero-time' : undefined}
-            onClick={isActive ? handleTimeTap : undefined}
-            style={{
-              fontSize: isActive ? 96 : 36,
-              fontWeight: isActive ? 700 : 500,
-              lineHeight: 1,
-              fontVariantNumeric: isActive ? 'tabular-nums' : 'normal',
-              letterSpacing: isActive ? '-0.02em' : '0.01em',
-              color: isActive ? 'var(--text)' : 'var(--text3)',
-              transition: 'color 0.35s',
-              cursor: isManual && pgm.running ? 'pointer' : 'default',
-              WebkitTapHighlightColor: 'transparent',
-            }}
-          >
-            {isActive ? sess.elapsedDisplay : motivation}
+        <motion.div
+          animate={{ height: isActive ? 'auto' : 0, opacity: isActive ? 1 : 0 }}
+          transition={spring}
+          style={{ overflow: 'hidden', position: 'relative', zIndex: 1 }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {isActive && (
+              <motion.div
+                className="hero-time font-timer"
+                initial={{ opacity: 0, scale: 0.8, y: 8 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                transition={springBouncy}
+                onClick={handleTimeTap}
+                style={{
+                  fontSize: 96,
+                  fontWeight: 600,
+                  lineHeight: 1,
+                  letterSpacing: '-0.02em',
+                  color: 'var(--text)',
+                  cursor: isManual && pgm.running ? 'pointer' : 'default',
+                  WebkitTapHighlightColor: 'transparent',
+                }}
+              >
+                {sess.elapsedDisplay}
+              </motion.div>
+            )}
           </div>
-        </div>
+        </motion.div>
 
         {isManual && pgm.running && (
-          <div style={{
+          <div className="font-timer" style={{
             fontSize: 12, color: 'var(--text3)', marginTop: 2,
-            fontVariantNumeric: 'tabular-nums',
           }}>
             {fmtDur(pgm.totalRemaining)} remaining of {fmtDur(pgm.totalDuration)}
           </div>
         )}
 
-        {durationEditOpen && isManual && pgm.running && (
-          <div style={{
-            display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8,
-            animation: 'toastSlideUp 150ms var(--ease-decel) forwards',
-          }}>
-            {[-10, -5, 5, 10].map(d => (
-              <button
-                key={d}
-                onClick={(e) => { e.stopPropagation(); adjustDuration(d); }}
-                style={{
-                  height: 36, padding: '0 14px', borderRadius: 'var(--r-pill)',
-                  border: '0.5px solid var(--separator)',
-                  background: 'var(--card)', color: d > 0 ? 'var(--green)' : 'var(--text3)',
-                  fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-                  cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
-                }}
-              >
-                {d > 0 ? '+' : ''}{d}m
-              </button>
-            ))}
-          </div>
-        )}
+        <AnimatePresence>
+          {durationEditOpen && isManual && pgm.running && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={spring}
+              style={{
+                display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8,
+              }}
+            >
+              {[-10, -5, 5, 10].map(d => (
+                <button
+                  key={d}
+                  onClick={(e) => { e.stopPropagation(); adjustDuration(d); }}
+                  style={{
+                    height: 36, padding: '0 14px', borderRadius: 'var(--r-pill)',
+                    border: '0.5px solid var(--separator)',
+                    background: 'var(--card)', color: d > 0 ? 'var(--green)' : 'var(--text3)',
+                    fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                    cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
+                  }}
+                >
+                  {d > 0 ? '+' : ''}{d}m
+                </button>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Metrics row */}
       <MetricsRow />
 
       {/* Elevation profile or empty state — fills available vertical space */}
-      <div className="run-viz" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginTop: 6 }}>
-        {pgm.program && pgm.running ? (
-          <ProgramHUD />
-        ) : pgm.completed ? (
-          <ProgramComplete onVoice={() => { haptic(20); toggleVoice(); }} />
-        ) : (
-          <EmptyRunCard onVoice={() => { haptic(20); toggleVoice(); }} />
-        )}
+      <div className="run-viz" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginTop: 6, position: 'relative' }}>
+        <AnimatePresence mode="wait">
+          {pgm.program && pgm.running ? (
+            <motion.div
+              key="hud"
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={spring}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            >
+              <ProgramHUD />
+            </motion.div>
+          ) : pgm.completed ? (
+            <motion.div
+              key="complete"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={springBouncy}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}
+            >
+              <ProgramComplete onVoice={() => { haptic(20); toggleVoice(); }} />
+            </motion.div>
+          ) : (
+            <motion.div
+              key="idle"
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={springBouncy}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}
+            >
+              {/* Floating icons in the viz area when idle */}
+              <div className="idle-icon idle-icon-left">
+                {homeButton}
+              </div>
+              <div className="idle-icon idle-icon-right">
+                {voiceButton}
+              </div>
+              <IdleCard onVoice={(prompt) => { haptic(20); toggleVoice(prompt); }} />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {pgm.completed && !pgm.running && (

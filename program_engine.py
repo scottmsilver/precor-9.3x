@@ -164,8 +164,11 @@ class ProgramState:
         }
         if self._pending_encouragement:
             d["encouragement"] = self._pending_encouragement
-            self._pending_encouragement = None
         return d
+
+    def drain_encouragement(self):
+        """Clear pending encouragement after broadcast. Call after to_dict()."""
+        self._pending_encouragement = None
 
     def load(self, program):
         self._cancel_task()
@@ -345,6 +348,7 @@ class ProgramState:
     async def _broadcast(self):
         if self._on_update:
             await self._on_update(self.to_dict())
+            self.drain_encouragement()
 
     def _cancel_task(self):
         if self._task:
@@ -456,6 +460,8 @@ async def generate_program(prompt, api_key=None):
 
 CHAT_SYSTEM_PROMPT = """You are an AI treadmill coach. You control a Precor treadmill via function calls.
 Be brief, friendly, motivating. Respond in 1-3 short sentences max.
+Feel free to use emoji in your responses when it feels natural.
+You can wrap a single important word in <<double angle brackets>> to give it an animated glow effect in the UI. Use sparingly for emphasis.
 
 Tools:
 - set_speed: change speed (mph). Use 0 to stop belt.
@@ -478,6 +484,11 @@ Guidelines:
 - extend_interval changes the CURRENT interval's duration (e.g. +60 adds 1 min)
 - add_time appends new intervals at the END of the program
 - Always confirm what you did briefly"""
+
+SMARTASS_ADDENDUM = """
+SMART-ASS MODE: Be sarcastic, witty, and make fun of the user for being lazy.
+Roast them (lovingly) about their pace, breaks, or workout choices.
+Still be helpful and encouraging underneath the sass."""
 
 TOOL_DECLARATIONS = [
     {

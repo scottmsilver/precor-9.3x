@@ -110,12 +110,16 @@ export async function uploadGpx(file: File): Promise<{ ok: boolean; program?: un
 
 // --- Chat ---
 
+function isSmartassMode(): boolean {
+  try { return localStorage.getItem('smartass_mode') === 'true'; } catch { return false; }
+}
+
 export async function sendChat(message: string): Promise<ChatResponse> {
-  return post('/api/chat', { message });
+  return post('/api/chat', { message, smartass: isSmartassMode() });
 }
 
 export async function sendVoiceChat(audio: string, mimeType: string): Promise<ChatResponse> {
-  return post('/api/chat/voice', { audio, mime_type: mimeType });
+  return post('/api/chat/voice', { audio, mime_type: mimeType, smartass: isSmartassMode() });
 }
 
 // --- Voice intent extraction ---
@@ -146,4 +150,11 @@ export async function getLog(lines = 200): Promise<{ lines: string[] }> {
 
 export async function getConfig(): Promise<AppConfig> {
   return get('/api/config');
+}
+
+// --- Voice prompts ---
+
+export async function getVoicePrompt(id: string): Promise<string> {
+  const res = await get<{ prompt: string }>(`/api/voice/prompt/${id}`);
+  return res.prompt;
 }

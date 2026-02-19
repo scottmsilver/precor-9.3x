@@ -3,6 +3,7 @@
  * Minimal visual feedback at the top of screen: listening or speaking indicator.
  */
 import React from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import type { VoiceState } from '../state/useVoice';
 
 interface VoiceOverlayProps {
@@ -18,7 +19,6 @@ const overlayBase: React.CSSProperties = {
   display: 'flex',
   justifyContent: 'center',
   pointerEvents: 'none',
-  transition: 'opacity 0.3s var(--ease), transform 0.3s var(--ease)',
 };
 
 const pillBase: React.CSSProperties = {
@@ -71,27 +71,31 @@ function WaveformBars() {
 
 export default function VoiceOverlay({ voiceState }: VoiceOverlayProps) {
   const active = voiceState === 'listening' || voiceState === 'speaking';
-
-  if (!active) return null;
-
   const isListening = voiceState === 'listening';
 
   return (
-    <div style={{
-      ...overlayBase,
-      opacity: active ? 1 : 0,
-      transform: active ? 'translateY(0)' : 'translateY(-20px)',
-    }}>
-      <div style={{
-        ...pillBase,
-        background: isListening
-          ? 'rgba(196,92,82,0.15)'
-          : 'rgba(139,127,160,0.15)',
-        color: isListening ? 'var(--red)' : 'var(--purple)',
-      }}>
-        {isListening ? <PulseDot color="var(--red)" /> : <WaveformBars />}
-        <span>{isListening ? 'Listening...' : 'Speaking...'}</span>
-      </div>
-    </div>
+    <AnimatePresence>
+      {active && (
+        <motion.div
+          key={voiceState}
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -20 }}
+          transition={{ duration: 0.3 }}
+          style={overlayBase}
+        >
+          <div style={{
+            ...pillBase,
+            background: isListening
+              ? 'rgba(196,92,82,0.15)'
+              : 'rgba(139,127,160,0.15)',
+            color: isListening ? 'var(--red)' : 'var(--purple)',
+          }}>
+            {isListening ? <PulseDot color="var(--red)" /> : <WaveformBars />}
+            <span>{isListening ? 'Listening...' : 'Speaking...'}</span>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

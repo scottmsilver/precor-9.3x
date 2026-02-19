@@ -24,14 +24,13 @@ from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
+from google import genai
 from program_engine import (
     CHAT_SYSTEM_PROMPT,
     GEMINI_MODEL,
+    SMARTASS_ADDENDUM,
     TOOL_DECLARATIONS,
     TTS_MODEL,
-    ProgramState,
     build_tts_config,
     call_gemini,
     extract_intent_from_text,
@@ -40,19 +39,30 @@ from program_engine import (
     read_api_key,
     validate_interval,
 )
+from pydantic import BaseModel
 from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
+from workout_session import WorkoutSession
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("treadmill")
 
+# Server-side dirty guard — when the API sets emu_speed or emu_incline,
+# we record a timestamp. The on_status callback from the C binary will
+# skip overwriting these fields while the guard is active, so that the
+# UI sees the *target* value (what the user requested), not the motor's
+# in-progress position (which lags behind during physical movement).
+_dirty_speed_until = 0.0
+_dirty_incline_until = 0.0
+_DIRTY_GRACE_SEC = 15.0  # motor can take 10+ seconds to reach target incline
+
 
 @asynccontextmanager
 async def lifespan(application):
-    global loop, msg_queue, client, prog
+    global loop, msg_queue, client, sess
 
     loop = asyncio.get_event_loop()
     msg_queue = asyncio.Queue(maxsize=500)
-    prog = ProgramState()
+    sess = WorkoutSession()
 
     # Connect to treadmill_io C binary
     client = TreadmillClient()
@@ -72,13 +82,17 @@ async def lifespan(application):
             was_emulating = state["emulate"]
             state["proxy"] = msg.get("proxy", False)
             state["emulate"] = msg.get("emulate", False)
-            state["emu_speed"] = msg.get("emu_speed", 0)
-            state["emu_incline"] = msg.get("emu_incline", 0)
+            # Only accept C binary's emu values if API hasn't set them recently
+            now = time.monotonic()
+            if now >= _dirty_speed_until:
+                state["emu_speed"] = msg.get("emu_speed", 0)
+            if now >= _dirty_incline_until:
+                state["emu_incline"] = msg.get("emu_incline", 0)
             # Detect watchdog / auto-proxy killing emulate while session active
-            if was_emulating and not state["emulate"] and session["active"]:
+            if was_emulating and not state["emulate"] and sess.active:
                 reason = "auto_proxy" if state["proxy"] else "watchdog"
-                _end_session(reason)
-                push_msg(build_session())
+                sess.end(reason)
+                push_msg(sess.to_dict())
             push_msg(msg)
 
     client.on_message = on_message
@@ -86,15 +100,18 @@ async def lifespan(application):
     def on_disconnect():
         state["treadmill_connected"] = False
         log.warning("treadmill_io disconnected")
-        # End active session
-        if session["active"]:
-            _end_session("disconnect")
-            push_msg(build_session())
-        # Push disconnect event to WebSocket clients
-        push_msg({"type": "connection", "connected": False})
-        # Auto-pause program if running
-        if prog and prog.running and not prog.paused:
-            asyncio.run_coroutine_threadsafe(prog.toggle_pause(), loop)
+
+        # All session mutations must happen on the event loop thread
+        def _handle_disconnect():
+            if sess.active:
+                sess.end("disconnect")
+                push_msg(sess.to_dict())
+            push_msg({"type": "connection", "connected": False})
+
+        loop.call_soon_threadsafe(_handle_disconnect)
+        # Auto-pause program if running (async, so use coroutine)
+        if sess.prog.running and not sess.prog.paused:
+            asyncio.run_coroutine_threadsafe(sess.prog.toggle_pause(), loop)
 
     def on_reconnect():
         state["treadmill_connected"] = True
@@ -130,8 +147,8 @@ async def lifespan(application):
     broadcast_task.cancel()
     session_tick_task.cancel()
     client.stop_heartbeat()
-    if prog and prog.running:
-        await prog.stop()
+    if sess.prog.running:
+        await sess.prog.stop()
     client.close()
     log.info("Server stopped")
 
@@ -151,7 +168,7 @@ app.add_middleware(
 loop: asyncio.AbstractEventLoop = None
 msg_queue: asyncio.Queue = None
 client: TreadmillClient = None
-prog: ProgramState = None
+sess: WorkoutSession = None
 
 # --- Shared state ---
 state = {
@@ -166,19 +183,6 @@ state = {
 latest = {
     "last_console": {},
     "last_motor": {},
-}
-
-# --- Session state (server-authoritative) ---
-session = {
-    "active": False,
-    "started_at": 0.0,  # monotonic
-    "wall_started_at": "",  # ISO wall clock for display
-    "paused_at": 0.0,  # monotonic when paused, 0 if not paused
-    "total_paused": 0.0,  # accumulated pause seconds
-    "elapsed": 0.0,
-    "distance": 0.0,  # miles
-    "vert_feet": 0.0,
-    "end_reason": None,  # "user_stop" | "watchdog" | "auto_proxy" | "disconnect"
 }
 
 chat_history: list = []
@@ -236,106 +240,13 @@ def push_msg(msg):
         loop.call_soon_threadsafe(_enqueue, msg)
 
 
-# --- Session lifecycle ---
-
-
-def _start_session():
-    """Begin a new workout session. Idempotent if already active."""
-    if session["active"]:
-        # Clear any stale pause (e.g. new program started while paused)
-        session["paused_at"] = 0.0
-        return
-    session["active"] = True
-    session["started_at"] = time.monotonic()
-    session["wall_started_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    session["paused_at"] = 0.0
-    session["total_paused"] = 0.0
-    session["elapsed"] = 0.0
-    session["distance"] = 0.0
-    session["vert_feet"] = 0.0
-    session["end_reason"] = None
-    log.info("Session started")
-
-
-def _end_session(reason):
-    """End the current workout session with a reason."""
-    if not session["active"]:
-        return
-    # Final tick to capture last elapsed/distance
-    _session_tick_compute()
-    session["active"] = False
-    session["end_reason"] = reason
-    log.info(f"Session ended: {reason}")
-
-
-def _session_tick_compute():
-    """Compute elapsed/distance/vert from monotonic clock and current speed/incline."""
-    if not session["active"]:
-        return
-    now = time.monotonic()
-    if session["paused_at"] > 0:
-        # Paused — don't advance
-        return
-    raw_elapsed = now - session["started_at"] - session["total_paused"]
-    session["elapsed"] = max(0.0, raw_elapsed)
-
-    # Accumulate distance and vert from current speed/incline
-    speed_mph = state["emu_speed"] / 10
-    if speed_mph > 0:
-        miles_per_sec = speed_mph / 3600
-        session["distance"] += miles_per_sec
-        inc = state["emu_incline"]
-        if inc > 0:
-            session["vert_feet"] += miles_per_sec * (inc / 100) * 5280
-
-
-def build_session():
-    """Build session state dict for WebSocket broadcast."""
-    return {
-        "type": "session",
-        "active": session["active"],
-        "elapsed": session["elapsed"],
-        "distance": session["distance"],
-        "vert_feet": session["vert_feet"],
-        "wall_started_at": session["wall_started_at"],
-        "end_reason": session["end_reason"],
-    }
-
-
 async def _session_tick_loop():
     """1/sec loop: compute session metrics and broadcast to all WS clients."""
     while state["running"]:
-        if session["active"]:
-            _session_tick_compute()
-            await manager.broadcast(build_session())
+        if sess.active:
+            sess.tick(state["emu_speed"] / 10, state["emu_incline"])
+            await manager.broadcast(sess.to_dict())
         await asyncio.sleep(1)
-
-
-def _pause_session():
-    """Pause session timer (for program pauses)."""
-    if session["active"] and session["paused_at"] == 0:
-        session["paused_at"] = time.monotonic()
-
-
-def _resume_session():
-    """Resume session timer after pause."""
-    if session["active"] and session["paused_at"] > 0:
-        session["total_paused"] += time.monotonic() - session["paused_at"]
-        session["paused_at"] = 0.0
-
-
-def _reset_session():
-    """Zero all session data for a full reset."""
-    session["active"] = False
-    session["started_at"] = 0.0
-    session["wall_started_at"] = ""
-    session["paused_at"] = 0.0
-    session["total_paused"] = 0.0
-    session["elapsed"] = 0.0
-    session["distance"] = 0.0
-    session["vert_feet"] = 0.0
-    session["end_reason"] = None
-    log.info("Session reset")
 
 
 # --- WebSocket manager ---
@@ -440,11 +351,13 @@ class GenerateRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    smartass: bool = False
 
 
 class VoiceChatRequest(BaseModel):
     audio: str  # base64-encoded audio
     mime_type: str = "audio/webm"
+    smartass: bool = False
 
 
 class TTSRequest(BaseModel):
@@ -455,42 +368,27 @@ class TTSRequest(BaseModel):
 # --- Shared control helpers ---
 
 
-async def _ensure_manual_program(speed=3.0, incline=0, duration_minutes=60):
-    """Auto-create and start a manual program if none is running."""
-    if prog.running:
-        return
-    program = {
-        "name": f"{duration_minutes}-Min Manual",
-        "manual": True,
-        "intervals": [
-            {
-                "name": "Seg 1",
-                "duration": duration_minutes * 60,
-                "speed": speed,
-                "incline": incline,
-            }
-        ],
-    }
-    prog.load(program)
-    await prog.start(_prog_on_change(), _prog_on_update())
-
-
 async def _apply_speed(mph):
     """Core speed logic shared by REST endpoint and Gemini function calls."""
+    global _dirty_speed_until
+    _dirty_speed_until = time.monotonic() + _DIRTY_GRACE_SEC
     state["emu_speed"] = max(0, min(int(mph * 10), MAX_SPEED_TENTHS))
     # Mirror C binary's auto-emulate: sending a speed command enables emulate mode
     if mph > 0:
         state["emulate"] = True
         state["proxy"] = False
-        _start_session()
         # Every workout has a program — auto-create manual if none running
-        await _ensure_manual_program(speed=mph, incline=state["emu_incline"])
-    elif mph == 0 and session["active"]:
-        _end_session("user_stop")
-        await manager.broadcast(build_session())
+        await sess.ensure_manual(
+            speed=mph, incline=state["emu_incline"], on_change=_prog_on_change(), on_update=_prog_on_update()
+        )
+    elif mph == 0 and sess.active:
+        if sess.prog.running:
+            await sess.prog.stop()
+        sess.end("user_stop")
+        await manager.broadcast(sess.to_dict())
     # Split manual program interval to record course
-    if prog.is_manual and prog.running and mph > 0:
-        await prog.split_for_manual(mph, state["emu_incline"])
+    if sess.prog.is_manual and sess.prog.running and mph > 0:
+        await sess.prog.split_for_manual(mph, state["emu_incline"])
     try:
         client.set_speed(mph)
     except ConnectionError:
@@ -498,18 +396,25 @@ async def _apply_speed(mph):
     await broadcast_status()
 
 
+MAX_SAFE_INCLINE = 15  # Application-layer limit (hardware allows 0-99)
+
+
 async def _apply_incline(inc):
     """Core incline logic shared by REST endpoint and Gemini function calls."""
-    state["emu_incline"] = max(0, min(inc, MAX_INCLINE))
+    global _dirty_incline_until
+    _dirty_incline_until = time.monotonic() + _DIRTY_GRACE_SEC
+    state["emu_incline"] = max(0, min(inc, MAX_SAFE_INCLINE))
     # Mirror C binary's auto-emulate: sending an incline command enables emulate mode
     if inc > 0:
         state["emulate"] = True
         state["proxy"] = False
+    # Use the clamped value for all downstream operations
+    clamped_inc = state["emu_incline"]
     # Split manual program interval to record course
-    if prog.is_manual and prog.running:
-        await prog.split_for_manual(state["emu_speed"] / 10, inc)
+    if sess.prog.is_manual and sess.prog.running:
+        await sess.prog.split_for_manual(state["emu_speed"] / 10, clamped_inc)
     try:
-        client.set_incline(inc)
+        client.set_incline(clamped_inc)
     except ConnectionError:
         log.warning("Cannot set incline: treadmill_io disconnected")
     await broadcast_status()
@@ -517,13 +422,13 @@ async def _apply_incline(inc):
 
 async def _apply_stop():
     """Core stop logic shared by REST endpoint and Gemini function calls."""
-    if prog and prog.running:
-        await prog.stop()
+    if sess.prog.running:
+        await sess.prog.stop()
     state["emu_speed"] = 0
     state["emu_incline"] = 0
-    if session["active"]:
-        _end_session("user_stop")
-        await manager.broadcast(build_session())
+    if sess.active:
+        sess.end("user_stop")
+        await manager.broadcast(sess.to_dict())
     try:
         client.set_speed(0)
         client.set_incline(0)
@@ -542,18 +447,64 @@ async def get_status():
 
 @app.get("/api/session")
 async def get_session():
-    return build_session()
+    return sess.to_dict()
 
 
 GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-latest"
 
+# Voice prompts — injected into Gemini Live session as user text turns
+VOICE_PROMPTS = {
+    "custom-workout": (
+        "The user wants to create a custom workout program. "
+        "Greet them warmly and ask what kind of workout they'd like — "
+        "duration, intensity, hills, intervals, etc. "
+        "Then use start_workout to create it."
+    ),
+}
+
+
+@app.get("/api/voice/prompt/{prompt_id}")
+async def get_voice_prompt(prompt_id: str):
+    """Return a voice prompt by ID for injection into Gemini Live sessions."""
+    text = VOICE_PROMPTS.get(prompt_id)
+    if text is None:
+        return JSONResponse({"error": "unknown prompt"}, status_code=404)
+    return {"prompt": text}
+
+
+def _create_ephemeral_token() -> str | None:
+    """Create a short-lived Gemini API token for client-side Live sessions."""
+    import datetime
+
+    api_key = read_api_key()
+    if not api_key:
+        return None
+    try:
+        auth_client = genai.Client(
+            api_key=api_key,
+            http_options={"api_version": "v1alpha"},
+        )
+        now = datetime.datetime.now(tz=datetime.timezone.utc)
+        token = auth_client.auth_tokens.create(
+            config={
+                "uses": 1,
+                "expire_time": now + datetime.timedelta(minutes=30),
+                "new_session_expire_time": now + datetime.timedelta(minutes=2),
+                "http_options": {"api_version": "v1alpha"},
+            }
+        )
+        return token.name
+    except Exception:
+        log.exception("Failed to create ephemeral token")
+        return None
+
 
 @app.get("/api/config")
 async def get_config():
-    """Return client config (API key, model, voice) for Gemini Live."""
-    api_key = read_api_key() or ""
+    """Return client config with ephemeral token for Gemini Live."""
+    token = await asyncio.to_thread(_create_ephemeral_token)
     return {
-        "gemini_api_key": api_key,
+        "gemini_api_key": token or "",
         "gemini_model": GEMINI_MODEL,
         "gemini_live_model": GEMINI_LIVE_MODEL,
         "gemini_voice": "Kore",
@@ -640,7 +591,7 @@ async def set_proxy(req: ProxyRequest):
 async def api_generate_program(req: GenerateRequest):
     try:
         program = await generate_program(req.prompt)
-        prog.load(program)
+        sess.prog.load(program)
         _add_to_history(program, req.prompt)
         return {"ok": True, "program": program}
     except Exception as e:
@@ -650,11 +601,10 @@ async def api_generate_program(req: GenerateRequest):
 
 @app.post("/api/program/start")
 async def api_start_program():
-    if not prog.program:
+    if not sess.prog.program:
         return {"ok": False, "error": "No program loaded"}
-    _start_session()
-    await prog.start(_prog_on_change(), _prog_on_update())
-    return prog.to_dict()
+    await sess.start_program(_prog_on_change(), _prog_on_update())
+    return sess.prog.to_dict()
 
 
 class QuickStartRequest(BaseModel):
@@ -666,41 +616,44 @@ class QuickStartRequest(BaseModel):
 @app.post("/api/program/quick-start")
 async def api_quick_start(req: QuickStartRequest):
     """Create a simple single-interval program and start it immediately."""
-    _start_session()
-    await _ensure_manual_program(speed=req.speed, incline=req.incline, duration_minutes=req.duration_minutes)
-    return {"ok": True, **prog.to_dict()}
+    await sess.ensure_manual(
+        speed=req.speed,
+        incline=req.incline,
+        duration_minutes=req.duration_minutes,
+        on_change=_prog_on_change(),
+        on_update=_prog_on_update(),
+    )
+    return {"ok": True, **sess.prog.to_dict()}
 
 
 @app.post("/api/program/stop")
 async def api_stop_program():
     await _apply_stop()
-    return prog.to_dict()
+    return sess.prog.to_dict()
 
 
 @app.post("/api/reset")
 async def api_reset():
     """Full reset: stop belt, clear program, zero session."""
-    await prog.reset()
+    await sess.reset()
     state["emu_speed"] = 0
     state["emu_incline"] = 0
-    _reset_session()
     try:
         client.set_speed(0)
         client.set_incline(0)
     except ConnectionError:
         log.warning("Cannot send stop: treadmill_io disconnected")
-    await manager.broadcast(build_session())
+    await manager.broadcast(sess.to_dict())
     await broadcast_status()
     return {"ok": True}
 
 
 @app.post("/api/program/pause")
 async def api_pause_program():
-    was_paused = prog.paused
-    await prog.toggle_pause()
-    if prog.paused:
+    await sess.prog.toggle_pause()
+    if sess.prog.paused:
         # Pause: stop the belt, remember speed for resume
-        _pause_session()
+        sess.pause()
         state["_paused_speed"] = state["emu_speed"]
         state["emu_speed"] = 0
         try:
@@ -710,20 +663,20 @@ async def api_pause_program():
         await broadcast_status()
     else:
         # Resume: session timer resumes, speed restored by program engine's on_change
-        _resume_session()
-    return prog.to_dict()
+        sess.resume()
+    return sess.prog.to_dict()
 
 
 @app.post("/api/program/skip")
 async def api_skip_program():
-    await prog.skip()
-    return prog.to_dict()
+    await sess.prog.skip()
+    return sess.prog.to_dict()
 
 
 @app.post("/api/program/prev")
 async def api_prev_program():
-    await prog.prev()
-    return prog.to_dict()
+    await sess.prog.prev()
+    return sess.prog.to_dict()
 
 
 class ExtendRequest(BaseModel):
@@ -732,12 +685,12 @@ class ExtendRequest(BaseModel):
 
 @app.post("/api/program/extend")
 async def api_extend_interval(req: ExtendRequest):
-    if not prog or not prog.running:
+    if not sess.prog.running:
         return {"ok": False, "error": "No program running"}
-    ok = await prog.extend_current(req.seconds)
+    ok = await sess.prog.extend_current(req.seconds)
     if ok:
-        await manager.broadcast(prog.to_dict())
-    return prog.to_dict()
+        await manager.broadcast(sess.prog.to_dict())
+    return sess.prog.to_dict()
 
 
 class DurationAdjustRequest(BaseModel):
@@ -747,17 +700,17 @@ class DurationAdjustRequest(BaseModel):
 @app.post("/api/program/adjust-duration")
 async def api_adjust_duration(req: DurationAdjustRequest):
     """Adjust manual program total duration by adding/removing time from last interval."""
-    if not prog or not prog.is_manual or not prog.running:
+    if not sess.prog.is_manual or not sess.prog.running:
         return {"ok": False, "error": "No manual program running"}
-    ok = await prog.adjust_duration(req.delta_seconds)
+    ok = await sess.prog.adjust_duration(req.delta_seconds)
     if ok:
-        await manager.broadcast(prog.to_dict())
-    return prog.to_dict()
+        await manager.broadcast(sess.prog.to_dict())
+    return sess.prog.to_dict()
 
 
 @app.get("/api/program")
 async def api_get_program():
-    return prog.to_dict()
+    return sess.prog.to_dict()
 
 
 @app.get("/api/programs/history")
@@ -771,7 +724,7 @@ async def api_load_from_history(entry_id: str):
     entry = next((h for h in history if h["id"] == entry_id), None)
     if not entry:
         return {"ok": False, "error": "Not found"}
-    prog.load(entry["program"])
+    sess.prog.load(entry["program"])
     return {"ok": True, "program": entry["program"]}
 
 
@@ -881,7 +834,7 @@ async def api_gpx_upload(file: UploadFile = File(...)):
     try:
         gpx_bytes = await file.read()
         program = _parse_gpx_to_intervals(gpx_bytes)
-        prog.load(program)
+        sess.prog.load(program)
         _add_to_history(program, f"GPX: {file.filename}")
         return {"ok": True, "program": program}
     except Exception as e:
@@ -922,9 +875,9 @@ def _prog_on_update():
                 client.set_incline(0)
             except ConnectionError:
                 pass
-            if session["active"]:
-                _end_session("user_stop")
-                await manager.broadcast(build_session())
+            if sess.active:
+                sess.end("user_stop")
+                await manager.broadcast(sess.to_dict())
             await broadcast_status()
 
     return on_update
@@ -946,9 +899,9 @@ async def _exec_fn(name, args):
         desc = args.get("description", "")
         try:
             program = await generate_program(desc)
-            prog.load(program)
+            sess.prog.load(program)
             _add_to_history(program, desc)
-            await prog.start(_prog_on_change(), _prog_on_update())
+            await sess.start_program(_prog_on_change(), _prog_on_update())
             n = len(program["intervals"])
             mins = sum(iv["duration"] for iv in program["intervals"]) // 60
             return f"Started '{program['name']}': {n} intervals, {mins} min"
@@ -960,30 +913,45 @@ async def _exec_fn(name, args):
         return "Treadmill stopped"
 
     elif name == "pause_program":
-        if prog and prog.running:
-            await prog.toggle_pause()
-            return "Program paused" if prog.paused else "Program resumed"
+        if sess.prog.running:
+            await sess.prog.toggle_pause()
+            if sess.prog.paused:
+                # Same as api_pause_program: stop belt, pause session timer
+                sess.pause()
+                state["_paused_speed"] = state["emu_speed"]
+                state["emu_speed"] = 0
+                try:
+                    client.set_speed(0)
+                except ConnectionError:
+                    pass
+                await broadcast_status()
+                return "Program paused"
+            else:
+                # Resume: session timer resumes, speed restored by on_change
+                sess.resume()
+                return "Program resumed"
         return "No program running"
 
     elif name == "resume_program":
-        if prog and prog.paused:
-            await prog.toggle_pause()
+        if sess.prog.paused:
+            await sess.prog.toggle_pause()
+            sess.resume()
             return "Program resumed"
         return "No paused program"
 
     elif name == "skip_interval":
-        if prog and prog.running:
-            await prog.skip()
-            iv = prog.current_iv
+        if sess.prog.running:
+            await sess.prog.skip()
+            iv = sess.prog.current_iv
             return f"Skipped to: {iv['name']}" if iv else "Program complete"
         return "No program running"
 
     elif name == "extend_interval":
         secs = int(args.get("seconds", 0))
-        if prog and prog.running:
-            ok = await prog.extend_current(secs)
+        if sess.prog.running:
+            ok = await sess.prog.extend_current(secs)
             if ok:
-                iv = prog.current_iv
+                iv = sess.prog.current_iv
                 return f"Interval now {iv['duration']}s ({'+' if secs > 0 else ''}{secs}s)"
             return "No current interval"
         return "No program running"
@@ -992,35 +960,37 @@ async def _exec_fn(name, args):
         intervals = args.get("intervals", [])
         if not intervals:
             return "No intervals provided"
-        if prog and prog.program:
-            ok = await prog.add_intervals(intervals)
+        if sess.prog.program:
+            ok = await sess.prog.add_intervals(intervals)
             if ok:
                 added = sum(iv.get("duration", 0) for iv in intervals)
-                return f"Added {len(intervals)} interval(s), {added}s total. Program now {prog.total_duration}s."
+                return f"Added {len(intervals)} interval(s), {added}s total. Program now {sess.prog.total_duration}s."
             return "Failed to add intervals"
         return "No program loaded"
 
     return f"Unknown function: {name}"
 
 
-def _build_chat_system():
+def _build_chat_system(smartass=False):
     """Build the system prompt with current treadmill state context."""
     treadmill_state = {
         "speed_mph": state["emu_speed"] / 10,
         "incline_pct": state["emu_incline"],
         "mode": "emulate" if state["emulate"] else "proxy" if state["proxy"] else "off",
     }
-    if prog and prog.program:
+    if sess.prog.program:
         treadmill_state["program"] = {
-            "name": prog.program.get("name"),
-            "running": prog.running,
-            "paused": prog.paused,
-            "current_interval_index": prog.current_interval,
-            "interval": prog.current_iv.get("name") if prog.current_iv else None,
-            "interval_remaining_s": (prog.current_iv["duration"] - prog.interval_elapsed) if prog.current_iv else 0,
-            "elapsed": prog.total_elapsed,
-            "remaining": prog.total_duration - prog.total_elapsed,
-            "total_intervals": len(prog.program.get("intervals", [])),
+            "name": sess.prog.program.get("name"),
+            "running": sess.prog.running,
+            "paused": sess.prog.paused,
+            "current_interval_index": sess.prog.current_interval,
+            "interval": sess.prog.current_iv.get("name") if sess.prog.current_iv else None,
+            "interval_remaining_s": (
+                (sess.prog.current_iv["duration"] - sess.prog.interval_elapsed) if sess.prog.current_iv else 0
+            ),
+            "elapsed": sess.prog.total_elapsed,
+            "remaining": sess.prog.total_duration - sess.prog.total_elapsed,
+            "total_intervals": len(sess.prog.program.get("intervals", [])),
         }
 
     history = _load_history()
@@ -1029,15 +999,17 @@ def _build_chat_system():
         names = [h["program"].get("name", "?") for h in history[:5]]
         history_summary = f"\n\nRecent programs: {', '.join(names)}"
 
-    return f"{CHAT_SYSTEM_PROMPT}{history_summary}\n\nCurrent state:\n{json.dumps(treadmill_state)}"
+    base_prompt = CHAT_SYSTEM_PROMPT + (SMARTASS_ADDENDUM if smartass else "")
+    return f"{base_prompt}{history_summary}\n\nCurrent state:\n{json.dumps(treadmill_state)}"
 
 
-async def _run_chat_core():
+async def _run_chat_core(smartass=False):
     """Run the Gemini function-calling loop using chat_history. Returns response dict."""
     global chat_history
 
-    system = _build_chat_system()
+    system = _build_chat_system(smartass=smartass)
     executed = []
+    history_len_before = len(chat_history)
 
     try:
         for _ in range(3):  # max function-calling turns
@@ -1083,19 +1055,15 @@ async def _run_chat_core():
 
     except Exception as e:
         log.error(f"Chat error: {e}")
-        # Clean up broken history
-        chat_history = [
-            m for m in chat_history if m.get("role") == "user" and "parts" in m and any("text" in p for p in m["parts"])
-        ]
-        if len(chat_history) > 10:
-            chat_history = chat_history[-10:]
-        return {"text": f"Error: {e}", "actions": executed}
+        # Roll back to pre-turn state instead of wiping everything
+        chat_history = chat_history[:history_len_before]
+        return {"text": "Something went wrong — try again.", "actions": executed}
 
 
 @app.post("/api/chat")
 async def api_chat(req: ChatRequest):
     chat_history.append({"role": "user", "parts": [{"text": req.message}]})
-    return await _run_chat_core()
+    return await _run_chat_core(smartass=req.smartass)
 
 
 @app.post("/api/chat/voice")
@@ -1112,7 +1080,7 @@ async def api_chat_voice(req: VoiceChatRequest):
     audio_parts = [{"inlineData": {"mimeType": req.mime_type, "data": req.audio}}]
     chat_history.append({"role": "user", "parts": audio_parts})
 
-    result = await _run_chat_core()
+    result = await _run_chat_core(smartass=req.smartass)
 
     # Replace the audio blob in history with transcribed text to save memory
     replacement_text = transcription if transcription else "[voice message]"
@@ -1163,9 +1131,9 @@ async def _transcribe_audio(audio_b64, mime_type):
 async def api_tts(req: TTSRequest):
     """Generate speech audio from text using Gemini TTS."""
     try:
-        client = get_client()
+        genai_client = get_client()
         config = build_tts_config(voice=req.voice)
-        resp = await client.aio.models.generate_content(
+        resp = await genai_client.aio.models.generate_content(
             model=TTS_MODEL,
             contents=req.text,
             config=config,
@@ -1232,10 +1200,10 @@ async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         await ws.send_text(json.dumps(build_status()))
-        if session["active"]:
-            await ws.send_text(json.dumps(build_session()))
-        if prog and prog.program:
-            await ws.send_text(json.dumps(prog.to_dict()))
+        if sess.active:
+            await ws.send_text(json.dumps(sess.to_dict()))
+        if sess.prog.program:
+            await ws.send_text(json.dumps(sess.prog.to_dict()))
     except Exception:
         pass
     try:
@@ -1254,13 +1222,16 @@ app.mount("/assets", StaticFiles(directory="static/assets"), name="static-assets
 @app.get("/{full_path:path}")
 async def spa_catch_all(request: Request, full_path: str):
     """Serve static files or fall back to index.html for SPA routing."""
-    static_dir = os.path.join(os.path.dirname(__file__) or ".", "static")
-    file_path = os.path.join(static_dir, full_path)
+    static_dir = os.path.realpath(os.path.join(os.path.dirname(__file__) or ".", "static"))
+    file_path = os.path.realpath(os.path.join(static_dir, full_path))
+    # Prevent path traversal — file must be inside static_dir
+    if not file_path.startswith(static_dir + os.sep) and file_path != static_dir:
+        return JSONResponse({"error": "not found"}, status_code=404)
     if full_path and os.path.isfile(file_path):
         return FileResponse(file_path)
     index_path = os.path.join(static_dir, "index.html")
     if os.path.isfile(index_path):
-        return FileResponse(index_path)
+        return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return JSONResponse({"error": "not found"}, status_code=404)
 
 

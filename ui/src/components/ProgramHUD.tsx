@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { useProgram } from '../state/useProgram';
 import { useTreadmillActions } from '../state/TreadmillContext';
 import { haptic } from '../utils/haptics';
@@ -42,8 +43,10 @@ export default function ProgramHUD(): React.ReactElement | null {
       flex: '1 1 0', minHeight: 0,
     }}>
       {/* Elevation profile card — fills available space */}
-      <div
-        className="pgm-hud-card"
+      <motion.div
+        initial={{ opacity: 0, scale: 0.92, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
         style={{
           position: 'relative', borderRadius: 'var(--r-lg)',
           background: 'var(--card)', overflow: 'hidden',
@@ -70,21 +73,28 @@ export default function ProgramHUD(): React.ReactElement | null {
         )}
 
         {/* Skip overlay — shown on single tap while running (not paused) */}
-        {expanded && !pgm.paused && (
-          <div style={{
-            position: 'absolute', bottom: 8, left: 8, right: 8,
-            display: 'flex', gap: 8,
-            animation: 'toastSlideUp 150ms var(--ease-decel) forwards',
-          }}>
-            <button style={skipBtn} onClick={() => { actions.prevInterval(); haptic(25); }}>
-              {'\u00ab'} Prev
-            </button>
-            <button style={skipBtn} onClick={() => { actions.skipInterval(); haptic(25); }}>
-              Next {'\u00bb'}
-            </button>
-          </div>
-        )}
-      </div>
+        <AnimatePresence>
+          {expanded && !pgm.paused && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+              style={{
+                position: 'absolute', bottom: 8, left: 8, right: 8,
+                display: 'flex', gap: 8,
+              }}
+            >
+              <button style={skipBtn} onClick={() => { actions.prevInterval(); haptic(25); }}>
+                {'\u00ab'} Prev
+              </button>
+              <button style={skipBtn} onClick={() => { actions.skipInterval(); haptic(25); }}>
+                Next {'\u00bb'}
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
     </div>
   );
 }

@@ -1,8 +1,5 @@
 /* Mobile-first (default) — all base styles live in components */
 
-/* Fixed-height hero slot so layout doesn't shift between motivation text and timer */
-.hero-slot { height: 96px; }
-
 /* Ensure touch targets are 44px+ on all interactive elements */
 button, [role="button"], a, input, select, textarea {
   min-height: 44px;
@@ -35,7 +32,8 @@ button, [role="button"], a, input, select, textarea {
   .run-header { grid-area: header; }
   .metrics-ro { grid-area: metrics; max-width: none; }
   .run-viz { grid-area: viz; margin-top: 0 !important; }
-  .run-viz > div { margin: 0 !important; border-radius: var(--r-lg); background: #272522 !important; }
+  .run-viz > div { margin: 0 !important; }
+  .run-viz > div > div { margin: 0 !important; border-radius: var(--r-lg); background: #272522 !important; }
   .run-controls-wrap .controls > div { background: #272522 !important; }
 
   /* BottomBar becomes transparent to grid — its children participate directly */
@@ -88,6 +86,9 @@ button, [role="button"], a, input, select, textarea {
     justify-content: center !important;
   }
 
+  /* Align floating icons with top of speed/incline up arrows */
+  .idle-icon { top: 17px; }
+
   /* Scale up control buttons for tablet — fill top-to-bottom */
   .controls .ctrl-btn { width: 58px !important; height: auto !important; flex: 1 !important; border-radius: 14px !important; }
   .controls .ctrl-btn svg { width: 24px; height: 24px; }
@@ -97,9 +98,8 @@ button, [role="button"], a, input, select, textarea {
   /* Elevation profile: no max-width cap, fill the grid cell */
   .pgm-section { max-width: none !important; padding-left: 0 !important; padding-right: 0 !important; }
 
-  /* Hero time slightly larger on tablet, with matching slot height */
+  /* Hero time slightly larger on tablet */
   .hero-time { font-size: 110px !important; }
-  .hero-slot { height: 110px; }
 
   /* Scale up metrics */
   .metrics-ro .metric-value { font-size: 18px !important; }

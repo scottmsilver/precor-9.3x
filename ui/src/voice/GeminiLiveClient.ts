@@ -7,7 +7,7 @@
  * - Receives audio responses and tool calls
  * - Handles barge-in (interruption)
  */
-import { TOOL_DECLARATIONS, VOICE_SYSTEM_PROMPT } from './voiceTools';
+import { TOOL_DECLARATIONS, VOICE_SYSTEM_PROMPT, VOICE_SMARTASS_ADDENDUM } from './voiceTools';
 import type { FunctionCall } from './functionBridge';
 import { executeFunctionCall } from './functionBridge';
 
@@ -37,7 +37,7 @@ interface SetupMessage {
   };
 }
 
-const GEMINI_WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
+const GEMINI_WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained';
 
 export class GeminiLiveClient {
   private ws: WebSocket | null = null;
@@ -46,6 +46,7 @@ export class GeminiLiveClient {
   private model: string;
   private voice: string;
   private stateContext: string;
+  private smartass: boolean;
   private _state: ClientState = 'disconnected';
   private setupDone = false;
   private receivingAudio = false;
@@ -59,12 +60,14 @@ export class GeminiLiveClient {
     voice: string,
     callbacks: GeminiLiveCallbacks,
     stateContext = '',
+    smartass = false,
   ) {
     this.apiKey = apiKey;
     this.model = model;
     this.voice = voice;
     this.callbacks = callbacks;
     this.stateContext = stateContext;
+    this.smartass = smartass;
   }
 
   get state(): ClientState {
@@ -102,7 +105,7 @@ export class GeminiLiveClient {
     if (this.ws) return;
     this.setState('connecting');
 
-    const url = `${GEMINI_WS_BASE}?key=${this.apiKey}`;
+    const url = `${GEMINI_WS_BASE}?access_token=${this.apiKey}`;
     this.ws = new WebSocket(url);
     this.setupDone = false;
 
@@ -152,9 +155,12 @@ export class GeminiLiveClient {
   }
 
   private sendSetup(): void {
-    const systemText = this.stateContext
-      ? `${VOICE_SYSTEM_PROMPT}\n\nCurrent treadmill state:\n${this.stateContext}`
+    const basePrompt = this.smartass
+      ? VOICE_SYSTEM_PROMPT + VOICE_SMARTASS_ADDENDUM
       : VOICE_SYSTEM_PROMPT;
+    const systemText = this.stateContext
+      ? `${basePrompt}\n\nCurrent treadmill state:\n${this.stateContext}`
+      : basePrompt;
 
     const setup: SetupMessage = {
       setup: {
@@ -293,6 +299,21 @@ export class GeminiLiveClient {
     const msg = {
       toolResponse: {
         functionResponses: [{ name, response }],
+      },
+    };
+    this.ws.send(JSON.stringify(msg));
+  }
+
+  /** Send a text prompt into the live session as a user turn. */
+  sendTextPrompt(text: string): void {
+    if (!this.ws || !this.setupDone || this.ws.readyState !== WebSocket.OPEN) return;
+    const msg = {
+      client_content: {
+        turns: [{
+          role: 'user',
+          parts: [{ text }],
+        }],
+        turn_complete: true,
       },
     };
     this.ws.send(JSON.stringify(msg));

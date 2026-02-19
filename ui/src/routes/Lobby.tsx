@@ -1,4 +1,4 @@
-import type React from 'react';
+import React, { useRef } from 'react';
 import { useLocation } from 'wouter';
 import { useTreadmillState, useTreadmillActions } from '../state/TreadmillContext';
 import { useProgram } from '../state/useProgram';
@@ -29,6 +29,7 @@ export default function Lobby(): React.ReactElement {
   const [, setLocation] = useLocation();
 
   const workoutActive = session.active || program.running;
+  const quickStartGuard = useRef(false);
 
   return (
     <div className="lobby-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -59,6 +60,9 @@ export default function Lobby(): React.ReactElement {
               </button>
               <button
                 onClick={() => {
+                  if (quickStartGuard.current) return;
+                  quickStartGuard.current = true;
+                  setTimeout(() => { quickStartGuard.current = false; }, 1000);
                   api.quickStart(3.0, 0, 60);
                   haptic([25, 30, 25]);
                   setLocation('/run');

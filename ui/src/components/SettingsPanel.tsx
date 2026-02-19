@@ -22,6 +22,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps): Re
   const actions = useTreadmillActions();
   const showToast = useToast();
   const [debugUnlocked, setDebugUnlocked] = useState(false);
+  const [smartass, setSmartass] = useState(() => {
+    try { return localStorage.getItem('smartass_mode') === 'true'; } catch { return false; }
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const debugTaps = useRef<number[]>([]);
   const [, setLocation] = useLocation();
@@ -115,6 +118,34 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps): Re
         >
           <span style={{ fontSize: 15, color: 'var(--text)' }}>Debug Console</span>
           <span style={{ fontSize: 13, color: 'var(--text3)' }}>&#8250;</span>
+        </div>
+
+        {/* Smart-ass mode toggle */}
+        <div
+          onClick={() => {
+            const next = !smartass;
+            setSmartass(next);
+            try { localStorage.setItem('smartass_mode', String(next)); } catch {}
+            haptic(25);
+            showToast(next ? 'Smart-ass mode ON. Brace yourself.' : 'Smart-ass mode off.');
+          }}
+          style={rowStyle}
+        >
+          <span style={{ fontSize: 15, color: 'var(--text)' }}>Smart-ass Mode</span>
+          <div style={{
+            width: 44, height: 26, borderRadius: 13,
+            background: smartass ? 'var(--purple)' : 'var(--fill)',
+            position: 'relative', transition: 'background 200ms var(--ease)',
+            flexShrink: 0,
+          }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: 11,
+              background: '#fff',
+              position: 'absolute', top: 2,
+              left: smartass ? 20 : 2,
+              transition: 'left 200ms var(--ease)',
+            }} />
+          </div>
         </div>
 
         {/* Mode toggle (unlocked by triple-tap) */}

@@ -21,6 +21,8 @@ venv/
 
 # Secrets
 .gemini_key
+cert.pem
+key.pem
 
 # Runtime data
 program_history.json
@@ -40,6 +42,9 @@ src/tests/test_integration
 src/tests/test_ipc_server
 src/tests/test_controller_live
 src/tests/test_*_cov
+
+# Rust build artifacts
+ftms/target/
 
 # Analysis/experimental scripts (not part of main tools)
 analysis/

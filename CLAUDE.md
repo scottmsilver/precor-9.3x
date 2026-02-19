@@ -8,24 +8,36 @@ Reverse-engineering and control toolkit for the Precor 9.31 treadmill serial bus
 
 ## Deployment
 
-The Raspberry Pi connected to the treadmill is at host `rpi`. Use `ssh rpi` to access it, and `scp` to copy files over. All tools must be run on the Pi (they need GPIO access).
+The Raspberry Pi connected to the treadmill is at host `rpi`. All three services are managed via systemd and deployed with `./deploy.sh`.
 
 ```bash
-# On the Pi:
-make                           # build C binary
-sudo ./treadmill_io            # start GPIO I/O (must be root, pigpiod must NOT be running)
+# Deploy everything to Pi (builds on Pi, restarts all services):
+./deploy.sh                    # or: make deploy
+
+# Services on Pi (managed by systemd, auto-start on boot):
+sudo systemctl status treadmill_io      # C++ GPIO daemon
+sudo systemctl status treadmill-server  # FastAPI web server
+sudo systemctl status ftms              # FTMS Bluetooth daemon
+
+# Service dependency chain:
+#   treadmill_io  ←  treadmill-server (After+Wants)
+#   treadmill_io  ←  ftms (After+Wants)
+#   bluetooth     ←  ftms (After+Requires)
+
+# Manual tools (for debugging):
 python3 dual_monitor.py        # Primary TUI (curses, side-by-side panes)
 python3 listen.py              # Simple KV listener (--changes, --unique flags)
-python3 server.py              # FastAPI web server on port 8000
 ```
 
 ## Dependencies
 
 - `pigpio` (system package, libpigpio) — linked by `treadmill_io` for GPIO access
 - `fastapi`, `uvicorn`, `python-multipart` — web server (server.py)
+- `google-genai` — Gemini SDK for AI coach + voice
 - `gpxpy` — GPX route parsing (server.py)
 - `pytest`, `pytest-asyncio` — test suite
-- Build: `make` (g++ with C++20, libpigpio-dev)
+- Build (C++): `make` (g++ with C++20, libpigpio-dev)
+- Build (Rust/FTMS): `cross` for aarch64 cross-compilation, or `cargo build` on Pi
 - Test deps (header-only, vendored): `doctest` (testing), `rapidjson` (JSON)
 
 ## Architecture
@@ -45,9 +57,9 @@ GPIO assignments live in `gpio.json` — all tools read from it at startup.
 
 The serial bus uses RS-485 signaling which idles LOW (opposite of standard UART). All GPIO serial I/O must use `bb_serial_invert=1` for reads and manually inverted waveforms for writes. See `RS485_DISCOVERY.md` for the full investigation. The key takeaway: **both pins carry the same `[key:value]` KV text protocol** — earlier "binary frame" interpretations were caused by polarity confusion.
 
-### C Binary — `treadmill_io`
+### C++ Binary — `treadmill_io`
 
-All GPIO I/O is handled by a C++20 binary (`src/`) that links libpigpio directly (no daemon). It reads pin assignments from `gpio.json`, handles KV parsing, proxy forwarding, and emulation, and serves data to Python clients over a Unix domain socket (`/tmp/treadmill_io.sock`). See `treadmill_client.py` for the Python IPC client library.
+All GPIO I/O is handled by a C++20 binary (`src/`) that links libpigpio directly (no daemon). It reads pin assignments from `gpio.json`, handles KV parsing, proxy forwarding, and emulation, and serves data to clients over a Unix domain socket (`/tmp/treadmill_io.sock`). Both the Python server and the FTMS daemon connect as socket clients. See `treadmill_client.py` for the Python IPC client library. Runs as a systemd service (`treadmill_io.service`).
 
 ### Protocol
 
@@ -65,9 +77,20 @@ Both directions use `[key:value]` text framing at 9600 baud, 8N1.
 - Proxy and emulate are mutually exclusive; transitions are **automatic** (see Auto Proxy/Emulate Mode below)
 - Manual toggle available via debug mode (triple-tap connection dot in UI)
 
+### FTMS Bluetooth — `ftms-daemon`
+
+A Rust daemon (`ftms/`) that advertises the treadmill as a Bluetooth FTMS (Fitness Machine Service, UUID 0x1826) device. Connects to `treadmill_io` via the same Unix socket, reads speed/incline state, and broadcasts it over BLE so fitness apps (Zwift, QZ Fitness, Apple Watch, Garmin) can see the treadmill.
+
+- **Crate**: `ftms/` with `bluer` (BlueZ bindings), `tokio`, `serde_json`
+- **Modules**: `main.rs` (entry), `treadmill.rs` (socket client), `ftms_service.rs` (GATT server), `protocol.rs` (binary encoding/UUIDs), `debug_server.rs` (TCP debug port 8826)
+- **GATT characteristics**: Feature (0x2ACC), Treadmill Data (0x2ACD, notifies at 1 Hz), Speed Range (0x2AD4), Incline Range (0x2AD5), Control Point (0x2AD9), Machine Status (0x2ADA)
+- **Control Point**: Supports Set Target Speed, Set Target Incline, Start/Resume, Stop/Pause — converts km/h to mph and sends commands back through the socket
+- **Cross-compile**: `cd ftms && cross build --release --target aarch64-unknown-linux-gnu`
+- Runs as a systemd service (`ftms.service`), depends on `bluetooth.target` and `treadmill_io.service`
+
 ### Web UI
 
-`server.py` serves `static/index.html` — a mobile-responsive Alpine.js interface with WebSocket for real-time KV data streaming and REST endpoints for speed/incline/mode control.
+`server.py` serves a React + TypeScript SPA (source in `ui/`, builds to `static/`) with WebSocket for real-time KV data streaming and REST endpoints for speed/incline/mode control. Runs as a systemd service (`treadmill-server.service`).
 
 ### AI Coach — Gemini Integration
 
@@ -97,7 +120,7 @@ This logic lives in the C binary (not Python) so that mode transitions work even
 ## Testing
 
 ```bash
-# C++ unit tests (local, no hardware needed, <2s)
+# C++ unit tests (92 tests, stops/restarts treadmill_io service automatically)
 make test
 
 # Deploy to Pi, build, restart binary, run hardware integration tests
@@ -106,6 +129,12 @@ make test-pi
 
 # Full pre-commit gate: local unit tests + Pi hardware tests
 make test-all
+
+# FTMS Rust unit tests (27 tests, protocol encoding/decoding)
+cd ftms && cargo test
+
+# FTMS integration tests (17 tests, requires ftms-daemon + treadmill_io running on Pi)
+cd ftms && cargo test --test debug_integration -- --ignored --test-threads=1
 
 # Python unit tests (mocked sleep, <1s)
 python3 -m pytest tests/test_program_engine.py tests/test_server_integration.py -v
@@ -116,6 +145,8 @@ python3 -m pytest tests/test_live_program.py -v
 # All non-hardware Python tests
 python3 -m pytest -m "not hardware" -v
 ```
+
+Note: `make test` automatically stops the `treadmill_io` service before running (to free the socket) and restarts it after, even if tests fail.
 
 ## API Reference
 
@@ -209,6 +240,8 @@ All C++ code in `src/` must follow these rules. The environment is resource-cons
 - No application logic, no knowledge of programs/workouts/AI. It just moves bytes and manages modes.
 - Note: The C++ binary accepts incline 0-99 (hardware range). The application layer (Python/Gemini) enforces 0-15 for safety.
 
+**FTMS daemon** (`ftms/`): BLE transport layer only. Reads treadmill state from the Unix socket, encodes it per the FTMS spec, and advertises over Bluetooth. Control Point writes are converted back to socket commands. No application logic, no knowledge of programs/workouts/AI.
+
 **Python client** (`treadmill_client.py`): Thin IPC wrapper to the C binary. No business logic.
 
 **Program engine** (`program_engine.py`): Interval execution + Gemini API. No HTTP, no GPIO, no imports from server.
@@ -217,9 +250,9 @@ All C++ code in `src/` must follow these rules. The environment is resource-cons
 - State management (speed, incline, mode, program)
 - Endpoint validation and clamping
 - Coordinating between program engine and treadmill client
-- Multiple clients (web UI, future CLI, future watch app) all hit the same server — logic must not leak into any single client.
+- Multiple clients (web UI, FTMS daemon, future CLI, future watch app) all connect through the same socket — logic must not leak into any single client.
 
-**UI** (`static/index.html`): Display layer only. Principles:
+**UI** (`ui/` → `static/`): Display layer only. Principles:
 - **No business logic.** All decisions happen server-side. The UI calls API endpoints and renders what comes back.
 - **Safety first.** Stop button always visible when belt is moving. Emergency stop is one tap.
 - **Minimal by default.** Show only what's needed right now. Debug info (mode badge, raw state) hidden behind triple-tap.

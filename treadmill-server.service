@@ -1,0 +1,15 @@
+[Unit]
+Description=Treadmill web server (FastAPI)
+After=treadmill_io.service
+Wants=treadmill_io.service
+
+[Service]
+Type=simple
+User=ssilver
+WorkingDirectory=/home/ssilver/treadmill
+ExecStart=/home/ssilver/.venv/bin/python3 server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

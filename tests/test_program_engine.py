@@ -643,9 +643,13 @@ class TestEncouragement:
         loaded_prog._pending_encouragement = "Test message"
         d = loaded_prog.to_dict()
         assert d["encouragement"] == "Test message"
-        # Should be cleared after to_dict
+        # to_dict() should NOT clear encouragement (read without consume)
         d2 = loaded_prog.to_dict()
-        assert "encouragement" not in d2
+        assert d2["encouragement"] == "Test message"
+        # drain_encouragement() clears it
+        loaded_prog.drain_encouragement()
+        d3 = loaded_prog.to_dict()
+        assert "encouragement" not in d3
 
     def test_encouragement_every_3_intervals(self):
         """Every 3 intervals should trigger encouragement."""

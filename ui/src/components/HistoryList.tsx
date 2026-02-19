@@ -4,13 +4,15 @@ import * as api from '../state/api';
 import { useToast } from '../state/TreadmillContext';
 import { haptic } from '../utils/haptics';
 import HistoryCard from './HistoryCard';
+import { MicIcon } from './shared';
 
 interface HistoryListProps {
   variant: 'lobby' | 'compact';
   onAfterLoad?: () => void;
+  onVoice?: (prompt?: string) => void;
 }
 
-export default function HistoryList({ variant, onAfterLoad }: HistoryListProps): React.ReactElement | null {
+export default function HistoryList({ variant, onAfterLoad, onVoice }: HistoryListProps): React.ReactElement | null {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const showToast = useToast();
 
@@ -30,17 +32,58 @@ export default function HistoryList({ variant, onAfterLoad }: HistoryListProps):
     }
   }, [showToast, onAfterLoad]);
 
-  if (history.length === 0) return null;
+  const handleCustomWorkout = useCallback(async () => {
+    if (!onVoice) return;
+    haptic(20);
+    try {
+      const prompt = await api.getVoicePrompt('custom-workout');
+      onVoice(prompt);
+    } catch {
+      // Fallback: start voice without prompt
+      onVoice();
+    }
+  }, [onVoice]);
 
   if (variant === 'lobby') {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '0 16px', overflowX: 'visible' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '0 16px' }}>
+        {onVoice && (
+          <div
+            onClick={handleCustomWorkout}
+            style={{
+              width: '100%', flexShrink: 0,
+              display: 'flex', alignItems: 'center', gap: 10,
+              background: 'var(--card)', borderRadius: 'var(--r-md)', padding: 12,
+              cursor: 'pointer', WebkitTapHighlightColor: 'transparent',
+              transition: 'transform 100ms var(--ease), opacity 100ms var(--ease)',
+            }}
+          >
+            <div style={{
+              width: 32, height: 32, borderRadius: 8,
+              background: 'rgba(139,127,160,0.15)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--purple)', flexShrink: 0,
+            }}>
+              <MicIcon size={16} />
+            </div>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--purple)' }}>
+                Tell us your own
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text3)' }}>
+                Describe a workout by voice
+              </div>
+            </div>
+          </div>
+        )}
         {history.map(h => (
           <HistoryCard key={h.id} entry={h} variant="lobby" onLoad={handleLoad} />
         ))}
       </div>
     );
   }
+
+  if (history.length === 0) return null;
 
   // compact: horizontal scroll
   return (

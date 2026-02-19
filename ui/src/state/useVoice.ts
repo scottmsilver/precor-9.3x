@@ -17,7 +17,7 @@ export type VoiceState = 'idle' | 'connecting' | 'listening' | 'speaking';
 
 export interface UseVoiceReturn {
   voiceState: VoiceState;
-  toggle: () => void;
+  toggle: (prompt?: string) => void;
   interrupt: () => void;
 }
 
@@ -34,6 +34,7 @@ export function useVoice(): UseVoiceReturn {
   const micProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const micContextRef = useRef<AudioContext | null>(null);
   const configRef = useRef<AppConfig | null>(null);
+  const pendingPromptRef = useRef<string | null>(null);
   const treadmillState = useTreadmillState();
 
   // Build state context string — only push to Gemini when speed/incline change
@@ -155,6 +156,11 @@ export function useVoice(): UseVoiceReturn {
           startMic().then(() => {
             console.log('[Voice] Mic started, listening');
             setVoiceState('listening');
+            // Send pending prompt (e.g. "Tell us your own" flow)
+            if (pendingPromptRef.current && clientRef.current) {
+              clientRef.current.sendTextPrompt(pendingPromptRef.current);
+              pendingPromptRef.current = null;
+            }
           }).catch((err) => {
             console.error('[Voice] Mic failed:', err);
             const isInsecure = window.location.protocol === 'http:';
@@ -207,12 +213,15 @@ export function useVoice(): UseVoiceReturn {
       },
     };
 
+    let smartass = false;
+    try { smartass = localStorage.getItem('smartass_mode') === 'true'; } catch {}
     const client = new GeminiLiveClient(
       config.gemini_api_key,
       config.gemini_live_model || 'gemini-2.5-flash-native-audio-latest',
       config.gemini_voice || 'Kore',
       callbacks,
       stateContextRef.current,
+      smartass,
     );
     clientRef.current = client;
     client.connect();
@@ -231,9 +240,10 @@ export function useVoice(): UseVoiceReturn {
     setVoiceState('listening');
   }, []);
 
-  const toggle = useCallback(() => {
+  const toggle = useCallback((prompt?: string) => {
     switch (voiceState) {
       case 'idle':
+        pendingPromptRef.current = prompt ?? null;
         connect();
         break;
       case 'connecting':

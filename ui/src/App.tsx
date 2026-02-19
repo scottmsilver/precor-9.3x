@@ -5,7 +5,7 @@ import Toast from './components/Toast';
 import DisconnectBanner from './components/DisconnectBanner';
 import SettingsPanel from './components/SettingsPanel';
 import VoiceOverlay from './components/VoiceOverlay';
-import { ToastContext } from './state/TreadmillContext';
+import { ToastContext, registerToast } from './state/TreadmillContext';
 import { useVoice } from './state/useVoice';
 
 export default function App({ children }: { children: React.ReactNode }) {
@@ -25,9 +25,12 @@ export default function App({ children }: { children: React.ReactNode }) {
     toastTimer.current = setTimeout(() => setToastVisible(false), 8000);
   }, []);
 
+  // Wire up the module-level toast ref so TreadmillProvider's WebSocket
+  // handler (encouragement, session-end warnings) can show toasts
   useEffect(() => {
+    registerToast(showToast);
     return () => clearTimeout(toastTimer.current);
-  }, []);
+  }, [showToast]);
 
   return (
     <ToastContext.Provider value={showToast}>

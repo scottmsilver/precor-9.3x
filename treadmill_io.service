@@ -1,0 +1,13 @@
+[Unit]
+Description=Treadmill I/O GPIO daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ssilver/treadmill
+ExecStart=/usr/local/bin/treadmill_io
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

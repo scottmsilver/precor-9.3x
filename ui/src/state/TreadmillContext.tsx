@@ -2,6 +2,28 @@ import React, { createContext, useContext, useReducer, useEffect, useRef, useCal
 import type { AppState, KVEntry, ServerMessage, TreadmillStatus, SessionState, ProgramState } from './types';
 import * as api from './api';
 
+// --- Debounce helpers ---
+
+/** Trailing debounce: coalesces rapid calls, fires once after `ms` of quiet. */
+function trailingDebounce<T extends (...args: never[]) => void>(fn: T, ms: number): T {
+  let timer: ReturnType<typeof setTimeout>;
+  return ((...args: Parameters<T>) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  }) as unknown as T;
+}
+
+/** Leading-edge guard: fires immediately, then ignores calls for `ms`. */
+function leadingGuard<T extends (...args: never[]) => Promise<void>>(fn: T, ms: number): T {
+  let blocked = false;
+  return (async (...args: Parameters<T>) => {
+    if (blocked) return;
+    blocked = true;
+    setTimeout(() => { blocked = false; }, ms);
+    await fn(...args);
+  }) as unknown as T;
+}
+
 // --- Initial state ---
 
 const initialStatus: TreadmillStatus = {
@@ -58,6 +80,12 @@ type Action =
 
 const MAX_KV_LOG = 500;
 
+// Optimistic updates set a dirty timestamp. While dirty, server status
+// updates are ignored for that field so they don't snap back to stale values.
+const DIRTY_GRACE_MS = 500;
+let _dirtySpeed = 0;
+let _dirtyIncline = 0;
+
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'WS_CONNECTED':
@@ -68,13 +96,16 @@ function reducer(state: AppState, action: Action): AppState {
 
     case 'STATUS_UPDATE': {
       const m = action.payload;
+      const now = Date.now();
+      const speedDirty = now - _dirtySpeed < DIRTY_GRACE_MS;
+      const inclineDirty = now - _dirtyIncline < DIRTY_GRACE_MS;
       return {
         ...state,
         status: {
           proxy: m.proxy,
           emulate: m.emulate,
-          emuSpeed: m.emu_speed ?? state.status.emuSpeed,
-          emuIncline: m.emu_incline ?? state.status.emuIncline,
+          emuSpeed: speedDirty ? state.status.emuSpeed : (m.emu_speed ?? state.status.emuSpeed),
+          emuIncline: inclineDirty ? state.status.emuIncline : (m.emu_incline ?? state.status.emuIncline),
           speed: m.speed ?? state.status.speed,
           incline: m.incline ?? state.status.incline,
           motor: m.motor ?? state.status.motor,
@@ -149,12 +180,14 @@ function reducer(state: AppState, action: Action): AppState {
     }
 
     case 'OPTIMISTIC_SPEED':
+      _dirtySpeed = Date.now();
       return {
         ...state,
         status: { ...state.status, emuSpeed: action.payload },
       };
 
     case 'OPTIMISTIC_INCLINE':
+      _dirtyIncline = Date.now();
       return {
         ...state,
         status: { ...state.status, emuIncline: action.payload },
@@ -192,21 +225,20 @@ const TreadmillActionsContext = createContext<TreadmillActions>(null!);
 type ToastFn = (message: string) => void;
 const ToastContext = createContext<ToastFn>(() => {});
 
+// Module-level toast ref — set by App.tsx via registerToast()
+let _toastFn: ToastFn = () => {};
+export function registerToast(fn: ToastFn) { _toastFn = fn; }
+
 // --- Provider ---
 
 export function TreadmillProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectRef = useRef<ReturnType<typeof setTimeout>>();
-  const toastRef = useRef<ToastFn>(() => {});
 
-  // Expose toast setter
-  const setToastFn = useCallback((fn: ToastFn) => {
-    toastRef.current = fn;
-  }, []);
-
+  // Use module-level toast function (set by App.tsx via registerToast)
   const showToast = useCallback((msg: string) => {
-    toastRef.current(msg);
+    _toastFn(msg);
   }, []);
 
   // WebSocket connection
@@ -274,29 +306,40 @@ export function TreadmillProvider({ children }: { children: React.ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  // Debounced API calls for speed/incline — coalesce rapid hold-repeat into
+  // fewer network requests while keeping optimistic UI updates instant.
+  const debouncedSetSpeed = useRef(trailingDebounce((mph: number) => {
+    api.setSpeed(mph).catch(() => {});
+  }, 150)).current;
+
+  const debouncedSetIncline = useRef(trailingDebounce((inc: number) => {
+    api.setIncline(inc).catch(() => {});
+  }, 150)).current;
+
   // Stable action refs — never change identity
   const stableActions = useRef<TreadmillActions>({
     setSpeed: async (mph) => {
       dispatch({ type: 'OPTIMISTIC_SPEED', payload: Math.max(0, Math.min(Math.round(mph * 10), 120)) });
-      await api.setSpeed(mph).catch(() => {});
+      debouncedSetSpeed(mph);
     },
     setIncline: async (value) => {
       dispatch({ type: 'OPTIMISTIC_INCLINE', payload: Math.max(0, Math.min(value, 99)) });
-      await api.setIncline(value).catch(() => {});
+      debouncedSetIncline(value);
     },
     adjustSpeed: (deltaTenths: number) => {
       const cur = stateRef.current.status.emuSpeed;
       const newSpeed = Math.max(0, Math.min(cur + deltaTenths, 120));
       dispatch({ type: 'OPTIMISTIC_SPEED', payload: newSpeed });
-      api.setSpeed(newSpeed / 10).catch(() => {});
+      debouncedSetSpeed(newSpeed / 10);
     },
     adjustIncline: (delta: number) => {
       const cur = stateRef.current.status.emuIncline;
       const newInc = Math.max(0, Math.min(cur + delta, 99));
       dispatch({ type: 'OPTIMISTIC_INCLINE', payload: newInc });
-      api.setIncline(newInc).catch(() => {});
+      debouncedSetIncline(newInc);
     },
     emergencyStop: async () => {
+      // Emergency stop is never debounced — always fires immediately
       dispatch({ type: 'OPTIMISTIC_SPEED', payload: 0 });
       dispatch({ type: 'OPTIMISTIC_INCLINE', payload: 0 });
       await Promise.all([
@@ -305,55 +348,42 @@ export function TreadmillProvider({ children }: { children: React.ReactNode }) {
         api.stopProgram().catch(() => {}),
       ]);
     },
-    resetAll: async () => {
+    resetAll: leadingGuard(async () => {
       dispatch({ type: 'OPTIMISTIC_SPEED', payload: 0 });
       dispatch({ type: 'OPTIMISTIC_INCLINE', payload: 0 });
       await api.resetAll().catch(() => {});
-    },
-    startProgram: async () => {
+    }, 1000),
+    startProgram: leadingGuard(async () => {
       await api.startProgram().catch(() => {});
-    },
-    stopProgram: async () => {
+    }, 1000),
+    stopProgram: leadingGuard(async () => {
       await api.stopProgram().catch(() => {});
-    },
-    pauseProgram: async () => {
+    }, 1000),
+    pauseProgram: leadingGuard(async () => {
       await api.pauseProgram().catch(() => {});
-    },
-    skipInterval: async () => {
+    }, 500),
+    skipInterval: leadingGuard(async () => {
       await api.skipInterval().catch(() => {});
-    },
-    prevInterval: async () => {
+    }, 400),
+    prevInterval: leadingGuard(async () => {
       await api.prevInterval().catch(() => {});
-    },
-    extendInterval: async (seconds) => {
+    }, 400),
+    extendInterval: leadingGuard(async (seconds) => {
       await api.extendInterval(seconds).catch(() => {});
-    },
-    setMode: async (mode) => {
+    }, 400),
+    setMode: leadingGuard(async (mode) => {
       if (mode === 'emulate') await api.setEmulate(true).catch(() => {});
       else await api.setProxy(true).catch(() => {});
-    },
+    }, 1000),
   }).current;
 
   return (
     <TreadmillStateContext.Provider value={state}>
       <TreadmillActionsContext.Provider value={stableActions}>
-        <ToastContext.Provider value={showToast}>
-          <ToastRegistrar setToastFn={setToastFn} />
-          {children}
-        </ToastContext.Provider>
+        {children}
       </TreadmillActionsContext.Provider>
     </TreadmillStateContext.Provider>
   );
-}
-
-// Internal component to wire the toast function
-function ToastRegistrar({ setToastFn }: { setToastFn: (fn: ToastFn) => void }) {
-  const showToast = useContext(ToastContext);
-  useEffect(() => {
-    // This will be called by the parent, but we need the child context toast
-    // Actually, the toast fn needs to be set externally by the App shell
-  }, [showToast, setToastFn]);
-  return null;
 }
 
 // --- Hooks ---

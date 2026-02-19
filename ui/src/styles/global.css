@@ -37,37 +37,9 @@ body::after {
   to { transform: rotate(360deg); }
 }
 
-@keyframes cardAppear {
-  0% { opacity: 0; transform: scale(0.92) translateY(8px); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
-}
-
-.pgm-hud-card {
-  animation: cardAppear 350ms var(--ease-decel) forwards;
-}
-
-@keyframes toastLife {
-  0% { opacity: 0; transform: translateY(8px); }
-  8% { opacity: 1; transform: translateY(0); }
-  80% { opacity: 1; }
-  100% { opacity: 0; transform: translateY(-4px); }
-}
-
 @keyframes toastSlideUp {
   0% { opacity: 0; transform: translateY(12px); }
   100% { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes bannerSlideDown {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(0); }
-}
-
-@keyframes reconnectFlash {
-  0% { opacity: 0; transform: translateY(-100%); }
-  10% { opacity: 1; transform: translateY(0); }
-  70% { opacity: 1; }
-  100% { opacity: 0; transform: translateY(-8px); }
 }
 
 @keyframes micPulse {
@@ -98,5 +70,24 @@ body::after {
   100% { box-shadow: none; filter: brightness(1); }
 }
 
+@keyframes wordGlow {
+  0%, 100% { text-shadow: 0 0 4px var(--purple), 0 0 8px rgba(139,127,160,0.3); }
+  50% { text-shadow: 0 0 8px var(--purple), 0 0 16px rgba(139,127,160,0.5); }
+}
+
+.glow-word {
+  animation: wordGlow 2s ease-in-out infinite;
+  color: var(--purple);
+  font-weight: 600;
+}
+
 .pulse-value { animation: valuePulse 500ms var(--ease) forwards; }
 .pulse-btn { animation: btnGlow 500ms var(--ease) forwards; }
+
+/* Monospace timer font — Recursive with half-casual axis */
+.font-timer { font-family: 'Recursive', monospace; font-variation-settings: "CASL" 0.5; }
+
+/* Floating Home/Voice icons when idle */
+.idle-icon { position: absolute; top: 6px; z-index: 2; }
+.idle-icon-left { left: 22px; }
+.idle-icon-right { right: 22px; }
