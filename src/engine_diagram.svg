@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 750" width="100%" height="100%">
+  <defs>
+    <marker id="arrowBlack" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L0,10 L10,5 Z" fill="#333" />
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L0,10 L10,5 Z" fill="#007bff" />
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L0,10 L10,5 Z" fill="#28a745" />
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L0,10 L10,5 Z" fill="#fd7e14" />
+    </marker>
+    
+    <filter id="shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="2" dy="4" stdDeviation="3" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <rect width="1000" height="750" fill="#f4f6f9" />
+
+  <g transform="translate(40, 100)" filter="url(#shadow)">
+    <rect width="140" height="90" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="2"/>
+    <text x="70" y="40" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="16" fill="#1e293b">CONSOLE</text>
+    <text x="70" y="65" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#475569">Physical UI</text>
+  </g>
+
+  <g transform="translate(40, 520)" filter="url(#shadow)">
+    <rect width="140" height="90" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="2"/>
+    <text x="70" y="40" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="16" fill="#1e293b">MOTOR</text>
+    <text x="70" y="65" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#475569">Controller (RS-485)</text>
+  </g>
+
+  <g transform="translate(800, 310)" filter="url(#shadow)">
+    <rect width="160" height="100" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="80" y="35" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="16" fill="#1e40af">APP LAYER</text>
+    <text x="80" y="55" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#1e40af">Python / UI / AI</text>
+    <text x="80" y="75" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#3b82f6">(Up to 4 Clients)</text>
+  </g>
+
+  <rect x="250" y="40" width="500" height="650" rx="12" fill="#ffffff" stroke="#dc2626" stroke-width="3" stroke-dasharray="10,5" filter="url(#shadow)"/>
+  <text x="500" y="70" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="18" fill="#dc2626">Raspberry Pi (treadmill_io C++ Binary)</text>
+  <text x="500" y="90" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#7f1d1d">Safety-Critical Transport Layer</text>
+
+  <g transform="translate(280, 130)">
+    <rect width="180" height="80" rx="6" fill="#f8fafc" stroke="#10b981" stroke-width="2"/>
+    <text x="90" y="25" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="#047857">SerialReader</text>
+    <text x="90" y="45" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#047857">GPIO 27 (Console)</text>
+    <text x="90" y="65" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#64748b">Thread 1: Console Read</text>
+  </g>
+
+  <g transform="translate(280, 520)">
+    <rect width="180" height="80" rx="6" fill="#f8fafc" stroke="#10b981" stroke-width="2"/>
+    <text x="90" y="25" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="#047857">SerialReader</text>
+    <text x="90" y="45" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#047857">GPIO 17 (Motor)</text>
+    <text x="90" y="65" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#64748b">Thread 2: Motor Read</text>
+  </g>
+
+  <g transform="translate(540, 130)">
+    <rect width="180" height="110" rx="6" fill="#fff7ed" stroke="#f97316" stroke-width="2"/>
+    <text x="90" y="25" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="#c2410c">EmulationEngine</text>
+    <text x="90" y="45" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c2410c">Generates 14-key cycle</text>
+    <text x="90" y="60" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c2410c">3-hour safety timeout</text>
+    <line x1="20" y1="70" x2="160" y2="70" stroke="#fdba74" stroke-width="1"/>
+    <text x="90" y="85" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="12" fill="#c2410c">SerialWriter</text>
+    <text x="90" y="100" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#c2410c">GPIO 22 (Thread 4)</text>
+  </g>
+
+  <g transform="translate(280, 270)">
+    <rect width="180" height="80" rx="6" fill="#f3f4f6" stroke="#6b7280" stroke-width="2"/>
+    <text x="90" y="25" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="#374151">ModeStateMachine</text>
+    <text x="90" y="45" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#4b5563">Authority on Proxy/Emu</text>
+    <text x="90" y="65" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#4b5563">Clamps Speed/Incline</text>
+  </g>
+
+  <g transform="translate(280, 390)">
+    <rect width="440" height="60" rx="30" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="220" y="25" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="#5b21b6">RingBuffer (2048 slots)</text>
+    <text x="220" y="45" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#6d28d9">KV events + Status snapshots (Lock-free consumer)</text>
+  </g>
+
+  <g transform="translate(540, 270)">
+    <rect width="180" height="80" rx="6" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+    <text x="90" y="25" text-anchor="middle" font-family="monospace" font-weight="bold" font-size="14" fill="#15803d">IpcServer</text>
+    <text x="90" y="45" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#15803d">/tmp/treadmill_io.sock</text>
+    <text x="90" y="65" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#15803d">Thread 3: IPC + Watchdog</text>
+  </g>
+
+
+  <path d="M 180 145 L 270 145" fill="none" stroke="#333" stroke-width="3" marker-end="url(#arrowBlack)"/>
+  <text x="225" y="135" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#333">Pin 6</text>
+  <text x="225" y="160" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#dc2626">(CUT)</text>
+
+  <path d="M 180 560 L 270 560" fill="none" stroke="#333" stroke-width="3" marker-end="url(#arrowBlack)"/>
+  <text x="225" y="550" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#333">Pin 3</text>
+  <text x="225" y="575" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#047857">(TAPPED)</text>
+
+  <path d="M 720 185 L 760 185 L 760 670 L 110 670 L 110 620" fill="none" stroke="#333" stroke-width="3" marker-end="url(#arrowBlack)"/>
+  <text x="440" y="660" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="bold" fill="#333">Pin 6 (Motor Rx - Forwarded or Emulated)</text>
+
+
+  <path d="M 460 150 L 530 150" fill="none" stroke="#0ea5e9" stroke-width="3" stroke-dasharray="6,4" marker-end="url(#arrowBlue)"/>
+  <text x="495" y="140" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#0ea5e9">PROXY</text>
+  <text x="495" y="165" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#0ea5e9">on_raw</text>
+
+  <path d="M 370 210 L 370 260" fill="none" stroke="#6b7280" stroke-width="2" marker-end="url(#arrowBlack)"/>
+  <text x="360" y="240" text-anchor="end" font-family="sans-serif" font-size="11" fill="#4b5563">on_kv (Auto-detect override)</text>
+
+  <path d="M 460 290 L 510 290 L 510 210 L 530 210" fill="none" stroke="#f97316" stroke-width="3" marker-end="url(#arrowOrange)"/>
+  <text x="500" y="250" text-anchor="end" font-family="sans-serif" font-size="11" font-weight="bold" fill="#ea580c">EMULATE</text>
+
+  <path d="M 320 210 L 320 380" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrowBlack)"/>
+  <text x="310" y="360" text-anchor="end" font-family="sans-serif" font-size="10" fill="#6d28d9">KV Push</text>
+
+  <path d="M 370 520 L 370 460" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrowBlack)"/>
+  <text x="380" y="490" text-anchor="start" font-family="sans-serif" font-size="10" fill="#6d28d9">KV Push</text>
+
+  <path d="M 630 390 L 630 360" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrowBlack)"/>
+  <text x="640" y="380" text-anchor="start" font-family="sans-serif" font-size="11" fill="#6d28d9">Lock-free drain</text>
+
+  <path d="M 460 320 L 480 320 L 480 380" fill="none" stroke="#8b5cf6" stroke-width="2" marker-end="url(#arrowBlack)"/>
+  <text x="485" y="360" text-anchor="start" font-family="sans-serif" font-size="10" fill="#6d28d9">Status Snapshots</text>
+
+  <path d="M 540 310 L 470 310" fill="none" stroke="#22c55e" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <text x="505" y="300" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#15803d">Cmd / Heartbeat</text>
+
+
+  <path d="M 800 340 L 730 340" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="4,2" marker-end="url(#arrowBlue)"/>
+  <text x="765" y="330" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#1d4ed8">JSON Cmds</text>
+
+  <path d="M 730 370 L 800 370" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="4,2" marker-end="url(#arrowBlack)"/>
+  <text x="765" y="390" text-anchor="middle" font-family="sans-serif" font-size="11" font-weight="bold" fill="#6d28d9">JSON Events</text>
+
+
+  <g transform="translate(40, 680)">
+    <rect width="200" height="60" rx="4" fill="#ffffff" stroke="#cbd5e1" stroke-width="1"/>
+    <text x="10" y="20" font-family="sans-serif" font-weight="bold" font-size="12" fill="#333">Legend:</text>
+    
+    <line x1="10" y1="35" x2="40" y2="35" stroke="#333" stroke-width="3"/>
+    <text x="45" y="40" font-family="sans-serif" font-size="11" fill="#333">Physical Wire</text>
+    
+    <line x1="100" y1="35" x2="130" y2="35" stroke="#0ea5e9" stroke-width="3" stroke-dasharray="4,2"/>
+    <text x="135" y="40" font-family="sans-serif" font-size="11" fill="#333">Proxy Data Flow</text>
+
+    <line x1="10" y1="50" x2="40" y2="50" stroke="#f97316" stroke-width="3"/>
+    <text x="45" y="55" font-family="sans-serif" font-size="11" fill="#333">Emulate Signal</text>
+
+    <line x1="100" y1="50" x2="130" y2="50" stroke="#8b5cf6" stroke-width="2"/>
+    <text x="135" y="55" font-family="sans-serif" font-size="11" fill="#333">Internal Memory</text>
+  </g>
+
+</svg>
