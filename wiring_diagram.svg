@@ -1,0 +1,316 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 900" width="100%" height="100%">
+  <defs>
+    <filter id="sh" x="-5%" y="-5%" width="110%" height="115%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#94a3b8" flood-opacity="0.2"/>
+    </filter>
+    <marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L0,7 L7,4 Z" fill="#ef4444"/>
+    </marker>
+    <marker id="ab" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,1 L0,7 L7,4 Z" fill="#2563eb"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="550" y="38" text-anchor="middle" font-family="'Courier New', 'Consolas', monospace" font-weight="700" font-size="22" fill="#1e293b" letter-spacing="2">PRECOR 9.31 — TREADMILL_IO WIRING</text>
+  <text x="550" y="60" text-anchor="middle" font-family="'Courier New', 'Consolas', monospace" font-size="14" fill="#64748b" letter-spacing="1">RS-485 SHARED BUS · 9600 BAUD · IDLES LOW (INVERTED)</text>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  BUS REGION                              -->
+  <!-- ════════════════════════════════════════ -->
+  <rect x="60" y="80" width="980" height="280" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="80" y="100" font-family="'Courier New', monospace" font-size="13" fill="#94a3b8" letter-spacing="2">TREADMILL RS-485 BUS (6-PIN CABLE)</text>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  CONSOLE                                 -->
+  <!-- ════════════════════════════════════════ -->
+  <g transform="translate(80, 115)" filter="url(#sh)">
+    <rect width="180" height="220" rx="8" fill="#fff" stroke="#64748b" stroke-width="2"/>
+    <rect width="180" height="38" rx="8" fill="#e2e8f0"/>
+    <rect y="30" width="180" height="8" fill="#e2e8f0"/>
+    <text x="90" y="26" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="17" fill="#1e293b">CONSOLE</text>
+    <text x="90" y="58" text-anchor="middle" font-family="'Courier New', monospace" font-size="12" fill="#64748b">Physical UI Panel</text>
+
+    <text x="155" y="95"  text-anchor="end" font-family="'Courier New', monospace" font-size="14" fill="#475569" font-weight="700">Pin 1  GND</text>
+    <circle cx="168" cy="91" r="4" fill="#475569"/>
+
+    <text x="155" y="145" text-anchor="end" font-family="'Courier New', monospace" font-size="14" fill="#2563eb" font-weight="700">Pin 3  RX←</text>
+    <circle cx="168" cy="141" r="4" fill="#2563eb"/>
+
+    <text x="155" y="198" text-anchor="end" font-family="'Courier New', monospace" font-size="14" fill="#ef4444" font-weight="700">Pin 6  TX→</text>
+    <circle cx="168" cy="194" r="4" fill="#ef4444"/>
+  </g>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  MOTOR                                   -->
+  <!-- ════════════════════════════════════════ -->
+  <g transform="translate(840, 115)" filter="url(#sh)">
+    <rect width="180" height="220" rx="8" fill="#fff" stroke="#64748b" stroke-width="2"/>
+    <rect width="180" height="38" rx="8" fill="#e2e8f0"/>
+    <rect y="30" width="180" height="8" fill="#e2e8f0"/>
+    <text x="90" y="26" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="17" fill="#1e293b">MOTOR</text>
+    <text x="90" y="58" text-anchor="middle" font-family="'Courier New', monospace" font-size="12" fill="#64748b">Controller Board</text>
+
+    <text x="25" y="95"  font-family="'Courier New', monospace" font-size="14" fill="#475569" font-weight="700">GND  Pin 1</text>
+    <circle cx="12" cy="91" r="4" fill="#475569"/>
+
+    <text x="25" y="145" font-family="'Courier New', monospace" font-size="14" fill="#2563eb" font-weight="700">→TX  Pin 3</text>
+    <circle cx="12" cy="141" r="4" fill="#2563eb"/>
+
+    <text x="25" y="198" font-family="'Courier New', monospace" font-size="14" fill="#ef4444" font-weight="700">←RX  Pin 6</text>
+    <circle cx="12" cy="194" r="4" fill="#ef4444"/>
+  </g>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  BUS WIRES                               -->
+  <!--                                          -->
+  <!--  Tap points left to right:               -->
+  <!--    Pin 3 tap  x=350                      -->
+  <!--    GND tap    x=440  (left of cut)       -->
+  <!--    Pin 6 In   x=500  (left break)        -->
+  <!--    CUT        x=540                      -->
+  <!--    Pin 6 Out  x=580  (right break)       -->
+  <!-- ════════════════════════════════════════ -->
+
+  <!-- Pin 1 GND: straight through, tap at x=440 -->
+  <line x1="252" y1="206" x2="848" y2="206" stroke="#475569" stroke-width="3"/>
+  <text x="700" y="199" text-anchor="middle" font-family="'Courier New', monospace" font-size="12" fill="#64748b">Pin 1 — GND (continuous)</text>
+  <circle cx="440" cy="206" r="6" fill="#fff" stroke="#475569" stroke-width="2.5"/>
+
+  <!-- Pin 3: Motor TX → Console RX, tap at x=350 -->
+  <path d="M 848 256 L 252 256" stroke="#2563eb" stroke-width="3" marker-end="url(#ab)"/>
+  <text x="700" y="249" text-anchor="middle" font-family="'Courier New', monospace" font-size="12" fill="#2563eb">Pin 3 — Motor TX → Console RX</text>
+  <circle cx="350" cy="256" r="7" fill="#fff" stroke="#2563eb" stroke-width="3"/>
+  <circle cx="350" cy="256" r="3" fill="#2563eb"/>
+  <text x="350" y="280" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="12" fill="#2563eb">TAP</text>
+
+  <!-- Pin 6: Console TX → Motor RX, CUT at x=540 -->
+  <!-- Left: Console → break (no arrow at break end) -->
+  <path d="M 252 309 L 510 309" stroke="#ef4444" stroke-width="3"/>
+  <!-- Right: break → Motor (arrow at motor end) -->
+  <path d="M 570 309 L 848 309" stroke="#ef4444" stroke-width="3" marker-end="url(#ar)"/>
+  <!-- Ghost -->
+  <line x1="515" y1="309" x2="565" y2="309" stroke="#ef4444" stroke-width="2" stroke-dasharray="5,4" opacity="0.2"/>
+  <!-- Cut symbol at x=540 -->
+  <circle cx="540" cy="309" r="14" fill="#fff" stroke="#ef4444" stroke-width="2"/>
+  <line x1="533" y1="302" x2="547" y2="316" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="533" y1="316" x2="547" y2="302" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="540" y="338" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="13" fill="#ef4444">CUT</text>
+
+  <text x="380" y="302" text-anchor="middle" font-family="'Courier New', monospace" font-size="12" fill="#ef4444">Console TX → Pi</text>
+  <text x="720" y="302" text-anchor="middle" font-family="'Courier New', monospace" font-size="12" fill="#ef4444">Pi → Motor RX</text>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  VERTICAL WIRES: bus → zoom inset        -->
+  <!--  All tap left of cut, nicely spaced      -->
+  <!-- ════════════════════════════════════════ -->
+
+  <!-- Pin 3 tap: from x=350 down -->
+  <path d="M 350 263 L 350 420"
+        stroke="#2563eb" stroke-width="2.5" fill="none"
+        stroke-linecap="round"/>
+  <text x="340" y="395" text-anchor="end" font-family="'Courier New', monospace" font-size="12" fill="#2563eb">Pin 3 Tap</text>
+
+  <!-- GND: from x=440 down -->
+  <path d="M 440 212 L 440 420"
+        stroke="#475569" stroke-width="2.5" fill="none"
+        stroke-linecap="round"/>
+  <text x="448" y="395" font-family="'Courier New', monospace" font-size="12" fill="#475569">GND</text>
+
+  <!-- Pin 6 in (left break): from x=500 down -->
+  <path d="M 500 309 L 500 420"
+        stroke="#ef4444" stroke-width="2.5" fill="none"
+        stroke-linecap="round"/>
+  <text x="492" y="410" text-anchor="end" font-family="'Courier New', monospace" font-size="12" fill="#ef4444">Pin 6 In</text>
+
+  <!-- Pin 6 out (right break): from x=580 down -->
+  <path d="M 580 309 L 580 420"
+        stroke="#ef4444" stroke-width="2.5" fill="none"
+        stroke-linecap="round"/>
+  <text x="588" y="410" font-family="'Courier New', monospace" font-size="12" fill="#ef4444">Pin 6 Out</text>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  ZOOM INSET (middle)                     -->
+  <!-- ════════════════════════════════════════ -->
+  <g transform="translate(100, 420)" filter="url(#sh)">
+    <rect width="900" height="260" rx="8" fill="#fff" stroke="#f59e0b" stroke-width="2.5"/>
+    <!-- Title bar -->
+    <rect width="900" height="34" rx="8" fill="#fffbeb"/>
+    <rect y="26" width="900" height="8" fill="#fffbeb"/>
+    <text x="18" y="24" font-family="'Courier New', monospace" font-weight="700" font-size="15" fill="#92400e" letter-spacing="1">DETAIL — PINS 11, 13, 14, 15  (2×2 CLUSTER)</text>
+
+    <!-- Row labels -->
+    <text x="108" y="105" text-anchor="end" font-family="'Courier New', monospace" font-size="14" fill="#94a3b8">Even →</text>
+    <text x="108" y="195" text-anchor="end" font-family="'Courier New', monospace" font-size="14" fill="#94a3b8"> Odd →</text>
+
+    <!-- ── EVEN ROW: 10, 12, [14], 16 ── -->
+    <circle cx="160" cy="100" r="17" fill="#f8fafc" stroke="#d1d5db" stroke-width="2"/>
+    <circle cx="160" cy="100" r="6" fill="#d1d5db"/>
+    <text x="160" y="77" text-anchor="middle" font-family="'Courier New', monospace" font-size="13" fill="#94a3b8">10</text>
+
+    <circle cx="260" cy="100" r="17" fill="#f8fafc" stroke="#d1d5db" stroke-width="2"/>
+    <circle cx="260" cy="100" r="6" fill="#d1d5db"/>
+    <text x="260" y="77" text-anchor="middle" font-family="'Courier New', monospace" font-size="13" fill="#94a3b8">12</text>
+
+    <!-- Pin 14 — GND — ACTIVE -->
+    <circle cx="360" cy="100" r="19" fill="#f1f5f9" stroke="#1e293b" stroke-width="3"/>
+    <circle cx="360" cy="100" r="7" fill="#475569"/>
+    <text x="360" y="74" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="14" fill="#1e293b">14</text>
+
+    <circle cx="460" cy="100" r="17" fill="#f8fafc" stroke="#d1d5db" stroke-width="2"/>
+    <circle cx="460" cy="100" r="6" fill="#d1d5db"/>
+    <text x="460" y="77" text-anchor="middle" font-family="'Courier New', monospace" font-size="13" fill="#94a3b8">16</text>
+
+    <!-- ── ODD ROW: 9, [11], [13], [15] ── -->
+    <circle cx="160" cy="190" r="17" fill="#f8fafc" stroke="#d1d5db" stroke-width="2"/>
+    <circle cx="160" cy="190" r="6" fill="#d1d5db"/>
+    <text x="160" y="220" text-anchor="middle" font-family="'Courier New', monospace" font-size="13" fill="#94a3b8">9</text>
+
+    <!-- Pin 11 — GPIO 17 — blue -->
+    <circle cx="260" cy="190" r="19" fill="#eff6ff" stroke="#2563eb" stroke-width="3"/>
+    <circle cx="260" cy="190" r="7" fill="#2563eb"/>
+    <text x="260" y="220" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="14" fill="#2563eb">11</text>
+
+    <!-- Pin 13 — GPIO 27 — red -->
+    <circle cx="360" cy="190" r="19" fill="#fef2f2" stroke="#ef4444" stroke-width="3"/>
+    <circle cx="360" cy="190" r="7" fill="#ef4444"/>
+    <text x="360" y="220" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="14" fill="#ef4444">13</text>
+
+    <!-- Pin 15 — GPIO 22 — red -->
+    <circle cx="460" cy="190" r="19" fill="#fef2f2" stroke="#ef4444" stroke-width="3"/>
+    <circle cx="460" cy="190" r="7" fill="#ef4444"/>
+    <text x="460" y="220" text-anchor="middle" font-family="'Courier New', monospace" font-weight="700" font-size="14" fill="#ef4444">15</text>
+
+    <!-- ── WIRES ENTERING TOP EDGE ── -->
+    <!-- Pin 3 Tap (x=350 global = 250 local) → Pin 11 -->
+    <path d="M 250 0 L 250 60 L 260 170"
+          stroke="#2563eb" stroke-width="3" fill="none"
+          stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- GND (x=440 global = 340 local) → Pin 14 -->
+    <path d="M 340 0 L 340 55 L 360 80"
+          stroke="#475569" stroke-width="3" fill="none"
+          stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Pin 6 In (x=500 global = 400 local) → Pin 13 -->
+    <path d="M 400 0 L 400 145 L 378 172"
+          stroke="#ef4444" stroke-width="3" fill="none"
+          stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Pin 6 Out (x=580 global = 480 local) → Pin 15 -->
+    <path d="M 480 0 L 480 145 L 460 170"
+          stroke="#ef4444" stroke-width="3" fill="none"
+          stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- ── LABELS (right side) ── -->
+    <g transform="translate(530, 0)">
+      <line x1="0" y1="100" x2="40" y2="100" stroke="#475569" stroke-width="1.5"/>
+      <rect x="45" y="87" width="320" height="26" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>
+      <text x="55" y="105" font-family="'Courier New', monospace" font-weight="700" font-size="13" fill="#1e293b">Pin 14  GND        Shared ground</text>
+
+      <line x1="0" y1="145" x2="40" y2="145" stroke="#2563eb" stroke-width="1.5"/>
+      <rect x="45" y="132" width="320" height="26" rx="4" fill="#eff6ff" stroke="#93c5fd" stroke-width="1"/>
+      <text x="55" y="150" font-family="'Courier New', monospace" font-weight="700" font-size="13" fill="#1e40af">Pin 11  GPIO 17    Pin 3 tap (RX)</text>
+
+      <line x1="0" y1="190" x2="40" y2="190" stroke="#ef4444" stroke-width="1.5"/>
+      <rect x="45" y="177" width="320" height="26" rx="4" fill="#fef2f2" stroke="#fca5a5" stroke-width="1"/>
+      <text x="55" y="195" font-family="'Courier New', monospace" font-weight="700" font-size="13" fill="#b91c1c">Pin 13  GPIO 27    Pin 6 in (con)</text>
+
+      <line x1="0" y1="230" x2="40" y2="230" stroke="#ef4444" stroke-width="1.5"/>
+      <rect x="45" y="217" width="320" height="26" rx="4" fill="#fef2f2" stroke="#fca5a5" stroke-width="1"/>
+      <text x="55" y="235" font-family="'Courier New', monospace" font-weight="700" font-size="13" fill="#b91c1c">Pin 15  GPIO 22    Pin 6 out (mtr)</text>
+    </g>
+  </g>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  CALLOUT LINES: zoom → Pi header         -->
+  <!-- ════════════════════════════════════════ -->
+  <line x1="300" y1="680" x2="490" y2="730" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
+  <line x1="660" y1="680" x2="558" y2="730" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  RASPBERRY PI HEADER (bottom)            -->
+  <!-- ════════════════════════════════════════ -->
+  <g transform="translate(280, 730)" filter="url(#sh)">
+    <rect width="540" height="110" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <text x="20" y="28" font-family="'Courier New', monospace" font-weight="700" font-size="16" fill="#15803d">RASPBERRY PI</text>
+    <text x="20" y="46" font-family="'Courier New', monospace" font-size="12" fill="#22c55e">treadmill_io · GPIO Header (full 40-pin)</text>
+
+    <!-- Header block -->
+    <rect x="190" y="55" width="320" height="38" rx="3" fill="#fff" stroke="#d1d5db" stroke-width="1"/>
+
+    <text x="200" y="51" font-family="'Courier New', monospace" font-size="10" fill="#94a3b8">Pin 1 ↓</text>
+
+    <!-- Even row (top) -->
+    <g transform="translate(200, 65)">
+      <circle cx="0"   cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="15"  cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="30"  cy="0" r="3" fill="#9ca3af" stroke="#6b7280" stroke-width="0.5"/>
+      <circle cx="45"  cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="60"  cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="75"  cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <!-- Pin 14 GND — ACTIVE -->
+      <circle cx="90"  cy="0" r="5" fill="#475569" stroke="#1e293b" stroke-width="2"/>
+      <circle cx="90"  cy="0" r="2" fill="#fff"/>
+      <circle cx="105" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="120" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="135" cy="0" r="3" fill="#9ca3af" stroke="#6b7280" stroke-width="0.5"/>
+      <circle cx="150" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="165" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="180" cy="0" r="3" fill="#9ca3af" stroke="#6b7280" stroke-width="0.5"/>
+      <circle cx="195" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="210" cy="0" r="3" fill="#9ca3af" stroke="#6b7280" stroke-width="0.5"/>
+      <circle cx="225" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="240" cy="0" r="3" fill="#9ca3af" stroke="#6b7280" stroke-width="0.5"/>
+      <circle cx="255" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="270" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="285" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+    </g>
+
+    <!-- Odd row (bottom) -->
+    <g transform="translate(200, 83)">
+      <circle cx="0"   cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="15"  cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="30"  cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="45"  cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="60"  cy="0" r="3" fill="#9ca3af" stroke="#6b7280" stroke-width="0.5"/>
+      <!-- Pin 11 — blue -->
+      <circle cx="75"  cy="0" r="5" fill="#2563eb" stroke="#1d4ed8" stroke-width="2"/>
+      <circle cx="75"  cy="0" r="2" fill="#fff"/>
+      <!-- Pin 13 — red -->
+      <circle cx="90"  cy="0" r="5" fill="#ef4444" stroke="#dc2626" stroke-width="2"/>
+      <circle cx="90"  cy="0" r="2" fill="#fff"/>
+      <!-- Pin 15 — red -->
+      <circle cx="105" cy="0" r="5" fill="#ef4444" stroke="#dc2626" stroke-width="2"/>
+      <circle cx="105" cy="0" r="2" fill="#fff"/>
+      <circle cx="120" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="135" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="150" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="165" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="180" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="195" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="210" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="225" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="240" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="255" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="270" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+      <circle cx="285" cy="0" r="3" fill="#d1d5db" stroke="#9ca3af" stroke-width="0.5"/>
+    </g>
+
+    <!-- Highlight box -->
+    <rect x="268" y="54" width="46" height="40" rx="4" fill="none" stroke="#f59e0b" stroke-width="2.5"/>
+  </g>
+
+  <!-- ════════════════════════════════════════ -->
+  <!--  LEGEND                                  -->
+  <!-- ════════════════════════════════════════ -->
+  <g transform="translate(80, 865)">
+    <text x="0" y="0" font-family="'Courier New', monospace" font-weight="700" font-size="14" fill="#64748b">LEGEND</text>
+    <line x1="90" y1="-4" x2="120" y2="-4" stroke="#475569" stroke-width="3"/>
+    <text x="128" y="0" font-family="'Courier New', monospace" font-size="13" fill="#475569">Pin 1 GND (shared)</text>
+    <line x1="350" y1="-4" x2="380" y2="-4" stroke="#2563eb" stroke-width="3"/>
+    <text x="388" y="0" font-family="'Courier New', monospace" font-size="13" fill="#2563eb">Pin 3 Motor→Con (tapped)</text>
+    <line x1="650" y1="-4" x2="680" y2="-4" stroke="#ef4444" stroke-width="3"/>
+    <text x="688" y="0" font-family="'Courier New', monospace" font-size="13" fill="#ef4444">Pin 6 Con→Motor (cut)</text>
+  </g>
+</svg>
