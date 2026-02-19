@@ -12,6 +12,7 @@ import ProgramComplete from '../components/ProgramComplete';
 import HistoryList from '../components/HistoryList';
 import BottomBar from '../components/BottomBar';
 import { pillBtn, HomeIcon, MicIcon } from '../components/shared';
+import { useMotivation } from '../state/useMotivation';
 
 function PathIcon() {
   return (
@@ -28,6 +29,7 @@ function EmptyRunCard({ onVoice }: { onVoice: () => void }) {
     <div style={{
       margin: '0 16px 8px', flex: 1,
       borderRadius: 'var(--r-lg)', background: 'var(--card)',
+      border: '1px solid rgba(255,255,255,0.25)',
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
       gap: 16, minHeight: 0,
@@ -61,6 +63,7 @@ export default function Running(): React.ReactElement {
   const [durationEditOpen, setDurationEditOpen] = useState(false);
 
   const isActive = sess.active || pgm.running;
+  const motivation = useMotivation(!isActive);
   const isManual = pgm.program?.manual === true;
 
   const handleTimeTap = () => {
@@ -76,9 +79,9 @@ export default function Running(): React.ReactElement {
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div className="run-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Hero time with ambient glow */}
-      <div style={{
+      <div className="run-header" style={{
         textAlign: 'center', padding: '12px 16px 4px', flexShrink: 0,
         position: 'relative',
       }}>
@@ -127,20 +130,27 @@ export default function Running(): React.ReactElement {
           transition: 'opacity 0.6s var(--ease)',
           willChange: 'opacity',
         }} />
-        <div
-          className="hero-time"
-          onClick={handleTimeTap}
-          style={{
-            position: 'relative', zIndex: 1,
-            fontSize: 96, fontWeight: 700, lineHeight: 1,
-            fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em',
-            color: isActive ? 'var(--text)' : 'var(--text2)',
-            transition: 'color 0.35s, font-size 0.3s var(--ease)',
-            cursor: isManual && pgm.running ? 'pointer' : 'default',
-            WebkitTapHighlightColor: 'transparent',
-          }}
-        >
-          {sess.elapsedDisplay}
+        <div className="hero-slot" style={{
+          position: 'relative', zIndex: 1,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <div
+            className={isActive ? 'hero-time' : undefined}
+            onClick={isActive ? handleTimeTap : undefined}
+            style={{
+              fontSize: isActive ? 96 : 36,
+              fontWeight: isActive ? 700 : 500,
+              lineHeight: 1,
+              fontVariantNumeric: isActive ? 'tabular-nums' : 'normal',
+              letterSpacing: isActive ? '-0.02em' : '0.01em',
+              color: isActive ? 'var(--text)' : 'var(--text3)',
+              transition: 'color 0.35s',
+              cursor: isManual && pgm.running ? 'pointer' : 'default',
+              WebkitTapHighlightColor: 'transparent',
+            }}
+          >
+            {isActive ? sess.elapsedDisplay : motivation}
+          </div>
         </div>
 
         {isManual && pgm.running && (
@@ -180,7 +190,7 @@ export default function Running(): React.ReactElement {
       <MetricsRow />
 
       {/* Elevation profile or empty state — fills available vertical space */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginTop: 6 }}>
+      <div className="run-viz" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', marginTop: 6 }}>
         {pgm.program && pgm.running ? (
           <ProgramHUD />
         ) : pgm.completed ? (

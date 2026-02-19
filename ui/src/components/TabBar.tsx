@@ -54,7 +54,7 @@ function TabItem({ icon, label, active, onClick, dot, color }: {
           }} />
         )}
       </div>
-      <span style={{ fontSize: 10, fontWeight: 500, lineHeight: 1 }}>{label}</span>
+      <span className="tab-label" style={{ fontSize: 10, fontWeight: 500, lineHeight: 1 }}>{label}</span>
     </button>
   );
 }

@@ -18,12 +18,12 @@ export default function BottomBar(): React.ReactElement {
   const isRunning = status.emulate && (status.emuSpeed > 0 || (program.running && !pgm.paused));
 
   return (
-    <div style={{ flexShrink: 0, paddingTop: 6, paddingBottom: 12 }}>
-      <div style={{ marginBottom: 12 }}>
+    <div className="run-bottom" style={{ flexShrink: 0, paddingTop: 6, paddingBottom: 12 }}>
+      <div className="run-controls-wrap" style={{ marginBottom: 12 }}>
         <SpeedInclineControls />
       </div>
 
-      <div style={{
+      <div className="stop-area" style={{
         display: 'flex', gap: 8, padding: '0 12px',
         alignItems: 'stretch',
       }}>

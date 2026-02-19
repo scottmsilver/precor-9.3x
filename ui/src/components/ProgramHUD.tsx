@@ -39,7 +39,7 @@ export default function ProgramHUD(): React.ReactElement | null {
   return (
     <div className="pgm-section" style={{
       padding: '4px 16px 6px', display: 'flex', flexDirection: 'column',
-      flex: '1 1 0', minHeight: 0, maxHeight: 280,
+      flex: '1 1 0', minHeight: 0,
     }}>
       {/* Elevation profile card — fills available space */}
       <div
@@ -47,6 +47,7 @@ export default function ProgramHUD(): React.ReactElement | null {
         style={{
           position: 'relative', borderRadius: 'var(--r-lg)',
           background: 'var(--card)', overflow: 'hidden',
+          border: '1px solid rgba(255,255,255,0.25)',
           flex: 1, minHeight: 0,
           display: 'flex', flexDirection: 'column',
         }}

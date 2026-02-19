@@ -1,5 +1,8 @@
 /* Mobile-first (default) — all base styles live in components */
 
+/* Fixed-height hero slot so layout doesn't shift between motivation text and timer */
+.hero-slot { height: 96px; }
+
 /* Ensure touch targets are 44px+ on all interactive elements */
 button, [role="button"], a, input, select, textarea {
   min-height: 44px;
@@ -15,15 +18,102 @@ button, [role="button"], a, input, select, textarea {
 
 /* Tablet: 768px+ */
 @media (min-width: 768px) {
-  .hero-time { font-size: 120px !important; }
-  .metrics-ro { max-width: 480px; margin-left: auto; margin-right: auto; }
-  .controls { max-width: 480px; margin-left: auto; margin-right: auto; }
-  .pgm-section { max-width: 480px; margin-left: auto; margin-right: auto; }
-  .stop-area { max-width: 480px; margin-left: auto; margin-right: auto; width: 100%; }
-  .chat-pill { max-width: 480px; margin-left: auto; margin-right: auto; }
-  .chat-sheet { max-width: 480px; margin-left: auto; margin-right: auto; }
-  .history-section { max-width: 600px; margin-left: auto; margin-right: auto; }
-  .lobby-content { max-width: 600px; margin-left: auto; margin-right: auto; }
+  /* --- Run screen: 2-column grid layout --- */
+  .run-screen {
+    display: grid !important;
+    grid-template-columns: 5fr 3fr;
+    grid-template-rows: auto auto 1fr auto;
+    grid-template-areas:
+      "header   header"
+      "metrics  metrics"
+      "viz      controls"
+      "stop     stop";
+    gap: 12px 20px;
+    padding: 12px 24px 16px;
+    overflow: hidden !important;
+  }
+  .run-header { grid-area: header; }
+  .metrics-ro { grid-area: metrics; max-width: none; }
+  .run-viz { grid-area: viz; margin-top: 0 !important; }
+  .run-viz > div { margin: 0 !important; border-radius: var(--r-lg); background: #272522 !important; }
+  .run-controls-wrap .controls > div { background: #272522 !important; }
+
+  /* BottomBar becomes transparent to grid — its children participate directly */
+  .run-bottom {
+    display: contents !important;
+    padding: 0 !important;
+  }
+  .run-controls-wrap {
+    grid-area: controls;
+    margin-bottom: 0 !important;
+  }
+  .stop-area {
+    grid-area: stop;
+    max-width: 400px;
+    margin-left: auto; margin-right: auto;
+    width: 100%;
+  }
+
+  /* Controls stack vertically in the sidebar, filling available height */
+  .run-controls-wrap {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .run-controls-wrap .controls {
+    flex-direction: column !important;
+    max-width: none !important;
+    gap: 12px !important;
+    padding: 0 !important;
+    flex: 1;
+  }
+  /* Each control panel fills its share of the column */
+  .run-controls-wrap .controls > div {
+    flex: 1 !important;
+    padding: 16px !important;
+    gap: 6px !important;
+    align-items: stretch !important;
+  }
+  /* Button columns: don't grow horizontally, just stretch vertically */
+  .run-controls-wrap .controls > div > div:first-child,
+  .run-controls-wrap .controls > div > div:last-child {
+    flex: 0 0 auto !important;
+    align-self: stretch !important;
+  }
+  /* Center value area: centered both ways */
+  .run-controls-wrap .controls > div > div:nth-child(2) {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  /* Scale up control buttons for tablet — fill top-to-bottom */
+  .controls .ctrl-btn { width: 58px !important; height: auto !important; flex: 1 !important; border-radius: 14px !important; }
+  .controls .ctrl-btn svg { width: 24px; height: 24px; }
+  .controls .ctrl-value { font-size: 56px !important; }
+  .controls .ctrl-label { font-size: 17px !important; }
+
+  /* Elevation profile: no max-width cap, fill the grid cell */
+  .pgm-section { max-width: none !important; padding-left: 0 !important; padding-right: 0 !important; }
+
+  /* Hero time slightly larger on tablet, with matching slot height */
+  .hero-time { font-size: 110px !important; }
+  .hero-slot { height: 110px; }
+
+  /* Scale up metrics */
+  .metrics-ro .metric-value { font-size: 18px !important; }
+  .metrics-ro .metric-label { font-size: 12px !important; }
+  .metrics-ro { gap: 32px !important; }
+
+  /* --- Lobby & non-run pages --- */
+  .lobby-content { max-width: 720px; margin-left: auto; margin-right: auto; }
+  .chat-pill { max-width: 640px; margin-left: auto; margin-right: auto; }
+  .chat-sheet { max-width: 640px; margin-left: auto; margin-right: auto; }
+  .history-section { max-width: 720px; margin-left: auto; margin-right: auto; }
+
+  /* Tab bar labels */
+  .tab-label { font-size: 11px !important; }
 
   /* History: 2-column grid on tablet */
   .history-section .history-scroll {

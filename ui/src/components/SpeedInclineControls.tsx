@@ -36,7 +36,7 @@ function DoubleChevronDown({ sw = 2.5 }: { sw?: number }) {
 
 // Clean pill button — matches Home/Voice style
 const btn: React.CSSProperties = {
-  width: 38, height: 54, borderRadius: 10,
+  width: 38, height: 54, borderRadius: 10, boxSizing: 'border-box' as const,
   border: 'none', background: 'var(--fill)',
   cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
   WebkitTapHighlightColor: 'transparent',
@@ -69,12 +69,14 @@ export default function SpeedInclineControls(): React.ReactElement {
   const actions = useTreadmillActions();
   const repeatTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatCount = useRef(0);
+  const activeBtn = useRef<string | null>(null);
 
   const speedPulse = usePulse(status.emuSpeed);
   const inclinePulse = usePulse(status.emuIncline);
 
-  const startRepeat = useCallback((type: 'speed' | 'incline', delta: number) => {
+  const startRepeat = useCallback((type: 'speed' | 'incline', delta: number, btnId: string) => {
     repeatCount.current = 0;
+    activeBtn.current = btnId;
     const action = type === 'speed'
       ? () => { actions.adjustSpeed(delta); haptic(15); }
       : () => { actions.adjustIncline(delta); haptic(15); };
@@ -94,17 +96,18 @@ export default function SpeedInclineControls(): React.ReactElement {
       repeatTimer.current = null;
     }
     repeatCount.current = 0;
+    activeBtn.current = null;
   }, []);
 
-  const ph = (type: 'speed' | 'incline', delta: number) => ({
-    onPointerDown: () => startRepeat(type, delta),
+  const ph = (type: 'speed' | 'incline', delta: number, btnId: string) => ({
+    onPointerDown: () => startRepeat(type, delta, btnId),
     onPointerUp: stopRepeat,
     onPointerLeave: stopRepeat,
   });
 
-  // Pulse class helper — uses key to force re-trigger animation on rapid changes
-  const pulseBtn = (pulse: PulseDir, dir: 'up' | 'down') =>
-    pulse === dir ? 'pulse-btn' : '';
+  // Pulse class helper — only pulses the specific button that was tapped
+  const pulseBtn = (pulse: PulseDir, dir: 'up' | 'down', btnId: string) =>
+    pulse === dir && activeBtn.current === btnId ? 'pulse-btn' : '';
   const pulseVal = (pulse: PulseDir) =>
     pulse ? 'pulse-value' : '';
 
@@ -118,29 +121,30 @@ export default function SpeedInclineControls(): React.ReactElement {
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', gap: 3,
         background: 'var(--card)', borderRadius: 'var(--r-lg)', padding: '6px 5px',
+        border: '1px solid rgba(255,255,255,0.25)',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button key={`su1-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'up')} style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', 1)}>
+          <button key={`su1-${status.emuSpeed}`} className={`ctrl-btn ${pulseBtn(speedPulse, 'up', 'su1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', 1, 'su1')}>
             <ChevronUp />
           </button>
-          <button key={`su10-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'up')} style={{ ...btn, color: 'var(--green)' }} {...ph('speed', 10)}>
-            <DoubleChevronUp />
+          <button key={`sd1-${status.emuSpeed}`} className={`ctrl-btn ${pulseBtn(speedPulse, 'down', 'sd1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', -1, 'sd1')}>
+            <ChevronDown />
           </button>
         </div>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0, padding: '10px 0' }}>
-          <div key={`sv-${status.emuSpeed}`} className={pulseVal(speedPulse)} style={{
+          <div key={`sv-${status.emuSpeed}`} className={`ctrl-value ${pulseVal(speedPulse)}`} style={{
             fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
             lineHeight: 1.1, color: 'var(--green)',
           }}>
             {(status.emuSpeed / 10).toFixed(1)}
           </div>
-          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>mph</div>
+          <div className="ctrl-label" style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>mph</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button key={`sd1-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'down')} style={{ ...btn, color: 'var(--text3)' }} {...ph('speed', -1)}>
-            <ChevronDown />
+          <button key={`su10-${status.emuSpeed}`} className={`ctrl-btn ${pulseBtn(speedPulse, 'up', 'su10')}`} style={{ ...btn, color: 'var(--green)' }} {...ph('speed', 10, 'su10')}>
+            <DoubleChevronUp />
           </button>
-          <button key={`sd10-${status.emuSpeed}`} className={pulseBtn(speedPulse, 'down')} style={{ ...btn, color: 'var(--green)' }} {...ph('speed', -10)}>
+          <button key={`sd10-${status.emuSpeed}`} className={`ctrl-btn ${pulseBtn(speedPulse, 'down', 'sd10')}`} style={{ ...btn, color: 'var(--green)' }} {...ph('speed', -10, 'sd10')}>
             <DoubleChevronDown />
           </button>
         </div>
@@ -150,29 +154,30 @@ export default function SpeedInclineControls(): React.ReactElement {
       <div style={{
         flex: 1, display: 'flex', alignItems: 'center', gap: 3,
         background: 'var(--card)', borderRadius: 'var(--r-lg)', padding: '6px 5px',
+        border: '1px solid rgba(255,255,255,0.25)',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button key={`iu1-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'up')} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 1)}>
+          <button key={`iu1-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'up', 'iu1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 1, 'iu1')}>
             <ChevronUp />
           </button>
-          <button key={`iu5-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'up')} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 5)}>
-            <DoubleChevronUp />
+          <button key={`id1-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'down', 'id1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -1, 'id1')}>
+            <ChevronDown />
           </button>
         </div>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0, padding: '10px 0' }}>
-          <div key={`iv-${status.emuIncline}`} className={pulseVal(inclinePulse)} style={{
+          <div key={`iv-${status.emuIncline}`} className={`ctrl-value ${pulseVal(inclinePulse)}`} style={{
             fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
             lineHeight: 1.1, color: 'var(--orange)',
           }}>
             {status.emuIncline}%
           </div>
-          <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>incline</div>
+          <div className="ctrl-label" style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>incline</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button key={`id1-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'down')} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -1)}>
-            <ChevronDown />
+          <button key={`iu5-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'up', 'iu5')}`} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 5, 'iu5')}>
+            <DoubleChevronUp />
           </button>
-          <button key={`id5-${status.emuIncline}`} className={pulseBtn(inclinePulse, 'down')} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -5)}>
+          <button key={`id5-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'down', 'id5')}`} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -5, 'id5')}>
             <DoubleChevronDown />
           </button>
         </div>
