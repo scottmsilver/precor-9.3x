@@ -111,20 +111,15 @@ The full forensic investigation is in [`RS485_DISCOVERY.md`](RS485_DISCOVERY.md)
 
 The Pi connects to three points on the cable:
 
-```
-Console ──pin 6──▶ [GPIO 27] Pi [GPIO 22] ──pin 6──▶ Motor
-                                Motor ──pin 3──▶ [GPIO 17] Pi (tap)
-```
-
 | Connection | Cable Pin | GPIO | Physical Pin | What It Does |
 |------------|-----------|------|--------------|--------------|
 | Console read | Pin 6 (console side) | 27 | 13 | Reads commands from console |
 | Motor write | Pin 6 (motor side) | 22 | 15 | Sends commands to motor |
 | Motor read | Pin 3 | 17 | 11 | Reads responses from motor |
 
-Pin assignments are configured in [`gpio.json`](gpio.json) — the C binary reads this at startup.
-
 ![Wiring Diagram](wiring_diagram.svg)
+
+NB: Pin assignments are configured in [`gpio.json`](gpio.json) — the C binary reads this at startup.
 
 ### Why Cut Pin 6
 
