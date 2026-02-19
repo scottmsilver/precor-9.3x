@@ -99,7 +99,7 @@ sudo ./ftms-daemon
 # With options
 sudo ./ftms-daemon --socket /tmp/treadmill_io.sock --debug-port 8826
 
-# Via systemd (installed by deploy.sh)
+# Via systemd (installed by make deploy)
 sudo systemctl start ftms
 ```
 
@@ -150,11 +150,11 @@ The unit test suite includes fuzz coverage: every possible single-byte opcode, a
 ## systemd
 
 ```ini
-# /etc/systemd/system/ftms.service
+# Generated from deploy/ftms.service.in
 [Unit]
-After=bluetooth.target treadmill_io.service
+After=bluetooth.target treadmill-io.service
 Requires=bluetooth.target
-Wants=treadmill_io.service
+Wants=treadmill-io.service
 
 [Service]
 ExecStart=/usr/local/bin/ftms-daemon
@@ -162,4 +162,4 @@ Environment=RUST_LOG=info
 Restart=always
 ```
 
-Installed automatically by `deploy.sh` when the cross-compiled binary exists.
+Service template at `deploy/ftms.service.in`, installed by `make deploy`.

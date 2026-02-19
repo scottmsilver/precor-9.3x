@@ -4,7 +4,7 @@ After=local-fs.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/ssilver/treadmill
+WorkingDirectory=/home/@USER@/@DEPLOY_DIR@
 ExecStart=/usr/local/bin/treadmill_io
 Restart=always
 RestartSec=3

@@ -32,19 +32,14 @@ program_history.json
 
 # C++ build artifacts
 *.o
+*.d
 *.gcda
 *.gcno
 *.gcov
-treadmill_io
-src/tests/test_kv_protocol
-src/tests/test_ipc_protocol
-src/tests/test_ring_buffer
-src/tests/test_mode_state
-src/tests/test_emulation
-src/tests/test_integration
-src/tests/test_ipc_server
-src/tests/test_controller_live
 src/tests/test_*_cov
+
+# Build staging directory
+build/
 
 # Rust build artifacts
 ftms/target/

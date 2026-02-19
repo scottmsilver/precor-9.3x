@@ -258,8 +258,8 @@ For the AI coach, create a `.gemini_key` file with your Gemini API key.
 ### Build and Run
 
 ```bash
-make                    # Build C++ binary
-sudo ./treadmill_io     # Start I/O (must be root, pigpiod must NOT be running)
+make                    # Build C++ binary (output in build/)
+sudo ./build/treadmill_io  # Start I/O (must be root, pigpiod must NOT be running)
 python3 server.py       # Start server — http://<pi-ip>:8000
 ```
 
@@ -268,12 +268,13 @@ python3 server.py       # Start server — http://<pi-ip>:8000
 The deploy script handles everything — builds, copies files, manages systemd services:
 
 ```bash
-./deploy.sh             # Full deploy: C binary, Python, UI, venv, services
-./deploy.sh ui          # UI only (quick iteration)
+make deploy             # Full deploy: C binary, Python, UI, venv, services
+make stage              # Build staging directory without deploying
+deploy/deploy.sh ui     # UI only (quick iteration)
 ```
 
 This deploys to `~/treadmill/` on the Pi and manages three systemd services:
-- `treadmill_io.service` — C binary (root)
+- `treadmill-io.service` — C binary (root)
 - `treadmill-server.service` — Python server (user)
 - `ftms.service` — Bluetooth daemon (root, optional)
 

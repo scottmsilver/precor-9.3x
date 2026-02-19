@@ -1,8 +1,8 @@
 [Unit]
 Description=FTMS Bluetooth Treadmill Service
-After=bluetooth.target treadmill_io.service
+After=bluetooth.target treadmill-io.service
 Requires=bluetooth.target
-Wants=treadmill_io.service
+Wants=treadmill-io.service
 
 [Service]
 Type=simple

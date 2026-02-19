@@ -8,21 +8,26 @@ Reverse-engineering and control toolkit for the Precor 9.31 treadmill serial bus
 
 ## Deployment
 
-The Raspberry Pi connected to the treadmill is at host `rpi`. All three services are managed via systemd and deployed with `./deploy.sh`.
+The Raspberry Pi connected to the treadmill is at host `rpi`. All three services are managed via systemd and deployed with `make deploy`.
 
 ```bash
-# Deploy everything to Pi (builds on Pi, restarts all services):
-./deploy.sh                    # or: make deploy
+# Deploy everything to Pi (stages build/, rsyncs, builds on Pi, restarts all services):
+make deploy                    # or: deploy/deploy.sh
+
+# Stage build/ directory without deploying:
+make stage
 
 # Services on Pi (managed by systemd, auto-start on boot):
-sudo systemctl status treadmill_io      # C++ GPIO daemon
+sudo systemctl status treadmill-io      # C++ GPIO daemon
 sudo systemctl status treadmill-server  # FastAPI web server
 sudo systemctl status ftms              # FTMS Bluetooth daemon
 
 # Service dependency chain:
-#   treadmill_io  ←  treadmill-server (After+Wants)
-#   treadmill_io  ←  ftms (After+Wants)
+#   treadmill-io  ←  treadmill-server (After+Wants)
+#   treadmill-io  ←  ftms (After+Wants)
 #   bluetooth     ←  ftms (After+Requires)
+
+# Service templates in deploy/*.service.in (rendered during stage)
 
 # Manual tools (for debugging):
 python3 dual_monitor.py        # Primary TUI (curses, side-by-side panes)
@@ -59,7 +64,7 @@ The serial bus uses RS-485 signaling which idles LOW (opposite of standard UART)
 
 ### C++ Binary — `treadmill_io`
 
-All GPIO I/O is handled by a C++20 binary (`src/`) that links libpigpio directly (no daemon). It reads pin assignments from `gpio.json`, handles KV parsing, proxy forwarding, and emulation, and serves data to clients over a Unix domain socket (`/tmp/treadmill_io.sock`). Both the Python server and the FTMS daemon connect as socket clients. See `treadmill_client.py` for the Python IPC client library. Runs as a systemd service (`treadmill_io.service`).
+All GPIO I/O is handled by a C++20 binary (`src/`) that links libpigpio directly (no daemon). It reads pin assignments from `gpio.json`, handles KV parsing, proxy forwarding, and emulation, and serves data to clients over a Unix domain socket (`/tmp/treadmill_io.sock`). Both the Python server and the FTMS daemon connect as socket clients. See `treadmill_client.py` for the Python IPC client library. Runs as a systemd service (`treadmill-io.service`).
 
 ### Protocol
 
@@ -86,7 +91,7 @@ A Rust daemon (`ftms/`) that advertises the treadmill as a Bluetooth FTMS (Fitne
 - **GATT characteristics**: Feature (0x2ACC), Treadmill Data (0x2ACD, notifies at 1 Hz), Speed Range (0x2AD4), Incline Range (0x2AD5), Control Point (0x2AD9), Machine Status (0x2ADA)
 - **Control Point**: Supports Set Target Speed, Set Target Incline, Start/Resume, Stop/Pause — converts km/h to mph and sends commands back through the socket
 - **Cross-compile**: `cd ftms && cross build --release --target aarch64-unknown-linux-gnu`
-- Runs as a systemd service (`ftms.service`), depends on `bluetooth.target` and `treadmill_io.service`
+- Runs as a systemd service (`ftms.service`), depends on `bluetooth.target` and `treadmill-io.service`
 
 ### Web UI
 
@@ -120,7 +125,7 @@ This logic lives in the C binary (not Python) so that mode transitions work even
 ## Testing
 
 ```bash
-# C++ unit tests (92 tests, stops/restarts treadmill_io service automatically)
+# C++ unit tests (92 tests, runs from src/)
 make test
 
 # Deploy to Pi, build, restart binary, run hardware integration tests
@@ -146,7 +151,7 @@ python3 -m pytest tests/test_live_program.py -v
 python3 -m pytest -m "not hardware" -v
 ```
 
-Note: `make test` automatically stops the `treadmill_io` service before running (to free the socket) and restarts it after, even if tests fail.
+Note: `make test` automatically stops the `treadmill-io` service before running (to free the socket) and restarts it after, even if tests fail.
 
 ## API Reference
 
