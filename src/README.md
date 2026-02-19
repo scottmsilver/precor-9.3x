@@ -7,8 +7,11 @@ The safety-critical transport layer for the Precor 9.31 treadmill. This C++ bina
 The treadmill's console and motor controller talk over an RS-485 serial bus at 9600 baud. Pin 6 (console → motor) is **cut** through the Pi; pin 3 (motor → console) is **tapped** passively. This binary sits on both wires.
 
 ```
-Console ──pin 6──▶ [GPIO 27] treadmill_io [GPIO 22] ──pin 6──▶ Motor
-                                           Motor ──pin 3──▶ [GPIO 17] treadmill_io
+Console ──pin 6──▶ [GPIO 27] ──▶  treadmill_io
+treadmill_io [GPIO 22] ──▶ ──pin 6 ──▶ Motor
+Motor ──pin 3──▶ [GPIO 17] treadmill_io
+
+(treadmill_io is passively reading pin3, but proxying pin 6
 ```
 
 In **proxy mode** (the default), raw bytes from the console are forwarded to the motor with minimal latency — the treadmill works normally. In **emulate mode**, the binary replaces the console entirely, sending a synthesized command cycle so the application layer can control speed and incline.
