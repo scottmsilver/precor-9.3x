@@ -136,7 +136,7 @@ If we only tapped pin 6, we could listen but not control anything. Cutting gives
 
 If you're investigating the protocol or something isn't working:
 
-- **Logic analyzer** + [`analyze_logic.py`](analyze_logic.py) / [`decode_inverted.py`](decode_inverted.py) — decode captured CSV traces. `decode_inverted.py` handles the RS-485 polarity inversion automatically. Raw captures live in `src/captures/`.
+- **Logic analyzer** + [`analyze_logic.py`](src/captures/analyze_logic.py) / [`decode_inverted.py`](src/captures/decode_inverted.py) — decode captured CSV traces. `decode_inverted.py` handles the RS-485 polarity inversion automatically. Raw captures and parsers live in [`src/captures/`](src/captures/).
 - **`dual_monitor.py`** — live curses TUI showing both channels side-by-side. Console commands on the left, motor responses on the right.
 - **`listen.py`** — simple CLI listener. Use `--changes` to only show value changes, `--source motor` to filter by direction.
 
