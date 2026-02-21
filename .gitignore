@@ -43,6 +43,7 @@ build/
 
 # Rust build artifacts
 ftms/target/
+hrm/target/
 
 # Analysis/experimental scripts (not part of main tools)
 analysis/
