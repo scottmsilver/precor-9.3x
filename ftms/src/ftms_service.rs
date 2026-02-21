@@ -347,7 +347,7 @@ pub async fn handle_control_command(
         }
         protocol::ControlCommand::SetTargetSpeed(kmh_hundredths) => {
             let mph_tenths = protocol::kmh_hundredths_to_mph_tenths(*kmh_hundredths);
-            let mph = mph_tenths as f64 / 10.0;
+            let mph = (mph_tenths as f64 / 10.0).clamp(0.0, 12.0); // Safety clamp: max 12.0 mph
             info!(
                 "FTMS: set speed to {:.1} mph ({} km/h*100)",
                 mph, kmh_hundredths
@@ -362,10 +362,10 @@ pub async fn handle_control_command(
             }
         }
         protocol::ControlCommand::SetTargetInclination(incline_tenths) => {
-            let incline = *incline_tenths / 10;
+            let incline = (*incline_tenths / 10).clamp(0, 15); // Safety clamp: 0-15% (hardware allows 0-99)
             info!(
-                "FTMS: set incline to {}% ({} tenths)",
-                incline, incline_tenths
+                "FTMS: set incline to {}% ({} tenths, clamped from {})",
+                incline, incline_tenths, *incline_tenths / 10
             );
 
             match crate::treadmill::send_incline(socket_path, incline).await {

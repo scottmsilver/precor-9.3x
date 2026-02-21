@@ -620,6 +620,13 @@ INTENT_TOOL_SCHEMA = json.dumps(
 )
 
 
+# Map short names from intent schema to full function names expected by _exec_fn
+_INTENT_NAME_MAP = {
+    "pause": "pause_program",
+    "resume": "resume_program",
+}
+
+
 async def extract_intent_from_text(text: str, already_executed: list[str] | None = None) -> list[dict]:
     """Extract intended function calls from narration text via Gemini Flash JSON mode.
 
@@ -671,7 +678,7 @@ async def extract_intent_from_text(text: str, already_executed: list[str] | None
         for item in parsed:
             if not isinstance(item, dict) or "name" not in item:
                 continue
-            name = item["name"]
+            name = _INTENT_NAME_MAP.get(item["name"], item["name"])
             args = item.get("args", {})
             if name in already:
                 continue
@@ -684,7 +691,7 @@ async def extract_intent_from_text(text: str, already_executed: list[str] | None
     except json.JSONDecodeError:
         # Regex fallback for malformed JSON
         for m in re.finditer(r'"name"\s*:\s*"(\w+)"', raw_text):
-            name = m.group(1)
+            name = _INTENT_NAME_MAP.get(m.group(1), m.group(1))
             if name in already:
                 continue
             region = raw_text[m.start() : m.start() + 200]

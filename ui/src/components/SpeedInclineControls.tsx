@@ -70,6 +70,7 @@ export default function SpeedInclineControls(): React.ReactElement {
   const repeatTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const repeatCount = useRef(0);
   const activeBtn = useRef<string | null>(null);
+  const stopped = useRef(true);
 
   const speedPulse = usePulse(status.emuSpeed);
   const inclinePulse = usePulse(status.emuIncline);
@@ -77,11 +78,13 @@ export default function SpeedInclineControls(): React.ReactElement {
   const startRepeat = useCallback((type: 'speed' | 'incline', delta: number, btnId: string) => {
     repeatCount.current = 0;
     activeBtn.current = btnId;
+    stopped.current = false;
     const action = type === 'speed'
       ? () => { actions.adjustSpeed(delta); haptic(15); }
       : () => { actions.adjustIncline(delta); haptic(15); };
     action();
     repeatTimer.current = setTimeout(() => {
+      if (stopped.current) return;
       repeatTimer.current = setInterval(() => {
         repeatCount.current++;
         action();
@@ -90,6 +93,7 @@ export default function SpeedInclineControls(): React.ReactElement {
   }, [actions]);
 
   const stopRepeat = useCallback(() => {
+    stopped.current = true;
     if (repeatTimer.current != null) {
       clearTimeout(repeatTimer.current);
       clearInterval(repeatTimer.current as unknown as ReturnType<typeof setInterval>);
@@ -97,6 +101,16 @@ export default function SpeedInclineControls(): React.ReactElement {
     }
     repeatCount.current = 0;
     activeBtn.current = null;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      stopped.current = true;
+      if (repeatTimer.current != null) {
+        clearTimeout(repeatTimer.current);
+        clearInterval(repeatTimer.current as unknown as ReturnType<typeof setInterval>);
+      }
+    };
   }, []);
 
   const ph = (type: 'speed' | 'incline', delta: number, btnId: string) => ({

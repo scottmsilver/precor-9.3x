@@ -4,7 +4,7 @@ import { useLocation } from 'wouter';
 import { useSession } from '../state/useSession';
 import { useProgram } from '../state/useProgram';
 import { useTreadmillState } from '../state/TreadmillContext';
-import { useVoice } from '../state/useVoice';
+import { useVoiceContext } from '../state/VoiceContext';
 import * as api from '../state/api';
 import { fmtDur } from '../utils/formatters';
 import { haptic } from '../utils/haptics';
@@ -32,7 +32,7 @@ export default function Running(): React.ReactElement {
   const sess = useSession();
   const pgm = useProgram();
   const { status } = useTreadmillState();
-  const { voiceState, toggle: toggleVoice } = useVoice();
+  const { voiceState, toggle: toggleVoice } = useVoiceContext();
   const [durationEditOpen, setDurationEditOpen] = useState(false);
 
   const isManual = pgm.program?.manual === true;
@@ -54,7 +54,7 @@ export default function Running(): React.ReactElement {
       setVisualActive(false);
     }
     return () => clearTimeout(settleTimer.current);
-  }, [physicalActive, isManual, status.emuSpeed, status.emuIncline]);
+  }, [physicalActive, isManual, visualActive, status.emuSpeed, status.emuIncline]);
 
   const isActive = visualActive;
 

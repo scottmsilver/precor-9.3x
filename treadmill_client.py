@@ -31,6 +31,7 @@ import time
 SOCK_PATH = "/tmp/treadmill_io.sock"
 MAX_SPEED_TENTHS = 120  # 12.0 mph max, in tenths
 MAX_INCLINE = 99
+MAX_BUF = 65536
 
 log = logging.getLogger("treadmill_client")
 
@@ -167,6 +168,10 @@ class TreadmillClient:
                 if not data:
                     break
                 buf += data
+                if len(buf) > MAX_BUF:
+                    log.warning("Buffer overflow, discarding")
+                    buf = b""
+                    continue
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     line = line.strip()

@@ -122,6 +122,8 @@ export interface AppState {
   program: ProgramState;
   kvLog: KVEntry[];
   hrmDevices: Array<{ address: string; name: string; rssi: number }>;
+  _dirtySpeed: number;
+  _dirtyIncline: number;
 }
 
 export interface KVEntry {

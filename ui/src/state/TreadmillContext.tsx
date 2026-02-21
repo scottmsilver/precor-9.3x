@@ -66,6 +66,8 @@ const initialState: AppState = {
   program: initialProgram,
   kvLog: [],
   hrmDevices: [],
+  _dirtySpeed: 0,
+  _dirtyIncline: 0,
 };
 
 // --- Actions ---
@@ -88,8 +90,6 @@ const MAX_KV_LOG = 500;
 // Optimistic updates set a dirty timestamp. While dirty, server status
 // updates are ignored for that field so they don't snap back to stale values.
 const DIRTY_GRACE_MS = 500;
-let _dirtySpeed = 0;
-let _dirtyIncline = 0;
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -102,8 +102,8 @@ function reducer(state: AppState, action: Action): AppState {
     case 'STATUS_UPDATE': {
       const m = action.payload;
       const now = Date.now();
-      const speedDirty = now - _dirtySpeed < DIRTY_GRACE_MS;
-      const inclineDirty = now - _dirtyIncline < DIRTY_GRACE_MS;
+      const speedDirty = now - state._dirtySpeed < DIRTY_GRACE_MS;
+      const inclineDirty = now - state._dirtyIncline < DIRTY_GRACE_MS;
       return {
         ...state,
         status: {
@@ -204,16 +204,16 @@ function reducer(state: AppState, action: Action): AppState {
     }
 
     case 'OPTIMISTIC_SPEED':
-      _dirtySpeed = Date.now();
       return {
         ...state,
+        _dirtySpeed: Date.now(),
         status: { ...state.status, emuSpeed: action.payload },
       };
 
     case 'OPTIMISTIC_INCLINE':
-      _dirtyIncline = Date.now();
       return {
         ...state,
+        _dirtyIncline: Date.now(),
         status: { ...state.status, emuIncline: action.payload },
       };
 

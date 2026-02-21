@@ -10,14 +10,17 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (res.status === 503) {
-    throw new Error('treadmill_io disconnected');
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status}`);
   }
   return res.json();
 }
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${apiBase()}${path}`);
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -105,6 +108,9 @@ export async function uploadGpx(file: File): Promise<{ ok: boolean; program?: un
   const form = new FormData();
   form.append('file', file);
   const res = await fetch(`${apiBase()}/api/gpx/upload`, { method: 'POST', body: form });
+  if (!res.ok) {
+    throw new Error(`Upload error: ${res.status}`);
+  }
   return res.json();
 }
 

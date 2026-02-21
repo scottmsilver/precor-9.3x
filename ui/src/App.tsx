@@ -6,7 +6,7 @@ import DisconnectBanner from './components/DisconnectBanner';
 import SettingsPanel from './components/SettingsPanel';
 import VoiceOverlay from './components/VoiceOverlay';
 import { ToastContext, registerToast } from './state/TreadmillContext';
-import { useVoice } from './state/useVoice';
+import { useVoiceContext } from './state/VoiceContext';
 
 function useWakeLock() {
   const wakeLock = useRef<WakeLockSentinel | null>(null);
@@ -41,7 +41,7 @@ export default function App({ children }: { children: React.ReactNode }) {
   const [toastVisible, setToastVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
-  const { voiceState, toggle: toggleVoice } = useVoice();
+  const { voiceState, toggle: toggleVoice } = useVoiceContext();
 
   useWakeLock();
   const isRun = location.startsWith('/run');

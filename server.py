@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from hrm_client import HrmClient
 from program_engine import (
@@ -71,56 +71,61 @@ async def lifespan(application):
     client = TreadmillClient()
 
     def on_message(msg):
-        msg_type = msg.get("type")
-        if msg_type == "kv":
-            source = msg.get("source", "")
-            key = msg.get("key", "")
-            value = msg.get("value", "")
-            if source == "motor":
-                latest["last_motor"][key] = value
-            elif source in ("console", "emulate"):
-                latest["last_console"][key] = value
-            push_msg(msg)
-        elif msg_type == "status":
-            was_emulating = state["emulate"]
-            state["proxy"] = msg.get("proxy", False)
-            state["emulate"] = msg.get("emulate", False)
-            # Only accept C binary's emu values if API hasn't set them recently
-            now = time.monotonic()
-            if now >= _dirty_speed_until:
-                state["emu_speed"] = msg.get("emu_speed", 0)
-            if now >= _dirty_incline_until:
-                state["emu_incline"] = msg.get("emu_incline", 0)
-            # Detect watchdog / auto-proxy killing emulate while session active
-            if was_emulating and not state["emulate"] and sess.active:
-                reason = "auto_proxy" if state["proxy"] else "watchdog"
-                sess.end(reason)
-                push_msg(sess.to_dict())
-            push_msg(msg)
+        def _apply():
+            msg_type = msg.get("type")
+            if msg_type == "kv":
+                source = msg.get("source", "")
+                key = msg.get("key", "")
+                value = msg.get("value", "")
+                if source == "motor":
+                    latest["last_motor"][key] = value
+                elif source in ("console", "emulate"):
+                    latest["last_console"][key] = value
+                _enqueue(msg)
+            elif msg_type == "status":
+                was_emulating = state["emulate"]
+                state["proxy"] = msg.get("proxy", False)
+                state["emulate"] = msg.get("emulate", False)
+                # Only accept C binary's emu values if API hasn't set them recently
+                now = time.monotonic()
+                if now >= _dirty_speed_until:
+                    state["emu_speed"] = msg.get("emu_speed", 0)
+                if now >= _dirty_incline_until:
+                    state["emu_incline"] = msg.get("emu_incline", 0)
+                # Detect watchdog / auto-proxy killing emulate while session active
+                if was_emulating and not state["emulate"] and sess.active:
+                    reason = "auto_proxy" if state["proxy"] else "watchdog"
+                    sess.end(reason)
+                    _enqueue(sess.to_dict())
+                _enqueue(msg)
+
+        loop.call_soon_threadsafe(_apply)
 
     client.on_message = on_message
 
     def on_disconnect():
-        state["treadmill_connected"] = False
         log.warning("treadmill_io disconnected")
 
-        # All session mutations must happen on the event loop thread
         def _handle_disconnect():
+            state["treadmill_connected"] = False
+            if sess.prog.running and not sess.prog.paused:
+                asyncio.ensure_future(sess.prog.toggle_pause())
             if sess.active:
                 sess.end("disconnect")
-                push_msg(sess.to_dict())
-            push_msg({"type": "connection", "connected": False})
+                _enqueue(sess.to_dict())
+            _enqueue({"type": "connection", "connected": False})
 
         loop.call_soon_threadsafe(_handle_disconnect)
-        # Auto-pause program if running (async, so use coroutine)
-        if sess.prog.running and not sess.prog.paused:
-            asyncio.run_coroutine_threadsafe(sess.prog.toggle_pause(), loop)
 
     def on_reconnect():
-        state["treadmill_connected"] = True
         log.info("treadmill_io reconnected")
-        push_msg({"type": "connection", "connected": True})
-        # Request fresh status from C binary
+
+        def _apply():
+            state["treadmill_connected"] = True
+            _enqueue({"type": "connection", "connected": True})
+
+        loop.call_soon_threadsafe(_apply)
+        # Request fresh status from C binary (socket write has its own lock)
         try:
             client.request_status()
         except ConnectionError:
@@ -156,11 +161,14 @@ async def lifespan(application):
     hrm.on_message = on_hrm_message
 
     def on_hrm_disconnect():
-        state["hrm_connected"] = False
-        state["heart_rate"] = 0
-        state["hrm_device"] = ""
-        state["hrm_devices"] = []
-        push_msg({"type": "hr", "bpm": 0, "connected": False, "device": ""})
+        def _apply():
+            state["hrm_connected"] = False
+            state["heart_rate"] = 0
+            state["hrm_device"] = ""
+            state["hrm_devices"] = []
+            _enqueue({"type": "hr", "bpm": 0, "connected": False, "device": ""})
+
+        loop.call_soon_threadsafe(_apply)
 
     hrm.on_disconnect = on_hrm_disconnect
 
@@ -393,22 +401,22 @@ class ProxyRequest(BaseModel):
 
 
 class GenerateRequest(BaseModel):
-    prompt: str
+    prompt: str = Field(max_length=5000)
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(max_length=10000)
     smartass: bool = False
 
 
 class VoiceChatRequest(BaseModel):
-    audio: str  # base64-encoded audio
+    audio: str = Field(max_length=15_000_000)  # ~10MB decoded
     mime_type: str = "audio/webm"
     smartass: bool = False
 
 
 class TTSRequest(BaseModel):
-    text: str
+    text: str = Field(max_length=5000)
     voice: str = "Kore"
 
 
@@ -709,9 +717,9 @@ async def api_start_program():
 
 
 class QuickStartRequest(BaseModel):
-    speed: float = 3.0
-    incline: int = 0
-    duration_minutes: int = 60
+    speed: float = Field(default=3.0, ge=0.5, le=12.0)
+    incline: int = Field(default=0, ge=0, le=15)
+    duration_minutes: int = Field(default=60, ge=1, le=300)
 
 
 @app.post("/api/program/quick-start")
@@ -781,7 +789,7 @@ async def api_prev_program():
 
 
 class ExtendRequest(BaseModel):
-    seconds: int
+    seconds: int = Field(ge=-3600, le=3600)
 
 
 @app.post("/api/program/extend")
@@ -795,7 +803,7 @@ async def api_extend_interval(req: ExtendRequest):
 
 
 class DurationAdjustRequest(BaseModel):
-    delta_seconds: int
+    delta_seconds: int = Field(ge=-3600, le=3600)
 
 
 @app.post("/api/program/adjust-duration")
@@ -934,6 +942,8 @@ def _parse_gpx_to_intervals(gpx_bytes):
 async def api_gpx_upload(file: UploadFile = File(...)):
     try:
         gpx_bytes = await file.read()
+        if len(gpx_bytes) > 10_000_000:  # 10MB limit
+            return {"ok": False, "error": "GPX file too large (max 10MB)"}
         program = _parse_gpx_to_intervals(gpx_bytes)
         sess.prog.load(program)
         _add_to_history(program, f"GPX: {file.filename}")
@@ -951,10 +961,10 @@ def _prog_on_change():
 
     async def on_change(speed, incline):
         state["emu_speed"] = max(0, min(int(speed * 10), MAX_SPEED_TENTHS))
-        state["emu_incline"] = max(0, min(int(incline), MAX_INCLINE))
+        state["emu_incline"] = max(0, min(int(incline), MAX_SAFE_INCLINE))
         try:
             client.set_speed(speed)
-            client.set_incline(incline)
+            client.set_incline(max(0, min(int(incline), MAX_SAFE_INCLINE)))
         except ConnectionError:
             log.warning("Cannot apply program change: treadmill_io disconnected")
         await broadcast_status()
@@ -987,12 +997,21 @@ def _prog_on_update():
 async def _exec_fn(name, args):
     """Execute a treadmill function call from Gemini."""
     if name == "set_speed":
-        mph = float(args.get("mph", 0))
+        try:
+            mph = float(args.get("mph", 0))
+            if not (0 <= mph <= 12.0) or mph != mph:  # catches NaN
+                mph = 0
+        except (ValueError, TypeError):
+            return "Invalid speed value"
         await _apply_speed(mph)
         return f"Speed set to {mph} mph"
 
     elif name == "set_incline":
-        inc = int(args.get("incline", 0))
+        try:
+            inc = int(args.get("incline", 0))
+            inc = max(0, min(inc, MAX_SAFE_INCLINE))
+        except (ValueError, TypeError):
+            return "Invalid incline value"
         await _apply_incline(inc)
         return f"Incline set to {inc}%"
 
@@ -1048,7 +1067,11 @@ async def _exec_fn(name, args):
         return "No program running"
 
     elif name == "extend_interval":
-        secs = int(args.get("seconds", 0))
+        try:
+            secs = int(args.get("seconds", 0))
+            secs = max(-3600, min(secs, 3600))
+        except (ValueError, TypeError):
+            return "Invalid seconds value"
         if sess.prog.running:
             ok = await sess.prog.extend_current(secs)
             if ok:

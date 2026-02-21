@@ -13,8 +13,9 @@ export function fmtDur(secs: number | null | undefined): string {
 export function paceDisplay(speedMph: number): string {
   if (speedMph <= 0) return '--:--';
   const minPerMile = 60 / speedMph;
-  const m = Math.floor(minPerMile);
-  const s = Math.round((minPerMile - m) * 60);
+  let m = Math.floor(minPerMile);
+  let s = Math.round((minPerMile - m) * 60);
+  if (s === 60) { m += 1; s = 0; }
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 

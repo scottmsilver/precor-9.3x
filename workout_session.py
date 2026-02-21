@@ -33,6 +33,7 @@ class WorkoutSession:
         self.elapsed = 0.0
         self.distance = 0.0
         self.vert_feet = 0.0
+        self.last_tick = 0.0
         self.end_reason = None
 
     def start(self):
@@ -48,6 +49,7 @@ class WorkoutSession:
         self.elapsed = 0.0
         self.distance = 0.0
         self.vert_feet = 0.0
+        self.last_tick = time.monotonic()
         self.end_reason = None
         log.info("Session started")
 
@@ -99,6 +101,7 @@ class WorkoutSession:
         self.elapsed = 0.0
         self.distance = 0.0
         self.vert_feet = 0.0
+        self.last_tick = 0.0
         self.end_reason = None
         log.info("Session reset")
 
@@ -108,11 +111,13 @@ class WorkoutSession:
             return
         now = time.monotonic()
         self.elapsed = max(0.0, now - self.started_at - self.total_paused)
+        dt = now - self.last_tick if self.last_tick > 0 else 1.0
+        self.last_tick = now
         if speed_mph > 0:
-            miles_per_sec = speed_mph / 3600
-            self.distance += miles_per_sec
+            miles_this_tick = (speed_mph / 3600) * dt
+            self.distance += miles_this_tick
             if incline > 0:
-                self.vert_feet += miles_per_sec * (incline / 100) * 5280
+                self.vert_feet += miles_this_tick * (incline / 100) * 5280
 
     def to_dict(self):
         """Build session state dict for WebSocket broadcast."""

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from starlette.testclient import TestClient
+from workout_session import WorkoutSession
 
 
 @pytest.fixture
@@ -27,15 +28,14 @@ def mock_client():
 def test_app(mock_client):
     """Create test app with mocked dependencies, reset session state."""
     import server
-    from program_engine import ProgramState
 
     orig_client = getattr(server, "client", None)
-    orig_prog = getattr(server, "prog", None)
+    orig_sess = getattr(server, "sess", None)
     orig_loop = getattr(server, "loop", None)
     orig_queue = getattr(server, "msg_queue", None)
 
     server.client = mock_client
-    server.prog = ProgramState()
+    server.sess = WorkoutSession()
     server.loop = MagicMock()
     server.msg_queue = MagicMock()
     server.msg_queue.put_nowait = MagicMock()
@@ -50,23 +50,12 @@ def test_app(mock_client):
     server.latest["last_motor"] = {}
     server.latest["last_console"] = {}
 
-    # Reset session
-    server.session["active"] = False
-    server.session["started_at"] = 0.0
-    server.session["wall_started_at"] = ""
-    server.session["paused_at"] = 0.0
-    server.session["total_paused"] = 0.0
-    server.session["elapsed"] = 0.0
-    server.session["distance"] = 0.0
-    server.session["vert_feet"] = 0.0
-    server.session["end_reason"] = None
-
     server.app.router.lifespan_context = None
     tc = TestClient(server.app, raise_server_exceptions=True)
     yield tc, server, mock_client
 
     server.client = orig_client
-    server.prog = orig_prog
+    server.sess = orig_sess
     server.loop = orig_loop
     server.msg_queue = orig_queue
 
@@ -82,12 +71,11 @@ class TestSessionWebSocket:
     def test_ws_receives_session_on_connect_when_active(self, test_app):
         """If session is active, new WS connection receives session state."""
         client, server, _ = test_app
-        # Start a session first
-        server.session["active"] = True
-        server.session["elapsed"] = 42.0
-        server.session["distance"] = 0.5
-        server.session["vert_feet"] = 100.0
-        server.session["wall_started_at"] = "2025-01-01T12:00:00"
+        # Start a session and set metrics
+        server.sess.start()
+        server.sess.elapsed = 42.0
+        server.sess.distance = 0.5
+        server.sess.vert_feet = 100.0
         with client.websocket_connect("/ws") as ws:
             status = json.loads(ws.receive_text())
             assert status["type"] == "status"
@@ -111,26 +99,26 @@ class TestSessionWebSocket:
         """Verify session ends when speed set to 0 (via REST, not WS broadcast).
 
         WS broadcast during POST isn't testable with sync TestClient, so we
-        verify state change + build_session() output instead.
+        verify state change + to_dict() output instead.
         """
         client, server, _ = test_app
         # Start session
         client.post("/api/speed", json={"value": 3.0})
-        assert server.session["active"] is True
+        assert server.sess.active is True
         # Stop
         client.post("/api/speed", json={"value": 0})
-        assert server.session["active"] is False
-        sess = server.build_session()
-        assert sess["end_reason"] == "user_stop"
+        assert server.sess.active is False
+        d = server.sess.to_dict()
+        assert d["end_reason"] == "user_stop"
 
     def test_build_session_returns_correct_type(self, test_app):
-        """build_session() returns proper dict structure."""
+        """sess.to_dict() returns proper dict structure."""
         _, server, _ = test_app
-        server.session["active"] = True
-        server.session["elapsed"] = 10.5
-        server.session["distance"] = 0.1
-        server.session["vert_feet"] = 50.0
-        result = server.build_session()
+        server.sess.start()
+        server.sess.elapsed = 10.5
+        server.sess.distance = 0.1
+        server.sess.vert_feet = 50.0
+        result = server.sess.to_dict()
         assert result["type"] == "session"
         assert result["active"] is True
         assert result["elapsed"] == 10.5
@@ -139,7 +127,7 @@ class TestSessionWebSocket:
     def test_ws_receives_program_on_connect_when_loaded(self, test_app):
         """If a program is loaded, new WS connection receives program state."""
         client, server, _ = test_app
-        server.prog.load(
+        server.sess.prog.load(
             {
                 "name": "Test Program",
                 "intervals": [
@@ -159,7 +147,7 @@ class TestSessionWebSocket:
     def test_ws_no_program_on_connect_when_none(self, test_app):
         """If no program loaded, WS only gets status (no program message)."""
         client, server, _ = test_app
-        assert server.prog.program is None
+        assert server.sess.prog.program is None
         with client.websocket_connect("/ws") as ws:
             status = json.loads(ws.receive_text())
             assert status["type"] == "status"

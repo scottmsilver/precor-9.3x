@@ -46,14 +46,21 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut backoff = Duration::from_secs(1);
 
+    // Persist distance/elapsed across reconnects (not local to connect_and_run)
+    let mut accumulated_distance_m: f64 = 0.0;
+    let mut workout_start: Option<Instant> = None;
+    let mut last_update = Instant::now();
+
     loop {
-        match connect_and_run(&state, socket_path).await {
+        let was_connected;
+        match connect_and_run(&state, socket_path, &mut accumulated_distance_m, &mut workout_start, &mut last_update).await {
             Ok(()) => {
-                // Clean exit (shouldn't happen normally)
                 info!("Treadmill connection closed cleanly");
+                was_connected = state.lock().await.connected;
             }
             Err(e) => {
                 warn!("Treadmill connection error: {}", e);
+                was_connected = state.lock().await.connected;
             }
         }
 
@@ -63,6 +70,11 @@ pub async fn run(
             s.connected = false;
         }
 
+        // Reset backoff if we had a successful connection (fast retry on transient drops)
+        if was_connected {
+            backoff = Duration::from_secs(1);
+        }
+
         info!("Reconnecting to treadmill_io in {:?}...", backoff);
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(10));
@@ -70,9 +82,13 @@ pub async fn run(
 }
 
 /// Connect to the socket and run the read/heartbeat loop until disconnection.
+/// Distance/elapsed state is passed in from the caller so it persists across reconnects.
 async fn connect_and_run(
     state: &Arc<Mutex<TreadmillState>>,
     socket_path: &str,
+    accumulated_distance_m: &mut f64,
+    workout_start: &mut Option<Instant>,
+    last_update: &mut Instant,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stream = UnixStream::connect(socket_path).await?;
     let (reader, mut writer) = stream.into_split();
@@ -85,16 +101,14 @@ async fn connect_and_run(
 
     info!("Connected to treadmill_io at {}", socket_path);
 
-    // Reset backoff on successful connect (caller tracks backoff, but mark connected)
+    // Mark connected (caller tracks backoff)
     {
         let mut s = state.lock().await;
         s.connected = true;
     }
 
-    // Distance/elapsed tracking state (local to this connection session)
-    let mut last_update = Instant::now();
-    let mut workout_start: Option<Instant> = None;
-    let mut accumulated_distance_m: f64 = 0.0;
+    // Reset last_update to now so reconnect gap doesn't inflate distance
+    *last_update = Instant::now();
 
     let mut heartbeat = interval(Duration::from_secs(1));
     // First tick fires immediately — skip it since we just sent status
@@ -106,8 +120,8 @@ async fn connect_and_run(
                 match line_result {
                     Ok(Some(line)) => {
                         let now = Instant::now();
-                        let dt_hours = now.duration_since(last_update).as_secs_f64() / 3600.0;
-                        last_update = now;
+                        let dt_hours = now.duration_since(*last_update).as_secs_f64() / 3600.0;
+                        *last_update = now;
 
                         if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
                             let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -124,19 +138,19 @@ async fn connect_and_run(
                                     // Accumulate distance based on previous speed
                                     let mut s = state.lock().await;
                                     let prev_speed_mph = s.speed_tenths_mph as f64 / 10.0;
-                                    accumulated_distance_m += prev_speed_mph * dt_hours * 1609.34;
+                                    *accumulated_distance_m += prev_speed_mph * dt_hours * 1609.34;
 
                                     // Track elapsed time
                                     if emu_speed > 0 {
                                         if workout_start.is_none() {
-                                            workout_start = Some(now);
+                                            *workout_start = Some(now);
                                         }
                                     }
 
                                     s.speed_tenths_mph = emu_speed;
                                     s.incline_percent = emu_incline;
-                                    s.distance_meters = accumulated_distance_m as u32;
-                                    if let Some(start) = workout_start {
+                                    s.distance_meters = *accumulated_distance_m as u32;
+                                    if let Some(start) = *workout_start {
                                         s.elapsed_secs = now.duration_since(start).as_secs() as u16;
                                     }
 

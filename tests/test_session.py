@@ -230,6 +230,7 @@ class TestSessionTick:
     def test_tick_accumulates_distance(self, sess):
         sess.start()
         sess.started_at = time.monotonic() - 1
+        sess.last_tick = sess.started_at  # backdate so dt ≈ 1s
         sess.tick(6.0, 0)
         expected = 6.0 / 3600  # miles per second
         assert abs(sess.distance - expected) < 0.001
@@ -237,6 +238,7 @@ class TestSessionTick:
     def test_tick_accumulates_vert_feet(self, sess):
         sess.start()
         sess.started_at = time.monotonic() - 1
+        sess.last_tick = sess.started_at  # backdate so dt ≈ 1s
         sess.tick(6.0, 10)
         # vert_feet = miles_per_sec * (incline/100) * 5280
         miles_per_sec = 6.0 / 3600
