@@ -19,6 +19,9 @@ export interface StatusMessage {
   incline: number | null;
   motor: Record<string, string>;
   treadmill_connected: boolean;
+  heart_rate: number;
+  hrm_connected: boolean;
+  hrm_device: string;
 }
 
 export interface SessionMessage {
@@ -62,7 +65,20 @@ export interface ConnectionMessage {
   connected: boolean;
 }
 
-export type ServerMessage = KVMessage | StatusMessage | SessionMessage | ProgramMessage | ConnectionMessage;
+export interface HRMessage {
+  type: 'hr';
+  bpm: number;
+  connected: boolean;
+  device: string;
+  address: string;
+}
+
+export interface ScanResultMessage {
+  type: 'scan_result';
+  devices: Array<{ address: string; name: string; rssi: number }>;
+}
+
+export type ServerMessage = KVMessage | StatusMessage | SessionMessage | ProgramMessage | ConnectionMessage | HRMessage | ScanResultMessage;
 
 // --- Client state ---
 
@@ -75,6 +91,8 @@ export interface TreadmillStatus {
   incline: number | null;  // live motor incline
   motor: Record<string, string>;
   treadmillConnected: boolean;
+  heartRate: number;
+  hrmConnected: boolean;
 }
 
 export interface SessionState {
@@ -103,6 +121,7 @@ export interface AppState {
   session: SessionState;
   program: ProgramState;
   kvLog: KVEntry[];
+  hrmDevices: Array<{ address: string; name: string; rssi: number }>;
 }
 
 export interface KVEntry {

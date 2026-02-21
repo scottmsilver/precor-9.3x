@@ -8,7 +8,7 @@ Reverse-engineering and control toolkit for the Precor 9.31 treadmill serial bus
 
 ## Deployment
 
-The Raspberry Pi connected to the treadmill is at host `rpi`. All three services are managed via systemd and deployed with `make deploy`.
+The Raspberry Pi connected to the treadmill is at host `rpi`. All four services are managed via systemd and deployed with `make deploy`.
 
 ```bash
 # Deploy everything to Pi (stages build/, rsyncs, builds on Pi, restarts all services):
@@ -21,11 +21,13 @@ make stage
 sudo systemctl status treadmill-io      # C++ GPIO daemon
 sudo systemctl status treadmill-server  # FastAPI web server
 sudo systemctl status ftms              # FTMS Bluetooth daemon
+sudo systemctl status hrm               # HRM Bluetooth daemon
 
 # Service dependency chain:
 #   treadmill-io  ←  treadmill-server (After+Wants)
 #   treadmill-io  ←  ftms (After+Wants)
 #   bluetooth     ←  ftms (After+Requires)
+#   bluetooth     ←  hrm (After+Requires)
 
 # Service templates in deploy/*.service.in (rendered during stage)
 
@@ -42,7 +44,7 @@ python3 listen.py              # Simple KV listener (--changes, --unique flags)
 - `gpxpy` — GPX route parsing (server.py)
 - `pytest`, `pytest-asyncio` — test suite
 - Build (C++): `make` (g++ with C++20, libpigpio-dev)
-- Build (Rust/FTMS): `cross` for aarch64 cross-compilation, or `cargo build` on Pi
+- Build (Rust/FTMS+HRM): `cross` for aarch64 cross-compilation, or `cargo build` on Pi
 - Test deps (header-only, vendored): `doctest` (testing), `rapidjson` (JSON)
 
 ## Architecture
@@ -93,6 +95,21 @@ A Rust daemon (`ftms/`) that advertises the treadmill as a Bluetooth FTMS (Fitne
 - **Cross-compile**: `cd ftms && cross build --release --target aarch64-unknown-linux-gnu`
 - Runs as a systemd service (`ftms.service`), depends on `bluetooth.target` and `treadmill-io.service`
 
+### HRM Bluetooth — `hrm-daemon`
+
+A Rust daemon (`hrm/`) that acts as a BLE GATT client, scanning for and connecting to Bluetooth heart rate monitors (HR Service UUID 0x180D). Reads HR Measurement notifications (UUID 0x2A37) and serves data over a Unix domain socket so server.py and the UI can display real-time heart rate.
+
+- **Crate**: `hrm/` with `bluer` (BlueZ bindings), `tokio`, `serde_json`
+- **Modules**: `main.rs` (entry), `scanner.rs` (BLE scan + connect + HR parsing), `server.rs` (Unix socket server), `config.rs` (persist saved device), `debug_server.rs` (TCP debug port 8827)
+- **Socket**: `/tmp/hrm.sock` — newline-delimited JSON, bidirectional. Broadcasts `{"type":"hr","bpm":142,"connected":true,...}` at 1 Hz
+- **Commands**: `connect` (with address), `disconnect`, `forget`, `scan`, `status`
+- **Device selection**: Auto-connects to saved device from `hrm_config.json`. If multiple devices found, sends `scan_result` to clients for user selection
+- **Debug server**: TCP port 8827 — `mock <bpm>` injects fake HR data for testing without hardware, `mock off` resets
+- **Cross-compile**: `cd hrm && cross build --release --target aarch64-unknown-linux-gnu` (requires custom Docker image for libdbus, see `hrm/Dockerfile.cross`)
+- **Python client**: `hrm_client.py` — same pattern as `treadmill_client.py` (threaded reader, auto-reconnect with backoff)
+- **Graceful degradation**: If hrm-daemon isn't running, server.py continues without HR. Auto-reconnects when daemon becomes available
+- Runs as a systemd service (`hrm.service`), depends on `bluetooth.target`
+
 ### Web UI
 
 `server.py` serves a React + TypeScript SPA (source in `ui/`, builds to `static/`) with WebSocket for real-time KV data streaming and REST endpoints for speed/incline/mode control. Runs as a systemd service (`treadmill-server.service`).
@@ -141,6 +158,12 @@ cd ftms && cargo test
 # FTMS integration tests (17 tests, requires ftms-daemon + treadmill_io running on Pi)
 cd ftms && cargo test --test debug_integration -- --ignored --test-threads=1
 
+# HRM Rust unit tests (14 tests, HR parsing + config)
+cd hrm && cargo test
+
+# HRM Python client tests (6 tests, mock daemon)
+python3 -m pytest tests/test_hrm_client.py -v
+
 # Python unit tests (mocked sleep, <1s)
 python3 -m pytest tests/test_program_engine.py tests/test_server_integration.py -v
 
@@ -181,6 +204,14 @@ Note: `make test` automatically stops the `treadmill-io` service before running 
 | `/api/programs/history` | GET | List recent programs (max 10) |
 | `/api/programs/history/{id}/load` | POST | Reload a saved program |
 | `/api/gpx/upload` | POST | Upload GPX route file (multipart form) |
+
+### Heart Rate Monitor
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/hrm` | GET | HRM status (heart_rate, connected, device, available_devices) |
+| `/api/hrm/select` | POST | Connect to a specific HRM. Body: `{"address": "AA:BB:CC:DD:EE:FF"}` |
+| `/api/hrm/forget` | POST | Clear saved HRM device, disconnect |
+| `/api/hrm/scan` | POST | Trigger a new BLE scan for HRM devices |
 
 ### AI Chat
 | Endpoint | Method | Description |
@@ -247,7 +278,9 @@ All C++ code in `src/` must follow these rules. The environment is resource-cons
 
 **FTMS daemon** (`ftms/`): BLE transport layer only. Reads treadmill state from the Unix socket, encodes it per the FTMS spec, and advertises over Bluetooth. Control Point writes are converted back to socket commands. No application logic, no knowledge of programs/workouts/AI.
 
-**Python client** (`treadmill_client.py`): Thin IPC wrapper to the C binary. No business logic.
+**HRM daemon** (`hrm/`): BLE client layer only. Scans for heart rate monitors, connects, reads HR notifications, and serves data on a Unix socket. No application logic, no knowledge of programs/workouts/AI.
+
+**Python clients** (`treadmill_client.py`, `hrm_client.py`): Thin IPC wrappers to daemon sockets. No business logic.
 
 **Program engine** (`program_engine.py`): Interval execution + Gemini API. No HTTP, no GPIO, no imports from server.
 

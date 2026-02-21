@@ -15,6 +15,12 @@ if [ -f ftms-daemon ]; then
     sudo install -m 755 ftms-daemon /usr/local/bin/
 fi
 
+# Install HRM if present
+if [ -f hrm-daemon ]; then
+    echo "Installing hrm-daemon..."
+    sudo install -m 755 hrm-daemon /usr/local/bin/
+fi
+
 # Clean up old underscore-named service
 sudo systemctl disable --now treadmill_io 2>/dev/null || true
 sudo rm -f /etc/systemd/system/treadmill_io.service
@@ -29,6 +35,11 @@ sudo systemctl enable treadmill-io treadmill-server
 # FTMS only if binary was deployed
 if [ -f ftms-daemon ]; then
     sudo systemctl enable ftms
+fi
+
+# HRM only if binary was deployed
+if [ -f hrm-daemon ]; then
+    sudo systemctl enable hrm
 fi
 
 # TLS certs (Tailscale — auto-renewed on each deploy)
@@ -57,6 +68,9 @@ echo "Restarting services..."
 sudo systemctl restart treadmill-io treadmill-server
 if [ -f ftms-daemon ]; then
     sudo systemctl restart ftms
+fi
+if [ -f hrm-daemon ]; then
+    sudo systemctl restart hrm
 fi
 
 echo "Done! Services restarted."

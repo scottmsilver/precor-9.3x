@@ -27,7 +27,7 @@ stage() {
 
     # Python
     cp server.py workout_session.py program_engine.py \
-       treadmill_client.py pyproject.toml build/
+       treadmill_client.py hrm_client.py pyproject.toml build/
 
     # Setup script
     cp deploy/setup.sh build/
@@ -43,6 +43,12 @@ stage() {
     FTMS_BIN="ftms/target/aarch64-unknown-linux-gnu/release/ftms-daemon"
     if [ -f "$FTMS_BIN" ]; then
         cp "$FTMS_BIN" build/
+    fi
+
+    # HRM binary (if cross-compiled)
+    HRM_BIN="hrm/target/aarch64-unknown-linux-gnu/release/hrm-daemon"
+    if [ -f "$HRM_BIN" ]; then
+        cp "$HRM_BIN" build/
     fi
 
     # Render service templates
@@ -74,7 +80,7 @@ deploy_full() {
     ssh "$PI_HOST" "cd ~/$PI_DIR && bash setup.sh"
 
     echo "Done!"
-    echo "  Services: sudo systemctl status treadmill-io treadmill-server ftms"
+    echo "  Services: sudo systemctl status treadmill-io treadmill-server ftms hrm"
     echo "  UI: https://$PI_HOST:8000"
 }
 

@@ -152,6 +152,24 @@ export async function getConfig(): Promise<AppConfig> {
   return get('/api/config');
 }
 
+// --- HRM ---
+
+export async function getHrm(): Promise<{ heart_rate: number; connected: boolean; device: string; available_devices: Array<{ address: string; name: string; rssi: number }> }> {
+  return get('/api/hrm');
+}
+
+export async function selectHrmDevice(address: string): Promise<{ ok: boolean }> {
+  return post('/api/hrm/select', { address });
+}
+
+export async function forgetHrmDevice(): Promise<{ ok: boolean }> {
+  return post('/api/hrm/forget', {});
+}
+
+export async function scanHrm(): Promise<{ ok: boolean }> {
+  return post('/api/hrm/scan', {});
+}
+
 // --- Voice prompts ---
 
 export async function getVoicePrompt(id: string): Promise<string> {

@@ -2,8 +2,10 @@ PI_HOST ?= rpi
 VENV_DIR ?= .venv
 FTMS_TARGET = aarch64-unknown-linux-gnu
 FTMS_BIN = ftms/target/$(FTMS_TARGET)/release/ftms-daemon
+HRM_TARGET = aarch64-unknown-linux-gnu
+HRM_BIN = hrm/target/$(HRM_TARGET)/release/hrm-daemon
 
-.PHONY: all clean test stage deploy ftms deploy-ftms test-ftms test-pi test-all
+.PHONY: all clean test stage deploy ftms deploy-ftms test-ftms hrm deploy-hrm test-hrm test-pi test-all
 
 all:
 	$(MAKE) -C src
@@ -31,6 +33,17 @@ deploy-ftms: ftms
 
 test-ftms:
 	cd ftms && cargo test
+
+hrm:
+	cd hrm && cross build --release --target $(HRM_TARGET)
+
+deploy-hrm: hrm
+	ssh $(PI_HOST) 'sudo systemctl stop hrm 2>/dev/null || true'
+	scp $(HRM_BIN) $(PI_HOST):/tmp/hrm-daemon
+	ssh $(PI_HOST) 'sudo install -m 755 /tmp/hrm-daemon /usr/local/bin/ && sudo systemctl restart hrm'
+
+test-hrm:
+	cd hrm && cargo test
 
 # Deploy to Pi, build, restart binary, run hardware tests
 test-pi: test

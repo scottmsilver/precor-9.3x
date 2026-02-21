@@ -1,6 +1,7 @@
 import type React from 'react';
 import { motion } from 'motion/react';
 import { useSession } from '../state/useSession';
+import HeartRate from './HeartRate';
 
 export default function MetricsRow(): React.ReactElement {
   const sess = useSession();
@@ -28,6 +29,7 @@ export default function MetricsRow(): React.ReactElement {
         <span className="metric-value" style={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: 'tabular-nums', color: 'var(--orange)' }}>{sess.vertDisplay}</span>
         <span className="metric-label" style={{ fontSize: 10, color: 'var(--text3)' }}>vert ft</span>
       </div>
+      <HeartRate />
     </motion.div>
   );
 }

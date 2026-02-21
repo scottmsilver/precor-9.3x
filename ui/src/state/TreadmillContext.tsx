@@ -35,6 +35,8 @@ const initialStatus: TreadmillStatus = {
   incline: null,
   motor: {},
   treadmillConnected: false,
+  heartRate: 0,
+  hrmConnected: false,
 };
 
 const initialSession: SessionState = {
@@ -63,6 +65,7 @@ const initialState: AppState = {
   session: initialSession,
   program: initialProgram,
   kvLog: [],
+  hrmDevices: [],
 };
 
 // --- Actions ---
@@ -76,7 +79,9 @@ type Action =
   | { type: 'CONNECTION_UPDATE'; payload: ServerMessage & { type: 'connection' } }
   | { type: 'KV_UPDATE'; payload: ServerMessage & { type: 'kv' } }
   | { type: 'OPTIMISTIC_SPEED'; payload: number }
-  | { type: 'OPTIMISTIC_INCLINE'; payload: number };
+  | { type: 'OPTIMISTIC_INCLINE'; payload: number }
+  | { type: 'HR_UPDATE'; payload: ServerMessage & { type: 'hr' } }
+  | { type: 'SCAN_RESULT'; payload: ServerMessage & { type: 'scan_result' } };
 
 const MAX_KV_LOG = 500;
 
@@ -92,7 +97,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, wsConnected: true };
 
     case 'WS_DISCONNECTED':
-      return { ...state, wsConnected: false };
+      return { ...state, wsConnected: false, hrmDevices: [] };
 
     case 'STATUS_UPDATE': {
       const m = action.payload;
@@ -110,6 +115,8 @@ function reducer(state: AppState, action: Action): AppState {
           incline: m.incline ?? state.status.incline,
           motor: m.motor ?? state.status.motor,
           treadmillConnected: m.treadmill_connected ?? state.status.treadmillConnected,
+          heartRate: m.heart_rate ?? state.status.heartRate,
+          hrmConnected: m.hrm_connected ?? state.status.hrmConnected,
         },
       };
     }
@@ -177,6 +184,23 @@ function reducer(state: AppState, action: Action): AppState {
         kvLog: newLog,
         status: { ...state.status, motor },
       };
+    }
+
+    case 'HR_UPDATE': {
+      const m = action.payload;
+      return {
+        ...state,
+        status: {
+          ...state.status,
+          heartRate: m.bpm,
+          hrmConnected: m.connected,
+        },
+      };
+    }
+
+    case 'SCAN_RESULT': {
+      const m = action.payload;
+      return { ...state, hrmDevices: m.devices };
     }
 
     case 'OPTIMISTIC_SPEED':
@@ -290,6 +314,12 @@ export function TreadmillProvider({ children }: { children: React.ReactNode }) {
             break;
           case 'kv':
             dispatch({ type: 'KV_UPDATE', payload: msg });
+            break;
+          case 'hr':
+            dispatch({ type: 'HR_UPDATE', payload: msg });
+            break;
+          case 'scan_result':
+            dispatch({ type: 'SCAN_RESULT', payload: msg });
             break;
         }
       };

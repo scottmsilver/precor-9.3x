@@ -1,0 +1,15 @@
+[Unit]
+Description=Heart Rate Monitor BLE daemon
+After=bluetooth.target
+Requires=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hrm-daemon
+WorkingDirectory=/home/@USER@/@DEPLOY_DIR@
+Restart=always
+RestartSec=3
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target

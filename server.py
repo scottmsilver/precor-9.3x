@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -25,6 +26,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
+from pydantic import BaseModel, field_validator
+
+from hrm_client import HrmClient
 from program_engine import (
     CHAT_SYSTEM_PROMPT,
     GEMINI_MODEL,
@@ -39,7 +43,6 @@ from program_engine import (
     read_api_key,
     validate_interval,
 )
-from pydantic import BaseModel
 from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
 from workout_session import WorkoutSession
 
@@ -58,7 +61,7 @@ _DIRTY_GRACE_SEC = 15.0  # motor can take 10+ seconds to reach target incline
 
 @asynccontextmanager
 async def lifespan(application):
-    global loop, msg_queue, client, sess
+    global loop, msg_queue, client, hrm, sess
 
     loop = asyncio.get_event_loop()
     msg_queue = asyncio.Queue(maxsize=500)
@@ -134,6 +137,40 @@ async def lifespan(application):
         log.error(f"Cannot connect to treadmill_io: {e}")
         raise RuntimeError("treadmill_io not running. Start: sudo ./treadmill_io")
 
+    # Connect to hrm-daemon (optional — server works without it)
+    hrm = HrmClient()
+
+    def on_hrm_message(msg):
+        def _apply():
+            msg_type = msg.get("type")
+            if msg_type == "hr":
+                state["heart_rate"] = msg.get("bpm", 0)
+                state["hrm_connected"] = msg.get("connected", False)
+                state["hrm_device"] = msg.get("device", "")
+            elif msg_type == "scan_result":
+                state["hrm_devices"] = msg.get("devices", [])
+            _enqueue(msg)
+
+        loop.call_soon_threadsafe(_apply)
+
+    hrm.on_message = on_hrm_message
+
+    def on_hrm_disconnect():
+        state["hrm_connected"] = False
+        state["heart_rate"] = 0
+        state["hrm_device"] = ""
+        state["hrm_devices"] = []
+        push_msg({"type": "hr", "bpm": 0, "connected": False, "device": ""})
+
+    hrm.on_disconnect = on_hrm_disconnect
+
+    try:
+        hrm.connect()
+        log.info("Connected to hrm-daemon")
+    except Exception:
+        log.info("hrm-daemon not available yet, will retry in background")
+        hrm.ensure_connecting()
+
     broadcast_task = asyncio.create_task(broadcast_loop())
     session_tick_task = asyncio.create_task(_session_tick_loop())
     client.start_heartbeat()
@@ -149,6 +186,8 @@ async def lifespan(application):
     client.stop_heartbeat()
     if sess.prog.running:
         await sess.prog.stop()
+    if hrm:
+        hrm.close()
     client.close()
     log.info("Server stopped")
 
@@ -168,6 +207,7 @@ app.add_middleware(
 loop: asyncio.AbstractEventLoop = None
 msg_queue: asyncio.Queue = None
 client: TreadmillClient = None
+hrm: HrmClient = None
 sess: WorkoutSession = None
 
 # --- Shared state ---
@@ -178,6 +218,10 @@ state = {
     "emu_speed": 0,  # tenths of mph
     "emu_incline": 0,
     "treadmill_connected": False,
+    "heart_rate": 0,
+    "hrm_connected": False,
+    "hrm_device": "",
+    "hrm_devices": [],
 }
 
 latest = {
@@ -308,6 +352,9 @@ def build_status():
         "incline": incline,
         "motor": latest["last_motor"],
         "treadmill_connected": state["treadmill_connected"],
+        "heart_rate": state["heart_rate"],
+        "hrm_connected": state["hrm_connected"],
+        "hrm_device": state["hrm_device"],
     }
 
 
@@ -582,6 +629,60 @@ async def set_proxy(req: ProxyRequest):
         return JSONResponse({"error": "treadmill_io disconnected"}, status_code=503)
     await broadcast_status()
     return build_status()
+
+
+# --- HRM endpoints ---
+
+
+_BLE_ADDR_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+
+
+class HrmSelectRequest(BaseModel):
+    address: str
+
+    @field_validator("address")
+    @classmethod
+    def validate_ble_address(cls, v: str) -> str:
+        if not _BLE_ADDR_RE.match(v):
+            raise ValueError("Invalid BLE MAC address (expected XX:XX:XX:XX:XX:XX)")
+        return v
+
+
+@app.get("/api/hrm")
+async def get_hrm():
+    return {
+        "heart_rate": state["heart_rate"],
+        "connected": state["hrm_connected"],
+        "device": state["hrm_device"],
+        "available_devices": state.get("hrm_devices", []),
+    }
+
+
+@app.post("/api/hrm/select")
+async def select_hrm(req: HrmSelectRequest):
+    try:
+        hrm.select_device(req.address)
+    except ConnectionError:
+        return JSONResponse({"error": "hrm-daemon not connected"}, status_code=503)
+    return {"ok": True}
+
+
+@app.post("/api/hrm/forget")
+async def forget_hrm():
+    try:
+        hrm.forget_device()
+    except ConnectionError:
+        return JSONResponse({"error": "hrm-daemon not connected"}, status_code=503)
+    return {"ok": True}
+
+
+@app.post("/api/hrm/scan")
+async def scan_hrm():
+    try:
+        hrm.scan()
+    except ConnectionError:
+        return JSONResponse({"error": "hrm-daemon not connected"}, status_code=503)
+    return {"ok": True}
 
 
 # --- Program endpoints ---
@@ -978,6 +1079,8 @@ def _build_chat_system(smartass=False):
         "incline_pct": state["emu_incline"],
         "mode": "emulate" if state["emulate"] else "proxy" if state["proxy"] else "off",
     }
+    if state["hrm_connected"]:
+        treadmill_state["heart_rate_bpm"] = state["heart_rate"]
     if sess.prog.program:
         treadmill_state["program"] = {
             "name": sess.prog.program.get("name"),

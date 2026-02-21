@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { useTreadmillState, useTreadmillActions, useToast } from '../state/TreadmillContext';
 import * as api from '../state/api';
 import { haptic } from '../utils/haptics';
+import { hrColor } from '../utils/hrColor';
 
 interface SettingsPanelProps {
   open: boolean;
@@ -18,13 +19,14 @@ const rowStyle: React.CSSProperties = {
 };
 
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps): React.ReactElement | null {
-  const { status } = useTreadmillState();
+  const { status, hrmDevices } = useTreadmillState();
   const actions = useTreadmillActions();
   const showToast = useToast();
   const [debugUnlocked, setDebugUnlocked] = useState(false);
   const [smartass, setSmartass] = useState(() => {
     try { return localStorage.getItem('smartass_mode') === 'true'; } catch { return false; }
   });
+  const [hrmScanning, setHrmScanning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const debugTaps = useRef<number[]>([]);
   const [, setLocation] = useLocation();
@@ -145,6 +147,130 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps): Re
               left: smartass ? 20 : 2,
               transition: 'left 200ms var(--ease)',
             }} />
+          </div>
+        </div>
+
+        {/* Heart Rate Monitor */}
+        <div style={{ marginTop: 24 }}>
+          <h3 style={{
+            fontSize: 13, fontWeight: 600, color: 'var(--text3)',
+            textTransform: 'uppercase' as const, letterSpacing: '0.02em',
+            margin: '0 0 8px',
+          }}>Heart Rate Monitor</h3>
+
+          {/* Connection status */}
+          <div style={{
+            ...rowStyle,
+            cursor: 'default',
+          }}>
+            <span style={{ fontSize: 15, color: 'var(--text)' }}>
+              {status.hrmConnected ? `${status.heartRate > 0 ? status.heartRate + ' bpm' : 'Connected'}` : 'Not connected'}
+            </span>
+            {status.hrmConnected && (
+              <span style={{
+                fontSize: 14,
+                color: hrColor(status.heartRate),
+              }}>{'\u2665'}</span>
+            )}
+            {!status.hrmConnected && (
+              <span style={{ fontSize: 13, color: 'var(--text3)' }}>{'\u2013'}</span>
+            )}
+          </div>
+
+          {/* Device list from scan results */}
+          {hrmDevices.length > 0 && !status.hrmConnected && (
+            <div style={{ borderBottom: '1px solid var(--separator)' }}>
+              {hrmDevices.map(d => {
+                const selectDevice = async () => {
+                  haptic(25);
+                  try {
+                    await api.selectHrmDevice(d.address);
+                    showToast(`Connecting to ${d.name || d.address}...`);
+                  } catch {
+                    showToast('Failed to select device');
+                  }
+                };
+                return (
+                <div
+                  key={d.address}
+                  role="button"
+                  tabIndex={0}
+                  onClick={selectDevice}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      selectDevice();
+                    }
+                  }}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    height: 44, padding: '0 4px',
+                    cursor: 'pointer',
+                    WebkitTapHighlightColor: 'transparent',
+                  }}
+                >
+                  <span style={{ fontSize: 14, color: 'var(--text)' }}>
+                    {d.name || d.address}
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--text3)', fontVariantNumeric: 'tabular-nums' }}>
+                    {d.rssi} dBm
+                  </span>
+                </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Scan / Forget buttons */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button
+              onClick={async () => {
+                haptic(25);
+                setHrmScanning(true);
+                try {
+                  await api.scanHrm();
+                } catch {
+                  showToast('Scan failed');
+                }
+                setTimeout(() => setHrmScanning(false), 10000);
+              }}
+              disabled={hrmScanning}
+              style={{
+                flex: 1, height: 44, border: 'none',
+                borderRadius: 'var(--r-sm)',
+                background: 'var(--fill2)',
+                color: hrmScanning ? 'var(--text3)' : 'var(--text)',
+                fontSize: 14, fontWeight: 600, fontFamily: 'inherit',
+                cursor: hrmScanning ? 'default' : 'pointer',
+                WebkitTapHighlightColor: 'transparent',
+              }}
+            >
+              {hrmScanning ? 'Scanning...' : 'Scan'}
+            </button>
+            {status.hrmConnected && (
+              <button
+                onClick={async () => {
+                  haptic([25, 30, 25]);
+                  try {
+                    await api.forgetHrmDevice();
+                    showToast('HRM device forgotten');
+                  } catch {
+                    showToast('Failed to forget device');
+                  }
+                }}
+                style={{
+                  flex: 1, height: 44, border: 'none',
+                  borderRadius: 'var(--r-sm)',
+                  background: 'var(--fill2)',
+                  color: 'var(--red)',
+                  fontSize: 14, fontWeight: 600, fontFamily: 'inherit',
+                  cursor: 'pointer',
+                  WebkitTapHighlightColor: 'transparent',
+                }}
+              >
+                Forget
+              </button>
+            )}
           </div>
         </div>
 
