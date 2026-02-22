@@ -987,7 +987,7 @@ def _prog_on_update():
             except ConnectionError:
                 pass
             if sess.active:
-                sess.end("user_stop")
+                sess.end("program_complete")
                 await manager.broadcast(sess.to_dict())
             await broadcast_status()
 

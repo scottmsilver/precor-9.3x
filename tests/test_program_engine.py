@@ -4,8 +4,9 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from program_engine import ProgramState
 from tests.helpers import make_program
+
+from program_engine import ProgramState
 
 
 class TestLoadProgram:
@@ -180,6 +181,35 @@ class TestTick:
         assert prog.running is False
         # Final on_change should be (0, 0)
         assert on_change.call_args_list[-1].args == (0, 0)
+
+    @pytest.mark.asyncio
+    async def test_finish_broadcasts_completed_state(self):
+        """on_update must be called with completed=True when program finishes.
+
+        Regression test: _finish() was not calling _broadcast(), so server.py
+        never learned the program completed and the session timer ran forever.
+        """
+        prog = ProgramState()
+        prog.load(make_program([{"name": "A", "duration": 2, "speed": 3.0, "incline": 1}]))
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await prog.start(on_change, on_update)
+            if prog._task:
+                try:
+                    await asyncio.wait_for(prog._task, timeout=2.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+
+        assert prog.completed is True
+        # The final on_update call must contain completed=True so server.py
+        # can end the session. Without the _broadcast() in _finish(), this
+        # final call never happens.
+        final_states = [c.args[0] for c in on_update.call_args_list if c.args[0].get("completed")]
+        assert len(final_states) > 0, (
+            "on_update was never called with completed=True — " "session timer will run forever"
+        )
 
 
 class TestPause:

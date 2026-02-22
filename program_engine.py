@@ -344,6 +344,7 @@ class ProgramState:
         self.completed = True
         if self._on_change:
             await self._on_change(0, 0)
+        await self._broadcast()
 
     async def _broadcast(self):
         if self._on_update:

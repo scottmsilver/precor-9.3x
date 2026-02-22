@@ -236,6 +236,7 @@ When reviewing or writing code in this project, enforce these principles:
 - Unit tests verify logic in isolation. Live tests prove the system actually works end-to-end with real timing.
 - Hardware tests (`@pytest.mark.hardware`) exist for Pi-only verification but aren't required to pass in CI.
 - Every behavior-changing PR should have at least one test that would fail without the change.
+- **Bug fix workflow: test first, then fix.** When fixing a bug, write a regression test that reproduces the failure *before* writing the fix. Run it to verify it fails, then apply the fix and confirm the test passes. Never fix a bug without a test that proves it was broken.
 
 ### DRY
 - Constants live in one place (e.g., `MAX_SPEED_TENTHS` in `treadmill_client.py`, shared by C and Python).
