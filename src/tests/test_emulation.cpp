@@ -86,7 +86,7 @@ TEST_CASE("emulation engine applies speed and incline") {
     // Find inc and hmph events
     bool found_inc = false, found_hmph = false;
     for (auto& [k, v] : kv_events) {
-        if (k == "inc" && v == "7") found_inc = true;
+        if (k == "inc" && v == "E") found_inc = true;
         if (k == "hmph") {
             // 50 tenths = 500 hundredths = 0x1F4
             if (v == "1F4") found_hmph = true;

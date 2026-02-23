@@ -110,3 +110,28 @@ int decode_speed_hex(std::string_view hex) {
     // val is in hundredths of mph, convert to tenths (round)
     return static_cast<int>((val + 5) / 10);
 }
+
+std::string encode_incline_hex(int percent) {
+    // Incline wire format: half-percent units, uppercase hex
+    // percent * 2 = half-percent value
+    int half_pct = percent * 2;
+    std::array<char, 16> buf{};
+    auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), half_pct, 16);
+    std::string result(buf.data(), ptr);
+    // Convert to uppercase
+    for (auto& c : result) {
+        if (c >= 'a' && c <= 'f') c -= 32;
+    }
+    return result;
+}
+
+int decode_incline_hex(std::string_view hex) {
+    if (hex.empty() || hex.size() > 10) return -1;
+
+    unsigned long val = 0;
+    auto [ptr, ec] = std::from_chars(hex.data(), hex.data() + hex.size(), val, 16);
+    if (ec != std::errc{} || ptr != hex.data() + hex.size()) return -1;
+
+    // val is in half-percent units, convert to whole percent (round)
+    return static_cast<int>((val + 1) / 2);
+}

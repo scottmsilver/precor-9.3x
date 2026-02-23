@@ -18,6 +18,7 @@ pub const FEATURE_UUID: Uuid = ble_uuid(0x2ACC);
 pub const TREADMILL_DATA_UUID: Uuid = ble_uuid(0x2ACD);
 pub const SPEED_RANGE_UUID: Uuid = ble_uuid(0x2AD4);
 pub const INCLINE_RANGE_UUID: Uuid = ble_uuid(0x2AD5);
+pub const TRAINING_STATUS_UUID: Uuid = ble_uuid(0x2AD3);
 pub const CONTROL_POINT_UUID: Uuid = ble_uuid(0x2AD9);
 pub const MACHINE_STATUS_UUID: Uuid = ble_uuid(0x2ADA);
 
@@ -39,11 +40,11 @@ pub const RESPONSE_CODE: u8 = 0x80;
 
 /// Encode FTMS Treadmill Data characteristic (0x2ACD).
 ///
-/// Flags 0x008C = bits 2,3,7 set:
+/// Flags 0x040C = bits 2,3,10 set:
 ///   - Bit 0 = 0: Instantaneous Speed present
 ///   - Bit 2 = 1: Total Distance present
 ///   - Bit 3 = 1: Inclination and Ramp Angle present
-///   - Bit 7 = 1: Elapsed Time present
+///   - Bit 10 = 1: Elapsed Time present
 ///
 /// Layout: flags(2) + speed(2) + distance(3) + inclination(2) + ramp_angle(2) + elapsed(2) = 13 bytes
 pub fn encode_treadmill_data(
@@ -52,7 +53,7 @@ pub fn encode_treadmill_data(
     distance_meters: u32,
     elapsed_secs: u16,
 ) -> Vec<u8> {
-    let flags: u16 = 0x008C;
+    let flags: u16 = 0x040C;
     let mut buf = Vec::with_capacity(13);
 
     // Flags (uint16 LE)
@@ -84,15 +85,15 @@ pub fn encode_treadmill_data(
 /// Fitness Machine Features (uint32 LE):
 ///   - Bit 2: Total Distance Supported
 ///   - Bit 3: Inclination Supported
-///   - Bit 13: Elapsed Time Supported
-///   = 0x0000_200C
+///   - Bit 12: Elapsed Time Supported
+///   = 0x0000_100C
 ///
 /// Target Setting Features (uint32 LE):
 ///   - Bit 0: Speed Target Supported
 ///   - Bit 1: Inclination Target Supported
 ///   = 0x0000_0003
 pub fn encode_feature() -> [u8; 8] {
-    let machine_features: u32 = 0x0000_200C;
+    let machine_features: u32 = 0x0000_100C;
     let target_features: u32 = 0x0000_0003;
     let mut buf = [0u8; 8];
     buf[0..4].copy_from_slice(&machine_features.to_le_bytes());
@@ -199,9 +200,9 @@ mod tests {
     fn test_encode_treadmill_data_zeros() {
         let data = encode_treadmill_data(0, 0, 0, 0);
         assert_eq!(data.len(), 13);
-        // Flags: 0x008C LE
-        assert_eq!(data[0], 0x8C);
-        assert_eq!(data[1], 0x00);
+        // Flags: 0x040C LE
+        assert_eq!(data[0], 0x0C);
+        assert_eq!(data[1], 0x04);
         // Speed: 0
         assert_eq!(data[2], 0x00);
         assert_eq!(data[3], 0x00);
@@ -227,7 +228,7 @@ mod tests {
         assert_eq!(data.len(), 13);
 
         // Flags
-        assert_eq!(u16::from_le_bytes([data[0], data[1]]), 0x008C);
+        assert_eq!(u16::from_le_bytes([data[0], data[1]]), 0x040C);
 
         // Speed: 500 = 0x01F4 LE
         assert_eq!(u16::from_le_bytes([data[2], data[3]]), 500);
@@ -253,7 +254,7 @@ mod tests {
         assert_eq!(feat.len(), 8);
         let machine = u32::from_le_bytes([feat[0], feat[1], feat[2], feat[3]]);
         let target = u32::from_le_bytes([feat[4], feat[5], feat[6], feat[7]]);
-        assert_eq!(machine, 0x0000_200C);
+        assert_eq!(machine, 0x0000_100C);
         assert_eq!(target, 0x0000_0003);
     }
 

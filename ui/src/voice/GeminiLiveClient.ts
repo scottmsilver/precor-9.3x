@@ -1,5 +1,5 @@
 /**
- * WebSocket client for Gemini Live (BidiGenerateContent) API.
+ * WebSocket client for Gemini Live (BidiGenerateContentConstrained) API.
  *
  * Manages the bidirectional streaming connection:
  * - Sends setup message with model config, tools, system prompt

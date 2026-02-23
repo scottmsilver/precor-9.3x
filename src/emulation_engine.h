@@ -28,7 +28,7 @@ struct KvCycleEntry {
 };
 
 static constexpr KvCycleEntry KV_CYCLE[14] = {
-    { "inc",  true  },   //  0: incline (decimal int)
+    { "inc",  true  },   //  0: incline (half-pct, uppercase hex)
     { "hmph", true  },   //  1: speed (mph*100, uppercase hex)
     { "amps", false },   //  2
     { "err",  false },   //  3
@@ -93,7 +93,7 @@ private:
 
     std::string value_for(int idx, const StateSnapshot& snap) {
         switch (idx) {
-            case 0:  return std::to_string(snap.incline);      // inc
+            case 0:  return encode_incline_hex(snap.incline);   // inc
             case 1:  return encode_speed_hex(snap.speed_tenths); // hmph
             case 9:  return "6";     // part
             case 12: return "0";     // diag

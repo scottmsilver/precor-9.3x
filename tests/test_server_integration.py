@@ -46,6 +46,8 @@ def test_app(mock_client):
     server.state["emu_speed"] = 0
     server.state["emu_incline"] = 0
     server.state["treadmill_connected"] = True
+    server.state["bus_speed"] = None
+    server.state["bus_incline"] = None
     server.latest["last_motor"] = {}
     server.latest["last_console"] = {}
 
@@ -72,6 +74,75 @@ class TestStatusEndpoint:
         assert data["type"] == "status"
         assert "proxy" in data
         assert "emulate" in data
+
+
+class TestBusValues:
+    """Tests for bus_speed/bus_incline propagation from C++ status."""
+
+    def test_bus_speed_in_status(self, test_app):
+        """bus_speed from C++ status should appear as speed in /api/status."""
+        client, server, _ = test_app
+        server.state["bus_speed"] = 35  # 3.5 mph in tenths
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["speed"] == 3.5
+
+    def test_bus_incline_in_status(self, test_app):
+        """bus_incline from C++ status should appear as incline in /api/status."""
+        client, server, _ = test_app
+        server.state["bus_incline"] = 5
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["incline"] == 5.0
+
+    def test_bus_values_none_falls_back_to_kv(self, test_app):
+        """When bus values are None, should fall back to KV parsing."""
+        client, server, _ = test_app
+        server.state["bus_speed"] = None
+        server.state["bus_incline"] = None
+        server.latest["last_motor"]["hmph"] = "78"  # hex: 0x78 = 120 hundredths = 1.2 mph
+        server.latest["last_motor"]["inc"] = "A"  # hex: 0xA = 10 half-pct = 5.0%
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["speed"] == 1.2
+        assert data["incline"] == 5.0
+
+    def test_kv_hex_incline_15_percent(self, test_app):
+        """KV fallback: hex 1E = 30 half-pct = 15.0%."""
+        client, server, _ = test_app
+        server.state["bus_speed"] = None
+        server.state["bus_incline"] = None
+        server.latest["last_motor"]["inc"] = "1E"
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        assert resp.json()["incline"] == 15.0
+
+    def test_hex_incline_no_longer_crashes(self, test_app):
+        """Regression: float('A') used to crash; now parsed as hex."""
+        client, server, _ = test_app
+        server.state["bus_speed"] = None
+        server.state["bus_incline"] = None
+        server.latest["last_motor"]["inc"] = "A"
+        # Should not raise, should return 5.0
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        assert resp.json()["incline"] == 5.0
+
+    def test_bus_speed_negative_one_treated_as_none(self, test_app):
+        """bus_speed of -1 (not yet received) should be treated as None."""
+        client, server, _ = test_app
+        server.state["bus_speed"] = -1
+        server.state["bus_incline"] = -1
+        # Should fall back to KV
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        # With no KV data either, should be None
+        data = resp.json()
+        assert data["speed"] is None
+        assert data["incline"] is None
 
 
 class TestSpeedEndpoint:

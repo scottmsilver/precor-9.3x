@@ -92,12 +92,17 @@ async def lifespan(application):
                     state["emu_speed"] = msg.get("emu_speed", 0)
                 if now >= _dirty_incline_until:
                     state["emu_incline"] = msg.get("emu_incline", 0)
+                # Bus values from C++ motor KV parsing
+                bs = msg.get("bus_speed")
+                state["bus_speed"] = bs if bs is not None and bs >= 0 else None
+                bi = msg.get("bus_incline")
+                state["bus_incline"] = bi if bi is not None and bi >= 0 else None
                 # Detect watchdog / auto-proxy killing emulate while session active
                 if was_emulating and not state["emulate"] and sess.active:
                     reason = "auto_proxy" if state["proxy"] else "watchdog"
                     sess.end(reason)
                     _enqueue(sess.to_dict())
-                _enqueue(msg)
+                _enqueue(build_status())
 
         loop.call_soon_threadsafe(_apply)
 
@@ -230,6 +235,8 @@ state = {
     "hrm_connected": False,
     "hrm_device": "",
     "hrm_devices": [],
+    "bus_speed": None,  # from C++ status: motor speed in tenths mph, None if unknown
+    "bus_incline": None,  # from C++ status: motor incline in percent, None if unknown
 }
 
 latest = {
@@ -333,22 +340,32 @@ manager = ConnectionManager()
 
 def build_status():
     emu_mph = state["emu_speed"] / 10
-    # Decode live speed from motor hmph response (hex mph*100)
+
+    # Decode live speed: prefer bus_speed from C++ status (negative = unknown)
     speed = None
-    hmph = latest["last_motor"].get("hmph")
-    if hmph:
-        try:
-            speed = int(hmph, 16) / 100
-        except ValueError:
-            pass
-    # Decode live incline from motor inc response
+    if state["bus_speed"] is not None and state["bus_speed"] >= 0:
+        speed = state["bus_speed"] / 10.0
+    else:
+        # KV fallback (hex hundredths -> mph)
+        hmph = latest["last_motor"].get("hmph")
+        if hmph:
+            try:
+                speed = int(hmph, 16) / 100
+            except ValueError:
+                pass
+
+    # Decode live incline: prefer bus_incline from C++ status (negative = unknown)
     incline = None
-    inc = latest["last_motor"].get("inc")
-    if inc:
-        try:
-            incline = float(inc)
-        except ValueError:
-            pass
+    if state["bus_incline"] is not None and state["bus_incline"] >= 0:
+        incline = float(state["bus_incline"])
+    else:
+        # KV fallback (hex half-percent -> percent)
+        inc = latest["last_motor"].get("inc")
+        if inc:
+            try:
+                incline = int(inc, 16) / 2.0
+            except ValueError:
+                pass
     return {
         "type": "status",
         "proxy": state["proxy"],

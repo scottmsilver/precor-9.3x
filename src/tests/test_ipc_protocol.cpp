@@ -127,7 +127,7 @@ TEST_CASE("build KV event") {
 }
 
 TEST_CASE("build status event") {
-    StatusEvent ev{true, false, 12, 5, 1234, 567};
+    StatusEvent ev{true, false, 12, 5, 42, 7, 1234, 567};
     auto result = build_status_event(ev);
 
     CHECK(!result.empty());
@@ -136,6 +136,8 @@ TEST_CASE("build status event") {
     CHECK(result.find("\"emulate\":false") != std::string::npos);
     CHECK(result.find("\"emu_speed\":12") != std::string::npos);
     CHECK(result.find("\"emu_incline\":5") != std::string::npos);
+    CHECK(result.find("\"bus_speed\":42") != std::string::npos);
+    CHECK(result.find("\"bus_incline\":7") != std::string::npos);
     CHECK(result.find("\"console_bytes\":1234") != std::string::npos);
     CHECK(result.find("\"motor_bytes\":567") != std::string::npos);
     CHECK(result.back() == '\n');

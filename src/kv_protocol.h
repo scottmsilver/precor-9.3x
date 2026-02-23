@@ -55,3 +55,16 @@ std::string encode_speed_hex(int tenths_mph);
  * Returns -1 on parse error.
  */
 int decode_speed_hex(std::string_view hex);
+
+/*
+ * Encode incline percent to uppercase hex string (half-percent units).
+ * E.g., 5 -> "A" (5*2=10, hex A), 15 -> "1E" (15*2=30, hex 1E)
+ */
+std::string encode_incline_hex(int percent);
+
+/*
+ * Decode uppercase hex string (half-percent units) to incline percent.
+ * E.g., "A" -> 5 (hex 10, /2), "1E" -> 15 (hex 30, /2)
+ * Returns -1 on parse error.
+ */
+int decode_incline_hex(std::string_view hex);

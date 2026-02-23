@@ -75,6 +75,7 @@ Both directions use `[key:value]` text framing at 9600 baud, 8N1.
 - **Console→Motor** (pin 6): `[key:value]\xff` or `[key]\xff`, repeating 14-key cycle in 5 bursts
 - **Motor→Console** (pin 3): `[key:value]` responses (no `\xff` delimiter)
 - **Speed encoding**: `hmph` key = mph × 100 in uppercase hex (e.g., 1.2 mph = `78`)
+- **Incline encoding**: `inc` key = half-percent units in uppercase hex (e.g., 5% incline = `A`, 15% incline = `1E`)
 - **14-key cycle**: `inc, hmph, amps, err, belt, vbus, lift, lfts, lftg, part, ver, type, diag, loop`
 
 ### Application Modes
@@ -92,6 +93,7 @@ A Rust daemon (`ftms/`) that advertises the treadmill as a Bluetooth FTMS (Fitne
 - **Modules**: `main.rs` (entry), `treadmill.rs` (socket client), `ftms_service.rs` (GATT server), `protocol.rs` (binary encoding/UUIDs), `debug_server.rs` (TCP debug port 8826)
 - **GATT characteristics**: Feature (0x2ACC), Treadmill Data (0x2ACD, notifies at 1 Hz), Speed Range (0x2AD4), Incline Range (0x2AD5), Control Point (0x2AD9), Machine Status (0x2ADA)
 - **Control Point**: Supports Set Target Speed, Set Target Incline, Start/Resume, Stop/Pause — converts km/h to mph and sends commands back through the socket
+- **Proxy mode values**: In proxy mode, speed/incline come from `bus_speed`/`bus_incline` in the C++ status event (decoded motor KV readings). In emulate mode, uses `emu_speed`/`emu_incline`.
 - **Cross-compile**: `cd ftms && cross build --release --target aarch64-unknown-linux-gnu`
 - Runs as a systemd service (`ftms.service`), depends on `bluetooth.target` and `treadmill-io.service`
 
@@ -155,8 +157,11 @@ make test-all
 # FTMS Rust unit tests (27 tests, protocol encoding/decoding)
 cd ftms && cargo test
 
-# FTMS integration tests (17 tests, requires ftms-daemon + treadmill_io running on Pi)
+# FTMS debug integration tests (17 tests, requires ftms-daemon + treadmill_io running on Pi)
 cd ftms && cargo test --test debug_integration -- --ignored --test-threads=1
+
+# FTMS BLE integration tests (18 tests, requires hci1 USB dongle on Pi)
+make test-ftms-ble   # or: ssh rpi 'sudo bash ~/treadmill/ftms/tests/ble_integration.sh'
 
 # HRM Rust unit tests (14 tests, HR parsing + config)
 cd hrm && cargo test
@@ -273,7 +278,7 @@ All C++ code in `src/` must follow these rules. The environment is resource-cons
 **C++ binary** (`src/`): Transport layer only. This code must be:
 - **Incredibly narrow in scope**: GPIO I/O, KV protocol parsing, proxy forwarding, emulation cycle. Nothing else.
 - **Very fast**: bit-banged serial at 9600 baud with DMA waveforms. No allocations in hot paths, no blocking.
-- **Safety-critical**: the 3-hour timeout, the zero-speed-on-emulate-start, and auto proxy/emulate detection live here because they must work even if Python is dead.
+- **Safety-critical**: the 3-hour timeout, the zero-speed-on-emulate-start, auto proxy/emulate detection, and motor KV decoding (hmph/inc → `bus_speed`/`bus_incline` in status events) live here because they must work even if Python is dead.
 - No application logic, no knowledge of programs/workouts/AI. It just moves bytes and manages modes.
 - Note: The C++ binary accepts incline 0-99 (hardware range). The application layer (Python/Gemini) enforces 0-15 for safety.
 

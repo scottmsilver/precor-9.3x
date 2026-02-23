@@ -5,7 +5,7 @@ FTMS_BIN = ftms/target/$(FTMS_TARGET)/release/ftms-daemon
 HRM_TARGET = aarch64-unknown-linux-gnu
 HRM_BIN = hrm/target/$(HRM_TARGET)/release/hrm-daemon
 
-.PHONY: all clean test stage deploy ftms deploy-ftms test-ftms hrm deploy-hrm test-hrm test-pi test-all
+.PHONY: all clean test stage deploy ftms deploy-ftms test-ftms test-ftms-ble hrm deploy-hrm test-hrm test-pi test-all
 
 all:
 	$(MAKE) -C src
@@ -33,6 +33,9 @@ deploy-ftms: ftms
 
 test-ftms:
 	cd ftms && cargo test
+
+test-ftms-ble:
+	ssh $(PI_HOST) 'sudo bash ~/treadmill/ftms/tests/ble_integration.sh'
 
 hrm:
 	cd hrm && cross build --release --target $(HRM_TARGET)

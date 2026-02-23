@@ -134,6 +134,31 @@ async fn connect_and_run(
                                     let emu_incline = msg.get("emu_incline")
                                         .and_then(|v| v.as_u64())
                                         .unwrap_or(0) as u16;
+                                    let bus_speed = msg.get("bus_speed")
+                                        .and_then(|v| v.as_i64())
+                                        .unwrap_or(-1);
+                                    let bus_incline = msg.get("bus_incline")
+                                        .and_then(|v| v.as_i64())
+                                        .unwrap_or(-1);
+                                    let is_emulating = msg.get("emulate")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+
+                                    // Effective values: emulate mode uses emu_*, proxy uses bus_*
+                                    let effective_speed = if is_emulating {
+                                        emu_speed
+                                    } else if bus_speed >= 0 {
+                                        bus_speed as u16
+                                    } else {
+                                        0
+                                    };
+                                    let effective_incline = if is_emulating {
+                                        emu_incline
+                                    } else if bus_incline >= 0 {
+                                        bus_incline as u16
+                                    } else {
+                                        0
+                                    };
 
                                     // Accumulate distance based on previous speed
                                     let mut s = state.lock().await;
@@ -141,23 +166,24 @@ async fn connect_and_run(
                                     *accumulated_distance_m += prev_speed_mph * dt_hours * 1609.34;
 
                                     // Track elapsed time
-                                    if emu_speed > 0 {
+                                    if effective_speed > 0 {
                                         if workout_start.is_none() {
                                             *workout_start = Some(now);
                                         }
                                     }
 
-                                    s.speed_tenths_mph = emu_speed;
-                                    s.incline_percent = emu_incline;
+                                    s.speed_tenths_mph = effective_speed;
+                                    s.incline_percent = effective_incline;
                                     s.distance_meters = *accumulated_distance_m as u32;
                                     if let Some(start) = *workout_start {
                                         s.elapsed_secs = now.duration_since(start).as_secs() as u16;
                                     }
 
                                     debug!(
-                                        "Status: speed={:.1} mph, incline={}%",
-                                        emu_speed as f64 / 10.0,
-                                        emu_incline
+                                        "Status: speed={:.1} mph, incline={}%, emulating={}",
+                                        effective_speed as f64 / 10.0,
+                                        effective_incline,
+                                        is_emulating
                                     );
                                 }
                                 "kv" => {

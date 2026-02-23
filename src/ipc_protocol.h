@@ -55,6 +55,8 @@ struct StatusEvent {
     bool emulate;
     int emu_speed;
     int emu_incline;
+    int bus_speed;      // motor speed in tenths mph, -1 if unknown
+    int bus_incline;    // motor incline in percent, -1 if unknown
     uint32_t console_bytes;
     uint32_t motor_bytes;
 };

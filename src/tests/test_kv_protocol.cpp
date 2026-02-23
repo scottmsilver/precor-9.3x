@@ -169,3 +169,45 @@ TEST_CASE("encode/decode round-trip") {
         CHECK(decoded == t);
     }
 }
+
+// ── Incline hex encoding tests ──────────────────────────────────────
+
+TEST_CASE("encode_incline_hex: 0% -> 0 half-pct = 0x0") {
+    CHECK(encode_incline_hex(0) == "0");
+}
+
+TEST_CASE("encode_incline_hex: 5% -> 10 half-pct = 0xA") {
+    CHECK(encode_incline_hex(5) == "A");
+}
+
+TEST_CASE("encode_incline_hex: 15% -> 30 half-pct = 0x1E") {
+    CHECK(encode_incline_hex(15) == "1E");
+}
+
+TEST_CASE("encode_incline_hex: 7% -> 14 half-pct = 0xE") {
+    CHECK(encode_incline_hex(7) == "E");
+}
+
+TEST_CASE("decode_incline_hex: A -> 5%") {
+    CHECK(decode_incline_hex("A") == 5);
+}
+
+TEST_CASE("decode_incline_hex: 1E -> 15%") {
+    CHECK(decode_incline_hex("1E") == 15);
+}
+
+TEST_CASE("decode_incline_hex: 0 -> 0%") {
+    CHECK(decode_incline_hex("0") == 0);
+}
+
+TEST_CASE("decode_incline_hex: empty string -> -1") {
+    CHECK(decode_incline_hex("") == -1);
+}
+
+TEST_CASE("encode/decode incline round-trip") {
+    for (int p = 0; p <= 99; p++) {
+        auto hex = encode_incline_hex(p);
+        int decoded = decode_incline_hex(hex);
+        CHECK(decoded == p);
+    }
+}

@@ -88,7 +88,7 @@ TEST_CASE("client connects and receives initial status") {
     CHECK(ipc.create());
 
     // Push a status message before client connects
-    StatusEvent ev{true, false, 0, 0, 0, 0};
+    StatusEvent ev{true, false, 0, 0, -1, -1, 0, 0};
     auto status = build_status_event(ev);
     ring.push(status);
 

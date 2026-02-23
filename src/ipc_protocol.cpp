@@ -117,6 +117,8 @@ std::string build_status_event(const StatusEvent& ev) {
     w.Key("emulate"); w.Bool(ev.emulate);
     w.Key("emu_speed"); w.Int(ev.emu_speed);
     w.Key("emu_incline"); w.Int(ev.emu_incline);
+    w.Key("bus_speed"); w.Int(ev.bus_speed);
+    w.Key("bus_incline"); w.Int(ev.bus_incline);
     w.Key("console_bytes"); w.Uint(ev.console_bytes);
     w.Key("motor_bytes"); w.Uint(ev.motor_bytes);
     w.EndObject();

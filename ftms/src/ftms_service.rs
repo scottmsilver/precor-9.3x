@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 
 use crate::protocol::{
     self, CONTROL_POINT_UUID, FEATURE_UUID, FTMS_SERVICE_UUID, INCLINE_RANGE_UUID,
-    MACHINE_STATUS_UUID, SPEED_RANGE_UUID, TREADMILL_DATA_UUID,
+    MACHINE_STATUS_UUID, SPEED_RANGE_UUID, TRAINING_STATUS_UUID, TREADMILL_DATA_UUID,
 };
 use crate::treadmill::TreadmillState;
 
@@ -44,9 +44,15 @@ pub async fn run(
     );
 
     // --- Advertisement ---
+    // FTMS spec Section 3.1: Service Data must include Flags (available) + Machine Type (treadmill)
+    let ftms_service_data: Vec<u8> = vec![
+        0x01, // Flags: bit 0 = Fitness Machine Available
+        0x01, // Fitness Machine Type: bit 0 = Treadmill Supported
+    ];
     let adv = Advertisement {
         advertisement_type: bluer::adv::Type::Peripheral,
         service_uuids: vec![FTMS_SERVICE_UUID].into_iter().collect(),
+        service_data: [(FTMS_SERVICE_UUID, ftms_service_data)].into_iter().collect(),
         local_name: Some("Precor 9.31".to_string()),
         discoverable: Some(true),
         ..Default::default()
@@ -111,9 +117,39 @@ pub async fn run(
                 "Machine Status notification session started (confirming={})",
                 notifier.confirming()
             );
+            // Send initial "Stopped by User" status on subscribe so client knows machine state
+            let mut notifier = notifier;
+            let _ = notifier.notify(vec![0x02, 0x01]).await;
             // Store the notifier so control_point handler can send status updates
             let mut sn_guard = sn.lock().await;
             *sn_guard = Some(notifier);
+        }
+        .boxed()
+    });
+
+    // --- Training Status notify ---
+    // Mandatory when Control Point is exposed (FTMS spec).
+    // Notifies Idle (0x01) or Manual Mode (0x0D) on start/stop.
+    let training_notifier: Arc<Mutex<Option<bluer::gatt::local::CharacteristicNotifier>>> =
+        Arc::new(Mutex::new(None));
+
+    let tn_clone = training_notifier.clone();
+    let training_status_notify_fn: Box<
+        dyn Fn(bluer::gatt::local::CharacteristicNotifier) -> std::pin::Pin<Box<dyn futures::Future<Output = ()> + Send>>
+            + Send
+            + Sync,
+    > = Box::new(move |notifier| {
+        let tn = tn_clone.clone();
+        async move {
+            info!(
+                "Training Status notification session started (confirming={})",
+                notifier.confirming()
+            );
+            // Send initial "Idle" status on subscribe so client knows training state
+            let mut notifier = notifier;
+            let _ = notifier.notify(vec![0x00, 0x01]).await;
+            let mut tn_guard = tn.lock().await;
+            *tn_guard = Some(notifier);
         }
         .boxed()
     });
@@ -123,6 +159,7 @@ pub async fn run(
     // dispatches it to treadmill_io, and returns an indication response.
     let (cp_control, cp_handle) = characteristic_control();
     let cp_status_notifier = status_notifier.clone();
+    let cp_training_notifier = training_notifier.clone();
     let cp_socket = socket_path.clone();
 
     // --- Build GATT Application ---
@@ -189,6 +226,29 @@ pub async fn run(
                     }),
                     ..Default::default()
                 },
+                // Training Status (0x2AD3) -- Read + Notify
+                // Mandatory when Control Point is present (FTMS spec).
+                Characteristic {
+                    uuid: TRAINING_STATUS_UUID,
+                    read: Some(CharacteristicRead {
+                        read: true,
+                        fun: Box::new(|_req| {
+                            async move {
+                                debug!("Training Status read");
+                                // Flags=0x00 (no string), Status=0x01 (Idle)
+                                Ok(vec![0x00, 0x01])
+                            }
+                            .boxed()
+                        }),
+                        ..Default::default()
+                    }),
+                    notify: Some(CharacteristicNotify {
+                        notify: true,
+                        method: CharacteristicNotifyMethod::Fun(training_status_notify_fn),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
                 // Fitness Machine Control Point (0x2AD9) -- Write + Indicate
                 // Uses IO mode so we can process writes in our event loop and send
                 // indication responses via the notify/indicate handle.
@@ -207,9 +267,21 @@ pub async fn run(
                     control_handle: cp_handle,
                     ..Default::default()
                 },
-                // Fitness Machine Status (0x2ADA) -- Notify
+                // Fitness Machine Status (0x2ADA) -- Read + Notify
                 Characteristic {
                     uuid: MACHINE_STATUS_UUID,
+                    read: Some(CharacteristicRead {
+                        read: true,
+                        fun: Box::new(|_req| {
+                            async move {
+                                debug!("Machine Status read");
+                                // Default: Stopped by User (0x02, param 0x01=stop)
+                                Ok(vec![0x02, 0x01])
+                            }
+                            .boxed()
+                        }),
+                        ..Default::default()
+                    }),
                     notify: Some(CharacteristicNotify {
                         notify: true,
                         method: CharacteristicNotifyMethod::Fun(machine_status_notify_fn),
@@ -286,7 +358,7 @@ pub async fn run(
                         // Parse and handle the FTMS control command
                         let (opcode, result) = match protocol::parse_control_point(bytes) {
                             Some(cmd) => {
-                                // Send status notification for this command
+                                // Send Machine Status notification for this command
                                 if let Some(status_data) = encode_status_notification(&cmd) {
                                     let mut sn = cp_status_notifier.lock().await;
                                     if let Some(notifier) = sn.as_mut() {
@@ -295,6 +367,19 @@ pub async fn run(
                                         } else if let Err(e) = notifier.notify(status_data).await {
                                             warn!("Status notification error: {}", e);
                                             *sn = None;
+                                        }
+                                    }
+                                }
+
+                                // Send Training Status notification on start/stop
+                                if let Some(ts_data) = encode_training_status(&cmd) {
+                                    let mut tn = cp_training_notifier.lock().await;
+                                    if let Some(notifier) = tn.as_mut() {
+                                        if notifier.is_stopped() {
+                                            *tn = None;
+                                        } else if let Err(e) = notifier.notify(ts_data).await {
+                                            warn!("Training Status notification error: {}", e);
+                                            *tn = None;
                                         }
                                     }
                                 }
@@ -399,23 +484,46 @@ pub async fn handle_control_command(
     }
 }
 
-/// Encode a Fitness Machine Status notification for a target change.
+/// Encode a Training Status notification for start/stop state changes.
 ///
-/// Status opcodes (FTMS spec Table 4.26):
-///   0x02 = Fitness Machine Stopped/Paused by user
-///   0x04 = Target Speed Changed
-///   0x05 = Target Incline Changed
+/// Training Status format: [flags(1), status(1)]
+///   Flags: 0x00 (no string present)
+///   Status values (FTMS spec Table 4.25):
+///     0x01 = Idle
+///     0x0D = Manual Mode (Quick Start)
+fn encode_training_status(cmd: &protocol::ControlCommand) -> Option<Vec<u8>> {
+    match cmd {
+        protocol::ControlCommand::StartOrResume => {
+            Some(vec![0x00, 0x0D]) // Manual Mode (Quick Start)
+        }
+        protocol::ControlCommand::StopOrPause(_) => {
+            Some(vec![0x00, 0x01]) // Idle
+        }
+        _ => None,
+    }
+}
+
+/// Encode a Fitness Machine Status notification for a state/target change.
+///
+/// Status opcodes (FTMS spec Table 4.16):
+///   0x02 = Fitness Machine Stopped/Paused by user (param: 0x01=stop, 0x02=pause)
+///   0x04 = Fitness Machine Started or Resumed by the User
+///   0x05 = Target Speed Changed (uint16 LE param: km/h * 100)
+///   0x06 = Target Incline Changed (int16 LE param: % * 10)
 fn encode_status_notification(cmd: &protocol::ControlCommand) -> Option<Vec<u8>> {
     match cmd {
         protocol::ControlCommand::SetTargetSpeed(kmh_hundredths) => {
-            let mut buf = vec![0x04]; // Target Speed Changed
+            let mut buf = vec![0x05]; // Target Speed Changed
             buf.extend_from_slice(&kmh_hundredths.to_le_bytes());
             Some(buf)
         }
         protocol::ControlCommand::SetTargetInclination(incline_tenths) => {
-            let mut buf = vec![0x05]; // Target Incline Changed
+            let mut buf = vec![0x06]; // Target Incline Changed
             buf.extend_from_slice(&incline_tenths.to_le_bytes());
             Some(buf)
+        }
+        protocol::ControlCommand::StartOrResume => {
+            Some(vec![0x04]) // Started or Resumed by User
         }
         protocol::ControlCommand::StopOrPause(param) => {
             Some(vec![0x02, *param]) // Stopped or Paused
