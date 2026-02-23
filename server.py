@@ -236,7 +236,7 @@ state = {
     "hrm_device": "",
     "hrm_devices": [],
     "bus_speed": None,  # from C++ status: motor speed in tenths mph, None if unknown
-    "bus_incline": None,  # from C++ status: motor incline in percent, None if unknown
+    "bus_incline": None,  # from C++ status: motor incline in half-pct units, None if unknown
 }
 
 latest = {
@@ -303,7 +303,7 @@ async def _session_tick_loop():
     """1/sec loop: compute session metrics and broadcast to all WS clients."""
     while state["running"]:
         if sess.active:
-            sess.tick(state["emu_speed"] / 10, state["emu_incline"])
+            sess.tick(state["emu_speed"] / 10, state["emu_incline"] / 2.0)
             await manager.broadcast(sess.to_dict())
         await asyncio.sleep(1)
 
@@ -355,9 +355,10 @@ def build_status():
                 pass
 
     # Decode live incline: prefer bus_incline from C++ status (negative = unknown)
+    # bus_incline is in half-percent units from C++
     incline = None
     if state["bus_incline"] is not None and state["bus_incline"] >= 0:
-        incline = float(state["bus_incline"])
+        incline = state["bus_incline"] / 2.0
     else:
         # KV fallback (hex half-percent -> percent)
         inc = latest["last_motor"].get("inc")
@@ -372,7 +373,7 @@ def build_status():
         "emulate": state["emulate"],
         "emu_speed": state["emu_speed"],
         "emu_speed_mph": emu_mph,
-        "emu_incline": state["emu_incline"],
+        "emu_incline": state["emu_incline"] / 2.0,
         "speed": speed,
         "incline": incline,
         "motor": latest["last_motor"],
@@ -406,7 +407,7 @@ class SpeedRequest(BaseModel):
 
 
 class InclineRequest(BaseModel):
-    value: int
+    value: float
 
 
 class EmulateRequest(BaseModel):
@@ -451,7 +452,7 @@ async def _apply_speed(mph):
         state["proxy"] = False
         # Every workout has a program — auto-create manual if none running
         await sess.ensure_manual(
-            speed=mph, incline=state["emu_incline"], on_change=_prog_on_change(), on_update=_prog_on_update()
+            speed=mph, incline=state["emu_incline"] / 2.0, on_change=_prog_on_change(), on_update=_prog_on_update()
         )
     elif mph == 0 and sess.active:
         if sess.prog.running:
@@ -460,7 +461,7 @@ async def _apply_speed(mph):
         await manager.broadcast(sess.to_dict())
     # Split manual program interval to record course
     if sess.prog.is_manual and sess.prog.running and mph > 0:
-        await sess.prog.split_for_manual(mph, state["emu_incline"])
+        await sess.prog.split_for_manual(mph, state["emu_incline"] / 2.0)
     try:
         client.set_speed(mph)
     except ConnectionError:
@@ -472,21 +473,28 @@ MAX_SAFE_INCLINE = 15  # Application-layer limit (hardware allows 0-99)
 
 
 async def _apply_incline(inc):
-    """Core incline logic shared by REST endpoint and Gemini function calls."""
+    """Core incline logic shared by REST endpoint and Gemini function calls.
+
+    inc: float percent (0-15, resolution 0.5)
+    Internally stores half-pct units in state["emu_incline"].
+    """
     global _dirty_incline_until
     _dirty_incline_until = time.monotonic() + _DIRTY_GRACE_SEC
-    state["emu_incline"] = max(0, min(inc, MAX_SAFE_INCLINE))
+    # Clamp to safe range and snap to 0.5% steps
+    clamped = max(0.0, min(float(inc), MAX_SAFE_INCLINE))
+    clamped = round(clamped * 2) / 2  # snap to 0.5 steps
+    # Store as half-pct units (what C++ now uses internally)
+    state["emu_incline"] = int(clamped * 2)
     # Mirror C binary's auto-emulate: sending an incline command enables emulate mode
     if inc > 0:
         state["emulate"] = True
         state["proxy"] = False
-    # Use the clamped value for all downstream operations
-    clamped_inc = state["emu_incline"]
     # Split manual program interval to record course
     if sess.prog.is_manual and sess.prog.running:
-        await sess.prog.split_for_manual(state["emu_speed"] / 10, clamped_inc)
+        await sess.prog.split_for_manual(state["emu_speed"] / 10, clamped)
+    # Send float percent to C++
     try:
-        client.set_incline(clamped_inc)
+        client.set_incline(clamped)
     except ConnectionError:
         log.warning("Cannot set incline: treadmill_io disconnected")
     await broadcast_status()
@@ -735,7 +743,7 @@ async def api_start_program():
 
 class QuickStartRequest(BaseModel):
     speed: float = Field(default=3.0, ge=0.5, le=12.0)
-    incline: int = Field(default=0, ge=0, le=15)
+    incline: float = Field(default=0, ge=0, le=15)
     duration_minutes: int = Field(default=60, ge=1, le=300)
 
 
@@ -978,10 +986,13 @@ def _prog_on_change():
 
     async def on_change(speed, incline):
         state["emu_speed"] = max(0, min(int(speed * 10), MAX_SPEED_TENTHS))
-        state["emu_incline"] = max(0, min(int(incline), MAX_SAFE_INCLINE))
+        # incline from program is in percent; store as half-pct units
+        clamped_inc = max(0.0, min(float(incline), MAX_SAFE_INCLINE))
+        clamped_inc = round(clamped_inc * 2) / 2  # snap to 0.5 steps
+        state["emu_incline"] = int(clamped_inc * 2)
         try:
             client.set_speed(speed)
-            client.set_incline(max(0, min(int(incline), MAX_SAFE_INCLINE)))
+            client.set_incline(clamped_inc)
         except ConnectionError:
             log.warning("Cannot apply program change: treadmill_io disconnected")
         await broadcast_status()
@@ -1025,8 +1036,9 @@ async def _exec_fn(name, args):
 
     elif name == "set_incline":
         try:
-            inc = int(args.get("incline", 0))
-            inc = max(0, min(inc, MAX_SAFE_INCLINE))
+            inc = float(args.get("incline", 0))
+            inc = max(0.0, min(inc, MAX_SAFE_INCLINE))
+            inc = round(inc * 2) / 2  # snap to 0.5 steps
         except (ValueError, TypeError):
             return "Invalid incline value"
         await _apply_incline(inc)
@@ -1116,7 +1128,7 @@ def _build_chat_system(smartass=False):
     """Build the system prompt with current treadmill state context."""
     treadmill_state = {
         "speed_mph": state["emu_speed"] / 10,
-        "incline_pct": state["emu_incline"],
+        "incline_pct": state["emu_incline"] / 2.0,
         "mode": "emulate" if state["emulate"] else "proxy" if state["proxy"] else "off",
     }
     if state["hrm_connected"]:

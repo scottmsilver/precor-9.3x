@@ -24,18 +24,25 @@ TEST_CASE("parse speed command with int value") {
     CHECK(cmd->float_value == doctest::Approx(5.0));
 }
 
-TEST_CASE("parse incline command") {
+TEST_CASE("parse incline command (int percent -> half-pct)") {
     auto cmd = parse_command("{\"cmd\":\"incline\",\"value\":5}");
     CHECK(cmd.has_value());
     CHECK(cmd->type == CmdType::Incline);
-    CHECK(cmd->int_value == 5);
+    CHECK(cmd->int_value == 10);  // 5% * 2 = 10 half-pct
 }
 
-TEST_CASE("parse incline command with float value truncates") {
-    auto cmd = parse_command("{\"cmd\":\"incline\",\"value\":3.7}");
+TEST_CASE("parse incline command with float value (half-pct conversion)") {
+    auto cmd = parse_command("{\"cmd\":\"incline\",\"value\":3.5}");
     CHECK(cmd.has_value());
     CHECK(cmd->type == CmdType::Incline);
-    CHECK(cmd->int_value == 3);  // truncated
+    CHECK(cmd->int_value == 7);  // 3.5% * 2 = 7 half-pct
+}
+
+TEST_CASE("parse incline command with 5.5% (half-pct conversion)") {
+    auto cmd = parse_command("{\"cmd\":\"incline\",\"value\":5.5}");
+    CHECK(cmd.has_value());
+    CHECK(cmd->type == CmdType::Incline);
+    CHECK(cmd->int_value == 11);  // 5.5% * 2 = 11 half-pct
 }
 
 TEST_CASE("parse emulate enable") {
@@ -127,7 +134,8 @@ TEST_CASE("build KV event") {
 }
 
 TEST_CASE("build status event") {
-    StatusEvent ev{true, false, 12, 5, 42, 7, 1234, 567};
+    // emu_incline and bus_incline are in half-pct units
+    StatusEvent ev{true, false, 12, 10, 42, 14, 1234, 567};
     auto result = build_status_event(ev);
 
     CHECK(!result.empty());
@@ -135,9 +143,9 @@ TEST_CASE("build status event") {
     CHECK(result.find("\"proxy\":true") != std::string::npos);
     CHECK(result.find("\"emulate\":false") != std::string::npos);
     CHECK(result.find("\"emu_speed\":12") != std::string::npos);
-    CHECK(result.find("\"emu_incline\":5") != std::string::npos);
+    CHECK(result.find("\"emu_incline\":10") != std::string::npos);
     CHECK(result.find("\"bus_speed\":42") != std::string::npos);
-    CHECK(result.find("\"bus_incline\":7") != std::string::npos);
+    CHECK(result.find("\"bus_incline\":14") != std::string::npos);
     CHECK(result.find("\"console_bytes\":1234") != std::string::npos);
     CHECK(result.find("\"motor_bytes\":567") != std::string::npos);
     CHECK(result.back() == '\n');

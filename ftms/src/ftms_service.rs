@@ -447,10 +447,14 @@ pub async fn handle_control_command(
             }
         }
         protocol::ControlCommand::SetTargetInclination(incline_tenths) => {
-            let incline = (*incline_tenths / 10).clamp(0, 15); // Safety clamp: 0-15% (hardware allows 0-99)
+            // FTMS sends tenths of percent (e.g. 50 = 5.0%). Convert to float percent
+            // and round to nearest 0.5 for the treadmill's half-percent resolution.
+            let pct = (*incline_tenths as f64 / 10.0).clamp(0.0, 15.0);
+            // Round to nearest 0.5
+            let incline = (pct * 2.0).round() / 2.0;
             info!(
-                "FTMS: set incline to {}% ({} tenths, clamped from {})",
-                incline, incline_tenths, *incline_tenths / 10
+                "FTMS: set incline to {:.1}% ({} tenths)",
+                incline, incline_tenths
             );
 
             match crate::treadmill::send_incline(socket_path, incline).await {

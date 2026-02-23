@@ -66,10 +66,10 @@ TEST_CASE("emulation engine applies speed and incline") {
     mode.set_emulate_callback([](bool) {});
     mode.request_emulate(true);
 
-    // Set speed to 5.0 mph (50 tenths) and incline to 7
+    // Set speed to 5.0 mph (50 tenths) and incline to 14 half-pct (7%)
     // Do this after emulate is enabled (which zeros values)
     mode.set_speed(50);
-    mode.set_incline(7);
+    mode.set_incline(14);
 
     SerialWriter<MockGpioPort> writer(port, 22);
     EmulationEngine<MockGpioPort> engine(writer, mode);

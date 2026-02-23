@@ -170,44 +170,56 @@ TEST_CASE("encode/decode round-trip") {
     }
 }
 
-// ── Incline hex encoding tests ──────────────────────────────────────
+// ── Incline hex encoding tests (half-pct units) ─────────────────────
 
-TEST_CASE("encode_incline_hex: 0% -> 0 half-pct = 0x0") {
+TEST_CASE("encode_incline_hex: 0 half-pct (0%) -> 0x0") {
     CHECK(encode_incline_hex(0) == "0");
 }
 
-TEST_CASE("encode_incline_hex: 5% -> 10 half-pct = 0xA") {
-    CHECK(encode_incline_hex(5) == "A");
+TEST_CASE("encode_incline_hex: 10 half-pct (5%) -> 0xA") {
+    CHECK(encode_incline_hex(10) == "A");
 }
 
-TEST_CASE("encode_incline_hex: 15% -> 30 half-pct = 0x1E") {
-    CHECK(encode_incline_hex(15) == "1E");
+TEST_CASE("encode_incline_hex: 30 half-pct (15%) -> 0x1E") {
+    CHECK(encode_incline_hex(30) == "1E");
 }
 
-TEST_CASE("encode_incline_hex: 7% -> 14 half-pct = 0xE") {
-    CHECK(encode_incline_hex(7) == "E");
+TEST_CASE("encode_incline_hex: 14 half-pct (7%) -> 0xE") {
+    CHECK(encode_incline_hex(14) == "E");
 }
 
-TEST_CASE("decode_incline_hex: A -> 5%") {
-    CHECK(decode_incline_hex("A") == 5);
+TEST_CASE("encode_incline_hex: 1 half-pct (0.5%) -> 0x1") {
+    CHECK(encode_incline_hex(1) == "1");
 }
 
-TEST_CASE("decode_incline_hex: 1E -> 15%") {
-    CHECK(decode_incline_hex("1E") == 15);
+TEST_CASE("decode_incline_hex: A -> 10 half-pct (5%)") {
+    CHECK(decode_incline_hex("A") == 10);
 }
 
-TEST_CASE("decode_incline_hex: 0 -> 0%") {
+TEST_CASE("decode_incline_hex: 1E -> 30 half-pct (15%)") {
+    CHECK(decode_incline_hex("1E") == 30);
+}
+
+TEST_CASE("decode_incline_hex: 0 -> 0 half-pct") {
     CHECK(decode_incline_hex("0") == 0);
+}
+
+TEST_CASE("decode_incline_hex: 1 -> 1 half-pct (0.5%)") {
+    CHECK(decode_incline_hex("1") == 1);
+}
+
+TEST_CASE("decode_incline_hex: B -> 11 half-pct (5.5%)") {
+    CHECK(decode_incline_hex("B") == 11);
 }
 
 TEST_CASE("decode_incline_hex: empty string -> -1") {
     CHECK(decode_incline_hex("") == -1);
 }
 
-TEST_CASE("encode/decode incline round-trip") {
-    for (int p = 0; p <= 99; p++) {
-        auto hex = encode_incline_hex(p);
+TEST_CASE("encode/decode incline round-trip (half-pct)") {
+    for (int hp = 0; hp <= 198; hp++) {
+        auto hex = encode_incline_hex(hp);
         int decoded = decode_incline_hex(hex);
-        CHECK(decoded == p);
+        CHECK(decoded == hp);
     }
 }

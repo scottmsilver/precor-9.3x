@@ -89,9 +89,9 @@ class TestBusValues:
         assert data["speed"] == 3.5
 
     def test_bus_incline_in_status(self, test_app):
-        """bus_incline from C++ status should appear as incline in /api/status."""
+        """bus_incline from C++ status (half-pct units) should appear as percent in /api/status."""
         client, server, _ = test_app
-        server.state["bus_incline"] = 5
+        server.state["bus_incline"] = 10  # 10 half-pct = 5.0%
         resp = client.get("/api/status")
         assert resp.status_code == 200
         data = resp.json()
@@ -165,8 +165,40 @@ class TestInclineEndpoint:
         client, server, mock = test_app
         resp = client.post("/api/incline", json={"value": 5})
         assert resp.status_code == 200
-        assert server.state["emu_incline"] == 5
-        mock.set_incline.assert_called_with(5)
+        assert server.state["emu_incline"] == 10  # 5% stored as 10 half-pct
+        mock.set_incline.assert_called_with(5.0)
+
+    def test_set_incline_float(self, test_app):
+        """POST /api/incline with float 5.5 should work."""
+        client, server, mock = test_app
+        resp = client.post("/api/incline", json={"value": 5.5})
+        assert resp.status_code == 200
+        assert server.state["emu_incline"] == 11  # 5.5% stored as 11 half-pct
+        mock.set_incline.assert_called_with(5.5)
+
+    def test_set_incline_half_step(self, test_app):
+        """POST /api/incline with 0.5 should work."""
+        client, server, mock = test_app
+        resp = client.post("/api/incline", json={"value": 0.5})
+        assert resp.status_code == 200
+        assert server.state["emu_incline"] == 1  # 0.5% stored as 1 half-pct
+        mock.set_incline.assert_called_with(0.5)
+
+    def test_set_incline_snaps_to_half(self, test_app):
+        """Non-0.5-step values should snap to nearest 0.5."""
+        client, server, mock = test_app
+        resp = client.post("/api/incline", json={"value": 5.3})
+        assert resp.status_code == 200
+        assert server.state["emu_incline"] == 11  # 5.3 snaps to 5.5 -> 11 half-pct
+        mock.set_incline.assert_called_with(5.5)
+
+    def test_incline_in_status_response(self, test_app):
+        """Status response should show emu_incline in percent, not half-pct."""
+        client, server, _ = test_app
+        server.state["emu_incline"] = 11  # 5.5% in half-pct
+        resp = client.get("/api/status")
+        assert resp.status_code == 200
+        assert resp.json()["emu_incline"] == 5.5
 
 
 class TestProgramFlow:
@@ -261,9 +293,20 @@ class TestProgOnChange:
         on_change = server._prog_on_change()
         asyncio.get_event_loop().run_until_complete(on_change(4.5, 3))
         assert server.state["emu_speed"] == 45
-        assert server.state["emu_incline"] == 3
+        assert server.state["emu_incline"] == 6  # 3% stored as 6 half-pct
         mock.set_speed.assert_called_with(4.5)
-        mock.set_incline.assert_called_with(3)
+        mock.set_incline.assert_called_with(3.0)
+
+    def test_prog_on_change_half_step(self, test_app):
+        """Test _prog_on_change with 0.5 incline step."""
+        _, server, mock = test_app
+        import asyncio
+
+        on_change = server._prog_on_change()
+        asyncio.get_event_loop().run_until_complete(on_change(3.0, 2.5))
+        assert server.state["emu_speed"] == 30
+        assert server.state["emu_incline"] == 5  # 2.5% stored as 5 half-pct
+        mock.set_incline.assert_called_with(2.5)
 
 
 class TestExecFn:
@@ -282,8 +325,16 @@ class TestExecFn:
         _, server, mock = test_app
         result = await server._exec_fn("set_incline", {"incline": 7})
         assert "7" in result
-        assert server.state["emu_incline"] == 7
-        mock.set_incline.assert_called_with(7)
+        assert server.state["emu_incline"] == 14  # 7% stored as 14 half-pct
+        mock.set_incline.assert_called_with(7.0)
+
+    @pytest.mark.asyncio
+    async def test_exec_set_incline_float(self, test_app):
+        _, server, mock = test_app
+        result = await server._exec_fn("set_incline", {"incline": 5.5})
+        assert "5.5" in result
+        assert server.state["emu_incline"] == 11  # 5.5% stored as 11 half-pct
+        mock.set_incline.assert_called_with(5.5)
 
     @pytest.mark.asyncio
     async def test_exec_stop(self, test_app):

@@ -28,7 +28,7 @@ export const TOOL_DECLARATIONS: FunctionDeclaration[] = [
     description: 'Set treadmill incline grade',
     parameters: {
       type: 'OBJECT',
-      properties: { incline: { type: 'NUMBER', description: 'Incline percent (0-15)' } },
+      properties: { incline: { type: 'NUMBER', description: 'Incline percent (0-15, 0.5% steps)' } },
       required: ['incline'],
     },
   },
@@ -116,7 +116,7 @@ Feel free to use emoji in your text responses when it feels natural.
 
 Tools:
 - set_speed: change speed (mph). Use 0 to stop belt.
-- set_incline: change incline (0-15%)
+- set_incline: change incline (0-15%, 0.5% steps)
 - start_workout: create & start an interval program from a description
 - stop_treadmill: emergency stop (speed 0, incline 0, end program)
 - pause_program / resume_program: pause/resume interval programs

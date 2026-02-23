@@ -113,7 +113,7 @@ public:
                 if (decoded >= 0) bus_speed_tenths_.store(decoded, std::memory_order_relaxed);
             } else if (key == "inc") {
                 int decoded = decode_incline_hex(value);
-                if (decoded >= 0) bus_incline_pct_.store(decoded, std::memory_order_relaxed);
+                if (decoded >= 0) bus_incline_half_pct_.store(decoded, std::memory_order_relaxed);
             }
             push_kv_event("motor", key, value);
         });
@@ -208,7 +208,7 @@ private:
         ev.emu_speed = snap.speed_tenths;
         ev.emu_incline = snap.incline;
         ev.bus_speed = bus_speed_tenths_.load(std::memory_order_relaxed);
-        ev.bus_incline = bus_incline_pct_.load(std::memory_order_relaxed);
+        ev.bus_incline = bus_incline_half_pct_.load(std::memory_order_relaxed);
         ev.console_bytes = mode_.console_bytes();
         ev.motor_bytes = mode_.motor_bytes();
         ring_.push(build_status_event(ev));
@@ -307,7 +307,7 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<int> bus_speed_tenths_{-1};   // -1 = not yet received
-    std::atomic<int> bus_incline_pct_{-1};    // -1 = not yet received
+    std::atomic<int> bus_incline_half_pct_{-1};  // half-pct units, -1 = not yet received
     std::thread console_thread_;
     std::thread motor_thread_;
     std::thread ipc_thread_;

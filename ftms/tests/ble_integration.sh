@@ -218,7 +218,7 @@ test_read_incline_range() {
     local ok=true
     [[ "$min" -eq 0 ]]   || { fail "Incline Range min: expected 0, got $min"; ok=false; }
     [[ "$max" -eq 150 ]] || { fail "Incline Range max: expected 150, got $max"; ok=false; }
-    [[ "$step" -eq 10 ]] || { fail "Incline Range step: expected 10, got $step"; ok=false; }
+    [[ "$step" -eq 5 ]]  || { fail "Incline Range step: expected 5, got $step"; ok=false; }
     $ok && pass "Incline Range: min=${min} max=${max} step=${step} (%*10)"
 }
 

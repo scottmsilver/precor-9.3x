@@ -17,7 +17,7 @@
 
 // Speed/incline limits (mirrored in treadmill_client.py)
 constexpr int MAX_SPEED_TENTHS = 120;   // 12.0 mph max
-constexpr int MAX_INCLINE      = 99;
+constexpr int MAX_INCLINE      = 198;   // 99% in half-pct units (1 = 0.5%)
 
 enum class Mode : uint8_t {
     Idle,       // Neither proxy nor emulate active
@@ -30,7 +30,7 @@ struct StateSnapshot {
     Mode mode;
     int speed_tenths;       // 0-120
     int speed_raw;          // speed_tenths * 10 (hundredths for hex encoding)
-    int incline;            // 0-99
+    int incline;            // half-pct units: 0-198 (0=0%, 1=0.5%, 10=5%, 30=15%)
     bool proxy_enabled;
     bool emulate_enabled;
 };
@@ -61,8 +61,9 @@ public:
     // Same but from mph float (as received from IPC)
     TransitionResult set_speed_mph(double mph);
 
-    // Set incline (auto-enables emulate, clamps 0-MAX_INCLINE)
-    TransitionResult set_incline(int val);
+    // Set incline in half-pct units (auto-enables emulate, clamps 0-MAX_INCLINE)
+    // 1 = 0.5%, 10 = 5%, 30 = 15%
+    TransitionResult set_incline(int half_pct);
 
     // Called from console read thread when hmph/inc value changes
     // while in emulate mode — switches back to proxy

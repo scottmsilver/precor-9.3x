@@ -116,14 +116,15 @@ async fn handle_state(
     let speed_kmh = protocol::mph_tenths_to_kmh_hundredths(s.speed_tenths_mph) as f64 / 100.0;
     Ok(format!(
         "speed:    {:.1} mph ({:.2} km/h)  [raw: {} tenths]\n\
-         incline:  {}%\n\
+         incline:  {:.1}%  [raw: {} half-pct]\n\
          elapsed:  {}s ({}:{:02})\n\
          distance: {}m ({:.2} mi)\n\
          connected: {}",
         speed_mph,
         speed_kmh,
         s.speed_tenths_mph,
-        s.incline_percent,
+        s.incline_half_pct as f64 / 2.0,
+        s.incline_half_pct,
         s.elapsed_secs,
         s.elapsed_secs / 60,
         s.elapsed_secs % 60,
@@ -139,7 +140,7 @@ async fn handle_td(
     let s = state.lock().await;
     let data = s.encode_ftms_data();
     let speed_kmh = protocol::mph_tenths_to_kmh_hundredths(s.speed_tenths_mph);
-    let incline_tenths = (s.incline_percent as i16) * 10;
+    let incline_tenths = (s.incline_half_pct as i16) * 5;
 
     Ok(format!(
         "data {} (speed={} incline={} dist={}m elapsed={}s)",
@@ -216,14 +217,14 @@ async fn handle_subscribe(
         let s = state.lock().await;
         let data = s.encode_ftms_data();
         let speed_mph = s.speed_tenths_mph as f64 / 10.0;
-        let incline_tenths = (s.incline_percent as i16) * 10;
+        let incline_half_pct = s.incline_half_pct;
         drop(s);
 
         let line = format!(
-            "data {} | {:.1}mph {}%\n",
+            "data {} | {:.1}mph {:.1}%\n",
             hex_encode(&data),
             speed_mph,
-            incline_tenths / 10,
+            incline_half_pct as f64 / 2.0,
         );
 
         if writer.write_all(line.as_bytes()).await.is_err() {

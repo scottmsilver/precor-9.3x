@@ -47,12 +47,15 @@ std::optional<IpcCommand> parse_command(std::string_view json) {
         out.type = CmdType::Incline;
         auto val_it = doc.FindMember("value");
         if (val_it != doc.MemberEnd()) {
-            if (val_it->value.IsInt())
-                out.int_value = val_it->value.GetInt();
+            // Accept float percent, convert to half-pct units: half_pct = round(pct * 2)
+            double pct = 0.0;
+            if (val_it->value.IsDouble())
+                pct = val_it->value.GetDouble();
+            else if (val_it->value.IsInt())
+                pct = static_cast<double>(val_it->value.GetInt());
             else if (val_it->value.IsUint())
-                out.int_value = static_cast<int>(val_it->value.GetUint());
-            else if (val_it->value.IsDouble())
-                out.int_value = static_cast<int>(val_it->value.GetDouble());
+                pct = static_cast<double>(val_it->value.GetUint());
+            out.int_value = static_cast<int>(pct * 2.0 + (pct >= 0 ? 0.5 : -0.5));
         }
         return out;
     }

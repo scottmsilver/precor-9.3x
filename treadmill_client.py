@@ -146,7 +146,7 @@ class TreadmillClient:
         self._send({"cmd": "speed", "value": mph})
 
     def set_incline(self, value):
-        """Set emulation incline (int 0-99)."""
+        """Set emulation incline (float 0-99, resolution 0.5)."""
         self._send({"cmd": "incline", "value": value})
 
     def request_status(self):

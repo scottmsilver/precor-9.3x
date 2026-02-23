@@ -18,8 +18,8 @@ use tokio::time::{interval, Duration};
 pub struct TreadmillState {
     /// Belt speed in tenths of mph (e.g. 35 = 3.5 mph)
     pub speed_tenths_mph: u16,
-    /// Incline in percent grade (0-15)
-    pub incline_percent: u16,
+    /// Incline in half-percent units (e.g. 10 = 5.0%, 1 = 0.5%)
+    pub incline_half_pct: u16,
     /// Seconds elapsed since belt first started moving
     pub elapsed_secs: u16,
     /// Cumulative distance in meters
@@ -30,10 +30,11 @@ pub struct TreadmillState {
 
 impl TreadmillState {
     /// Encode current state as FTMS Treadmill Data (0x2ACD) bytes.
-    /// Handles mph→km/h and incline→tenths conversions in one place.
+    /// Handles mph→km/h and half-pct→tenths conversions in one place.
     pub fn encode_ftms_data(&self) -> Vec<u8> {
         let speed_kmh = crate::protocol::mph_tenths_to_kmh_hundredths(self.speed_tenths_mph);
-        let incline_tenths = (self.incline_percent as i16) * 10;
+        // half-pct * 5 = tenths of percent (e.g. 10 half_pct = 5% = 50 tenths)
+        let incline_tenths = (self.incline_half_pct as i16) * 5;
         crate::protocol::encode_treadmill_data(speed_kmh, incline_tenths, self.distance_meters, self.elapsed_secs)
     }
 }
@@ -173,16 +174,16 @@ async fn connect_and_run(
                                     }
 
                                     s.speed_tenths_mph = effective_speed;
-                                    s.incline_percent = effective_incline;
+                                    s.incline_half_pct = effective_incline;
                                     s.distance_meters = *accumulated_distance_m as u32;
                                     if let Some(start) = *workout_start {
                                         s.elapsed_secs = now.duration_since(start).as_secs() as u16;
                                     }
 
                                     debug!(
-                                        "Status: speed={:.1} mph, incline={}%, emulating={}",
+                                        "Status: speed={:.1} mph, incline={:.1}%, emulating={}",
                                         effective_speed as f64 / 10.0,
-                                        effective_incline,
+                                        effective_incline as f64 / 2.0,
                                         is_emulating
                                     );
                                 }
@@ -227,13 +228,13 @@ pub async fn send_speed(
     send_oneshot(socket_path, &cmd).await
 }
 
-/// Send an incline command to treadmill_io (0-15 int).
+/// Send an incline command to treadmill_io (float percent, 0.5 resolution).
 /// Opens a short-lived connection, sends the command, and closes.
 pub async fn send_incline(
     socket_path: &str,
-    incline: i16,
+    incline: f64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let cmd = format!("{{\"cmd\":\"incline\",\"value\":{}}}\n", incline);
+    let cmd = format!("{{\"cmd\":\"incline\",\"value\":{:.1}}}\n", incline);
     send_oneshot(socket_path, &cmd).await
 }
 
@@ -250,7 +251,7 @@ pub async fn send_stop(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Set speed to 0 first, then incline
     send_oneshot(socket_path, "{\"cmd\":\"speed\",\"value\":0.0}\n").await?;
-    send_oneshot(socket_path, "{\"cmd\":\"incline\",\"value\":0}\n").await
+    send_oneshot(socket_path, "{\"cmd\":\"incline\",\"value\":0.0}\n").await
 }
 
 /// Open a short-lived connection, send one command line, then close.

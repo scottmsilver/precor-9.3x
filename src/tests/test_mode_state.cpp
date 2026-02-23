@@ -141,10 +141,10 @@ TEST_CASE("set_incline auto-enables emulate") {
     ModeStateMachine mode;
     mode.set_emulate_callback([](bool) {});
 
-    mode.set_incline(5);
+    mode.set_incline(10);  // 10 half-pct = 5%
     auto snap = mode.snapshot();
     CHECK(snap.emulate_enabled == true);
-    CHECK(snap.incline == 5);
+    CHECK(snap.incline == 10);
 }
 
 // ── Clamping ────────────────────────────────────────────────────────
@@ -165,12 +165,12 @@ TEST_CASE("speed clamped to 0") {
     CHECK(mode.speed_tenths() == 0);
 }
 
-TEST_CASE("incline clamped to MAX_INCLINE") {
+TEST_CASE("incline clamped to MAX_INCLINE (198 half-pct)") {
     ModeStateMachine mode;
     mode.set_emulate_callback([](bool) {});
 
-    mode.set_incline(200);
-    CHECK(mode.incline() == MAX_INCLINE);
+    mode.set_incline(300);
+    CHECK(mode.incline() == MAX_INCLINE);  // 198 half-pct
 }
 
 TEST_CASE("incline clamped to 0") {
@@ -253,10 +253,10 @@ TEST_CASE("safety_timeout_reset zeros speed and incline") {
     mode.set_emulate_callback([](bool) {});
 
     mode.set_speed(50);
-    mode.set_incline(5);
+    mode.set_incline(10);  // 10 half-pct = 5%
 
     CHECK(mode.speed_tenths() == 50);
-    CHECK(mode.incline() == 5);
+    CHECK(mode.incline() == 10);
 
     mode.safety_timeout_reset();
     CHECK(mode.speed_tenths() == 0);
@@ -269,14 +269,14 @@ TEST_CASE("watchdog_reset_to_proxy zeros speed/incline and returns to proxy") {
     ModeStateMachine mode;
     mode.set_emulate_callback([](bool) {});
 
-    // Set up: emulating at speed 50 tenths, incline 7
+    // Set up: emulating at speed 50 tenths, incline 14 half-pct (7%)
     mode.request_emulate(true);
     mode.set_speed(50);
-    mode.set_incline(7);
+    mode.set_incline(14);
 
     CHECK(mode.is_emulating() == true);
     CHECK(mode.speed_tenths() == 50);
-    CHECK(mode.incline() == 7);
+    CHECK(mode.incline() == 14);
 
     // Watchdog fires
     mode.watchdog_reset_to_proxy();

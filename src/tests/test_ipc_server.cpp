@@ -133,7 +133,7 @@ TEST_CASE("server dispatches speed command to callback") {
     ipc.shutdown();
 }
 
-TEST_CASE("server dispatches incline command") {
+TEST_CASE("server dispatches incline command (half-pct conversion)") {
     RingBuffer<> ring;
     IpcServer ipc(ring);
     CHECK(ipc.create());
@@ -150,7 +150,7 @@ TEST_CASE("server dispatches incline command") {
     send_cmd(client_fd, "{\"cmd\":\"incline\",\"value\":7}");
     poll_for(ipc, 50);
 
-    CHECK(received_incline == 7);
+    CHECK(received_incline == 14);  // 7% * 2 = 14 half-pct
 
     close(client_fd);
     ipc.shutdown();

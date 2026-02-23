@@ -123,11 +123,11 @@ pub fn encode_speed_range() -> [u8; 6] {
 /// 3x sint16 LE: minimum, maximum, step (all in percent * 10).
 ///   - Min: 0   (0.0%)
 ///   - Max: 150 (15.0%)
-///   - Step: 10 (1.0%)
+///   - Step: 5  (0.5%)
 pub fn encode_incline_range() -> [u8; 6] {
     let min: i16 = 0;
     let max: i16 = 150;
-    let step: i16 = 10;
+    let step: i16 = 5;
     let mut buf = [0u8; 6];
     buf[0..2].copy_from_slice(&min.to_le_bytes());
     buf[2..4].copy_from_slice(&max.to_le_bytes());
@@ -277,7 +277,7 @@ mod tests {
         let step = i16::from_le_bytes([range[4], range[5]]);
         assert_eq!(min, 0);
         assert_eq!(max, 150);
-        assert_eq!(step, 10);
+        assert_eq!(step, 5); // 0.5% steps
     }
 
     #[test]

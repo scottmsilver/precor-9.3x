@@ -171,10 +171,10 @@ export default function SpeedInclineControls(): React.ReactElement {
         border: '1px solid rgba(255,255,255,0.25)',
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button key={`iu1-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'up', 'iu1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 1, 'iu1')}>
+          <button key={`iu1-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'up', 'iu1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', 0.5, 'iu1')}>
             <ChevronUp />
           </button>
-          <button key={`id1-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'down', 'id1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -1, 'id1')}>
+          <button key={`id1-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'down', 'id1')}`} style={{ ...btn, color: 'var(--text3)' }} {...ph('incline', -0.5, 'id1')}>
             <ChevronDown />
           </button>
         </div>
@@ -183,15 +183,15 @@ export default function SpeedInclineControls(): React.ReactElement {
             fontSize: 26, fontWeight: 600, fontVariantNumeric: 'tabular-nums',
             lineHeight: 1.1, color: 'var(--orange)',
           }}>
-            {status.emuIncline}%
+            {status.emuIncline.toFixed(1)}
           </div>
-          <div className="ctrl-label" style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>incline</div>
+          <div className="ctrl-label" style={{ fontSize: 10, color: 'var(--text3)', marginTop: 1 }}>% incline</div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <button key={`iu5-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'up', 'iu5')}`} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 5, 'iu5')}>
+          <button key={`iu5-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'up', 'iu5')}`} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', 1, 'iu5')}>
             <DoubleChevronUp />
           </button>
-          <button key={`id5-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'down', 'id5')}`} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -5, 'id5')}>
+          <button key={`id5-${status.emuIncline}`} className={`ctrl-btn ${pulseBtn(inclinePulse, 'down', 'id5')}`} style={{ ...btn, color: 'var(--orange)' }} {...ph('incline', -1, 'id5')}>
             <DoubleChevronDown />
           </button>
         </div>

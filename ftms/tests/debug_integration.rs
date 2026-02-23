@@ -217,7 +217,7 @@ async fn test_04_read_incline_range() {
 
     assert_eq!(min, 0, "min incline 0%");
     assert_eq!(max, 150, "max incline 15.0%");
-    assert_eq!(step, 10, "step 1.0%");
+    assert_eq!(step, 5, "step 0.5%");
 
     println!("Incline range: min={} max={} step={}", min, max, step);
 }
@@ -316,10 +316,10 @@ async fn test_07_set_incline_and_observe() {
     println!("State after set incline: {:?}", state);
 
     let incline_line = &state["incline"];
-    // Should contain "5%"
+    // Should contain "5.0%" (format is now "{:.1}%  [raw: X half-pct]")
     assert!(
-        incline_line.contains("5%"),
-        "Incline should be 5%, got: {}",
+        incline_line.contains("5.0%"),
+        "Incline should be 5.0%, got: {}",
         incline_line
     );
     println!("Incline verified: {}", incline_line);

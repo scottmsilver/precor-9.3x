@@ -111,10 +111,9 @@ int decode_speed_hex(std::string_view hex) {
     return static_cast<int>((val + 5) / 10);
 }
 
-std::string encode_incline_hex(int percent) {
+std::string encode_incline_hex(int half_pct) {
     // Incline wire format: half-percent units, uppercase hex
-    // percent * 2 = half-percent value
-    int half_pct = percent * 2;
+    // Input is already in half-pct units (1 = 0.5%)
     std::array<char, 16> buf{};
     auto [ptr, ec] = std::to_chars(buf.data(), buf.data() + buf.size(), half_pct, 16);
     std::string result(buf.data(), ptr);
@@ -132,6 +131,6 @@ int decode_incline_hex(std::string_view hex) {
     auto [ptr, ec] = std::from_chars(hex.data(), hex.data() + hex.size(), val, 16);
     if (ec != std::errc{} || ptr != hex.data() + hex.size()) return -1;
 
-    // val is in half-percent units, convert to whole percent (round)
-    return static_cast<int>((val + 1) / 2);
+    // val is already in half-percent units (1 = 0.5%)
+    return static_cast<int>(val);
 }

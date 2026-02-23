@@ -107,7 +107,7 @@ TEST_CASE("IPC incline command triggers emulate and reports status") {
     std::string data = read_available(fd, 150);
 
     CHECK(data.find("\"emulate\":true") != std::string::npos);
-    CHECK(data.find("\"emu_incline\":8") != std::string::npos);
+    CHECK(data.find("\"emu_incline\":16") != std::string::npos);  // 8% * 2 = 16 half-pct
 
     close(fd);
     ctrl.stop();
