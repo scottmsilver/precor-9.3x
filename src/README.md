@@ -21,14 +21,14 @@ In **proxy mode** (the default), raw bytes from the console are forwarded to the
 Both directions use `[key:value]` text framing. The console sends a repeating 14-key cycle in 5 bursts with ~100ms gaps:
 
 ```
-Burst 1:  [inc:3][hmph:FA]             ← incline + speed
+Burst 1:  [inc:A][hmph:FA]             ← incline (5%) + speed
 Burst 2:  [amps][err][belt]            ← sensor queries
 Burst 3:  [vbus][lift][lfts][lftg]
 Burst 4:  [part:6][ver][type]          ← identity
 Burst 5:  [diag:0][loop:5550]          ← diagnostics
 ```
 
-Speed is encoded as `mph × 100` in uppercase hex (`hmph:FA` = 2.50 mph). Incline is a plain decimal integer. The motor responds to queries with the same bracket format. Pin 6 messages are terminated with `0xFF`; pin 3 messages are not.
+Speed is encoded as `mph × 100` in uppercase hex (`hmph:FA` = 2.50 mph). Incline is encoded as half-percent units in uppercase hex (`inc:A` = 5%, `inc:1E` = 15%). The motor responds to queries with the same bracket format. Pin 6 messages are terminated with `0xFF`; pin 3 messages are not.
 
 **RS-485 polarity**: the bus idles LOW (opposite of standard UART). All GPIO reads use `bb_serial_invert=1` and all writes use manually inverted DMA waveforms. See [`captures/RS485_DISCOVERY.md`](captures/RS485_DISCOVERY.md) for the full investigation.
 

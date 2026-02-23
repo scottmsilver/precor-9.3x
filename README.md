@@ -46,14 +46,14 @@ Query command: [  k  e  y  ]  0xFF
                5B 6B 65 79 5D FF
 ```
 
-A **set command** has a colon between key and value: `[inc:3]`. A **query** has no colon, just the key: `[amps]`. The `0xFF` byte terminates each message on pin 6 (console → motor). Pin 3 (motor → console) uses the same bracket format but omits the `0xFF`.
+A **set command** has a colon between key and value: `[inc:A]`. A **query** has no colon, just the key: `[amps]`. The `0xFF` byte terminates each message on pin 6 (console → motor). Pin 3 (motor → console) uses the same bracket format but omits the `0xFF`.
 
 #### Console → Motor (pin 6)
 
-The console sends a repeating cycle of 14 keys, grouped into 5 bursts with ~100ms pauses between them. Here's one full cycle as it appears on the wire, at 2.5 mph and incline 3:
+The console sends a repeating cycle of 14 keys, grouped into 5 bursts with ~100ms pauses between them. Here's one full cycle as it appears on the wire, at 2.5 mph and 5% incline:
 
 ```
-Burst 1:  [inc:3] FF  [hmph:FA] FF              ← incline + speed
+Burst 1:  [inc:A] FF  [hmph:FA] FF              ← incline + speed
           ~100ms pause
 Burst 2:  [amps] FF  [err] FF  [belt] FF        ← sensor queries
           ~100ms pause
@@ -89,7 +89,7 @@ The `hmph` key encodes speed as **mph × 100, in uppercase hex**:
 | 2.5 | 250 | `FA` | `[hmph:FA]` → `5B 68 6D 70 68 3A 46 41 5D FF` |
 | 6.0 | 600 | `258` | `[hmph:258]` → `5B 68 6D 70 68 3A 32 35 38 5D FF` |
 
-Incline is a plain decimal integer: `[inc:3]` means incline 3.
+Incline is encoded as **half-percent units in uppercase hex**: the integer percent is multiplied by 2, then converted to hex. For example, 5% incline = 10 half-percent = hex `A`, so `[inc:A]`. 15% = 30 = hex `1E`, so `[inc:1E]`.
 
 ### RS-485 Polarity — The Gotcha
 
