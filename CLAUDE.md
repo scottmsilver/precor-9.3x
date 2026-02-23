@@ -303,3 +303,4 @@ All C++ code in `src/` must follow these rules. The environment is resource-cons
 - **Beautiful and peaceful.** Warm muted palette, subtle texture, organic curves. No neon, no visual noise.
 - **Progressive disclosure.** Essential info (speed, time, current interval) is prominent. Settings, history, and debug are tucked away but accessible.
 - **Mobile/tablet first.** Touch targets 44px+, no hover-dependent interactions, responsive layout, haptic feedback.
+- **Dual-platform requirement.** All UI changes must be made in BOTH the web UI (`ui/`) and Android app (`android/`) unless explicitly told otherwise.
