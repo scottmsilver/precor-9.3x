@@ -78,7 +78,7 @@ The motor responds to queries with the same bracket format, no `0xFF`:
 
 Responses arrive interleaved with the console's bursts.
 
-#### Speed Encoding
+#### Speed and Incline Encoding
 
 The `hmph` key encodes speed as **mph × 100, in uppercase hex**:
 
@@ -89,13 +89,20 @@ The `hmph` key encodes speed as **mph × 100, in uppercase hex**:
 | 2.5 | 250 | `FA` | `[hmph:FA]` → `5B 68 6D 70 68 3A 46 41 5D FF` |
 | 6.0 | 600 | `258` | `[hmph:258]` → `5B 68 6D 70 68 3A 32 35 38 5D FF` |
 
-Incline is encoded as **half-percent units in uppercase hex**: the integer percent is multiplied by 2, then converted to hex. For example, 5% incline = 10 half-percent = hex `A`, so `[inc:A]`. 15% = 30 = hex `1E`, so `[inc:1E]`.
+The `inc` key encodes incline as **half-percent units in uppercase hex**. The incline percentage is multiplied by 2, then converted to hex. Because the unit is half-percent, odd hex values represent 0.5% increments:
+
+| Incline | Half-pct | Hex | Wire bytes |
+|---------|----------|-----|------------|
+| 0% | 0 | `0` | `[inc:0]` → `5B 69 6E 63 3A 30 5D FF` |
+| 0.5% | 1 | `1` | `[inc:1]` → `5B 69 6E 63 3A 31 5D FF` |
+| 5% | 10 | `A` | `[inc:A]` → `5B 69 6E 63 3A 41 5D FF` |
+| 15% | 30 | `1E` | `[inc:1E]` → `5B 69 6E 63 3A 31 45 5D FF` |
 
 ### RS-485 Polarity — The Gotcha
 
 These serial lines use RS-485 signaling, which idles LOW. Standard UART idles HIGH. If you connect a normal TTL serial adapter, you'll see what looks like binary garbage — it's actually the KV text with every bit flipped, and byte boundaries shifted because the start/stop bits are inverted too.
 
-The full forensic investigation is in [`RS485_DISCOVERY.md`](RS485_DISCOVERY.md). The short version: we spent days analyzing a "binary protocol" that turned out to be regular ASCII read with the wrong polarity.
+The full forensic investigation is in [`RS485_DISCOVERY.md`](src/captures/RS485_DISCOVERY.md). The short version: we spent days analyzing a "binary protocol" that turned out to be regular ASCII read with the wrong polarity.
 
 ---
 
