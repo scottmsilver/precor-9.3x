@@ -4,7 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from tests.helpers import make_program
+from tests.helpers import FakeClock, make_program
 
 from program_engine import ProgramState
 
@@ -34,10 +34,13 @@ class TestStart:
         on_change = AsyncMock()
         on_update = AsyncMock()
         tick_count = 0
+        clock = FakeClock()
+        loaded_prog._clock = clock
 
         async def mock_sleep(duration):
             nonlocal tick_count
             tick_count += 1
+            clock.advance(1)
             if tick_count >= 2:
                 loaded_prog.running = False
 
@@ -65,10 +68,13 @@ class TestStart:
         on_change = AsyncMock()
         on_update = AsyncMock()
         call_count = 0
+        clock = FakeClock()
+        loaded_prog._clock = clock
 
         async def mock_sleep(duration):
             nonlocal call_count
             call_count += 1
+            clock.advance(1)
             # Don't stop running — let the second start() call stop() while
             # the program is still "running" so on_change(0,0) fires.
 
@@ -97,10 +103,13 @@ class TestTick:
         on_change = AsyncMock()
         on_update = AsyncMock()
         tick_count = 0
+        clock = FakeClock()
+        loaded_prog._clock = clock
 
         async def mock_sleep(duration):
             nonlocal tick_count
             tick_count += 1
+            clock.advance(1)
             if tick_count >= 5:
                 loaded_prog.running = False
 
@@ -118,6 +127,8 @@ class TestTick:
     async def test_interval_transition(self):
         """3-interval program with short durations — verify transition."""
         prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
         prog.load(
             make_program(
                 [
@@ -134,6 +145,7 @@ class TestTick:
         async def mock_sleep(duration):
             nonlocal tick_count
             tick_count += 1
+            clock.advance(1)
             if tick_count >= 5:
                 prog.running = False
 
@@ -153,6 +165,8 @@ class TestTick:
     async def test_all_intervals_complete(self):
         """Short program completes, calls on_change(0,0)."""
         prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
         prog.load(
             make_program(
                 [
@@ -167,6 +181,7 @@ class TestTick:
         async def mock_sleep(duration):
             nonlocal tick_count
             tick_count += 1
+            clock.advance(1)
             if tick_count >= 5:
                 prog.running = False
 
@@ -190,11 +205,16 @@ class TestTick:
         never learned the program completed and the session timer ran forever.
         """
         prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
         prog.load(make_program([{"name": "A", "duration": 2, "speed": 3.0, "incline": 1}]))
         on_change = AsyncMock()
         on_update = AsyncMock()
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        async def mock_sleep(duration):
+            clock.advance(1)
+
+        with patch("asyncio.sleep", side_effect=mock_sleep):
             await prog.start(on_change, on_update)
             if prog._task:
                 try:
@@ -218,12 +238,16 @@ class TestPause:
         on_change = AsyncMock()
         on_update = AsyncMock()
         tick_count = 0
+        clock = FakeClock()
+        loaded_prog._clock = clock
 
         async def mock_sleep(duration):
             nonlocal tick_count
             tick_count += 1
+            clock.advance(1)
             if tick_count == 3:
                 loaded_prog.paused = True
+                loaded_prog._pause_start = clock()
             if tick_count >= 6:
                 loaded_prog.running = False
 
@@ -234,9 +258,12 @@ class TestPause:
                     await asyncio.wait_for(loaded_prog._task, timeout=2.0)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
-        # tick_loop: sleep then check paused then increment.
-        # Ticks 1-2 increment (paused=False), tick 3 sets paused so no
-        # increment on that iteration, ticks 4-5 paused, tick 6 exits.
+        # tick_loop: sleep then check paused then compute elapsed.
+        # Ticks 1-2 advance clock (paused=False), tick 3 sets paused so
+        # ticks 3-5 are paused (time passes but _pause_accumulated isn't
+        # updated since we set paused directly without toggle_pause),
+        # tick 6 exits. Since pause_start is set, elapsed = 6 - 0 - 0 = 6
+        # but paused ticks don't compute elapsed, so last computed = 2.
         assert loaded_prog.total_elapsed == 2
 
     @pytest.mark.asyncio
@@ -407,6 +434,8 @@ class TestFullProgramExecution:
         """Run a 3-interval program to completion, verify each interval
         sent the correct speed/incline and total elapsed is correct."""
         prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
         prog.load(
             make_program(
                 [
@@ -433,6 +462,7 @@ class TestFullProgramExecution:
         async def mock_sleep(duration):
             nonlocal tick_count
             tick_count += 1
+            clock.advance(1)
 
         with patch("asyncio.sleep", side_effect=mock_sleep):
             await prog.start(tracking_on_change, on_update)
@@ -467,6 +497,8 @@ class TestFullProgramExecution:
         """Verify interval_elapsed resets at each transition and
         total_elapsed accumulates correctly."""
         prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
         prog.load(
             make_program(
                 [
@@ -498,6 +530,7 @@ class TestFullProgramExecution:
         async def mock_sleep(d):
             nonlocal tick
             tick += 1
+            clock.advance(1)
 
         with patch("asyncio.sleep", side_effect=mock_sleep):
             await prog.start(on_change, on_update)
@@ -529,6 +562,8 @@ class TestFullProgramExecution:
         from unittest.mock import MagicMock
 
         prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
         prog.load(
             make_program(
                 [
@@ -555,6 +590,7 @@ class TestFullProgramExecution:
         async def mock_sleep(d):
             nonlocal tick
             tick += 1
+            clock.advance(1)
 
         with patch("asyncio.sleep", side_effect=mock_sleep):
             await prog.start(on_change, on_update)
@@ -576,6 +612,8 @@ class TestFullProgramExecution:
     async def test_encouragement_fires_at_milestones(self):
         """Verify encouragement messages appear at 25/50/75% milestones."""
         prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
         # 4 intervals of 10s each = 40s total
         prog.load(
             make_program(
@@ -601,6 +639,7 @@ class TestFullProgramExecution:
         async def mock_sleep(d):
             nonlocal tick
             tick += 1
+            clock.advance(1)
 
         with patch("asyncio.sleep", side_effect=mock_sleep):
             await prog.start(on_change, on_update)
@@ -720,6 +759,27 @@ class TestValidateInterval:
         validate_interval(iv)
         assert iv["incline"] == 15
 
+    def test_incline_float_half_step(self):
+        from program_engine import validate_interval
+
+        iv = {"speed": 3.0, "incline": 5.5, "duration": 60}
+        validate_interval(iv)
+        assert iv["incline"] == 5.5
+
+    def test_incline_snaps_to_half_step(self):
+        from program_engine import validate_interval
+
+        iv = {"speed": 3.0, "incline": 5.3, "duration": 60}
+        validate_interval(iv)
+        assert iv["incline"] == 5.5
+
+    def test_incline_snaps_down(self):
+        from program_engine import validate_interval
+
+        iv = {"speed": 3.0, "incline": 5.2, "duration": 60}
+        validate_interval(iv)
+        assert iv["incline"] == 5.0
+
     def test_clamps_duration(self):
         from program_engine import validate_interval
 
@@ -746,3 +806,55 @@ class TestValidateInterval:
         iv = {"speed": 3.0, "incline": 0, "duration": 60}
         validate_interval(iv, index=2)
         assert iv["name"] == "Interval 3"
+
+
+class TestWallClockTiming:
+    """Tests specific to the wall-clock timing fix (59:18 bug)."""
+
+    @pytest.mark.asyncio
+    async def test_10s_program_completes_at_10(self):
+        """A 10-second single-interval program must end with total_elapsed == 10."""
+        prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
+        prog.load(make_program([{"name": "Test", "duration": 10, "speed": 3.0, "incline": 0}]))
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+
+        async def mock_sleep(d):
+            clock.advance(1)
+
+        with patch("asyncio.sleep", side_effect=mock_sleep):
+            await prog.start(on_change, on_update)
+            if prog._task:
+                try:
+                    await asyncio.wait_for(prog._task, timeout=2.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+
+        assert prog.completed is True
+        assert prog.total_elapsed == 10
+
+    @pytest.mark.asyncio
+    async def test_drift_resilience(self):
+        """Simulate sleep overshoot (1.007s per tick) — wall clock still accurate."""
+        prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
+        prog.load(make_program([{"name": "Test", "duration": 10, "speed": 3.0, "incline": 0}]))
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+
+        async def mock_sleep(d):
+            clock.advance(1.007)  # realistic overshoot
+
+        with patch("asyncio.sleep", side_effect=mock_sleep):
+            await prog.start(on_change, on_update)
+            if prog._task:
+                try:
+                    await asyncio.wait_for(prog._task, timeout=2.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+
+        assert prog.completed is True
+        assert prog.total_elapsed == 10

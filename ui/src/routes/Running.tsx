@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useLocation } from 'wouter';
 import { useSession } from '../state/useSession';
 import { useProgram } from '../state/useProgram';
-import { useTreadmillState } from '../state/TreadmillContext';
+import { useTreadmillState, registerEncouragement } from '../state/TreadmillContext';
 import { useVoiceContext } from '../state/VoiceContext';
 import * as api from '../state/api';
 import { fmtDur } from '../utils/formatters';
@@ -36,6 +36,23 @@ export default function Running(): React.ReactElement {
   const [durationEditOpen, setDurationEditOpen] = useState(false);
 
   const isManual = pgm.program?.manual === true;
+
+  // --- Bounce encouragement state ---
+  const [encouragement, setEncouragement] = useState<string | null>(null);
+  const encouragementTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // Register encouragement callback so TreadmillContext can push messages here
+  useEffect(() => {
+    registerEncouragement((msg: string) => {
+      clearTimeout(encouragementTimer.current);
+      setEncouragement(msg);
+      encouragementTimer.current = setTimeout(() => setEncouragement(null), 4000);
+    });
+    return () => {
+      clearTimeout(encouragementTimer.current);
+      registerEncouragement(() => {});
+    };
+  }, []);
 
   // Delay the idle→HUD visual swap for manual programs so the user can
   // finish tapping speed/incline without the layout shifting under them.
@@ -119,8 +136,8 @@ export default function Running(): React.ReactElement {
         textAlign: 'center', padding: '12px 16px 4px', flexShrink: 0,
         position: 'relative',
       }}>
-        {/* Home & Mic in header when active */}
-        {isActive && (
+        {/* Home & Mic in header when active or completed */}
+        {(isActive || pgm.completed) && (
           <>
             <div style={{ position: 'absolute', top: 6, left: 16, zIndex: 2 }}>
               {homeButton}
@@ -146,26 +163,51 @@ export default function Running(): React.ReactElement {
           transition={spring}
           style={{ overflow: 'hidden', position: 'relative', zIndex: 1 }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: isActive ? 96 : 0 }}>
             {isActive && (
-              <motion.div
-                className="hero-time font-timer"
-                initial={{ opacity: 0, scale: 0.8, y: 8 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                transition={springBouncy}
-                onClick={handleTimeTap}
-                style={{
-                  fontSize: 96,
-                  fontWeight: 600,
-                  lineHeight: 1,
-                  letterSpacing: '-0.02em',
-                  color: 'var(--text)',
-                  cursor: isManual && pgm.running ? 'pointer' : 'default',
-                  WebkitTapHighlightColor: 'transparent',
-                }}
-              >
-                {sess.elapsedDisplay}
-              </motion.div>
+              <AnimatePresence mode="wait">
+                {encouragement ? (
+                  <motion.div
+                    key="encouragement"
+                    className="font-timer"
+                    initial={{ opacity: 0, scale: 0.85 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.85 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 18 }}
+                    style={{
+                      fontSize: 28,
+                      fontWeight: 600,
+                      lineHeight: 1.3,
+                      color: 'var(--green)',
+                      textAlign: 'center',
+                      padding: '16px 8px',
+                    }}
+                  >
+                    {encouragement}
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="timer"
+                    className="hero-time font-timer"
+                    initial={{ opacity: 0, scale: 0.85 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.85 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 18 }}
+                    onClick={handleTimeTap}
+                    style={{
+                      fontSize: 96,
+                      fontWeight: 600,
+                      lineHeight: 1,
+                      letterSpacing: '-0.02em',
+                      color: 'var(--text)',
+                      cursor: isManual && pgm.running ? 'pointer' : 'default',
+                      WebkitTapHighlightColor: 'transparent',
+                    }}
+                  >
+                    {sess.elapsedDisplay}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             )}
           </div>
         </motion.div>

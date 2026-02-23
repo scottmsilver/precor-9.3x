@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 
 from google import genai
 from google.genai import types
@@ -80,7 +81,7 @@ Output a JSON object with these fields:
   - "name": short label (e.g. "Warmup", "Sprint", "Hill Climb", "Recovery", "Cooldown")
   - "duration": seconds (integer, min 10)
   - "speed": mph (float, 0.5 to 12.0)
-  - "incline": percent (integer, 0 to 15)
+  - "incline": percent (0 to 15, 0.5 steps)
 
 Rules:
 - Always start with a warmup (2-5 min, low speed/incline)
@@ -113,7 +114,7 @@ def validate_interval(iv, index=None):
             label = f"Interval {index}" if index is not None else "Interval"
             raise ValueError(f"{label} missing '{field}'")
     iv["speed"] = round(max(MIN_SPEED, min(MAX_SPEED, float(iv["speed"]))), 1)
-    iv["incline"] = max(0, min(MAX_INCLINE, int(iv["incline"])))
+    iv["incline"] = max(0, min(MAX_INCLINE, round(float(iv["incline"]) * 2) / 2))
     iv["duration"] = max(MIN_DURATION, int(iv["duration"]))
     if "name" not in iv:
         iv["name"] = f"Interval {index + 1}" if index is not None else "Added"
@@ -137,6 +138,12 @@ class ProgramState:
         self._encouragement_milestones = set()
         self._last_encouragement_interval = -3
         self._pending_encouragement = None
+        # Wall-clock timing fields
+        self._clock = time.monotonic  # replaceable for testing
+        self._loop_start = 0.0
+        self._pause_accumulated = 0.0
+        self._pause_start = 0.0
+        self._interval_start_elapsed = 0
 
     @property
     def total_duration(self):
@@ -182,6 +189,10 @@ class ProgramState:
         self._encouragement_milestones = set()
         self._last_encouragement_interval = -3
         self._pending_encouragement = None
+        self._loop_start = 0.0
+        self._pause_accumulated = 0.0
+        self._pause_start = 0.0
+        self._interval_start_elapsed = 0
 
     async def start(self, on_change, on_update):
         await self.stop()
@@ -198,6 +209,10 @@ class ProgramState:
         self._encouragement_milestones = set()
         self._last_encouragement_interval = -3
         self._pending_encouragement = None
+        self._loop_start = self._clock()
+        self._pause_accumulated = 0.0
+        self._pause_start = 0.0
+        self._interval_start_elapsed = 0
         iv = self.current_iv
         if iv and self._on_change:
             await self._on_change(iv["speed"], iv["incline"])
@@ -227,23 +242,37 @@ class ProgramState:
         self._encouragement_milestones = set()
         self._last_encouragement_interval = -3
         self._pending_encouragement = None
+        self._loop_start = 0.0
+        self._pause_accumulated = 0.0
+        self._pause_start = 0.0
+        self._interval_start_elapsed = 0
         if was_running and self._on_change:
             await self._on_change(0, 0)
         await self._broadcast()
 
     async def toggle_pause(self):
-        self.paused = not self.paused
-        # On resume, re-apply current interval's speed/incline
-        if not self.paused and self.running:
-            iv = self.current_iv
-            if iv and self._on_change:
-                await self._on_change(iv["speed"], iv["incline"])
+        if not self.paused:
+            # Pausing: record when pause started
+            self.paused = True
+            self._pause_start = self._clock()
+        else:
+            # Resuming: accumulate pause duration
+            self.paused = False
+            if self._pause_start > 0:
+                self._pause_accumulated += self._clock() - self._pause_start
+                self._pause_start = 0.0
+            # Re-apply current interval's speed/incline
+            if self.running:
+                iv = self.current_iv
+                if iv and self._on_change:
+                    await self._on_change(iv["speed"], iv["incline"])
         await self._broadcast()
 
     async def skip(self):
         if not self.running:
             return
         self.current_interval += 1
+        self._interval_start_elapsed = self.total_elapsed
         self.interval_elapsed = 0
         iv = self.current_iv
         if iv:
@@ -258,6 +287,7 @@ class ProgramState:
             return
         if self.current_interval > 0:
             self.current_interval -= 1
+        self._interval_start_elapsed = self.total_elapsed
         self.interval_elapsed = 0
         iv = self.current_iv
         if iv and self._on_change:
@@ -290,7 +320,7 @@ class ProgramState:
         if remaining < 1:
             return False
         # Same values — no split needed
-        if abs(iv["speed"] - speed) < 0.05 and iv["incline"] == incline:
+        if abs(iv["speed"] - speed) < 0.05 and abs(iv["incline"] - incline) < 0.05:
             return False
         # Trim current interval to what's been completed
         iv["duration"] = elapsed
@@ -391,8 +421,10 @@ class ProgramState:
                     await self._broadcast()
                     continue
 
-                self.interval_elapsed += 1
-                self.total_elapsed += 1
+                # Wall-clock elapsed (excluding paused time)
+                real_elapsed = self._clock() - self._loop_start - self._pause_accumulated
+                self.total_elapsed = int(real_elapsed)
+                self.interval_elapsed = self.total_elapsed - self._interval_start_elapsed
 
                 iv = self.current_iv
                 if not iv:
@@ -401,6 +433,7 @@ class ProgramState:
 
                 if self.interval_elapsed >= iv["duration"]:
                     self.current_interval += 1
+                    self._interval_start_elapsed = self.total_elapsed
                     self.interval_elapsed = 0
                     nxt = self.current_iv
                     if nxt:
@@ -466,7 +499,7 @@ You can wrap a single important word in <<double angle brackets>> to give it an 
 
 Tools:
 - set_speed: change speed (mph). Use 0 to stop belt.
-- set_incline: change incline (0-15%)
+- set_incline: change incline (0-15%, 0.5 steps)
 - start_workout: create & start an interval program from a description
 - stop_treadmill: emergency stop (speed 0, incline 0, end program)
 - pause_program / resume_program: pause/resume interval programs
@@ -508,7 +541,7 @@ TOOL_DECLARATIONS = [
                 "description": "Set treadmill incline grade",
                 "parameters": {
                     "type": "OBJECT",
-                    "properties": {"incline": {"type": "NUMBER", "description": "Incline percent (0-15)"}},
+                    "properties": {"incline": {"type": "NUMBER", "description": "Incline percent (0-15, 0.5 steps)"}},
                     "required": ["incline"],
                 },
             },
@@ -610,7 +643,7 @@ async def call_gemini(contents, system_prompt, tools=None, api_key=None, generat
 INTENT_TOOL_SCHEMA = json.dumps(
     [
         {"name": "set_speed", "args": {"mph": "number (e.g. 3.5)"}},
-        {"name": "set_incline", "args": {"incline": "integer 0-15"}},
+        {"name": "set_incline", "args": {"incline": "number 0-15 (0.5 steps)"}},
         {"name": "start_workout", "args": {"description": "string"}},
         {"name": "stop_treadmill", "args": {}},
         {"name": "pause", "args": {}},
@@ -687,7 +720,7 @@ async def extract_intent_from_text(text: str, already_executed: list[str] | None
             if name == "set_speed" and "mph" in args:
                 args["mph"] = float(args["mph"])
             if name == "set_incline" and "incline" in args:
-                args["incline"] = int(float(args["incline"]))
+                args["incline"] = round(float(args["incline"]) * 2) / 2
             actions.append({"name": name, "args": args})
     except json.JSONDecodeError:
         # Regex fallback for malformed JSON
@@ -704,7 +737,7 @@ async def extract_intent_from_text(text: str, already_executed: list[str] | None
             elif name == "set_incline":
                 inc_m = re.search(r'"incline"\s*:\s*([\d.]+)', region)
                 if inc_m:
-                    args["incline"] = int(float(inc_m.group(1)))
+                    args["incline"] = round(float(inc_m.group(1)) * 2) / 2
             actions.append({"name": name, "args": args})
 
     return actions

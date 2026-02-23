@@ -253,6 +253,11 @@ const ToastContext = createContext<ToastFn>(() => {});
 let _toastFn: ToastFn = () => {};
 export function registerToast(fn: ToastFn) { _toastFn = fn; }
 
+// --- Encouragement callback (bounce animation in Running.tsx) ---
+type EncouragementFn = (message: string) => void;
+let _encouragementFn: EncouragementFn = () => {};
+export function registerEncouragement(fn: EncouragementFn) { _encouragementFn = fn; }
+
 // --- Provider ---
 
 export function TreadmillProvider({ children }: { children: React.ReactNode }) {
@@ -307,7 +312,7 @@ export function TreadmillProvider({ children }: { children: React.ReactNode }) {
             break;
           case 'program':
             dispatch({ type: 'PROGRAM_UPDATE', payload: msg });
-            if (msg.encouragement) showToast(msg.encouragement);
+            if (msg.encouragement) _encouragementFn(msg.encouragement);
             break;
           case 'connection':
             dispatch({ type: 'CONNECTION_UPDATE', payload: msg });
@@ -364,7 +369,7 @@ export function TreadmillProvider({ children }: { children: React.ReactNode }) {
     },
     adjustIncline: (delta: number) => {
       const cur = stateRef.current.status.emuIncline;
-      const newInc = Math.max(0, Math.min(cur + delta, 99));
+      const newInc = Math.max(0, Math.min(Math.round((cur + delta) * 2) / 2, 99));
       dispatch({ type: 'OPTIMISTIC_INCLINE', payload: newInc });
       debouncedSetIncline(newInc);
     },
