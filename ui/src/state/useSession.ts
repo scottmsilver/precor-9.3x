@@ -3,7 +3,7 @@ import { useTreadmillState } from './TreadmillContext';
 import { fmtDur, paceDisplay } from '../utils/formatters';
 
 export function useSession() {
-  const { session, status } = useTreadmillState();
+  const { session, status, program } = useTreadmillState();
 
   // --- Local clock interpolation ---
   // Server sends elapsed at 1Hz. We interpolate locally at ~10Hz
@@ -30,7 +30,7 @@ export function useSession() {
       tickRef.current = undefined;
     }
 
-    if (!session.active) {
+    if (!session.active || program.paused) {
       setLocalElapsed(serverElapsed);
       return;
     }
@@ -49,7 +49,7 @@ export function useSession() {
         tickRef.current = undefined;
       }
     };
-  }, [session.active, serverElapsed]);
+  }, [session.active, program.paused, serverElapsed]);
 
   return useMemo(() => {
     const speedMph = status.emulate

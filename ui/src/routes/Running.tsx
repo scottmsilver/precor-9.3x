@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useLocation } from 'wouter';
 import { useSession } from '../state/useSession';
 import { useProgram } from '../state/useProgram';
-import { useTreadmillState, registerEncouragement } from '../state/TreadmillContext';
+import { useTreadmillState, registerBounceMessage } from '../state/TreadmillContext';
 import { useVoiceContext } from '../state/VoiceContext';
 import * as api from '../state/api';
 import { fmtDur } from '../utils/formatters';
@@ -41,16 +41,16 @@ export default function Running(): React.ReactElement {
   const [encouragement, setEncouragement] = useState<string | null>(null);
   const encouragementTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  // Register encouragement callback so TreadmillContext can push messages here
+  // Register bounce message callback so anyone can push messages to the timer area
   useEffect(() => {
-    registerEncouragement((msg: string) => {
+    registerBounceMessage((msg: string, durationMs?: number) => {
       clearTimeout(encouragementTimer.current);
       setEncouragement(msg);
-      encouragementTimer.current = setTimeout(() => setEncouragement(null), 4000);
+      encouragementTimer.current = setTimeout(() => setEncouragement(null), durationMs ?? 4000);
     });
     return () => {
       clearTimeout(encouragementTimer.current);
-      registerEncouragement(() => {});
+      registerBounceMessage(() => {});
     };
   }, []);
 

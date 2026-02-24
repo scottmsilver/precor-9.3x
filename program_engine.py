@@ -157,6 +157,12 @@ class ProgramState:
             return None
         return self.program["intervals"][self.current_interval]
 
+    def _cumulative_at(self, interval_idx):
+        """Cumulative duration at start of interval."""
+        if not self.program:
+            return 0
+        return sum(iv["duration"] for iv in self.program["intervals"][:interval_idx])
+
     def to_dict(self):
         d = {
             "type": "program",
@@ -268,14 +274,24 @@ class ProgramState:
                     await self._on_change(iv["speed"], iv["incline"])
         await self._broadcast()
 
+    def _effective_pause(self):
+        """Total pause duration including any in-progress pause."""
+        total = self._pause_accumulated
+        if self.paused and self._pause_start > 0:
+            total += self._clock() - self._pause_start
+        return total
+
     async def skip(self):
         if not self.running:
             return
         self.current_interval += 1
-        self._interval_start_elapsed = self.total_elapsed
-        self.interval_elapsed = 0
         iv = self.current_iv
         if iv:
+            target = self._cumulative_at(self.current_interval)
+            self._loop_start = self._clock() - self._effective_pause() - target
+            self._interval_start_elapsed = target
+            self.total_elapsed = target
+            self.interval_elapsed = 0
             if self._on_change:
                 await self._on_change(iv["speed"], iv["incline"])
         else:
@@ -287,7 +303,10 @@ class ProgramState:
             return
         if self.current_interval > 0:
             self.current_interval -= 1
-        self._interval_start_elapsed = self.total_elapsed
+        target = self._cumulative_at(self.current_interval)
+        self._loop_start = self._clock() - self._effective_pause() - target
+        self._interval_start_elapsed = target
+        self.total_elapsed = target
         self.interval_elapsed = 0
         iv = self.current_iv
         if iv and self._on_change:
@@ -371,6 +390,7 @@ class ProgramState:
     async def _finish(self):
         self._cancel_task()
         self.running = False
+        self.paused = False
         self.completed = True
         if self._on_change:
             await self._on_change(0, 0)

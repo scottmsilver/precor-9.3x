@@ -253,10 +253,15 @@ const ToastContext = createContext<ToastFn>(() => {});
 let _toastFn: ToastFn = () => {};
 export function registerToast(fn: ToastFn) { _toastFn = fn; }
 
-// --- Encouragement callback (bounce animation in Running.tsx) ---
-type EncouragementFn = (message: string) => void;
-let _encouragementFn: EncouragementFn = () => {};
-export function registerEncouragement(fn: EncouragementFn) { _encouragementFn = fn; }
+// --- Bounce message (bounce animation in Running.tsx timer area) ---
+// Used for encouragement messages from server AND local UI messages (skip, etc.)
+type BounceMessageFn = (message: string, durationMs?: number) => void;
+let _bounceMessageFn: BounceMessageFn = () => {};
+export function registerBounceMessage(fn: BounceMessageFn) { _bounceMessageFn = fn; }
+export function showBounceMessage(msg: string, durationMs?: number) { _bounceMessageFn(msg, durationMs); }
+
+// Back-compat alias
+export function registerEncouragement(fn: BounceMessageFn) { _bounceMessageFn = fn; }
 
 // --- Provider ---
 
@@ -312,7 +317,7 @@ export function TreadmillProvider({ children }: { children: React.ReactNode }) {
             break;
           case 'program':
             dispatch({ type: 'PROGRAM_UPDATE', payload: msg });
-            if (msg.encouragement) _encouragementFn(msg.encouragement);
+            if (msg.encouragement) _bounceMessageFn(msg.encouragement);
             break;
           case 'connection':
             dispatch({ type: 'CONNECTION_UPDATE', payload: msg });

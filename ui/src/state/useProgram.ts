@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useTreadmillState } from './TreadmillContext';
 import type { Interval } from './types';
 
-const W = 400, H = 140, PAD = 10, MAX_INC = 15;
+const W = 400, H = 140, PAD = 10;
 
 /** Fritsch-Carlson monotone cubic interpolation — never overshoots */
 function monotoneCubicPaths(
@@ -171,19 +171,35 @@ export function useProgram() {
     let maxInc = 0;
     if (dur) {
       for (const iv of intervals) {
+        if (iv.incline > maxInc) maxInc = iv.incline;
+      }
+    }
+    // Autoscale: Y-axis max = smallest nice tick ceiling above maxInc
+    const yAxisMax = maxInc <= 0 ? 5 : maxInc <= 5 ? 5 : maxInc <= 10 ? 10 : 15;
+    if (dur) {
+      for (const iv of intervals) {
         const segW = (iv.duration / dur) * W;
         const midX = x + segW / 2;
-        const y = H - PAD - (iv.incline / MAX_INC) * (H - PAD * 2);
+        const y = H - PAD - (iv.incline / yAxisMax) * (H - PAD * 2);
         points.push({ x: midX, y });
-        if (iv.incline > maxInc) maxInc = iv.incline;
         x += segW;
       }
+    }
+
+    const intervalBoundaryXs: number[] = [];
+    if (dur && intervals.length > 0) {
+      let cumX = 0;
+      for (const iv of intervals) {
+        intervalBoundaryXs.push(cumX);
+        cumX += (iv.duration / dur) * W;
+      }
+      intervalBoundaryXs.push(W);
     }
 
     const t = computeTangents(points);
     const { outline, area } = monotoneCubicPaths(points);
 
-    return { elevOutline: outline, elevAreaPath: area, pts: points, tangents: t, totalDur: dur, maxIncline: maxInc };
+    return { elevOutline: outline, elevAreaPath: area, pts: points, tangents: t, totalDur: dur, maxIncline: maxInc, yAxisMax, intervalBoundaryXs };
   }, [intervals, totalDuration]);
 
   // Dynamic position — recomputes every tick
@@ -222,5 +238,7 @@ export function useProgram() {
     elevPosY,
     intervalCount: intervals.length,
     maxIncline,
+    yAxisMax,
+    intervalBoundaryXs,
   };
 }

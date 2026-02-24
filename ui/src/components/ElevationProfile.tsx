@@ -9,10 +9,8 @@ const ML = 28, MR = 4, MT = 4, MB = 18;
 const VB_W = ML + W + MR;
 const VB_H = MT + H + MB;
 
-const MAX_INC = 15;
-
-function inclineY(inc: number): number {
-  return MT + H - PAD - (inc / MAX_INC) * (H - PAD * 2);
+function inclineY(inc: number, yMax: number): number {
+  return MT + H - PAD - (inc / yMax) * (H - PAD * 2);
 }
 
 /** D3-style "nice numbers" tick generation for time axis */
@@ -95,6 +93,7 @@ const ElevationProfile = memo(function ElevationProfile({ onSingleTap }: Elevati
   const actions = useTreadmillActions();
 
   const timeTicks = computeTimeTicks(pgm.totalDuration);
+  const yMax = pgm.yAxisMax;
   const inclineTicks = computeInclineTicks(pgm.maxIncline);
 
   // Position dot as percentage
@@ -175,13 +174,13 @@ const ElevationProfile = memo(function ElevationProfile({ onSingleTap }: Elevati
 
         {/* Y-axis grid lines */}
         {inclineTicks.map(inc => (
-          <line key={inc} x1={ML} y1={inclineY(inc)} x2={ML + W} y2={inclineY(inc)}
+          <line key={inc} x1={ML} y1={inclineY(inc, yMax)} x2={ML + W} y2={inclineY(inc, yMax)}
             stroke="rgba(232,228,223,0.12)" strokeWidth="0.5" strokeDasharray="3,4" />
         ))}
 
         {/* Y-axis tick marks — extend left from axis line */}
         {inclineTicks.map(inc => (
-          <line key={`ytick-${inc}`} x1={ML - TICK} y1={inclineY(inc)} x2={ML} y2={inclineY(inc)}
+          <line key={`ytick-${inc}`} x1={ML - TICK} y1={inclineY(inc, yMax)} x2={ML} y2={inclineY(inc, yMax)}
             stroke="rgba(232,228,223,0.25)" strokeWidth="1" />
         ))}
 
@@ -219,6 +218,35 @@ const ElevationProfile = memo(function ElevationProfile({ onSingleTap }: Elevati
                     strokeLinejoin="round" strokeLinecap="round" clipPath="url(#elev-done)" />
             </>
           )}
+          {/* Step indicator dots */}
+          {pgm.intervalBoundaryXs.length > 2 && (() => {
+            const trackY = H - 2;
+            return (
+              <>
+                {/* Track line */}
+                <line x1={0} y1={trackY} x2={W} y2={trackY}
+                  stroke="rgba(232,228,223,0.1)" strokeWidth="1" />
+                {/* Dots at interval boundaries (skip last = end) */}
+                {pgm.intervalBoundaryXs.slice(0, -1).map((bx, i) => {
+                  const isCompleted = i < pgm.currentInterval;
+                  const isCurrent = i === pgm.currentInterval;
+                  if (isCurrent) {
+                    return (
+                      <React.Fragment key={i}>
+                        <circle cx={bx} cy={trackY} r={6} fill="rgba(107,200,155,0.15)" />
+                        <circle cx={bx} cy={trackY} r={3.5} fill="rgba(107,200,155,1)" />
+                      </React.Fragment>
+                    );
+                  }
+                  if (isCompleted) {
+                    return <circle key={i} cx={bx} cy={trackY} r={2.5} fill="rgba(107,200,155,0.8)" />;
+                  }
+                  return <circle key={i} cx={bx} cy={trackY} r={2.5}
+                    fill="none" stroke="rgba(232,228,223,0.3)" strokeWidth="1" />;
+                })}
+              </>
+            );
+          })()}
         </g>
       </svg>
 
@@ -226,7 +254,7 @@ const ElevationProfile = memo(function ElevationProfile({ onSingleTap }: Elevati
 
       {/* Y-axis incline labels */}
       {inclineTicks.map(inc => {
-        const pctY = (inclineY(inc) / VB_H) * 100;
+        const pctY = (inclineY(inc, yMax) / VB_H) * 100;
         return (
           <div key={inc} style={{
             ...labelStyle,

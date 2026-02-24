@@ -288,6 +288,21 @@ class TestSkip:
         on_change.assert_called_with(6.0, 3)
 
     @pytest.mark.asyncio
+    async def test_skip_jumps_total_elapsed(self, loaded_prog):
+        """After skip, total_elapsed should jump to the cumulative duration of skipped intervals."""
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+        loaded_prog.running = True
+        loaded_prog._on_change = on_change
+        loaded_prog._on_update = on_update
+        # Default program: Warmup(60s), Run(120s), Cooldown(60s)
+        # Skip from interval 0 → interval 1, total_elapsed should be 60
+        await loaded_prog.skip()
+        assert loaded_prog.current_interval == 1
+        assert loaded_prog.total_elapsed == 60
+        assert loaded_prog.interval_elapsed == 0
+
+    @pytest.mark.asyncio
     async def test_skip_last_finishes(self):
         prog = ProgramState()
         prog.load(
@@ -338,6 +353,26 @@ class TestPrev:
         on_change.assert_called_with(2.0, 0)  # Warmup, restarted
 
     @pytest.mark.asyncio
+    async def test_prev_rewinds_total_elapsed(self):
+        """After prev, total_elapsed should rewind to the start of the previous interval."""
+        prog = ProgramState()
+        prog.load(make_program())
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+        prog.running = True
+        prog._on_change = on_change
+        prog._on_update = on_update
+        # Start at interval 2 (Cooldown, cumulative=180s)
+        prog.current_interval = 2
+        prog.total_elapsed = 200
+        prog.interval_elapsed = 20
+        await prog.prev()
+        # Should go back to interval 1 (Run), total_elapsed = 60
+        assert prog.current_interval == 1
+        assert prog.total_elapsed == 60
+        assert prog.interval_elapsed == 0
+
+    @pytest.mark.asyncio
     async def test_prev_when_not_running_is_noop(self, loaded_prog):
         on_change = AsyncMock()
         loaded_prog._on_change = on_change
@@ -361,6 +396,111 @@ class TestPrev:
         await loaded_prog.prev()
         assert loaded_prog.current_interval == 0
         assert loaded_prog.interval_elapsed == 0
+
+
+class TestSkipWhilePaused:
+    @pytest.mark.asyncio
+    async def test_skip_while_paused_preserves_timing(self):
+        """Skip during a pause must not cause timer drift on resume.
+
+        Regression: _pause_accumulated didn't include the in-progress pause,
+        so _loop_start was miscalculated and the timer jumped on resume.
+        """
+        prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
+        prog.load(
+            make_program(
+                [
+                    {"name": "A", "duration": 60, "speed": 2.0, "incline": 0},
+                    {"name": "B", "duration": 120, "speed": 6.0, "incline": 3},
+                    {"name": "C", "duration": 60, "speed": 2.0, "incline": 0},
+                ]
+            )
+        )
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+        tick_count = 0
+
+        async def mock_sleep(duration):
+            nonlocal tick_count
+            tick_count += 1
+            clock.advance(1)
+            if tick_count == 10:
+                # Pause at t=10
+                await prog.toggle_pause()
+            if tick_count == 15:
+                # Skip while paused (5s into pause)
+                await prog.skip()
+            if tick_count == 20:
+                # Resume after 10s of pause
+                await prog.toggle_pause()
+            if tick_count >= 25:
+                prog.running = False
+
+        with patch("asyncio.sleep", side_effect=mock_sleep):
+            await prog.start(on_change, on_update)
+            if prog._task:
+                try:
+                    await asyncio.wait_for(prog._task, timeout=2.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+
+        # After skip from A→B, total_elapsed should be cumulative_at(1) = 60
+        # After resume and 5 more non-paused ticks, total_elapsed ≈ 65
+        # Key check: elapsed should NOT include the 10s of paused time
+        assert prog.current_interval == 1
+        assert 63 <= prog.total_elapsed <= 67, f"Expected ~65 (60 + 5 ticks after resume), got {prog.total_elapsed}"
+
+    @pytest.mark.asyncio
+    async def test_prev_while_paused_preserves_timing(self):
+        """Prev during a pause must not cause timer drift on resume."""
+        prog = ProgramState()
+        clock = FakeClock()
+        prog._clock = clock
+        prog.load(
+            make_program(
+                [
+                    {"name": "A", "duration": 60, "speed": 2.0, "incline": 0},
+                    {"name": "B", "duration": 120, "speed": 6.0, "incline": 3},
+                    {"name": "C", "duration": 60, "speed": 2.0, "incline": 0},
+                ]
+            )
+        )
+        on_change = AsyncMock()
+        on_update = AsyncMock()
+
+        # Manually set up at interval 2 with some elapsed time
+        prog.running = True
+        prog._on_change = on_change
+        prog._on_update = on_update
+        prog.current_interval = 2
+        prog.total_elapsed = 200
+        prog._interval_start_elapsed = 180
+        prog.interval_elapsed = 20
+        prog._loop_start = clock() - 200  # simulated start
+
+        # Pause
+        prog.paused = True
+        prog._pause_start = clock()
+
+        # Advance clock during pause
+        clock.advance(10)
+
+        # Prev while paused
+        await prog.prev()
+
+        # Should be at interval 1, total_elapsed = 60
+        assert prog.current_interval == 1
+        assert prog.total_elapsed == 60
+        assert prog.interval_elapsed == 0
+
+        # Resume and check clock is consistent
+        await prog.toggle_pause()
+        # After resume, _loop_start should be set so that
+        # real_elapsed = clock() - _loop_start - _pause_accumulated = 60
+        real_elapsed = clock() - prog._loop_start - prog._pause_accumulated
+        assert 59 <= real_elapsed <= 61, f"Expected real_elapsed ~60 after resume, got {real_elapsed}"
 
 
 class TestExtend:

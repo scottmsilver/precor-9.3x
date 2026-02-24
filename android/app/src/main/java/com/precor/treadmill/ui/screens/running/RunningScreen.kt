@@ -145,8 +145,9 @@ fun RunningScreen(
                                 initialScale = 0.85f,
                             ) + fadeIn()) togetherWith (scaleOut(
                                 targetScale = 0.85f,
-                            ) + fadeOut())
+                            ) + fadeOut()) using SizeTransform(clip = false)
                         },
+                        contentAlignment = Alignment.Center,
                         label = "hero-bounce",
                     ) { msg ->
                         if (msg != null) {
@@ -157,7 +158,9 @@ fun RunningScreen(
                                 fontWeight = FontWeight.SemiBold,
                                 fontFamily = TimerFontFamily,
                                 textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
                             )
                         } else {
                             Text(
@@ -432,8 +435,9 @@ private fun RunningScreenLandscape(
                                     initialScale = 0.85f,
                                 ) + fadeIn()) togetherWith (scaleOut(
                                     targetScale = 0.85f,
-                                ) + fadeOut())
+                                ) + fadeOut()) using SizeTransform(clip = false)
                             },
+                            contentAlignment = Alignment.Center,
                             label = "hero-bounce-landscape",
                         ) { msg ->
                             if (msg != null) {
@@ -444,7 +448,9 @@ private fun RunningScreenLandscape(
                                     fontWeight = FontWeight.SemiBold,
                                     fontFamily = TimerFontFamily,
                                     textAlign = TextAlign.Center,
-                                    modifier = Modifier.padding(vertical = 12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 12.dp),
                                 )
                             } else {
                                 Text(

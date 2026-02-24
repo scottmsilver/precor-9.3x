@@ -97,7 +97,9 @@ data class DerivedProgram(
     val elevPosX: Float,
     val elevPosY: Float,
     val maxIncline: Double,
+    val yAxisMax: Float,
     val intervalCount: Int,
+    val intervalBoundaryXs: FloatArray,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -105,19 +107,24 @@ data class DerivedProgram(
         return program == other.program && running == other.running && paused == other.paused &&
                 completed == other.completed && currentInterval == other.currentInterval &&
                 intervalElapsed == other.intervalElapsed && totalElapsed == other.totalElapsed &&
-                totalDuration == other.totalDuration && points == other.points &&
+                totalDuration == other.totalDuration && currentIv == other.currentIv &&
+                nextIv == other.nextIv && ivRemaining == other.ivRemaining &&
+                totalRemaining == other.totalRemaining && ivPct == other.ivPct &&
+                timelinePos == other.timelinePos && points == other.points &&
                 tangents.contentEquals(other.tangents) && elevPosX == other.elevPosX &&
-                elevPosY == other.elevPosY && maxIncline == other.maxIncline
+                elevPosY == other.elevPosY && maxIncline == other.maxIncline && yAxisMax == other.yAxisMax &&
+                intervalCount == other.intervalCount &&
+                intervalBoundaryXs.contentEquals(other.intervalBoundaryXs)
     }
 
-    override fun hashCode(): Int = program.hashCode() + running.hashCode() + totalElapsed.hashCode()
+    override fun hashCode(): Int = program.hashCode() + running.hashCode() + totalElapsed.hashCode() +
+            currentInterval.hashCode() + intervalCount.hashCode()
 }
 
 // --- Elevation profile constants (match useProgram.ts) ---
 private const val ELEV_W = 400f
 private const val ELEV_H = 140f
 private const val ELEV_PAD = 10f
-private const val MAX_INC = 15f
 private const val MAX_KV_LOG = 500
 private const val DIRTY_GRACE_MS = 500L
 
@@ -154,6 +161,16 @@ class TreadmillViewModel(
     val encouragement: StateFlow<String?> = _encouragement.asStateFlow()
 
     fun clearEncouragement() { _encouragement.value = null }
+
+    /** Show a bounce message in the timer area. Auto-clears after [durationMs]. */
+    fun showMessage(msg: String, durationMs: Long = 4000L) {
+        _encouragement.value = msg
+        viewModelScope.launch {
+            delay(durationMs)
+            // Only clear if still showing the same message
+            if (_encouragement.value == msg) _encouragement.value = null
+        }
+    }
 
     // --- Local clock interpolation ---
     private var lastServerElapsed = 0.0
@@ -192,12 +209,12 @@ class TreadmillViewModel(
     }
 
     val derivedSession: StateFlow<DerivedSession> = combine(
-        _session, _status, localTicker
-    ) { sess, stat, now ->
+        _session, _status, _program, localTicker
+    ) { sess, stat, pgm, now ->
         val speedMph = if (stat.emulate) stat.emuSpeed / 10.0 else (stat.speed ?: 0.0)
 
         // Interpolate elapsed locally between server updates
-        val displayElapsed = if (sess.active) {
+        val displayElapsed = if (sess.active && !pgm.paused) {
             val delta = (now - lastServerTimestamp) / 1000.0
             val interpolated = lastServerElapsed + delta
             // Clamp: never go backwards, cap at server + 1.5s tolerance
@@ -523,16 +540,40 @@ class TreadmillViewModel(
         var maxInc = 0.0
         if (totalDur > 0) {
             for (iv in intervals) {
+                if (iv.incline > maxInc) maxInc = iv.incline
+            }
+        }
+        // Autoscale Y-axis to smallest nice ceiling above max incline
+        val yAxisMax = when {
+            maxInc <= 0 -> 5f
+            maxInc <= 5 -> 5f
+            maxInc <= 10 -> 10f
+            else -> 15f
+        }
+        if (totalDur > 0) {
+            for (iv in intervals) {
                 val segW = (iv.duration / totalDur * ELEV_W).toFloat()
                 val midX = x + segW / 2
-                val y = (ELEV_H - ELEV_PAD - (iv.incline / MAX_INC) * (ELEV_H - ELEV_PAD * 2)).toFloat()
+                val y = (ELEV_H - ELEV_PAD - (iv.incline / yAxisMax) * (ELEV_H - ELEV_PAD * 2)).toFloat()
                 points.add(ElevationPoint(midX, y))
-                if (iv.incline > maxInc) maxInc = iv.incline
                 x += segW
             }
         }
 
         val tangents = computeTangents(points)
+
+        val intervalBoundaryXs = if (totalDur > 0 && intervals.isNotEmpty()) {
+            val xs = FloatArray(intervals.size + 1)
+            var cumX = 0f
+            for ((idx, iv) in intervals.withIndex()) {
+                xs[idx] = cumX
+                cumX += (iv.duration / totalDur * ELEV_W).toFloat()
+            }
+            xs[intervals.size] = ELEV_W
+            xs
+        } else {
+            FloatArray(0)
+        }
 
         val currentIv = if (pgm.program != null && pgm.currentInterval < intervals.size)
             intervals[pgm.currentInterval] else null
@@ -566,7 +607,9 @@ class TreadmillViewModel(
             elevPosX = elevPosX,
             elevPosY = elevPosY,
             maxIncline = maxInc,
+            yAxisMax = yAxisMax,
             intervalCount = intervals.size,
+            intervalBoundaryXs = intervalBoundaryXs,
         )
     }
 
@@ -574,7 +617,6 @@ class TreadmillViewModel(
         const val ELEV_WIDTH = ELEV_W
         const val ELEV_HEIGHT = ELEV_H
         const val ELEV_PADDING = ELEV_PAD
-        const val MAX_INCLINE = MAX_INC
 
         /** Fritsch-Carlson monotone cubic tangent computation. */
         fun computeTangents(points: List<ElevationPoint>): FloatArray {

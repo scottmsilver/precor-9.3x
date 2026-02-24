@@ -1,24 +1,17 @@
 package com.precor.treadmill.ui.screens.running
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.*
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import com.precor.treadmill.ui.viewmodel.DerivedProgram
 import com.precor.treadmill.ui.viewmodel.ElevationPoint
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
-import kotlin.math.floor
 import kotlin.math.roundToInt
 
 // Layout constants matching the web version
@@ -29,9 +22,7 @@ private const val ML = 28f  // margin left
 private const val MR = 4f   // margin right
 private const val MT = 4f   // margin top
 private const val MB = 18f  // margin bottom
-private const val MAX_INC = 15f
 private const val TICK = 4f
-private const val DOUBLE_TAP_MS = 300L
 
 private val doneAreaColor = Color(0xFF6BC89B).copy(alpha = 0.18f)
 private val futureAreaColor = Color(0xFF6BC89B).copy(alpha = 0.08f)
@@ -43,8 +34,13 @@ private val tickColor = Color(0xFFE8E4DF).copy(alpha = 0.25f)
 private val labelColor = Color(0xFFE8E4DF).copy(alpha = 0.5f)
 private val dotColor = Color(0xFF6BC89B)
 private val dotBorderColor = Color(0xFFE8E4DF)
+private val stepDotCompletedColor = Color(0xFF6BC89B).copy(alpha = 0.8f)
+private val stepDotCurrentColor = Color(0xFF6BC89B)
+private val stepDotCurrentGlowColor = Color(0xFF6BC89B).copy(alpha = 0.15f)
+private val stepDotFutureStrokeColor = Color(0xFFE8E4DF).copy(alpha = 0.3f)
+private val stepTrackColor = Color(0xFFE8E4DF).copy(alpha = 0.1f)
 
-private fun inclineY(inc: Float): Float = MT + H - PAD - (inc / MAX_INC) * (H - PAD * 2)
+private fun inclineY(inc: Float, yMax: Float): Float = MT + H - PAD - (inc / yMax) * (H - PAD * 2)
 
 /** D3-style "nice numbers" tick generation for time axis. */
 private fun computeTimeTicks(totalSec: Double): List<Pair<Double, String>> {
@@ -91,42 +87,16 @@ private fun computeInclineTicks(maxIncline: Double): List<Int> = when {
 @Composable
 fun ElevationProfile(
     viewModel: TreadmillViewModel,
-    onSkip: () -> Unit,
-    onPrev: () -> Unit,
-    onSingleTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val pgm by viewModel.derivedProgram.collectAsState()
     val textMeasurer = rememberTextMeasurer()
 
-    // Double-tap detection
-    var lastTapTime by remember { mutableLongStateOf(0L) }
-    var lastTapSide by remember { mutableStateOf<String?>(null) }
-
     val totalW = ML + W + MR
     val totalH = MT + H + MB
 
     Canvas(
-        modifier = modifier
-            .fillMaxSize()
-            .pointerInput(pgm.running) {
-                if (!pgm.running) return@pointerInput
-                detectTapGestures { offset ->
-                    val relX = offset.x / size.width
-                    val side = if (relX > 0.5f) "right" else "left"
-                    val now = System.currentTimeMillis()
-
-                    if (now - lastTapTime < DOUBLE_TAP_MS && lastTapSide == side) {
-                        // Double tap
-                        lastTapTime = 0
-                        lastTapSide = null
-                        if (side == "right") onSkip() else onPrev()
-                    } else {
-                        lastTapTime = now
-                        lastTapSide = side
-                    }
-                }
-            },
+        modifier = modifier.fillMaxSize(),
     ) {
         val scaleX = size.width / totalW
         val scaleY = size.height / totalH
@@ -143,10 +113,11 @@ fun ElevationProfile(
         drawLine(axisColor, Offset(cx(ML), cy(MT + H)), Offset(cx(ML + W), cy(MT + H)), strokeWidth = 1f)
 
         // Y-axis grid lines + ticks
+        val dashEffect = PathEffect.dashPathEffect(floatArrayOf(3f * scaleX, 4f * scaleX))
         for (inc in inclineTicks) {
-            val y = inclineY(inc.toFloat())
+            val y = inclineY(inc.toFloat(), pgm.yAxisMax)
             // Grid line (dashed)
-            drawLine(gridColor, Offset(cx(ML), cy(y)), Offset(cx(ML + W), cy(y)), strokeWidth = 0.5f)
+            drawLine(gridColor, Offset(cx(ML), cy(y)), Offset(cx(ML + W), cy(y)), strokeWidth = 0.5f, pathEffect = dashEffect)
             // Tick mark
             drawLine(tickColor, Offset(cx(ML - TICK), cy(y)), Offset(cx(ML), cy(y)), strokeWidth = 1f)
 
@@ -162,8 +133,8 @@ fun ElevationProfile(
         // X-axis grid lines + ticks + labels
         for ((sec, label) in timeTicks) {
             val svgX = ML + (sec / pgm.totalDuration * W).toFloat()
-            // Grid line
-            drawLine(gridColor, Offset(cx(svgX), cy(MT)), Offset(cx(svgX), cy(MT + H)), strokeWidth = 0.5f)
+            // Grid line (dashed)
+            drawLine(gridColor, Offset(cx(svgX), cy(MT)), Offset(cx(svgX), cy(MT + H)), strokeWidth = 0.5f, pathEffect = dashEffect)
             // Tick mark
             drawLine(tickColor, Offset(cx(svgX), cy(MT + H)), Offset(cx(svgX), cy(MT + H + TICK)), strokeWidth = 1f)
 
@@ -212,6 +183,36 @@ fun ElevationProfile(
             drawCircle(dotColor, radius = dotRadius, center = Offset(dotX, dotY))
             // Border
             drawCircle(dotBorderColor, radius = dotRadius, center = Offset(dotX, dotY), style = Stroke(width = 1.5f))
+        }
+
+        // Step indicator dots
+        if (pgm.intervalBoundaryXs.size > 2) {
+            val trackY = cy(MT + H - 2)
+
+            // Track line
+            drawLine(stepTrackColor, Offset(cx(ML), trackY), Offset(cx(ML + W), trackY), strokeWidth = 1f)
+
+            // Dots at each interval boundary (skip last = end)
+            for (i in 0 until pgm.intervalBoundaryXs.size - 1) {
+                val bx = pgm.intervalBoundaryXs[i]
+                val dotCx = cx(ML + bx)
+                val isCompleted = i < pgm.currentInterval
+                val isCurrent = i == pgm.currentInterval
+
+                when {
+                    isCurrent -> {
+                        drawCircle(stepDotCurrentGlowColor, radius = 6f * scaleX, center = Offset(dotCx, trackY))
+                        drawCircle(stepDotCurrentColor, radius = 3.5f * scaleX, center = Offset(dotCx, trackY))
+                    }
+                    isCompleted -> {
+                        drawCircle(stepDotCompletedColor, radius = 2.5f * scaleX, center = Offset(dotCx, trackY))
+                    }
+                    else -> {
+                        drawCircle(stepDotFutureStrokeColor, radius = 2.5f * scaleX, center = Offset(dotCx, trackY),
+                            style = Stroke(width = 1f))
+                    }
+                }
+            }
         }
     }
 }
