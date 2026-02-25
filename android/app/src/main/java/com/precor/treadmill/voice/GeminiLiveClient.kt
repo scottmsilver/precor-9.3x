@@ -2,6 +2,7 @@
 
 package com.precor.treadmill.voice
 
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -38,6 +39,7 @@ class GeminiLiveClient(
     private val functionBridge: FunctionBridge,
     private var stateContext: String = "",
     private val smartass: Boolean = false,
+    private val okHttpClient: OkHttpClient? = null,
 ) {
     companion object {
         private const val TAG = "GeminiLive"
@@ -48,7 +50,7 @@ class GeminiLiveClient(
 
     private val json = Json { ignoreUnknownKeys = true }
     private var ws: WebSocket? = null
-    private var client: OkHttpClient? = null
+    private var ownedClient: OkHttpClient? = null  // only created if no injected client
     private var scope: CoroutineScope? = null
     private var state: ClientState = ClientState.DISCONNECTED
     private var setupDone = false
@@ -56,6 +58,15 @@ class GeminiLiveClient(
     private var turnCompleteJob: Job? = null
     private val turnTextParts = mutableListOf<String>()
     private val turnToolCalls = mutableListOf<String>()
+
+    // Timing instrumentation
+    private var lastAudioSentMs = 0L
+    private var firstResponseMs = 0L
+    private var firstAudioChunkMs = 0L
+    private var audioChunkCount = 0
+
+    /** Set by VoiceViewModel to read speech-end timestamp from AudioCapture. */
+    var speechEndTimestampProvider: (() -> Long)? = null
 
     val isConnected: Boolean
         get() = state == ClientState.CONNECTED && setupDone
@@ -100,16 +111,18 @@ class GeminiLiveClient(
         // sequentially. Without this, audio chunks get enqueued out of order
         // because Dispatchers.IO is a thread pool.
         scope = CoroutineScope(Dispatchers.IO.limitedParallelism(1) + SupervisorJob())
-        val okClient = OkHttpClient.Builder()
+        // WebSockets need infinite read timeout — derive from injected client
+        // (shares connection pool + SSL config) or create a standalone one.
+        val activeClient = (okHttpClient ?: OkHttpClient.Builder().build().also { ownedClient = it })
+            .newBuilder()
             .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
             .build()
-        client = okClient
 
         val url = "$GEMINI_WS_BASE?access_token=$apiKey"
         Log.d(TAG, "Connecting to Gemini Live (model=$model)")
         val request = Request.Builder().url(url).build()
 
-        ws = okClient.newWebSocket(request, object : WebSocketListener() {
+        ws = activeClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d(TAG, "WebSocket connected, sending setup...")
                 sendSetup()
@@ -160,10 +173,11 @@ class GeminiLiveClient(
             turnCompleteJob = null
             scope?.cancel()
             scope = null
+            // Only shutdown client we created ourselves, not the injected shared one
             try {
-                client?.dispatcher?.executorService?.shutdownNow()
+                ownedClient?.dispatcher?.executorService?.shutdownNow()
             } catch (_: Exception) {}
-            client = null
+            ownedClient = null
         }
     }
 
@@ -225,6 +239,16 @@ class GeminiLiveClient(
                         }
                     }
                     putJsonArray("response_modalities") { add("AUDIO") }
+                    // Disable thinking/reasoning to reduce latency (~800ms savings)
+                    putJsonObject("thinking_config") {
+                        put("thinking_budget", 0)
+                    }
+                }
+                putJsonObject("realtime_input_config") {
+                    putJsonObject("automatic_activity_detection") {
+                        put("end_of_speech_sensitivity", "END_SENSITIVITY_HIGH")
+                        put("silence_duration_ms", 100)
+                    }
                 }
             }
         }
@@ -258,10 +282,24 @@ class GeminiLiveClient(
         // Server content (audio, turn complete, interrupted)
         val serverContent = (msg["serverContent"] ?: msg["server_content"])?.jsonObject
         if (serverContent != null) {
+            val now = SystemClock.elapsedRealtime()
+            if (firstResponseMs == 0L && lastAudioSentMs > 0L) {
+                firstResponseMs = now
+                Log.i("VoiceTiming", "GEMINI_FIRST_RESPONSE: ${now - lastAudioSentMs}ms after last mic chunk")
+            }
+
             // Interrupted
             if (serverContent["interrupted"]?.jsonPrimitive?.booleanOrNull == true) {
                 Log.w(TAG, ">>> INTERRUPTED by server (barge-in detected)")
                 receivingAudio = false
+                // Reset timing so next turn measures from fresh
+                firstResponseMs = 0L
+                firstAudioChunkMs = 0L
+                audioChunkCount = 0
+                turnTextParts.clear()
+                turnToolCalls.clear()
+                turnCompleteJob?.cancel()
+                turnCompleteJob = null
                 callbacks.onInterrupted()
                 return
             }
@@ -272,6 +310,13 @@ class GeminiLiveClient(
             ) {
                 val textJoined = turnTextParts.joinToString(" ")
                 Log.d(TAG, "Turn complete: toolCalls=$turnToolCalls, text=${textJoined.ifEmpty { "(none)" }}")
+                if (lastAudioSentMs > 0L) {
+                    Log.i("VoiceTiming", "TURN_COMPLETE: ${now - lastAudioSentMs}ms after last mic, $audioChunkCount audio chunks received")
+                }
+                // Reset timing for next turn
+                firstResponseMs = 0L
+                firstAudioChunkMs = 0L
+                audioChunkCount = 0
                 if (turnTextParts.isNotEmpty()) {
                     callbacks.onTextFallback(textJoined, turnToolCalls.toList())
                 }
@@ -308,8 +353,16 @@ class GeminiLiveClient(
                     val inlineData = (partObj["inlineData"] ?: partObj["inline_data"])?.jsonObject
                     val audioData = inlineData?.get("data")?.jsonPrimitive?.contentOrNull
                     if (audioData != null) {
+                        audioChunkCount++
                         if (!receivingAudio) {
                             receivingAudio = true
+                            firstAudioChunkMs = now
+                            val speechEndMs = speechEndTimestampProvider?.invoke() ?: 0L
+                            if (lastAudioSentMs > 0L) {
+                                val fromMic = now - lastAudioSentMs
+                                val fromSpeechEnd = if (speechEndMs > 0L) now - speechEndMs else -1L
+                                Log.i("VoiceTiming", "GEMINI_FIRST_AUDIO: ${fromMic}ms after last mic, ${fromSpeechEnd}ms after speech ended (PERCEIVED LATENCY)")
+                            }
                             callbacks.onSpeakingStart()
                         }
                         turnCompleteJob?.cancel()
@@ -392,6 +445,7 @@ class GeminiLiveClient(
     /** Send a PCM16 audio chunk (base64 encoded) to Gemini. */
     fun sendAudio(pcmBase64: String) {
         if (ws == null || !setupDone) return
+        lastAudioSentMs = SystemClock.elapsedRealtime()
         val msg = buildJsonObject {
             putJsonObject("realtimeInput") {
                 putJsonArray("mediaChunks") {

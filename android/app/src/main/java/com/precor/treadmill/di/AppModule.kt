@@ -74,7 +74,7 @@ val appModule = module {
     single { TreadmillWebSocket(get(), get()) }
 
     viewModel { TreadmillViewModel(get(), get(), get()) }
-    viewModel { VoiceViewModel(get()) }
+    viewModel { VoiceViewModel(get(), get()) }
 }
 
 /**

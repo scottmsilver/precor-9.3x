@@ -82,6 +82,12 @@ fun AppNavigation(
     // Voice state from ViewModel
     val voiceStateEnum by voiceViewModel.voiceState.collectAsState()
 
+    // Drive always-on Gemini connection lifecycle from server WS state
+    LaunchedEffect(wsConnected) {
+        if (wsConnected) voiceViewModel.ensureConnected()
+        else voiceViewModel.onServerDisconnected()
+    }
+
     // Keep voice context updated with treadmill state
     val treadmillStatus by viewModel.status.collectAsState()
     val programState by viewModel.program.collectAsState()
