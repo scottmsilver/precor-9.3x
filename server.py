@@ -26,8 +26,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
-from pydantic import BaseModel, Field, field_validator
-
 from hrm_client import HrmClient
 from program_engine import (
     CHAT_SYSTEM_PROMPT,
@@ -43,6 +41,7 @@ from program_engine import (
     read_api_key,
     validate_interval,
 )
+from pydantic import BaseModel, Field, field_validator
 from treadmill_client import MAX_INCLINE, MAX_SPEED_TENTHS, TreadmillClient
 from workout_session import WorkoutSession
 
@@ -567,7 +566,7 @@ def _create_ephemeral_token() -> str | None:
         now = datetime.datetime.now(tz=datetime.timezone.utc)
         token = auth_client.auth_tokens.create(
             config={
-                "uses": 1,
+                "uses": 5,
                 "expire_time": now + datetime.timedelta(minutes=30),
                 "new_session_expire_time": now + datetime.timedelta(minutes=2),
                 "http_options": {"api_version": "v1alpha"},

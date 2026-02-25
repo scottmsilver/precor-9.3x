@@ -1,5 +1,9 @@
 package com.precor.treadmill.ui.navigation
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -7,6 +11,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -40,11 +46,38 @@ fun AppNavigation(
     serverPreferences: ServerPreferences = koinInject(),
 ) {
     val colors = LocalPrecorColors.current
+    val context = LocalContext.current
     val serverUrl by serverPreferences.serverUrl.collectAsState(initial = null)
     val viewModel: TreadmillViewModel = koinViewModel()
     val voiceViewModel: VoiceViewModel = koinViewModel()
     val wsConnected by viewModel.wsConnected.collectAsState()
     val scope = rememberCoroutineScope()
+
+    // Runtime mic permission handling
+    var pendingVoicePrompt by remember { mutableStateOf<String?>(null) }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            voiceViewModel.toggle(pendingVoicePrompt)
+        }
+        pendingVoicePrompt = null
+    }
+
+    val handleVoiceToggle: (String?) -> Unit = { prompt ->
+        if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED
+            ) {
+                voiceViewModel.toggle(prompt)
+            } else {
+                pendingVoicePrompt = prompt
+                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+        } else {
+            voiceViewModel.toggle(prompt)
+        }
+    }
 
     // Voice state from ViewModel
     val voiceStateEnum by voiceViewModel.voiceState.collectAsState()
@@ -125,6 +158,13 @@ fun AppNavigation(
         }
     }
 
+    // Auto-navigate to Running when a program starts (e.g. via voice command from Lobby)
+    LaunchedEffect(programState.running) {
+        if (programState.running && currentRoute == Routes.LOBBY) {
+            navController.navigate(Routes.RUNNING)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -166,9 +206,7 @@ fun AppNavigation(
                             onNavigateHome = {
                                 navController.popBackStack(Routes.LOBBY, inclusive = false)
                             },
-                            onVoiceToggle = { prompt ->
-                                voiceViewModel.toggle(prompt)
-                            },
+                            onVoiceToggle = handleVoiceToggle,
                         )
                     }
                     composable(Routes.DEBUG) {
@@ -190,9 +228,7 @@ fun AppNavigation(
                             }
                         }
                     },
-                    onVoiceToggle = {
-                        voiceViewModel.toggle()
-                    },
+                    onVoiceToggle = { handleVoiceToggle(null) },
                     onSettingsToggle = {
                         showSettings = true
                         scope.launch { settingsSheetState.show() }

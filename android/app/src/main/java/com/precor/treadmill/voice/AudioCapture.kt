@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.util.Base64
 import android.util.Log
 
@@ -23,6 +24,7 @@ class AudioCapture(
     }
 
     private var audioRecord: AudioRecord? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
     private var captureThread: Thread? = null
     @Volatile
     private var isRecording = false
@@ -49,19 +51,31 @@ class AudioCapture(
                 return false
             }
 
+            if (AcousticEchoCanceler.isAvailable()) {
+                echoCanceler = AcousticEchoCanceler.create(record.audioSessionId)?.also {
+                    it.enabled = true
+                    Log.d(TAG, "AcousticEchoCanceler enabled")
+                }
+            }
+
             audioRecord = record
             isRecording = true
             record.startRecording()
 
             captureThread = Thread({
                 val buffer = ByteArray(BUFFER_SIZE_SAMPLES * 2) // 2 bytes per sample
-                while (isRecording) {
+                while (isRecording && !Thread.currentThread().isInterrupted) {
                     val bytesRead = record.read(buffer, 0, buffer.size)
                     if (bytesRead > 0) {
                         val encoded = Base64.encodeToString(
                             buffer, 0, bytesRead, Base64.NO_WRAP
                         )
-                        onAudioChunk(encoded)
+                        try {
+                            onAudioChunk(encoded)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Error in onAudioChunk callback", e)
+                            break
+                        }
                     }
                 }
             }, "AudioCapture").also { it.start() }
@@ -76,13 +90,21 @@ class AudioCapture(
 
     fun stop() {
         isRecording = false
-        captureThread?.join(1000)
+        captureThread?.let { thread ->
+            thread.join(2000)
+            if (thread.isAlive) {
+                Log.w(TAG, "Capture thread did not exit, interrupting")
+                thread.interrupt()
+            }
+        }
         captureThread = null
+        echoCanceler?.let {
+            try { it.release() } catch (_: Exception) {}
+        }
+        echoCanceler = null
         audioRecord?.let {
-            try {
-                it.stop()
-            } catch (_: Exception) { }
-            it.release()
+            try { it.stop() } catch (_: Exception) {}
+            try { it.release() } catch (_: Exception) {}
         }
         audioRecord = null
         Log.d(TAG, "Recording stopped")

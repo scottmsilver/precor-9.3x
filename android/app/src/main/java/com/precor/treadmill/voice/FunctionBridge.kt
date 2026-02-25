@@ -3,8 +3,6 @@ package com.precor.treadmill.voice
 import android.util.Log
 import com.precor.treadmill.data.remote.TreadmillApi
 import com.precor.treadmill.data.remote.models.*
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.int
@@ -53,12 +51,9 @@ class FunctionBridge(private val api: TreadmillApi) {
                 }
 
                 "stop_treadmill" -> {
-                    coroutineScope {
-                        val d1 = async { api.setSpeed(SpeedRequest(0.0)) }
-                        val d2 = async { api.setIncline(InclineRequest(0.0)) }
-                        val d3 = async { api.stopProgram() }
-                        d1.await(); d2.await(); d3.await()
-                    }
+                    api.setSpeed(SpeedRequest(0.0))
+                    api.setIncline(InclineRequest(0.0))
+                    api.stopProgram()
                     "Treadmill stopped"
                 }
 

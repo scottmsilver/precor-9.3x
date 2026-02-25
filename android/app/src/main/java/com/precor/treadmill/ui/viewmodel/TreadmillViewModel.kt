@@ -11,6 +11,7 @@ import com.precor.treadmill.ui.util.TrailingDebounce
 import com.precor.treadmill.ui.util.fmtDur
 import com.precor.treadmill.ui.util.paceDisplay
 import android.os.SystemClock
+import android.util.Log
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -127,6 +128,7 @@ private const val ELEV_H = 140f
 private const val ELEV_PAD = 10f
 private const val MAX_KV_LOG = 500
 private const val DIRTY_GRACE_MS = 500L
+private const val TAG = "TreadmillVM"
 
 class TreadmillViewModel(
     private val api: TreadmillApi,
@@ -183,10 +185,12 @@ class TreadmillViewModel(
     // --- Debounced API calls ---
     private val debouncedSetSpeed = TrailingDebounce<Double>(150, viewModelScope) { mph ->
         runCatching { api.setSpeed(SpeedRequest(mph)) }
+            .onFailure { Log.e(TAG, "Failed to set speed", it) }
     }
 
     private val debouncedSetIncline = TrailingDebounce<Double>(150, viewModelScope) { inc ->
         runCatching { api.setIncline(InclineRequest(inc)) }
+            .onFailure { Log.e(TAG, "Failed to set incline", it) }
     }
 
     // --- Leading guards ---
@@ -289,11 +293,12 @@ class TreadmillViewModel(
             is KVMessage -> handleKVUpdate(msg)
             is HRMessage -> handleHRUpdate(msg)
             is ScanResultMessage -> handleScanResult(msg)
+            is UnknownMessage -> {} // ignored
         }
     }
 
     private fun handleStatusUpdate(msg: StatusMessage) {
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         val speedDirty = now - dirtySpeed < DIRTY_GRACE_MS
         val inclineDirty = now - dirtyIncline < DIRTY_GRACE_MS
 
@@ -341,9 +346,9 @@ class TreadmillViewModel(
     }
 
     private fun handleProgramUpdate(msg: ProgramMessage) {
-        _program.update {
+        _program.update { cur ->
             ProgramState(
-                program = msg.program,
+                program = msg.program ?: cur.program,  // Keep existing if null
                 running = msg.running,
                 paused = msg.paused,
                 completed = msg.completed,
@@ -372,7 +377,10 @@ class TreadmillViewModel(
             if (newLog.size > MAX_KV_LOG) newLog.drop(100) else newLog
         }
         if (msg.source == "motor") {
-            _status.update { it.copy(motor = it.motor + (msg.key to msg.value)) }
+            _status.update {
+                val updated = it.motor + (msg.key to msg.value)
+                it.copy(motor = if (updated.size > 20) updated.toList().takeLast(20).toMap() else updated)
+            }
         }
     }
 
@@ -392,14 +400,14 @@ class TreadmillViewModel(
 
     fun setSpeed(mph: Double) {
         val clamped = (mph * 10).roundToInt().coerceIn(0, 120)
-        dirtySpeed = System.currentTimeMillis()
+        dirtySpeed = SystemClock.elapsedRealtime()
         _status.update { it.copy(emuSpeed = clamped) }
         debouncedSetSpeed.invoke(mph)
     }
 
     fun setIncline(value: Double) {
         val clamped = (Math.round(value * 2) / 2.0).coerceIn(0.0, 99.0)
-        dirtyIncline = System.currentTimeMillis()
+        dirtyIncline = SystemClock.elapsedRealtime()
         _status.update { it.copy(emuIncline = clamped) }
         debouncedSetIncline.invoke(clamped)
     }
@@ -407,7 +415,7 @@ class TreadmillViewModel(
     fun adjustSpeed(deltaTenths: Int) {
         val cur = _status.value.emuSpeed
         val newSpeed = (cur + deltaTenths).coerceIn(0, 120)
-        dirtySpeed = System.currentTimeMillis()
+        dirtySpeed = SystemClock.elapsedRealtime()
         _status.update { it.copy(emuSpeed = newSpeed) }
         debouncedSetSpeed.invoke(newSpeed / 10.0)
     }
@@ -415,7 +423,7 @@ class TreadmillViewModel(
     fun adjustIncline(delta: Double) {
         val cur = _status.value.emuIncline
         val newInc = (Math.round((cur + delta) * 2) / 2.0).coerceIn(0.0, 99.0)
-        dirtyIncline = System.currentTimeMillis()
+        dirtyIncline = SystemClock.elapsedRealtime()
         _status.update { it.copy(emuIncline = newInc) }
         debouncedSetIncline.invoke(newInc)
     }
@@ -423,12 +431,15 @@ class TreadmillViewModel(
     /** Emergency stop — never debounced, fires all three API calls simultaneously. */
     fun emergencyStop() {
         _status.update { it.copy(emuSpeed = 0, emuIncline = 0.0) }
-        dirtySpeed = System.currentTimeMillis()
-        dirtyIncline = System.currentTimeMillis()
+        dirtySpeed = SystemClock.elapsedRealtime()
+        dirtyIncline = SystemClock.elapsedRealtime()
         viewModelScope.launch {
-            launch { runCatching { api.setSpeed(SpeedRequest(0.0)) } }
-            launch { runCatching { api.setIncline(InclineRequest(0.0)) } }
-            launch { runCatching { api.stopProgram() } }
+            launch { runCatching { api.setSpeed(SpeedRequest(0.0)) }
+                .onFailure { Log.e(TAG, "Failed to set speed (emergency)", it) } }
+            launch { runCatching { api.setIncline(InclineRequest(0.0)) }
+                .onFailure { Log.e(TAG, "Failed to set incline (emergency)", it) } }
+            launch { runCatching { api.stopProgram() }
+                .onFailure { Log.e(TAG, "Failed to stop program (emergency)", it) } }
         }
     }
 
@@ -436,46 +447,74 @@ class TreadmillViewModel(
         viewModelScope.launch {
             resetGuard.tryExecuteSuspend {
                 _status.update { it.copy(emuSpeed = 0, emuIncline = 0.0) }
-                dirtySpeed = System.currentTimeMillis()
-                dirtyIncline = System.currentTimeMillis()
+                dirtySpeed = SystemClock.elapsedRealtime()
+                dirtyIncline = SystemClock.elapsedRealtime()
                 runCatching { api.reset() }
+                    .onFailure { Log.e(TAG, "Failed to reset", it) }
             }
         }
     }
 
     fun startProgram() {
         viewModelScope.launch {
-            startGuard.tryExecuteSuspend { runCatching { api.startProgram() } }
+            startGuard.tryExecuteSuspend {
+                runCatching { api.startProgram() }
+                    .onFailure {
+                        Log.e(TAG, "Failed to start program", it)
+                        _toast.tryEmit("Failed to start program")
+                    }
+            }
         }
     }
 
     fun stopProgram() {
         viewModelScope.launch {
-            stopGuard.tryExecuteSuspend { runCatching { api.stopProgram() } }
+            stopGuard.tryExecuteSuspend {
+                runCatching { api.stopProgram() }
+                    .onFailure {
+                        Log.e(TAG, "Failed to stop program", it)
+                        _toast.tryEmit("Failed to stop program")
+                    }
+            }
         }
     }
 
     fun pauseProgram() {
         viewModelScope.launch {
-            pauseGuard.tryExecuteSuspend { runCatching { api.pauseProgram() } }
+            pauseGuard.tryExecuteSuspend {
+                runCatching { api.pauseProgram() }
+                    .onFailure {
+                        Log.e(TAG, "Failed to pause program", it)
+                        _toast.tryEmit("Failed to pause program")
+                    }
+            }
         }
     }
 
     fun skipInterval() {
         viewModelScope.launch {
-            skipGuard.tryExecuteSuspend { runCatching { api.skipInterval() } }
+            skipGuard.tryExecuteSuspend {
+                runCatching { api.skipInterval() }
+                    .onFailure { Log.e(TAG, "Failed to skip interval", it) }
+            }
         }
     }
 
     fun prevInterval() {
         viewModelScope.launch {
-            prevGuard.tryExecuteSuspend { runCatching { api.prevInterval() } }
+            prevGuard.tryExecuteSuspend {
+                runCatching { api.prevInterval() }
+                    .onFailure { Log.e(TAG, "Failed to go to previous interval", it) }
+            }
         }
     }
 
     fun extendInterval(seconds: Int) {
         viewModelScope.launch {
-            extendGuard.tryExecuteSuspend { runCatching { api.extendInterval(ExtendRequest(seconds)) } }
+            extendGuard.tryExecuteSuspend {
+                runCatching { api.extendInterval(ExtendRequest(seconds)) }
+                    .onFailure { Log.e(TAG, "Failed to extend interval", it) }
+            }
         }
     }
 
@@ -484,8 +523,10 @@ class TreadmillViewModel(
             modeGuard.tryExecuteSuspend {
                 if (mode == "emulate") {
                     runCatching { api.setEmulate(EmulateRequest(true)) }
+                        .onFailure { Log.e(TAG, "Failed to set emulate mode", it) }
                 } else {
                     runCatching { api.setProxy(ProxyRequest(true)) }
+                        .onFailure { Log.e(TAG, "Failed to set proxy mode", it) }
                 }
             }
         }
@@ -494,6 +535,7 @@ class TreadmillViewModel(
     fun adjustDuration(deltaSeconds: Int) {
         viewModelScope.launch {
             runCatching { api.adjustDuration(AdjustDurationRequest(deltaSeconds)) }
+                .onFailure { Log.e(TAG, "Failed to adjust duration", it) }
         }
     }
 
@@ -501,6 +543,10 @@ class TreadmillViewModel(
         viewModelScope.launch {
             startGuard.tryExecuteSuspend {
                 runCatching { api.quickStart(QuickStartRequest(speed, incline, durationMinutes)) }
+                    .onFailure {
+                        Log.e(TAG, "Failed to quick start", it)
+                        _toast.tryEmit("Failed to start workout")
+                    }
             }
         }
     }
@@ -508,18 +554,21 @@ class TreadmillViewModel(
     fun selectHrmDevice(address: String) {
         viewModelScope.launch {
             runCatching { api.selectHrmDevice(HrmSelectRequest(address)) }
+                .onFailure { Log.e(TAG, "Failed to select HRM device", it) }
         }
     }
 
     fun forgetHrmDevice() {
         viewModelScope.launch {
             runCatching { api.forgetHrmDevice() }
+                .onFailure { Log.e(TAG, "Failed to forget HRM device", it) }
         }
     }
 
     fun scanHrmDevices() {
         viewModelScope.launch {
             runCatching { api.scanHrmDevices() }
+                .onFailure { Log.e(TAG, "Failed to scan HRM devices", it) }
         }
     }
 

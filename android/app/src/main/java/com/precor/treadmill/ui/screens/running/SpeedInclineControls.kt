@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -120,6 +122,11 @@ private fun ControlPanel(
     onAdjust: (Double) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Build readable metric name from label (e.g., "mph" -> "speed", "% incline" -> "incline")
+    val metricName = if (label.contains("incline", ignoreCase = true)) "incline" else "speed"
+    val smallAmount = if (metricName == "speed") "%.1f mph".format(smallDelta / 10.0) else "%.1f%%".format(smallDelta)
+    val largeAmount = if (metricName == "speed") "%.1f mph".format(largeDelta / 10.0) else "%.1f%%".format(largeDelta)
+
     Row(
         modifier = modifier
             .background(
@@ -143,6 +150,7 @@ private fun ControlPanel(
                 onAdjust = onAdjust,
                 isUp = true,
                 color = accentColor,
+                description = "Increase $metricName by $smallAmount",
             )
             RepeatButton(
                 delta = -smallDelta,
@@ -150,6 +158,7 @@ private fun ControlPanel(
                 onAdjust = onAdjust,
                 isUp = false,
                 color = accentColor,
+                description = "Decrease $metricName by $smallAmount",
             )
         }
 
@@ -187,6 +196,7 @@ private fun ControlPanel(
                 isUp = true,
                 color = accentColor,
                 isDouble = true,
+                description = "Increase $metricName by $largeAmount",
             )
             RepeatButton(
                 delta = -largeDelta,
@@ -195,6 +205,7 @@ private fun ControlPanel(
                 isUp = false,
                 color = accentColor,
                 isDouble = true,
+                description = "Decrease $metricName by $largeAmount",
             )
         }
     }
@@ -212,6 +223,7 @@ private fun RepeatButton(
     isUp: Boolean,
     color: Color,
     isDouble: Boolean = false,
+    description: String = "",
     modifier: Modifier = Modifier,
 ) {
     var pressed by remember { mutableStateOf(false) }
@@ -237,6 +249,7 @@ private fun RepeatButton(
     Box(
         modifier = modifier
             .size(width = btnW, height = btnH)
+            .semantics { contentDescription = description }
             .background(
                 color = Color(0x3D787880), // fill
                 shape = RoundedCornerShape(10.dp),

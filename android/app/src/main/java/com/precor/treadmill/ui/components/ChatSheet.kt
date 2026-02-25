@@ -81,7 +81,7 @@ fun ChatSheet(
         ) {
             OutlinedTextField(
                 value = chatMsg,
-                onValueChange = { chatMsg = it },
+                onValueChange = { if (it.length <= 500) chatMsg = it },
                 modifier = Modifier
                     .weight(1f)
                     .focusRequester(focusRequester),

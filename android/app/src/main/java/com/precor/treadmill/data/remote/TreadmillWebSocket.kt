@@ -33,6 +33,7 @@ class TreadmillWebSocket(
         disconnect()
         serverUrl = baseUrl
         shouldReconnect = true
+        scope?.cancel()  // Cancel any pending reconnect jobs
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         doConnect()
     }
@@ -64,7 +65,7 @@ class TreadmillWebSocket(
                     val message = json.decodeFromString(ServerMessage.serializer(), text)
                     _messages.tryEmit(message)
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to parse message: ${e.message}")
+                    Log.w(TAG, "Failed to parse message: ${text.take(200)}", e)
                 }
             }
 
@@ -80,6 +81,7 @@ class TreadmillWebSocket(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w(TAG, "WebSocket failure: ${t.message}")
+                this@TreadmillWebSocket.webSocket = null
                 _connected.value = false
                 scheduleReconnect()
             }

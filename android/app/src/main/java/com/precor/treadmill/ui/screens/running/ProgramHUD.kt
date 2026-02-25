@@ -56,6 +56,9 @@ fun ProgramHUD(
     // Double-tap skip feedback ("left" or "right")
     var skipFeedback by remember { mutableStateOf<String?>(null) }
 
+    // Double-tap debounce cooldown
+    var lastDoubleTapTime by remember { mutableLongStateOf(0L) }
+
     // Double-tap detection state
     var lastTapTime by remember { mutableLongStateOf(0L) }
     var lastTapSide by remember { mutableStateOf<String?>(null) }
@@ -192,6 +195,9 @@ fun ProgramHUD(
                                 singleTapJob = null
                                 lastTapTime = 0
                                 lastTapSide = null
+                                // Debounce: ignore double-taps within 500ms of the last one
+                                if (now - lastDoubleTapTime < 500) return@detectTapGestures
+                                lastDoubleTapTime = now
                                 view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                                 skipFeedback = side
                                 if (side == "right") {

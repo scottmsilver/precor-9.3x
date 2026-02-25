@@ -1,5 +1,6 @@
 package com.precor.treadmill.data.remote.models
 
+import android.util.Log
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -21,9 +22,10 @@ object ServerMessageSerializer : JsonContentPolymorphicSerializer<ServerMessage>
             "connection" -> ConnectionMessage.serializer()
             "hr" -> HRMessage.serializer()
             "scan_result" -> ScanResultMessage.serializer()
-            else -> throw IllegalArgumentException(
-                "Unknown server message type: ${element.jsonObject["type"]}"
-            )
+            else -> {
+                Log.w("ServerMsg", "Unknown message type: ${element.jsonObject["type"]}")
+                UnknownMessage.serializer()
+            }
         }
     }
 }
@@ -121,3 +123,6 @@ data class ScanResultMessage(
     val type: String = "scan_result",
     val devices: List<HrmDevice>,
 ) : ServerMessage
+
+@Serializable
+data class UnknownMessage(val type: String? = null) : ServerMessage

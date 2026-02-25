@@ -16,3 +16,18 @@
 # OkHttp
 -dontwarn okhttp3.**
 -dontwarn okio.**
+
+# Koin DI
+-keep class org.koin.** { *; }
+-dontwarn org.koin.**
+
+# Retrofit
+-keepattributes Signature, InnerClasses, EnclosingMethod
+-keep,allowshrinking,allowoptimization class retrofit2.** { *; }
+-dontwarn retrofit2.**
+
+# App data models (used by serialization)
+-keep class com.precor.treadmill.data.remote.models.** { *; }
+
+# Voice layer models (used by JSON building)
+-keep class com.precor.treadmill.voice.** { *; }

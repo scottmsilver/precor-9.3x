@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalCoroutinesApi::class)
+
 package com.precor.treadmill.voice
 
 import android.util.Log
@@ -94,14 +96,17 @@ class GeminiLiveClient(
         if (ws != null) return
         setState(ClientState.CONNECTING)
 
-        scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        // CRITICAL: limitedParallelism(1) ensures messages are processed
+        // sequentially. Without this, audio chunks get enqueued out of order
+        // because Dispatchers.IO is a thread pool.
+        scope = CoroutineScope(Dispatchers.IO.limitedParallelism(1) + SupervisorJob())
         val okClient = OkHttpClient.Builder()
             .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
             .build()
         client = okClient
 
         val url = "$GEMINI_WS_BASE?access_token=$apiKey"
-        Log.d(TAG, "Connecting to: ${url.take(120)}...")
+        Log.d(TAG, "Connecting to Gemini Live (model=$model)")
         val request = Request.Builder().url(url).build()
 
         ws = okClient.newWebSocket(request, object : WebSocketListener() {
@@ -145,17 +150,21 @@ class GeminiLiveClient(
     }
 
     private fun cleanup() {
-        ws = null
-        setupDone = false
-        receivingAudio = false
-        turnTextParts.clear()
-        turnToolCalls.clear()
-        turnCompleteJob?.cancel()
-        turnCompleteJob = null
-        scope?.cancel()
-        scope = null
-        client?.dispatcher?.executorService?.shutdown()
-        client = null
+        synchronized(this) {
+            ws = null
+            setupDone = false
+            receivingAudio = false
+            turnTextParts.clear()
+            turnToolCalls.clear()
+            turnCompleteJob?.cancel()
+            turnCompleteJob = null
+            scope?.cancel()
+            scope = null
+            try {
+                client?.dispatcher?.executorService?.shutdownNow()
+            } catch (_: Exception) {}
+            client = null
+        }
     }
 
     private fun sendSetup() {
@@ -229,6 +238,7 @@ class GeminiLiveClient(
         val msg = try {
             json.parseToJsonElement(raw).jsonObject
         } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse message: ${raw.take(200)}", e)
             return
         }
 
@@ -237,8 +247,6 @@ class GeminiLiveClient(
             Log.d(TAG, "Setup complete, ready for audio")
             setupDone = true
             setState(ClientState.CONNECTED)
-            // DEBUG: auto-send greeting to test audio response pipeline
-            sendTextPrompt("Say hello briefly in one sentence")
             return
         }
 
@@ -252,6 +260,7 @@ class GeminiLiveClient(
         if (serverContent != null) {
             // Interrupted
             if (serverContent["interrupted"]?.jsonPrimitive?.booleanOrNull == true) {
+                Log.w(TAG, ">>> INTERRUPTED by server (barge-in detected)")
                 receivingAudio = false
                 callbacks.onInterrupted()
                 return
@@ -318,15 +327,16 @@ class GeminiLiveClient(
             for (fc in functionCalls) {
                 val fcObj = fc.jsonObject
                 val name = fcObj["name"]?.jsonPrimitive?.content ?: continue
+                val fcId = fcObj["id"]?.jsonPrimitive?.contentOrNull
                 val args = fcObj["args"]?.jsonObject?.let { argsObj ->
                     argsObj.entries.associate { (k, v) -> k to v }
                 } ?: emptyMap()
 
                 turnToolCalls.add(name)
-                Log.d(TAG, "toolCall: $name($args)")
+                Log.d(TAG, "toolCall: $name($args) id=$fcId")
 
                 val result = functionBridge.execute(name, args)
-                sendToolResponse(result.name, result.response)
+                sendToolResponse(result.name, result.response, fcId)
             }
             // Fire fallback immediately if there was narration text alongside tool calls
             if (turnTextParts.isNotEmpty()) {
@@ -338,12 +348,13 @@ class GeminiLiveClient(
         }
     }
 
-    private fun sendToolResponse(name: String, response: String) {
+    private fun sendToolResponse(name: String, response: String, id: String? = null) {
         if (ws == null) return
         val msg = buildJsonObject {
             putJsonObject("toolResponse") {
                 putJsonArray("functionResponses") {
                     addJsonObject {
+                        if (id != null) put("id", id)
                         put("name", name)
                         putJsonObject("response") {
                             put("result", response)
@@ -357,7 +368,10 @@ class GeminiLiveClient(
 
     /** Send a text prompt into the live session as a user turn. */
     fun sendTextPrompt(text: String) {
-        if (ws == null || !setupDone) return
+        if (ws == null || !setupDone) {
+            Log.w(TAG, "sendTextPrompt skipped: ws=${ws != null}, setupDone=$setupDone")
+            return
+        }
         val msg = buildJsonObject {
             putJsonObject("client_content") {
                 putJsonArray("turns") {
@@ -371,6 +385,7 @@ class GeminiLiveClient(
                 put("turn_complete", true)
             }
         }
+        Log.d(TAG, "Sending text prompt: $text")
         ws?.send(msg.toString())
     }
 

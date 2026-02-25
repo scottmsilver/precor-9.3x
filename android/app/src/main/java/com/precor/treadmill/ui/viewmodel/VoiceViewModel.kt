@@ -37,8 +37,8 @@ class VoiceViewModel(
     private var audioCapture: AudioCapture? = null
     private var audioPlayer: AudioPlayer? = null
     private var pendingPrompt: String? = null
-    private var lastSpeed: Number = 0
-    private var lastIncline: Number = 0
+    private var lastSpeed: Int = 0
+    private var lastIncline: Double = 0.0
     private var currentStateContext = ""
 
     private val functionBridge = FunctionBridge(api)
@@ -46,11 +46,11 @@ class VoiceViewModel(
     /** Call this when treadmill status or program state changes to keep voice context current. */
     fun updateTreadmillState(status: StatusMessage?, program: ProgramMessage?) {
         if (status == null) return
-        val speed = if (status.emulate) status.emuSpeed else ((status.speed ?: 0.0) * 10).toInt()
-        val incline = if (status.emulate) status.emuIncline else (status.incline ?: 0.0)
+        val speedTenths = if (status.emulate) status.emuSpeed else ((status.speed ?: 0.0) * 10).toInt()
+        val incline = if (status.emulate) status.emuIncline.toDouble() else (status.incline ?: 0.0)
 
         val parts = mutableListOf<String>()
-        parts.add("Speed: ${speed / 10.0} mph")
+        parts.add("Speed: ${speedTenths / 10.0} mph")
         parts.add("Incline: $incline%")
         parts.add("Mode: ${if (status.emulate) "emulate" else "proxy"}")
         if (program?.running == true) {
@@ -65,10 +65,22 @@ class VoiceViewModel(
         currentStateContext = parts.joinToString("\n")
 
         // Only push to Gemini when speed or incline actually changes
-        if (speed != lastSpeed || incline != lastIncline) {
-            lastSpeed = speed
+        if (speedTenths != lastSpeed || incline != lastIncline) {
+            lastSpeed = speedTenths
             lastIncline = incline
             geminiClient?.updateStateContext(currentStateContext)
+        }
+    }
+
+    /** Send a text command to Gemini for testing (no mic needed). */
+    fun sendTestCommand(text: String) {
+        if (geminiClient?.isConnected == true) {
+            Log.d(TAG, "Sending test command: $text")
+            geminiClient?.sendTextPrompt(text)
+        } else {
+            Log.d(TAG, "Not connected, connecting first then sending: $text")
+            pendingPrompt = text
+            connect()
         }
     }
 
@@ -89,6 +101,7 @@ class VoiceViewModel(
     }
 
     fun interrupt() {
+        Log.d(TAG, "interrupt() called — flushing player")
         audioPlayer?.flush()
         _voiceState.value = VoiceState.LISTENING
     }
@@ -112,6 +125,7 @@ class VoiceViewModel(
                 return@launch
             }
 
+            Log.d(TAG, "Connecting: model=${cfg.geminiLiveModel.ifEmpty { "gemini-2.5-flash-native-audio-latest" }}, voice=${cfg.geminiVoice.ifEmpty { "Kore" }}")
             _voiceState.value = VoiceState.CONNECTING
 
             val player = AudioPlayer(
@@ -126,15 +140,23 @@ class VoiceViewModel(
                 override fun onStateChange(state: ClientState) {
                     when (state) {
                         ClientState.CONNECTED -> {
-                            startMicCapture()
                             _voiceState.value = VoiceState.LISTENING
-                            // Send pending prompt
-                            pendingPrompt?.let {
-                                geminiClient?.sendTextPrompt(it)
+                            // Send pending text prompt BEFORE starting mic.
+                            // Mic audio interferes with text prompt processing
+                            // in Gemini Live, so defer mic start until after
+                            // the response (onSpeakingEnd will start it).
+                            val prompt = pendingPrompt
+                            if (prompt != null) {
+                                Log.d(TAG, "Sending pending prompt (mic deferred): $prompt")
+                                geminiClient?.sendTextPrompt(prompt)
                                 pendingPrompt = null
+                            } else {
+                                Log.d(TAG, "No pending prompt, starting mic")
+                                startMicCapture()
                             }
                         }
                         ClientState.DISCONNECTED, ClientState.ERROR -> {
+                            Log.d(TAG, "State: $state — stopping mic, flushing player")
                             stopMicCapture()
                             player.flush()
                             _voiceState.value = VoiceState.IDLE
@@ -149,13 +171,21 @@ class VoiceViewModel(
 
                 override fun onSpeakingStart() {
                     _voiceState.value = VoiceState.SPEAKING
+                    // Mic stays open for full-duplex — Gemini Live detects
+                    // barge-in (user speaking) and sends an "interrupted" event.
                 }
 
                 override fun onSpeakingEnd() {
                     _voiceState.value = VoiceState.LISTENING
+                    // Start mic if not already running (deferred from text prompt)
+                    if (audioCapture == null) {
+                        Log.d(TAG, "Starting deferred mic capture after speaking")
+                        startMicCapture()
+                    }
                 }
 
                 override fun onInterrupted() {
+                    Log.d(TAG, "onInterrupted — flushing player (barge-in)")
                     player.flush()
                     _voiceState.value = VoiceState.LISTENING
                 }
@@ -203,14 +233,17 @@ class VoiceViewModel(
 
     private fun startMicCapture() {
         val client = geminiClient ?: return
+        Log.d(TAG, "Starting mic capture...")
         audioCapture = AudioCapture { pcmBase64 ->
             if (client.isConnected) {
                 client.sendAudio(pcmBase64)
             }
         }
         val started = audioCapture?.start() ?: false
-        if (!started) {
-            Log.e(TAG, "Failed to start mic capture")
+        if (started) {
+            Log.d(TAG, "Mic capture started successfully")
+        } else {
+            Log.e(TAG, "Failed to start mic capture — check RECORD_AUDIO permission")
             disconnectAll()
         }
     }
@@ -221,10 +254,13 @@ class VoiceViewModel(
     }
 
     private fun disconnectAll() {
+        Log.d(TAG, "disconnectAll() — stopping everything")
         stopMicCapture()
         geminiClient?.disconnect()
         geminiClient = null
-        audioPlayer?.flush()
+        audioPlayer?.release()
+        audioPlayer = null
+        config = null  // Clear cached token so next connect gets a fresh one
         _voiceState.value = VoiceState.IDLE
     }
 

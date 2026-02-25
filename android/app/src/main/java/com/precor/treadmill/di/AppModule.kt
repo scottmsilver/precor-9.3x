@@ -35,7 +35,12 @@ val appModule = module {
     }
 
     single {
-        // Trust all certs for self-signed Tailscale certs on the Pi
+        // WARNING: This disables SSL certificate validation entirely.
+        // Reason: The Raspberry Pi server uses Tailscale-issued certs which are
+        // trusted by the system CA store, but users may connect via IP address
+        // or local hostname where the cert CN won't match.
+        // TODO: Replace with proper certificate pinning for production use.
+        // Risk: Vulnerable to MITM attacks on the local network.
         val trustManager = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
