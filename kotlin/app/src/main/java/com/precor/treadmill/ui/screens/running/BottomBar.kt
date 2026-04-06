@@ -16,6 +16,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LocalGlassParams
+import com.precor.treadmill.ui.theme.glassPanelTinted
 import com.precor.treadmill.ui.theme.touchFingerPad
 import com.precor.treadmill.ui.theme.touchThumbPad
 import com.precor.treadmill.ui.util.haptic
@@ -70,13 +72,14 @@ fun BottomBar(
                         haptic(context, 25)
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF6BC89B),
+                        containerColor = Color.Transparent,
                         contentColor = Color.White,
                     ),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .weight(2f)
-                        .height(defaultHeight),
+                        .height(defaultHeight)
+                        .glassPanelTinted(LocalGlassParams.current, Color(0xFF6BC89B), shape = RoundedCornerShape(14.dp)),
                 ) {
                     Text("Resume", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }
@@ -86,13 +89,14 @@ fun BottomBar(
                         haptic(context, longArrayOf(50, 30, 50))
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFC45C52).copy(alpha = 0.15f),
+                        containerColor = Color.Transparent,
                         contentColor = Color(0xFFC45C52),
                     ),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .weight(1f)
-                        .height(defaultHeight),
+                        .height(defaultHeight)
+                        .glassPanelTinted(LocalGlassParams.current, Color(0xFFC45C52), tintAlpha = 0.4f, shape = RoundedCornerShape(14.dp)),
                 ) {
                     Text("Reset", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
@@ -107,16 +111,17 @@ fun BottomBar(
                     },
                     enabled = isRunning,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isRunning) Color(0xFFC45C52) else Color(0x3D787880),
-                        contentColor = if (isRunning) Color.White else Color(0x59E8E4DF),
-                        disabledContainerColor = Color(0x3D787880),
+                        containerColor = Color.Transparent,
+                        contentColor = Color.White,
+                        disabledContainerColor = Color.Transparent,
                         disabledContentColor = Color(0x59E8E4DF),
                     ),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(stopHeight)
-                        .alpha(if (isRunning) 1f else 0.4f),
+                        .alpha(if (isRunning) 1f else 0.4f)
+                        .glassPanelTinted(LocalGlassParams.current, Color(0xFFC45C52), shape = RoundedCornerShape(14.dp)),
                 ) {
                     Text("Stop", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                 }

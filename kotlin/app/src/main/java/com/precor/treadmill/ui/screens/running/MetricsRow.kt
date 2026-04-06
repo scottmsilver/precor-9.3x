@@ -3,6 +3,7 @@ package com.precor.treadmill.ui.screens.running
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -10,14 +11,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.TimerFontFamily
+import com.precor.treadmill.ui.theme.glassPanel
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import kotlin.math.max
 
@@ -46,6 +51,7 @@ fun MetricsRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .glassPanel(LocalGlassParams.current, RoundedCornerShape(10.dp))
                 .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.Bottom,
@@ -123,9 +129,16 @@ private fun HeartRateMetric(bpm: Int, scale: Float = 1f) {
         )
         Text(
             text = if (bpm > 0) bpm.toString() else "---",
-            color = color,
-            fontSize = (15 * scale).sp,
-            fontWeight = FontWeight.SemiBold,
+            style = TextStyle(
+                color = color,
+                fontSize = (15 * scale).sp,
+                fontWeight = FontWeight.SemiBold,
+                shadow = Shadow(
+                    color = Color.Black.copy(alpha = 0.4f),
+                    offset = Offset(0f, 1f),
+                    blurRadius = 4f,
+                ),
+            ),
         )
         Text(
             text = "bpm",
@@ -159,6 +172,11 @@ private fun MetricItem(
                 fontWeight = FontWeight.SemiBold,
                 fontFeatureSettings = "tnum",
                 fontFamily = fontFamily,
+                shadow = Shadow(
+                    color = Color.Black.copy(alpha = 0.4f),
+                    offset = Offset(0f, 1f),
+                    blurRadius = 4f,
+                ),
             ),
         )
         Text(
