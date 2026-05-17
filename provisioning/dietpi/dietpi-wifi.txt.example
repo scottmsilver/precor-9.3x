@@ -1,0 +1,5 @@
+# DietPi WiFi config (array format). prepare-sd.sh generates the real
+# dietpi-wifi.txt from secrets.env with correct single-quote escaping.
+aWIFI_SSID[0]='__INJECTED__'
+aWIFI_KEY[0]='__INJECTED__'
+aWIFI_KEYMGR[0]='WPA-PSK'

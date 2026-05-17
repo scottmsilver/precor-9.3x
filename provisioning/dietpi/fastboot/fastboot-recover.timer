@@ -1,0 +1,9 @@
+[Unit]
+Description=Periodic fast-boot lockout-recovery check
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=60
+AccuracySec=5s
+Unit=fastboot-recover.service
+[Install]
+WantedBy=timers.target

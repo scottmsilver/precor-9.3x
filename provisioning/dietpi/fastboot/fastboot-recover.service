@@ -1,0 +1,5 @@
+[Unit]
+Description=Fast-boot lockout-recovery watchdog (periodic reachability check)
+[Service]
+Type=oneshot
+ExecStart=/boot/fastboot/fastboot-recover.sh
