@@ -6,6 +6,7 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -13,16 +14,21 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
-import androidx.compose.ui.layout.FirstBaseline
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.FirstBaseline
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -33,7 +39,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.precor.treadmill.R
 import com.precor.treadmill.ui.components.ProgramBrowser
+import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.TimerFontFamily
+import com.precor.treadmill.ui.theme.rememberGlassParams
 import com.precor.treadmill.ui.util.glowText
 import com.precor.treadmill.ui.util.timerText
 import com.precor.treadmill.ui.util.haptic
@@ -135,11 +143,42 @@ fun RunningScreen(
         (glyphAbove + glyphBelow + 2 * edgePadPx).toDp()
     }
 
+    val glassParams = rememberGlassParams(R.drawable.bg_forest)
+
     // 3-row layout: top (timer+metrics), middle (HUD), bottom (buttons)
-    Column(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF121210))
+            .background(Color.Black),
+    ) {
+        // Background image
+        Image(
+            painter = painterResource(R.drawable.bg_forest),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        // Overlay gradient
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.05f),
+                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
+                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
+                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.08f),
+                        ),
+                    ),
+                ),
+        )
+
+        CompositionLocalProvider(LocalGlassParams provides glassParams) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
             .padding(top = 0.dp, bottom = EdgePad),
     ) {
         // ROW 1: Timer + Metrics (wraps content)
@@ -194,6 +233,13 @@ fun RunningScreen(
                                 fontFamily = TimerFontFamily,
                                 letterSpacing = (-0.03).em,
                                 textAlign = TextAlign.Center,
+                                style = TextStyle(
+                                    shadow = Shadow(
+                                        color = Color.Black.copy(alpha = 0.5f),
+                                        offset = Offset(0f, 2f),
+                                        blurRadius = 12f,
+                                    ),
+                                ),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(timerTrimmedHeight)
@@ -211,6 +257,11 @@ fun RunningScreen(
                                     lineHeight = 96.sp,
                                     letterSpacing = (-0.03).em,
                                     fontFeatureSettings = "tnum",
+                                    shadow = Shadow(
+                                        color = Color.Black.copy(alpha = 0.5f),
+                                        offset = Offset(0f, 2f),
+                                        blurRadius = 12f,
+                                    ),
                                 ),
                                 modifier = Modifier
                                     .layout { measurable, constraints ->
@@ -307,6 +358,8 @@ fun RunningScreen(
         // ROW 3: Bottom bar (wraps content, no internal padding)
         BottomBar(viewModel = viewModel, externalPadding = true)
     }
+        } // CompositionLocalProvider
+    } // Box
 }
 
 @Composable
@@ -328,8 +381,34 @@ private fun RunningScreenLandscape(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF121210)),
+            .background(Color.Black),
     ) {
+        val glassParams = rememberGlassParams(R.drawable.bg_forest)
+
+        // Background image
+        Image(
+            painter = painterResource(R.drawable.bg_forest),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        // Overlay gradient
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.05f),
+                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
+                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
+                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.08f),
+                        ),
+                    ),
+                ),
+        )
+
         // Proportional scaling (reference: ~740dp tablet landscape)
         val h = maxHeight.value
         val w = maxWidth.value
@@ -346,6 +425,7 @@ private fun RunningScreenLandscape(
         }
 
         // 3-row layout: top (timer+metrics), middle (HUD+controls), bottom (buttons)
+        CompositionLocalProvider(LocalGlassParams provides glassParams) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -389,6 +469,13 @@ private fun RunningScreenLandscape(
                                     fontFamily = TimerFontFamily,
                                     letterSpacing = (-0.03).em,
                                     textAlign = TextAlign.Center,
+                                    style = TextStyle(
+                                        shadow = Shadow(
+                                            color = Color.Black.copy(alpha = 0.5f),
+                                            offset = Offset(0f, 2f),
+                                            blurRadius = 12f,
+                                        ),
+                                    ),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(lsTimerTrimmedHeight)
@@ -406,6 +493,11 @@ private fun RunningScreenLandscape(
                                         lineHeight = timerFontSize,
                                         letterSpacing = (-0.03).em,
                                         fontFeatureSettings = "tnum",
+                                        shadow = Shadow(
+                                            color = Color.Black.copy(alpha = 0.5f),
+                                            offset = Offset(0f, 2f),
+                                            blurRadius = 12f,
+                                        ),
                                     ),
                                     modifier = Modifier
                                         .layout { measurable, constraints ->
@@ -462,6 +554,7 @@ private fun RunningScreenLandscape(
             // ROW 3: Stop/Resume buttons (wraps content, no internal padding)
             BottomBar(viewModel = viewModel, showControls = false, externalPadding = true)
         }
+        } // CompositionLocalProvider
     }
 }
 

@@ -1,0 +1,25 @@
+# Phase-1 DietPi unattended install for Pi Zero 2 W (boots to key-only SSH).
+# Pubkey + password are injected by prepare-sd.sh. Keys verified against the
+# live DietPi template by `prepare-sd.sh --check`.
+# WARNING: never flash this file directly. prepare-sd.sh replaces the
+# __INJECTED__ placeholders first; flashing it un-injected disables password
+# SSH and installs an invalid key = no way in (the Zero 2 W has no screen).
+AUTO_SETUP_AUTOMATED=1
+AUTO_SETUP_NET_HOSTNAME=rpi-zero
+AUTO_SETUP_NET_WIFI_ENABLED=1
+# Change for non-US deployments — wrong regulatory domain can break WiFi:
+AUTO_SETUP_NET_WIFI_COUNTRY_CODE=US
+AUTO_SETUP_HEADLESS=1
+AUTO_SETUP_SSH_SERVER_INDEX=-2
+AUTO_SETUP_SSH_PUBKEY=__INJECTED__
+SOFTWARE_DISABLE_SSH_PASSWORD_LOGINS=1
+AUTO_SETUP_GLOBAL_PASSWORD=__INJECTED__
+AUTO_SETUP_INSTALL_SOFTWARE_ID=
+# 0 = run /boot/Automation_Custom_Script.sh (NOT "disabled"; a URL value
+# would fetch+run remotely). Disable only by omitting that script from the SD.
+AUTO_SETUP_CUSTOM_SCRIPT_EXEC=0
+AUTO_SETUP_BOOT_WAIT_FOR_NETWORK=0
+CONFIG_CHECK_DIETPI_UPDATES=0
+CONFIG_CHECK_APT_UPDATES=0
+SURVEY_OPTED_IN=0
+AUTO_SETUP_SWAPFILE_SIZE=0

@@ -26,6 +26,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LocalGlassParams
+import com.precor.treadmill.ui.theme.glassPanel
 import com.precor.treadmill.ui.theme.touchFingertip
 import com.precor.treadmill.ui.theme.touchFingerPad
 import com.precor.treadmill.ui.util.haptic
@@ -136,15 +138,7 @@ private fun ControlPanel(
 
     Row(
         modifier = modifier
-            .background(
-                color = Color(0xFF1E1D1B),
-                shape = RoundedCornerShape(16.dp),
-            )
-            .border(
-                width = 1.dp,
-                color = Color.White.copy(alpha = 0.25f),
-                shape = RoundedCornerShape(16.dp),
-            )
+            .glassPanel(LocalGlassParams.current, RoundedCornerShape(16.dp))
             .padding(5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(1.dp),

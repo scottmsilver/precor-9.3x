@@ -1,0 +1,5 @@
+[Unit]
+Description=Treadmill critical (network-independent) early slot
+DefaultDependencies=no
+After=local-fs.target sysinit.target
+Requires=sysinit.target

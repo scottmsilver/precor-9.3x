@@ -1,0 +1,12 @@
+[Unit]
+Description=Fast-boot cached-lease network bring-up (wlan0)
+DefaultDependencies=no
+After=sysinit.target
+Before=network.target
+Wants=network.target
+[Service]
+Type=oneshot
+ExecStart=/boot/fastboot/wifi-fastpath.sh
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

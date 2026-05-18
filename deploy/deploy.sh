@@ -3,120 +3,125 @@ set -euo pipefail
 
 # cd to project root (parent of deploy/)
 cd "$(dirname "$0")/.."
-
 SCRIPT_DIR="$(pwd)"
 LOCK_SCRIPT="$SCRIPT_DIR/scripts/pi-lock.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/deploy/lib-artifacts.sh"
 
-PI_HOST="${PI_HOST:-rpi}"
+PI_HOST="${PI_HOST:-rpi-zero}"     # Zero 2 W is primary; Pi 4 (rpi) is the spare
 PI_DIR="${PI_DIR:-treadmill}"
-PI_USER="${PI_USER:-$(ssh "$PI_HOST" whoami)}"
 VENV_DIR="${VENV_DIR:-.venv}"
+MANIFEST="$SCRIPT_DIR/deploy/manifest.txt"
+SERVER_PORT="${SERVER_PORT:-8000}"
 
 render_service() {
-    sed -e "s|@USER@|$PI_USER|g" \
-        -e "s|@DEPLOY_DIR@|$PI_DIR|g" \
-        -e "s|@VENV_DIR@|$VENV_DIR|g" \
-        "$1"
+  # PI_USER only resolved for real runs (needs ssh); dry-run uses a token.
+  sed -e "s|@USER@|${PI_USER:-@USER@}|g" \
+      -e "s|@DEPLOY_DIR@|$PI_DIR|g" \
+      -e "s|@VENV_DIR@|$VENV_DIR|g" "$1"
 }
 
 stage() {
-    echo "=== Staging build/ ==="
-    rm -rf build && mkdir -p build/services build/static
+  echo "=== Staging build/ (from manifest) ==="
+  mkdir -p build/services build/static build/python
+  cp python/server.py python/workout_session.py python/program_engine.py \
+     python/treadmill_client.py python/hrm_client.py python/workout_db.py \
+     python/db.py build/python/
+  cp gpio.json pyproject.toml build/
+  cp deploy/setup.sh deploy/lib-artifacts.sh deploy/manifest.txt build/
+  chmod +x build/setup.sh
+  echo "Building UI..."
+  rm -rf static/assets && mkdir -p static/assets
+  (cd web && npx vite build)
+  cp -r static/index.html static/assets build/static/
+  for tmpl in deploy/*.service.in; do
+    name=$(basename "$tmpl" .in)
+    render_service "$tmpl" > "build/services/$name"
+  done
+  echo "Staged to build/ (binaries come from \`make cross\`)"
+}
 
-    # C++ source + build system (built on Pi via `make -C cpp`)
-    cp -r cpp/ build/cpp/
-    cp -r third_party/ build/third_party/
-    cp gpio.json build/
+# Best-effort belt-safety: read-only probe of the live server's /api/status
+# (no host mutation). A moving belt aborts unless FORCE=1. Unreachable server
+# => warn + proceed (a down server cannot be mid-web-workout; treadmill_io is
+# still restarted last+atomically so its safety gap is minimal).
+# DEPLOY_STATUS_OVERRIDE lets the test inject a status without a host.
+#
+# CRITICAL: must check BOTH "speed" AND "emu_speed_mph". In emulate mode the
+# server emits "speed": null (no motor reading) while the belt moves under
+# emu_speed_mph (server.py build_status). Probing only "speed" would
+# false-negative a moving emulate workout and let the deploy bounce
+# treadmill_io mid-run. The quote-delimited "speed" token does not collide
+# with "emu_speed"/"emu_speed_mph"; the digit-led capture ignores null.
+belt_is_moving() {
+  local json s key
+  if [ -n "${DEPLOY_STATUS_OVERRIDE:-}" ]; then
+    json="$DEPLOY_STATUS_OVERRIDE"
+  else
+    json=$(curl -sk --max-time 5 "https://$PI_HOST:$SERVER_PORT/api/status" 2>/dev/null || true)
+  fi
+  [ -n "$json" ] || { echo "WARN: could not read /api/status (server down?) — proceeding" >&2; return 1; }
+  for key in '"speed"' '"emu_speed_mph"'; do
+    s=$(printf '%s' "$json" | sed -n "s/.*$key[[:space:]]*:[[:space:]]*\\([0-9][0-9.]*\\).*/\\1/p")
+    [ -n "$s" ] && awk -v v="$s" 'BEGIN{exit (v+0>0)?0:1}' && return 0
+  done
+  return 1
+}
 
-    # Python
-    mkdir -p build/python
-    cp python/server.py python/workout_session.py python/program_engine.py \
-       python/treadmill_client.py python/hrm_client.py python/workout_db.py \
-       python/db.py build/python/
-    cp pyproject.toml build/
-
-    # Setup script
-    cp deploy/setup.sh build/
-    chmod +x build/setup.sh
-
-    # UI
-    echo "Building UI..."
-    rm -rf static/assets && mkdir -p static/assets
-    (cd web && npx vite build)
-    cp -r static/index.html static/assets build/static/
-
-    # FTMS binary (if cross-compiled)
-    FTMS_BIN="rust/ftms/target/aarch64-unknown-linux-gnu/release/ftms-daemon"
-    if [ -f "$FTMS_BIN" ]; then
-        cp "$FTMS_BIN" build/
-    fi
-
-    # HRM binary (if cross-compiled)
-    HRM_BIN="rust/hrm/target/aarch64-unknown-linux-gnu/release/hrm-daemon"
-    if [ -f "$HRM_BIN" ]; then
-        cp "$HRM_BIN" build/
-    fi
-
-    # Render service templates
-    for tmpl in deploy/*.service.in; do
-        name=$(basename "$tmpl" .in)
-        render_service "$tmpl" > "build/services/$name"
-    done
-
-    echo "Staged to build/"
+print_plan() {
+  echo "=== Deploy plan -> $PI_HOST:~/$PI_DIR (host: $PI_HOST) ==="
+  manifest_rows "$MANIFEST" | while IFS=$'\t' read -r kind src dest mode owner; do
+    echo "  install $kind  $src  ->  $dest  ($mode $owner)"
+  done
+  echo "  restart order: treadmill-server, ftms, hrm  THEN  treadmill_io (last, atomic)"
+  if belt_is_moving; then
+    echo "  ABORT: belt is moving (speed>0) — refusing deploy (use --force to override)"
+  fi
 }
 
 deploy_full() {
-    stage
-
-    # Acquire Pi lock (blocks if another worktree is deploying).
-    # Uses `source` (not subprocess) so fd 9 stays open in this shell,
-    # holding the flock for the duration of the deploy.
-    if [ -x "$LOCK_SCRIPT" ]; then
-        source "$LOCK_SCRIPT" acquire "deploy from $(basename "$SCRIPT_DIR")"
-    fi
-
-    echo "=== Deploying to $PI_HOST:~/$PI_DIR ==="
-    ssh "$PI_HOST" "mkdir -p ~/$PI_DIR"
-    rsync -az --delete \
-        --exclude='*.o' --exclude='*.d' --exclude='*.test.o' \
-        --exclude='.gemini_key' --exclude='*.pem' \
-        --exclude='program_history.json' --exclude='saved_workouts.json' \
-        --exclude='__pycache__' \
-        build/ "$PI_HOST":~/$PI_DIR/
-
-    # Build C binary on Pi
-    echo "Building on Pi..."
-    ssh "$PI_HOST" "cd ~/$PI_DIR && make -C cpp"
-
-    # Run setup (installs binaries, services, restarts)
-    echo "Running setup..."
-    ssh "$PI_HOST" "cd ~/$PI_DIR && bash setup.sh"
-
-    echo "Done!"
-    echo "  Services: sudo systemctl status treadmill-io treadmill-server ftms hrm"
-    echo "  UI: https://$PI_HOST:8000"
+  manifest_rows "$MANIFEST" >/dev/null    # fail closed before any host contact
+  stage
+  PI_USER="${PI_USER:-$(ssh "$PI_HOST" whoami)}"
+  # Re-render now that PI_USER is resolved (stage() rendered with the @USER@
+  # token for --stage-only; here we substitute the real deploy user).
+  for tmpl in deploy/*.service.in; do
+    name=$(basename "$tmpl" .in); render_service "$tmpl" > "build/services/$name"
+  done
+  if belt_is_moving && [ "${FORCE:-0}" != 1 ]; then
+    echo "REFUSING: belt is moving on $PI_HOST. Stop the belt or set FORCE=1." >&2
+    exit 1
+  fi
+  if [ -x "$LOCK_SCRIPT" ]; then
+    source "$LOCK_SCRIPT" acquire "deploy from $(basename "$SCRIPT_DIR")"
+  fi
+  echo "=== Deploying to $PI_HOST:~/$PI_DIR ==="
+  ssh "$PI_HOST" "mkdir -p ~/$PI_DIR"
+  # Never partial: rsync fully completes before any systemctl.
+  rsync -az --delete \
+    --exclude='*.o' --exclude='*.d' --exclude='*.test.o' \
+    --exclude='.gemini_key' --exclude='*.pem' \
+    --exclude='program_history.json' --exclude='saved_workouts.json' \
+    --exclude='__pycache__' \
+    build/ "$PI_HOST":~/"$PI_DIR"/
+  echo "Running setup (manifest install + ordered atomic restart)..."
+  ssh "$PI_HOST" "cd ~/$PI_DIR && bash setup.sh"
+  echo "Done!  UI: https://$PI_HOST:$SERVER_PORT"
 }
 
 deploy_ui() {
-    echo "=== Deploying UI to $PI_HOST ==="
-    rm -rf static/assets && mkdir -p static/assets build/static
-    (cd web && npx vite build)
-    cp -r static/index.html static/assets build/static/
-
-    ssh "$PI_HOST" "rm -rf ~/$PI_DIR/static/assets && mkdir -p ~/$PI_DIR/static/assets"
-    rsync -az build/static/ "$PI_HOST":~/$PI_DIR/static/
-    echo "Done! UI deployed."
+  echo "=== Deploying UI to $PI_HOST ==="
+  rm -rf static/assets && mkdir -p static/assets build/static
+  (cd web && npx vite build)
+  cp -r static/index.html static/assets build/static/
+  ssh "$PI_HOST" "rm -rf ~/$PI_DIR/static/assets && mkdir -p ~/$PI_DIR/static/assets"
+  rsync -az build/static/ "$PI_HOST":~/"$PI_DIR"/static/
+  echo "Done! UI deployed."
 }
 
 case "${1:-}" in
-    ui)
-        deploy_ui
-        ;;
-    --stage-only)
-        stage
-        ;;
-    *)
-        deploy_full
-        ;;
+  --dry-run)    print_plan ;;
+  --stage-only) stage ;;
+  ui)           deploy_ui ;;
+  *)            deploy_full ;;
 esac

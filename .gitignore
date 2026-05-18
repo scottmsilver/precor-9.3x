@@ -85,3 +85,9 @@ worktree.env
 # iOS build artifacts
 ios/Treddy.xcodeproj/xcuserdata/
 ios/DerivedData/
+
+# Provisioning secrets (operator-supplied + prepare-sd.sh output, never commit)
+provisioning/dietpi/secrets.env*
+!provisioning/dietpi/secrets.env.example
+provisioning/dietpi/dietpi-wifi.txt*
+!provisioning/dietpi/dietpi-wifi.txt.example

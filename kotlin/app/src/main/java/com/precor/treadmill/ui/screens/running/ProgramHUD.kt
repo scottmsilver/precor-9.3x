@@ -34,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LocalGlassParams
+import com.precor.treadmill.ui.theme.glassPanel
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -125,15 +127,7 @@ fun ProgramHUD(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    color = Color(0xFF1E1D1B),
-                    shape = RoundedCornerShape(16.dp),
-                )
-                .border(
-                    width = 1.dp,
-                    color = Color.White.copy(alpha = 0.25f),
-                    shape = RoundedCornerShape(16.dp),
-                )
+                .glassPanel(LocalGlassParams.current, RoundedCornerShape(16.dp))
                 .onGloballyPositioned { cardCoords = it }
                 .onSizeChanged { cardSize = it }
                 .pointerInput(pgm.running, pgm.intervalCount) {
@@ -247,7 +241,7 @@ fun ProgramHUD(
                         .align(Alignment.TopEnd)
                         .padding(top = 8.dp, end = 10.dp)
                         .background(
-                            color = Color(0xFF1E1D1B).copy(alpha = 0.6f),
+                            color = Color.Black.copy(alpha = LocalGlassParams.current.panelOpacity),
                             shape = RoundedCornerShape(4.dp),
                         )
                         .padding(horizontal = 8.dp, vertical = 2.dp),

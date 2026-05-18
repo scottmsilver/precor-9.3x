@@ -1,0 +1,10 @@
+[Unit]
+Description=Fast-boot Path A probe (timestamps the early slot)
+DefaultDependencies=no
+After=local-fs.target sysinit.target
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo "pathA-fired uptime=$(cut -d\" \" -f1 /proc/uptime)"'
+RemainAfterExit=yes
+[Install]
+WantedBy=treadmill-critical.target
