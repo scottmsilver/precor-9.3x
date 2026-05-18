@@ -26,21 +26,22 @@ private const val MT = 4f   // margin top
 private const val MB = 18f  // margin bottom
 private const val TICK = 4f
 
-private val doneAreaColor = Color(0xFF6BC89B).copy(alpha = 0.18f)
-private val futureAreaColor = Color(0xFF6BC89B).copy(alpha = 0.08f)
-private val doneStrokeColor = Color(0xFF6BC89B).copy(alpha = 0.5f)
-private val futureStrokeColor = Color(0xFF6BC89B).copy(alpha = 0.18f)
-private val axisColor = Color(0xFFE8E4DF).copy(alpha = 0.2f)
-private val gridColor = Color(0xFFE8E4DF).copy(alpha = 0.12f)
-private val tickColor = Color(0xFFE8E4DF).copy(alpha = 0.25f)
-private val labelColor = Color(0xFFE8E4DF).copy(alpha = 0.5f)
+// Boosted for visibility over glass panels
+private val doneAreaColor = Color(0xFF6BC89B).copy(alpha = 0.35f)
+private val futureAreaColor = Color(0xFF6BC89B).copy(alpha = 0.15f)
+private val doneStrokeColor = Color(0xFF6BC89B).copy(alpha = 0.7f)
+private val futureStrokeColor = Color(0xFF6BC89B).copy(alpha = 0.30f)
+private val axisColor = Color(0xFFE8E4DF).copy(alpha = 0.35f)
+private val gridColor = Color(0xFFE8E4DF).copy(alpha = 0.20f)
+private val tickColor = Color(0xFFE8E4DF).copy(alpha = 0.40f)
+private val labelColor = Color(0xFFE8E4DF).copy(alpha = 0.65f)
 private val dotColor = Color(0xFF6BC89B)
 private val dotBorderColor = Color(0xFFE8E4DF)
-private val stepDotCompletedColor = Color(0xFF6BC89B).copy(alpha = 0.8f)
+private val stepDotCompletedColor = Color(0xFF6BC89B).copy(alpha = 0.9f)
 private val stepDotCurrentColor = Color(0xFF6BC89B)
-private val stepDotCurrentGlowColor = Color(0xFF6BC89B).copy(alpha = 0.15f)
-private val stepDotFutureStrokeColor = Color(0xFFE8E4DF).copy(alpha = 0.3f)
-private val stepTrackColor = Color(0xFFE8E4DF).copy(alpha = 0.1f)
+private val stepDotCurrentGlowColor = Color(0xFF6BC89B).copy(alpha = 0.25f)
+private val stepDotFutureStrokeColor = Color(0xFFE8E4DF).copy(alpha = 0.45f)
+private val stepTrackColor = Color(0xFFE8E4DF).copy(alpha = 0.18f)
 
 private fun inclineY(inc: Float, yMax: Float): Float = MT + H - PAD - (inc / yMax) * (H - PAD * 2)
 

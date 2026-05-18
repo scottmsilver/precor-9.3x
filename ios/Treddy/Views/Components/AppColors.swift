@@ -29,4 +29,26 @@ enum AppColors {
     static let red = Color(.systemRed)
     static let yellow = Color(.systemYellow)
     static let purple = Color(.systemPurple)
+
+    // Glass panel styling for running screen photo background
+    static let glassBackground = Color.black.opacity(0.40)
+    static let glassBorder = Color.white.opacity(0.28)
+    static let glassStopBackground = Color(.systemRed).opacity(0.38)
+    static let glassStopBorder = Color(.systemRed).opacity(0.45)
+}
+
+struct GlassPanel: ViewModifier {
+    var cornerRadius: CGFloat = 12
+
+    func body(content: Content) -> some View {
+        content
+            .background(AppColors.glassBackground, in: RoundedRectangle(cornerRadius: cornerRadius))
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(AppColors.glassBorder, lineWidth: 1))
+    }
+}
+
+extension View {
+    func glassPanel(cornerRadius: CGFloat = 12) -> some View {
+        modifier(GlassPanel(cornerRadius: cornerRadius))
+    }
 }

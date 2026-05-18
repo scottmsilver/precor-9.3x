@@ -32,11 +32,13 @@ data class GlassParams(
 
         fun fromBrightness(brightness: Float): GlassParams {
             val b = brightness.coerceIn(0f, 255f)
+            // Tint opacity is the primary readability lever.
+            // Min 38% ensures glass is always clearly visible against any photo.
             return GlassParams(
                 blur = (b * 0.012f).coerceIn(0f, 3f).dp,
-                panelOpacity = (b * 0.25f).coerceIn(18f, 48f) / 100f,
-                borderOpacity = (45f - b * 0.12f).coerceIn(15f, 35f) / 100f,
-                overlayOpacity = ((b - 60f) * 0.15f).coerceIn(3f, 25f) / 100f,
+                panelOpacity = (38f + b * 0.06f).coerceIn(38f, 52f) / 100f,
+                borderOpacity = (45f - b * 0.08f).coerceIn(22f, 38f) / 100f,
+                overlayOpacity = (10f + (b - 60f) * 0.10f).coerceIn(10f, 28f) / 100f,
             )
         }
 
@@ -93,7 +95,7 @@ fun Modifier.glassPanel(
 fun Modifier.glassPanelTinted(
     params: GlassParams,
     tint: Color,
-    tintAlpha: Float = 0.8f,
+    tintAlpha: Float = 1.0f,
     shape: RoundedCornerShape = RoundedCornerShape(14.dp),
 ): Modifier {
     var m = this

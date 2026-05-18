@@ -71,6 +71,8 @@ fun ProfilePickerScreen(
     var showAddDialog by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    // Confirmation dialog for switching during active session
+    var pendingSwitch by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.fetchProfiles()
@@ -151,7 +153,20 @@ fun ProfilePickerScreen(
                                         },
                                         onError = { err ->
                                             loading = false
-                                            errorMsg = err
+                                            if (err.contains("active session", ignoreCase = true) || err.contains("409", ignoreCase = true)) {
+                                                pendingSwitch = {
+                                                    loading = true
+                                                    viewModel.stopAndReset {
+                                                        viewModel.selectProfile(
+                                                            id = item.profile.id,
+                                                            onSuccess = { loading = false; onProfileSelected() },
+                                                            onError = { loading = false; errorMsg = it },
+                                                        )
+                                                    }
+                                                }
+                                            } else {
+                                                errorMsg = err
+                                            }
                                         },
                                     )
                                 },
@@ -171,7 +186,19 @@ fun ProfilePickerScreen(
                                         },
                                         onError = { err ->
                                             loading = false
-                                            errorMsg = err
+                                            if (err.contains("active session", ignoreCase = true) || err.contains("409", ignoreCase = true)) {
+                                                pendingSwitch = {
+                                                    loading = true
+                                                    viewModel.stopAndReset {
+                                                        viewModel.startGuest(
+                                                            onSuccess = { loading = false; onProfileSelected() },
+                                                            onError = { loading = false; errorMsg = it },
+                                                        )
+                                                    }
+                                                }
+                                            } else {
+                                                errorMsg = err
+                                            }
                                         },
                                     )
                                 },
@@ -200,6 +227,32 @@ fun ProfilePickerScreen(
                 )
             }
         }
+    }
+
+    // Confirm end workout to switch profile
+    if (pendingSwitch != null) {
+        AlertDialog(
+            onDismissRequest = { pendingSwitch = null },
+            containerColor = colors.card,
+            titleContentColor = colors.text,
+            textContentColor = colors.text2,
+            title = { Text("End current workout?", fontWeight = FontWeight.Bold) },
+            text = { Text("Switching profiles will end your active workout.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val action = pendingSwitch
+                    pendingSwitch = null
+                    action?.invoke()
+                }) {
+                    Text("End & Switch", color = colors.red)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSwitch = null }) {
+                    Text("Cancel", color = colors.text3)
+                }
+            },
+        )
     }
 
     // Add profile dialog

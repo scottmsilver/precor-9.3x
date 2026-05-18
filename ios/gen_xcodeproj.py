@@ -18,6 +18,27 @@ def collect_swift(directory):
     return files
 
 
+# Map of file extensions to Xcode lastKnownFileType values
+RESOURCE_TYPES = {
+    ".jpg": "image.jpeg",
+    ".jpeg": "image.jpeg",
+    ".png": "image.png",
+    ".json": "text.json",
+}
+
+
+def collect_resources(directory):
+    """Collect non-Swift resource files (images, JSON, etc.)."""
+    files = []
+    for dirpath, _, filenames in os.walk(directory):
+        for f in sorted(filenames):
+            ext = os.path.splitext(f)[1].lower()
+            if ext in RESOURCE_TYPES:
+                rel = os.path.join(dirpath, f)
+                files.append((rel, f, uid(), uid(), RESOURCE_TYPES[ext]))
+    return files
+
+
 def main():
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -26,6 +47,9 @@ def main():
     test_files = collect_swift("TreddyTests")
     uitest_files = collect_swift("TreddyUITests")
 
+    # Collect resource files (images, etc.)
+    resource_files = collect_resources("Treddy/Resources")
+
     # Generate IDs
     root = uid()
     main_grp = uid()
@@ -33,6 +57,7 @@ def main():
     product_ref = uid()
     target = uid()
     src_phase = uid()
+    res_phase = uid()
     fw_phase = uid()
     cfg_list_proj = uid()
     cfg_list_tgt = uid()
@@ -52,14 +77,24 @@ def main():
     a("    objects = {")
     a("")
 
-    # File references
+    # File references — Swift
     for rel, name, fid, _ in swift_files:
         a(
             f'        {fid} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "{rel}"; sourceTree = "<group>"; }};'
         )
 
-    # Build files
+    # File references — Resources
+    for rel, name, fid, _, filetype in resource_files:
+        a(
+            f'        {fid} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = {filetype}; path = "{rel}"; sourceTree = "<group>"; }};'
+        )
+
+    # Build files — Swift
     for _, name, fid, bid in swift_files:
+        a(f"        {bid} /* {name} */ = {{isa = PBXBuildFile; fileRef = {fid}; }};")
+
+    # Build files — Resources
+    for _, name, fid, bid, _ in resource_files:
         a(f"        {bid} /* {name} */ = {{isa = PBXBuildFile; fileRef = {fid}; }};")
 
     # Product ref
@@ -68,7 +103,9 @@ def main():
     )
 
     # Groups
-    children = ", ".join(fid for _, _, fid, _ in swift_files)
+    swift_children = [fid for _, _, fid, _ in swift_files]
+    resource_children = [fid for _, _, fid, _, _ in resource_files]
+    children = ", ".join(swift_children + resource_children)
     a(f'        {main_grp} = {{isa = PBXGroup; children = ({children}, {products_grp}); sourceTree = "<group>"; }};')
     a(
         f'        {products_grp} = {{isa = PBXGroup; children = ({product_ref}); name = Products; sourceTree = "<group>"; }};'
@@ -79,6 +116,13 @@ def main():
     a(
         f"        {src_phase} = {{isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({build_file_ids}); runOnlyForDeploymentPostprocessing = 0; }};"
     )
+
+    # Resources build phase
+    res_build_ids = ", ".join(bid for _, _, _, bid, _ in resource_files)
+    a(
+        f"        {res_phase} = {{isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({res_build_ids}); runOnlyForDeploymentPostprocessing = 0; }};"
+    )
+
     a(
         f"        {fw_phase} = {{isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; }};"
     )
@@ -87,7 +131,7 @@ def main():
     a(f"        {target} = {{")
     a("            isa = PBXNativeTarget;")
     a(f"            buildConfigurationList = {cfg_list_tgt};")
-    a(f"            buildPhases = ({src_phase}, {fw_phase});")
+    a(f"            buildPhases = ({src_phase}, {res_phase}, {fw_phase});")
     a("            buildRules = ();")
     a("            dependencies = ();")
     a("            name = Treddy;")
@@ -159,7 +203,7 @@ def main():
     with open("Treddy.xcodeproj/project.pbxproj", "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    print(f"Generated Treddy.xcodeproj with {len(swift_files)} Swift files")
+    print(f"Generated Treddy.xcodeproj with {len(swift_files)} Swift files, {len(resource_files)} resources")
 
 
 if __name__ == "__main__":
