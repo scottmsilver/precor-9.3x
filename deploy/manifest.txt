@@ -1,0 +1,21 @@
+# Treadmill software family install manifest — single source of truth.
+# Consumed as DATA by deploy/lib-artifacts.sh (never sourced).
+# Columns:  kind  src  dest  mode  owner
+#   kind  : bin | tree | file | unit
+#   src   : path relative to repo root (no leading '/', no '..')
+#   dest  : install path; must be under /usr/local/bin, /etc/systemd/system,
+#           or a ~ / /home/ user root.  @USER@ resolved per host.
+#   mode  : octal file mode
+#   owner : root | @USER@
+# NOTE: trailing-slash on tree src/dest is convention, NOT validated — consumers must not assume it.
+bin   build/treadmill_io              /usr/local/bin/treadmill_io          0755 root
+bin   build/ftms-daemon               /usr/local/bin/ftms-daemon           0755 root
+bin   build/hrm-daemon                /usr/local/bin/hrm-daemon            0755 root
+tree  build/python/                   ~/treadmill/python/                  0644 @USER@
+file  build/gpio.json                 ~/treadmill/gpio.json                0644 @USER@
+file  build/pyproject.toml            ~/treadmill/pyproject.toml           0644 @USER@
+tree  build/static/                   ~/treadmill/static/                  0644 @USER@
+unit  build/services/treadmill-io.service      /etc/systemd/system/        0644 root
+unit  build/services/treadmill-server.service  /etc/systemd/system/        0644 root
+unit  build/services/ftms.service              /etc/systemd/system/        0644 root
+unit  build/services/hrm.service               /etc/systemd/system/        0644 root

@@ -124,10 +124,28 @@ if [ -d "$DIETPI_DIR/fastboot" ]; then
   tar czf "$stage/fastboot.tgz" -C "$DIETPI_DIR" fastboot
 fi
 
+# Full software family: if the caller cross-built artifacts into ./build,
+# ship them as one tarball alongside the manifest so first-boot installs the
+# appliance. Bake is opt-in: absent build/ => image is boot-to-SSH only.
+FAMILY_ROOT=${FAMILY_ROOT:-"$DIETPI_DIR/../../build"}
+if [ -d "$FAMILY_ROOT" ] && [ -f "$DIETPI_DIR/../../deploy/manifest.txt" ]; then
+  fam=$(mktemp -d)
+  trap 'rm -rf "$stage" "$fam"' EXIT   # extend the existing $stage trap so a
+                                       # set -e abort here cannot leak $fam
+  cp -r "$FAMILY_ROOT" "$fam/build"
+  mkdir -p "$fam/deploy"
+  cp "$DIETPI_DIR/../../deploy/manifest.txt" \
+     "$DIETPI_DIR/../../deploy/lib-artifacts.sh" \
+     "$DIETPI_DIR/../../deploy/setup.sh" "$fam/deploy/"
+  tar czf "$stage/family.tgz" -C "$fam" build deploy
+  rm -rf "$fam"
+fi
+
 # DietPi reads these from the FAT partition root.
 cp "$stage/dietpi.txt" "$stage/dietpi-wifi.txt" "$stage/Automation_Custom_Script.sh" "$boot/"
 extra=""
 if [ -f "$stage/fastboot.tgz" ]; then cp "$stage/fastboot.tgz" "$boot/"; extra=", fastboot.tgz"; fi
+if [ -f "$stage/family.tgz" ];   then cp "$stage/family.tgz"   "$boot/"; extra="$extra, family.tgz"; fi
 sync
 echo "WROTE: dietpi.txt, dietpi-wifi.txt, Automation_Custom_Script.sh${extra} -> $boot"
 echo "Eject, boot the Zero 2 W, wait ~3-4 min, then: ssh dietpi@rpi-zero.local"

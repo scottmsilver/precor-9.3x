@@ -8,14 +8,25 @@ Reverse-engineering and control toolkit for the Precor 9.31 treadmill serial bus
 
 ## Deployment
 
-The Raspberry Pi connected to the treadmill is at host `rpi`. All four services are managed via systemd and deployed with `make deploy`.
+The treadmill controller is the Pi Zero 2 W at host `rpi-zero` (primary); the Pi 4 `rpi` is a hot spare. `PI_HOST` selects the target (default `rpi-zero`). All four services are systemd-managed.
+
+Compiled code (C++ `treadmill_io`, Rust `ftms-daemon`/`hrm-daemon`) is **cross-built off-Pi** in one aarch64 Docker toolchain; build-on-Pi is retired. The Python venv is still `pip`-installed on the Pi. Install is driven by the single source of truth `deploy/manifest.txt` (parsed as data), shared by the live deployer and the image baker so a flashed Pi and an rsync'd Pi are byte-identical. Deploy refuses to run while the belt is moving (queries /api/status; `FORCE=1` overrides). `treadmill_io` is wired into the network-independent Path A slot (`treadmill-critical.target`) so belt control starts early. On the 512MB Zero, run the headroom gate after deploy: `bash deploy/tests/mem-headroom.sh` (asserts ≥40MB MemAvailable, 0 oom-kill).
 
 ```bash
-# Deploy everything to Pi (stages build/, rsyncs, builds on Pi, restarts all services):
+# Build all 3 aarch64 binaries in containers -> build/
+make cross
+
+# Cross-build + manifest rsync + ordered atomic restart (treadmill_io last):
 make deploy                    # or: deploy/deploy.sh
 
-# Stage build/ directory without deploying:
+# Bake a flashable full-appliance .img (provisioning toolkit):
+make image
+
+# Assemble build/ without deploying:
 make stage
+
+# Target the Pi 4 spare instead of the Zero:
+PI_HOST=rpi make deploy
 
 # Services on Pi (managed by systemd, auto-start on boot):
 sudo systemctl status treadmill-io      # C++ GPIO daemon
@@ -28,6 +39,7 @@ sudo systemctl status hrm               # HRM Bluetooth daemon
 #   treadmill-io  ←  ftms (After+Wants)
 #   bluetooth     ←  ftms (After+Requires)
 #   bluetooth     ←  hrm (After+Requires)
+#   treadmill-critical.target  ←  treadmill-io (Path A, network-independent early start)
 
 # Service templates in deploy/*.service.in (rendered during stage)
 

@@ -89,4 +89,52 @@ if [ ! -f /boot/fastboot/.fastboot.applied ] && [ -n "$FW" ] && [ -f "$FW/fastbo
   fi
 fi
 
+# --- Full software family install (manifest-driven, idempotent) -------------
+# Reuses the audited safe-extract posture from the fast-boot fold-back:
+# refuse absolute / ".." members, extract to a temp dir with hardening
+# flags, then install strictly via the shared manifest. dash/POSIX only.
+if [ ! -f /boot/fastboot/.family.applied ] && [ -n "$FW" ] && [ -f "$FW/family.tgz" ]; then
+  fok=1
+  ftx=$(mktemp -d)
+  if tar tzf "$FW/family.tgz" 2>/dev/null | grep -qE '^/|(^|/)\.\.(/|$)'; then
+    logger -t fastboot "family: refusing unsafe family.tgz (absolute/.. paths)"; fok=0
+  else
+    tar xzf "$FW/family.tgz" -C "$ftx" --no-same-owner --no-same-permissions --no-overwrite-dir 2>/dev/null || fok=0
+  fi
+  # Defense-in-depth for the EXECUTE path (this block runs setup.sh, unlike
+  # the fold-back which only copies a fixed allowlist): the listed-name guard
+  # rejects absolute/.. names; additionally refuse ANY symlink member so a
+  # clean-named symlink cannot redirect the cp/exec to outside $ftx. The real
+  # payload (binaries, *.py, static, *.service, deploy/*) has no symlinks.
+  if [ "$fok" = 1 ] && find "$ftx" -type l 2>/dev/null | grep -q .; then
+    logger -t fastboot "family: refusing family.tgz with symlink members"; fok=0
+  fi
+  if [ "$fok" = 1 ] && [ -f "$ftx/deploy/setup.sh" ] && [ -f "$ftx/deploy/manifest.txt" ]; then
+    # setup.sh is the single install path (manifest-driven) shared with the
+    # live deployer; run it from the unpacked tree as the DietPi user.
+    SETUP_USER=$(getent passwd 1000 | cut -d: -f1)
+    [ -n "$SETUP_USER" ] || SETUP_USER=dietpi
+    chmod +x "$ftx/deploy/setup.sh"
+    mkdir -p "/home/$SETUP_USER/treadmill"
+    cp -r "$ftx/build/." "/home/$SETUP_USER/treadmill/" 2>/dev/null || fok=0
+    cp "$ftx/deploy/setup.sh" "$ftx/deploy/lib-artifacts.sh" \
+       "$ftx/deploy/manifest.txt" "/home/$SETUP_USER/treadmill/" 2>/dev/null || fok=0
+    chown -R "$SETUP_USER:$SETUP_USER" "/home/$SETUP_USER/treadmill" 2>/dev/null || true
+    if [ "$fok" = 1 ]; then
+      su - "$SETUP_USER" -c "cd ~/treadmill && bash setup.sh" 2>/dev/null || fok=0
+    fi
+  else
+    fok=0
+  fi
+  rm -rf "$ftx"
+  if [ "$fok" = 1 ]; then
+    mkdir -p /boot/fastboot
+    touch /boot/fastboot/.family.applied
+    echo "Automation_Custom_Script: treadmill software family installed"
+  else
+    logger -t fastboot "family install incomplete — NOT marking applied; will retry next boot"
+    echo "Automation_Custom_Script: family install incomplete (will retry)" >&2
+  fi
+fi
+
 exit 0

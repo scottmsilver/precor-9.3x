@@ -1,11 +1,13 @@
-PI_HOST ?= rpi
+PI_HOST ?= rpi-zero
 VENV_DIR ?= .venv
 FTMS_TARGET = aarch64-unknown-linux-gnu
 FTMS_BIN = rust/ftms/target/$(FTMS_TARGET)/release/ftms-daemon
 HRM_TARGET = aarch64-unknown-linux-gnu
 HRM_BIN = rust/hrm/target/$(HRM_TARGET)/release/hrm-daemon
+CPP_CROSS_IMG = treadmill-cross-cpp
 
-.PHONY: all clean test stage deploy ftms deploy-ftms test-ftms test-ftms-ble hrm deploy-hrm test-hrm test-pi test-all
+.PHONY: all clean test stage deploy image cross cross-cpp ftms deploy-ftms \
+        test-ftms test-ftms-ble hrm deploy-hrm test-hrm test-pi test-all
 
 all:
 	$(MAKE) -C cpp
@@ -17,10 +19,34 @@ clean:
 	$(MAKE) -C cpp clean
 	rm -rf build/
 
-stage: all
+# Build the aarch64 treadmill_io inside the pinned cross container.
+cross-cpp:
+	docker build -t $(CPP_CROSS_IMG) -f deploy/cross/Dockerfile.cpp deploy/cross
+	mkdir -p build
+	docker run --rm --user "$(shell id -u):$(shell id -g)" -v "$(CURDIR)":/src -w /src $(CPP_CROSS_IMG) \
+		make -C cpp CXX=aarch64-linux-gnu-g++
+	test -f build/treadmill_io   # cpp/Makefile writes here (project build-dir convention)
+
+# Build all three aarch64 binaries (C++ + both Rust daemons) off-Pi.
+cross: cross-cpp ftms hrm
+	mkdir -p build
+	cp $(FTMS_BIN) build/ftms-daemon
+	cp $(HRM_BIN) build/hrm-daemon
+
+stage: cross
 	deploy/deploy.sh --stage-only
 
-deploy:
+# Bake a flashable full-appliance image: cross-build everything, stage it,
+# then run the audited userspace image builder which carries build/ +
+# manifest into the .img via the provisioning toolkit.
+image: cross
+	deploy/deploy.sh --stage-only
+	provisioning/dietpi/build-image.sh
+	@echo "Image built. Flash with provisioning/dietpi/build-image.sh --flash /dev/sdX (operator)."
+
+# `make deploy` must still work (CLAUDE.md + Task 9 docs rely on it). It now
+# depends on `cross` so the manifest's binaries exist before deploy.sh rsyncs.
+deploy: cross
 	deploy/deploy.sh
 
 ftms:

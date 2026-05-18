@@ -10,4 +10,7 @@ Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=multi-user.target
+# Path A: belt-control transport starts in the network-independent early
+# slot (~6.7s) alongside multi-user. treadmill-critical.target is installed
+# by the provisioning fold-back; add-wants in setup.sh covers live deploys.
+WantedBy=multi-user.target treadmill-critical.target

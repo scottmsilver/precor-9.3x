@@ -203,6 +203,10 @@ stage_and_inject() {
     mcopy -o -i "$img@@$off" "$stage/fastboot.tgz" :: \
       || { echo "writing fastboot.tgz into image failed" >&2; return 1; }
   fi
+  if [ -f "$stage/family.tgz" ]; then
+    mcopy -o -i "$img@@$off" "$stage/family.tgz" :: \
+      || { echo "writing family.tgz into image failed" >&2; return 1; }
+  fi
 }
 
 # lsblk TYPE must be exactly "disk" (S4). Fails CLOSED: if lsblk errors OR
