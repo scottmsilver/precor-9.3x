@@ -109,9 +109,7 @@ struct ControlPanel: View {
         }
         .frame(maxHeight: .infinity)
         .padding(12)
-        .background(AppColors.card)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+        .glassPanel(cornerRadius: 16)
     }
 }
 

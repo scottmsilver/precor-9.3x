@@ -10,7 +10,18 @@ Reverse-engineering and control toolkit for the Precor 9.31 treadmill serial bus
 
 The treadmill controller is the Pi Zero 2 W at host `rpi-zero` (primary); the Pi 4 `rpi` is a hot spare. `PI_HOST` selects the target (default `rpi-zero`). All four services are systemd-managed.
 
-Compiled code (C++ `treadmill_io`, Rust `ftms-daemon`/`hrm-daemon`) is **cross-built off-Pi** in one aarch64 Docker toolchain; build-on-Pi is retired. The Python venv is still `pip`-installed on the Pi. Install is driven by the single source of truth `deploy/manifest.txt` (parsed as data), shared by the live deployer and the image baker so a flashed Pi and an rsync'd Pi are byte-identical. Deploy refuses to run while the belt is moving (queries /api/status; `FORCE=1` overrides). `treadmill_io` is wired into the network-independent Path A slot (`treadmill-critical.target`) so belt control starts early. On the 512MB Zero, run the headroom gate after deploy: `bash deploy/tests/mem-headroom.sh` (asserts ≥40MB MemAvailable, 0 oom-kill).
+**OS image (your hardware).** The Pi runs a stock Debian-based Pi OS that you
+build for your board with the reproducible image builder in `provisioning/`
+(see [`provisioning/dietpi/README.md`](provisioning/dietpi/README.md) — DietPi
+is the reference implementation; adapt regulatory/board settings for other
+hardware). You never hand-install OS packages: the deploy/setup step
+**auto-installs the OS runtime prerequisites** (`python3`, `python3-venv/pip`,
+`libpigpio1`, `rsync`) idempotently if missing, so a bare provisioned image
+and a fully-loaded one converge. This works on any Pi OS whose apt provides
+`libpigpio1` (DietPi and Raspberry Pi OS both pull `1.79-1+rpt1` from
+`archive.raspberrypi.com`).
+
+**Software.** Compiled code (C++ `treadmill_io`, Rust `ftms-daemon`/`hrm-daemon`) is **cross-built off-Pi** in one aarch64 Docker toolchain; build-on-Pi is retired. The Python venv is still `pip`-installed on the Pi. Install is driven by the single source of truth `deploy/manifest.txt` (parsed as data), shared by the live deployer and the image baker so a flashed Pi and an rsync'd Pi are byte-identical. The Gemini API key is a per-device secret — gitignored and deliberately rsync-excluded so a normal deploy never clobbers it; push it explicitly once per device with `make deploy-key` (local `./.gemini_key` → Pi). Deploy refuses to run while the belt is moving (queries /api/status; `FORCE=1` overrides). `treadmill_io` is wired into the network-independent Path A slot (`treadmill-critical.target`) so belt control starts early. On the 512MB Zero, run the headroom gate after deploy: `bash deploy/tests/mem-headroom.sh` (asserts ≥40MB MemAvailable, 0 oom-kill). The whole stack can be acceptance-checked end-to-end with `make ship-check` (belt-clear) / `make ship-check-nobelt`.
 
 ```bash
 # Build all 3 aarch64 binaries in containers -> build/
@@ -19,8 +30,15 @@ make cross
 # Cross-build + manifest rsync + ordered atomic restart (treadmill_io last):
 make deploy                    # or: deploy/deploy.sh
 
+# Push the per-device Gemini key (local ./.gemini_key -> Pi; once per device):
+make deploy-key
+
 # Bake a flashable full-appliance .img (provisioning toolkit):
 make image
+
+# Acceptance-check a live device end-to-end (one READY/NOT-READY verdict):
+make ship-check            # drives the belt — belt MUST be clear
+make ship-check-nobelt     # non-moving checks only (no treadmill needed)
 
 # Assemble build/ without deploying:
 make stage
@@ -372,3 +390,52 @@ All C++ code in `cpp/` must follow these rules. The environment is resource-cons
 - **Mobile/tablet first.** Touch targets 44px+, no hover-dependent interactions, responsive layout, haptic feedback.
 - **Dual-platform requirement.** All UI changes must be made in BOTH the web UI (`web/`) and Kotlin app (`kotlin/`) unless explicitly told otherwise.
 - **No external CDN dependencies.** The app runs on a treadmill that may not have internet. All assets (fonts, scripts, styles) must be self-hosted. Never load from Google Fonts, cdnjs, unpkg, or any external CDN. Fonts live in `web/public/fonts/` (copied to `static/fonts/` on build).
+
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+
+**Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
+
+## Session Completion
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+<!-- END BEADS INTEGRATION -->

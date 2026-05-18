@@ -119,9 +119,29 @@ deploy_ui() {
   echo "Done! UI deployed."
 }
 
+# The Gemini API key is a per-device secret: gitignored, and deliberately
+# rsync --exclude'd by deploy_full so a normal deploy NEVER clobbers or
+# deletes the key already on the Pi. `deploy.sh key` is the one explicit,
+# opt-in path that pushes the local ./.gemini_key to the target.
+deploy_key() {
+  local key="$SCRIPT_DIR/.gemini_key"
+  if [ ! -s "$key" ]; then
+    echo "REFUSING: no local ./.gemini_key to deploy (expected at $key)." >&2
+    echo "Obtain the key (e.g. scp from a working Pi) before running 'deploy.sh key'." >&2
+    exit 1
+  fi
+  echo "=== Deploying Gemini key -> $PI_HOST:~/$PI_DIR/.gemini_key ==="
+  ssh "$PI_HOST" "mkdir -p ~/$PI_DIR"
+  # scp then tighten perms; the key is owner-only on the device.
+  scp -q "$key" "$PI_HOST":~/"$PI_DIR"/.gemini_key
+  ssh "$PI_HOST" "chmod 600 ~/$PI_DIR/.gemini_key && sudo systemctl restart treadmill-server"
+  echo "Done! Key deployed ($(wc -c < "$key") bytes) and treadmill-server restarted."
+}
+
 case "${1:-}" in
   --dry-run)    print_plan ;;
   --stage-only) stage ;;
   ui)           deploy_ui ;;
+  key)          deploy_key ;;
   *)            deploy_full ;;
 esac

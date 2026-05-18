@@ -5,14 +5,16 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
 
 # Logs (large files)
 *.jsonl
 *.log
 
-# CSVs except logic analyzer captures
+# CSVs except logic-analyzer captures (cpp/captures/ — tracked for analysis)
 *.csv
-!src/captures/*.csv
+!cpp/captures/*.csv
 
 # Editor backups
 *~
@@ -22,16 +24,26 @@ venv/
 # OS files
 .DS_Store
 
-# Secrets
+# Secrets — never commit
 .gemini_key
+.env
+.env.*
+!.env.example
+*.pem
 cert.pem
 key.pem
+*.jks
+*.keystore
 
-# Runtime data
+# Runtime data (regenerated per device/run)
 program_history.json
 saved_workouts.json
 run_history.json
 user_profile.json
+*.migrated
+treadmill.db
+treadmill.db-shm
+treadmill.db-wal
 
 # C++ build artifacts
 *.o
@@ -39,20 +51,18 @@ user_profile.json
 *.gcda
 *.gcno
 *.gcov
-src/tests/test_*_cov
+cpp/tests/test_*_cov
 
-# Build staging directory
+# Build staging directory (matches build/ at any depth, incl. kotlin/app/build)
 build/
 
 # Rust build artifacts
-rust/ftms/target/
-rust/hrm/target/
 **/target/
 
 # Analysis/experimental scripts (not part of main tools)
 analysis/
 
-# Screenshots (dev artifacts, except docs/screenshots which is tracked for README)
+# Screenshots (dev artifacts; docs/screenshots is tracked for README)
 screenshots/
 !docs/screenshots/
 
@@ -62,32 +72,49 @@ static/three.module.js
 # Node modules
 node_modules/
 
-# Gradle build cache (Android)
-android/.gradle/
-kotlin/.gradle/
+# Vite build output (whole dir is regenerated — deploy.sh wipes it)
+static/assets/
 
-# Vite build output (hashed filenames)
-static/assets/*.js
-static/assets/*.css
+# Android / Kotlin
+kotlin/.gradle/
+kotlin/.cxx/
+kotlin/local.properties
+*.apk
+*.aab
+
+# iOS build artifacts
+ios/Treddy.xcodeproj/xcuserdata/
+ios/DerivedData/
+
+# KiCad (track the design: .kicad_pro/_sch/_pcb; ignore per-user + autosave)
+*.kicad_prl
+*-backups/
+*.lck
+fp-info-cache
 
 # Worktree environment (per-worktree ports)
 worktree.env
 .worktrees/
 
-# Claude config (local)
-.claude/*
-!.claude/skills
-.claude/skills/*
-!.claude/skills/gstack
+# Local tool state (Claude Code, gstack, superpowers, codex — never tracked here)
+.claude/
 .gstack/
 .superpowers/
+.codex
 
-# iOS build artifacts
-ios/Treddy.xcodeproj/xcuserdata/
-ios/DerivedData/
+# Beads: it self-manages .beads/.gitignore (ignores the SQLite db + daemon
+# runtime, tracks the JSONL issue store + .beads/.gitignore itself). The only
+# rule needed here is to re-include the issue store, since the global *.jsonl
+# log rule above would otherwise swallow it.
+!.beads/*.jsonl
 
 # Provisioning secrets (operator-supplied + prepare-sd.sh output, never commit)
 provisioning/dietpi/secrets.env*
 !provisioning/dietpi/secrets.env.example
 provisioning/dietpi/dietpi-wifi.txt*
 !provisioning/dietpi/dietpi-wifi.txt.example
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

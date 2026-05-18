@@ -19,9 +19,7 @@ struct ElevationProfile: View {
                     .padding(8)
             }
         }
-        .background(AppColors.card)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 12))
+        .glassPanel()
     }
 
     private func drawChart(context: GraphicsContext, size: CGSize) {
@@ -43,7 +41,7 @@ struct ElevationProfile: View {
         let progressFraction = totalDur > 0 ? currentElapsed / totalDur : 0
 
         // Grid lines
-        let gridColor = Color.primary.opacity(0.12)
+        let gridColor = Color.primary.opacity(0.24)
         for i in 0...4 {
             let y = margin.top + chartH * CGFloat(i) / 4.0
             var path = Path()
@@ -100,10 +98,10 @@ struct ElevationProfile: View {
         let clipRect = CGRect(x: 0, y: 0, width: progressX, height: size.height)
         var completedContext = context
         completedContext.clip(to: Path(clipRect))
-        completedContext.fill(fillPath, with: .color(.green.opacity(0.25)))
+        completedContext.fill(fillPath, with: .color(.green.opacity(0.40)))
 
         // Full outline (future = dimmer)
-        context.stroke(staircasePath, with: .color(.green.opacity(0.5)), lineWidth: 2)
+        context.stroke(staircasePath, with: .color(.green.opacity(0.7)), lineWidth: 2)
 
         // Completed outline (brighter)
         var completedStrokeCtx = context
@@ -120,7 +118,7 @@ struct ElevationProfile: View {
             let dotY = margin.top + chartH * (1.0 - CGFloat(interval.incline / maxIncline))
 
             let glowRect = CGRect(x: dotX - 10, y: dotY - 10, width: 20, height: 20)
-            context.fill(Path(ellipseIn: glowRect), with: .color(.green.opacity(0.2)))
+            context.fill(Path(ellipseIn: glowRect), with: .color(.green.opacity(0.4)))
             let dotRect = CGRect(x: dotX - 5, y: dotY - 5, width: 10, height: 10)
             context.fill(Path(ellipseIn: dotRect), with: .color(.green))
         }
@@ -132,7 +130,7 @@ struct ElevationProfile: View {
             let by = baseline + 8
             if i > 0 {
                 let rect = CGRect(x: bx - dotSize / 2, y: by - dotSize / 2, width: dotSize, height: dotSize)
-                context.stroke(Path(ellipseIn: rect), with: .color(.primary.opacity(0.2)), lineWidth: 1)
+                context.stroke(Path(ellipseIn: rect), with: .color(.primary.opacity(0.4)), lineWidth: 1)
             }
             bx += chartW * CGFloat(intervals[i].duration / totalDur)
         }

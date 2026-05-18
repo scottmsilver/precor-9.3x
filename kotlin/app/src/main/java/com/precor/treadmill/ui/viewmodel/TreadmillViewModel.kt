@@ -639,6 +639,14 @@ class TreadmillViewModel(
         }
     }
 
+    fun stopAndReset(onDone: () -> Unit) {
+        viewModelScope.launch {
+            runCatching { api.stopProgram() }
+            runCatching { api.reset() }
+            onDone()
+        }
+    }
+
     fun selectProfile(id: String, onSuccess: () -> Unit = {}, onError: (String) -> Unit = {}) {
         viewModelScope.launch {
             runCatching { api.selectProfile(SelectProfileRequest(id)) }

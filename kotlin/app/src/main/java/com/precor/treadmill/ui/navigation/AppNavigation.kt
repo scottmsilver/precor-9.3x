@@ -134,7 +134,22 @@ fun AppNavigation(
     // Wait for DataStore to load before deciding start destination
     val url = serverUrl ?: return
 
-    val startDestination = if (url.isBlank()) Routes.SETUP else Routes.PROFILES
+    // On app restart, check if server already has an active profile — skip picker if so
+    var checkedActiveProfile by remember { mutableStateOf(false) }
+    LaunchedEffect(url) {
+        if (url.isNotBlank() && !checkedActiveProfile) {
+            viewModel.fetchActiveProfile()
+            // Small delay for the network call to complete
+            kotlinx.coroutines.delay(500)
+            checkedActiveProfile = true
+        }
+    }
+
+    val startDestination = when {
+        url.isBlank() -> Routes.SETUP
+        activeProfile != null || guestMode -> Routes.LOBBY
+        else -> Routes.PROFILES
+    }
 
     // Current route for tab bar highlighting
     val backStackEntry by navController.currentBackStackEntryAsState()

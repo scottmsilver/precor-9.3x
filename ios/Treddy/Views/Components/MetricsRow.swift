@@ -23,6 +23,9 @@ struct MetricsRow: View {
             divider
             metric(value: String(format: "%.0f", calories), unit: "cal")
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .glassPanel(cornerRadius: 10)
     }
 
     private func metric(value: String, unit: String, color: Color = .primary) -> some View {
@@ -30,9 +33,11 @@ struct MetricsRow: View {
             Text(value)
                 .font(.system(size: 20 * scale, weight: .bold).monospacedDigit())
                 .foregroundStyle(color)
+                .shadow(color: .black.opacity(0.5), radius: 4, y: 1)
             Text(unit)
                 .font(.system(size: 11 * scale))
                 .foregroundStyle(.secondary)
+                .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
         }
     }
 

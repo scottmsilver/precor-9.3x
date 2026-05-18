@@ -48,11 +48,11 @@ fun MetricsRow(
         exit = shrinkVertically() + fadeOut(),
         modifier = modifier,
     ) {
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
                 .glassPanel(LocalGlassParams.current, RoundedCornerShape(10.dp))
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+                .padding(horizontal = 20.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.Bottom,
         ) {
@@ -90,6 +90,7 @@ fun MetricsRow(
                 scale = scale,
             )
         }
+        } // Box
     }
 }
 
@@ -142,8 +143,15 @@ private fun HeartRateMetric(bpm: Int, scale: Float = 1f) {
         )
         Text(
             text = "bpm",
-            color = Color(0x59E8E4DF), // text3
-            fontSize = (10 * scale).sp,
+            style = TextStyle(
+                color = Color(0x99E8E4DF),
+                fontSize = (10 * scale).sp,
+                shadow = Shadow(
+                    color = Color.Black.copy(alpha = 0.4f),
+                    offset = Offset(0f, 1f),
+                    blurRadius = 3f,
+                ),
+            ),
         )
     }
 }
@@ -181,8 +189,15 @@ private fun MetricItem(
         )
         Text(
             text = label,
-            color = Color(0x59E8E4DF), // text3
-            fontSize = (10 * scale).sp,
+            style = TextStyle(
+                color = Color(0x99E8E4DF), // brighter for glass
+                fontSize = (10 * scale).sp,
+                shadow = Shadow(
+                    color = Color.Black.copy(alpha = 0.4f),
+                    offset = Offset(0f, 1f),
+                    blurRadius = 3f,
+                ),
+            ),
             modifier = Modifier.alignByBaseline(),
         )
     }

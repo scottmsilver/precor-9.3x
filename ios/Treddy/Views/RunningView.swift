@@ -48,70 +48,93 @@ struct RunningView: View {
             let timerSize = min(max(h * 0.14, 48), 100)
             let controlsWidth = min(max(w * 0.33, 280), 440)
 
-            VStack(spacing: 0) {
-                // Fixed-height container for timer/encouragement — never resizes
-                ZStack {
-                    // Invisible timer to hold the size constant
-                    Text("00:00")
-                        .font(.system(size: timerSize, weight: .bold))
-                        .monospacedDigit()
-                        .hidden()
+            ZStack {
+                // Background photo
+                Image("bg_forest")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
 
-                    if let msg = program.encouragement, !msg.isEmpty {
-                        Text(msg.replacingOccurrences(of: "<<", with: "").replacingOccurrences(of: ">>", with: ""))
-                            .font(.system(size: min(max(h * 0.05, 18), 36), weight: .semibold))
-                            .foregroundStyle(AppColors.green)
-                            .transition(.opacity)
-                    } else {
-                        Text(Fmt.time(session.elapsed))
+                // Darkening overlay
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.15),
+                        Color.black.opacity(0.05),
+                        Color.black.opacity(0.05),
+                        Color.black.opacity(0.18),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                VStack(spacing: 0) {
+                    // Fixed-height container for timer/encouragement — never resizes
+                    ZStack {
+                        // Invisible timer to hold the size constant
+                        Text("00:00")
                             .font(.system(size: timerSize, weight: .bold))
                             .monospacedDigit()
-                            .contentTransition(.numericText())
-                            .transition(.opacity)
-                    }
-                }
-                .animation(.easeInOut(duration: 0.3), value: program.encouragement != nil)
-                .padding(.top, 8)
-                .onTapGesture {
-                    if program.program?.manual == true && program.running {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showDurationButtons.toggle()
+                            .hidden()
+
+                        if let msg = program.encouragement, !msg.isEmpty {
+                            Text(msg.replacingOccurrences(of: "<<", with: "").replacingOccurrences(of: ">>", with: ""))
+                                .font(.system(size: min(max(h * 0.05, 18), 36), weight: .semibold))
+                                .foregroundStyle(AppColors.green)
+                                .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
+                                .transition(.opacity)
+                        } else {
+                            Text(Fmt.time(session.elapsed))
+                                .font(.system(size: timerSize, weight: .bold))
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
+                                .transition(.opacity)
                         }
                     }
-                }
-
-                // Duration adjustment (manual programs only, shown on timer tap)
-                if showDurationButtons && program.program?.manual == true && program.running {
-                    durationAdjustButtons
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                }
-
-                MetricsRow(
-                    speedMph: store.status.speedMph,
-                    distance: session.distance,
-                    vertFeet: session.vertFeet,
-                    calories: session.calories,
-                    heartRate: store.status.heartRate,
-                    hrmConnected: store.status.hrmConnected,
-                    scale: min(max(h / 380, 1.0), 1.8)
-                )
-                .padding(.vertical, 6)
-
-                GeometryReader { midGeo in
-                    HStack(spacing: 8) {
-                        elevationCard
-                            .frame(height: midGeo.size.height)
-                        SpeedInclineControls(vertical: true)
-                            .frame(width: controlsWidth, height: midGeo.size.height)
+                    .animation(.easeInOut(duration: 0.3), value: program.encouragement != nil)
+                    .padding(.top, 8)
+                    .onTapGesture {
+                        if program.program?.manual == true && program.running {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showDurationButtons.toggle()
+                            }
+                        }
                     }
-                }
-                .padding(.horizontal, 12)
 
-                stopBar
+                    // Duration adjustment (manual programs only, shown on timer tap)
+                    if showDurationButtons && program.program?.manual == true && program.running {
+                        durationAdjustButtons
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
+
+                    MetricsRow(
+                        speedMph: store.status.speedMph,
+                        distance: session.distance,
+                        vertFeet: session.vertFeet,
+                        calories: session.calories,
+                        heartRate: store.status.heartRate,
+                        hrmConnected: store.status.hrmConnected,
+                        scale: min(max(h / 380, 1.0), 1.8)
+                    )
+                    .padding(.vertical, 6)
+
+                    GeometryReader { midGeo in
+                        HStack(spacing: 8) {
+                            elevationCard
+                                .frame(height: midGeo.size.height)
+                            SpeedInclineControls(vertical: true)
+                                .frame(width: controlsWidth, height: midGeo.size.height)
+                        }
+                    }
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+
+                    stopBar
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -135,68 +158,91 @@ struct RunningView: View {
             let h = geo.size.height
             let timerSize = min(max(h * 0.10, 48), 80)
 
-            VStack(spacing: 0) {
-                // Fixed-height container for timer/encouragement
-                ZStack {
-                    Text("00:00")
-                        .font(.system(size: timerSize, weight: .bold))
-                        .monospacedDigit()
-                        .hidden()
+            ZStack {
+                // Background photo
+                Image("bg_forest")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
 
-                    if let msg = program.encouragement, !msg.isEmpty {
-                        Text(msg.replacingOccurrences(of: "<<", with: "").replacingOccurrences(of: ">>", with: ""))
-                            .font(.system(size: min(max(h * 0.04, 16), 28), weight: .semibold))
-                            .foregroundStyle(AppColors.green)
-                            .transition(.opacity)
-                    } else {
-                        Text(Fmt.time(session.elapsed))
+                // Darkening overlay
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.15),
+                        Color.black.opacity(0.05),
+                        Color.black.opacity(0.05),
+                        Color.black.opacity(0.18),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+
+                VStack(spacing: 0) {
+                    // Fixed-height container for timer/encouragement
+                    ZStack {
+                        Text("00:00")
                             .font(.system(size: timerSize, weight: .bold))
                             .monospacedDigit()
-                            .contentTransition(.numericText())
-                            .transition(.opacity)
-                    }
-                }
-                .animation(.easeInOut(duration: 0.3), value: program.encouragement != nil)
-                .padding(.top, 8)
-                .onTapGesture {
-                    if program.program?.manual == true && program.running {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showDurationButtons.toggle()
+                            .hidden()
+
+                        if let msg = program.encouragement, !msg.isEmpty {
+                            Text(msg.replacingOccurrences(of: "<<", with: "").replacingOccurrences(of: ">>", with: ""))
+                                .font(.system(size: min(max(h * 0.04, 16), 28), weight: .semibold))
+                                .foregroundStyle(AppColors.green)
+                                .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
+                                .transition(.opacity)
+                        } else {
+                            Text(Fmt.time(session.elapsed))
+                                .font(.system(size: timerSize, weight: .bold))
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
+                                .transition(.opacity)
                         }
                     }
-                }
-
-                // Duration adjustment (manual programs only, shown on timer tap)
-                if showDurationButtons && program.program?.manual == true && program.running {
-                    durationAdjustButtons
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                }
-
-                MetricsRow(
-                    speedMph: store.status.speedMph,
-                    distance: session.distance,
-                    vertFeet: session.vertFeet,
-                    calories: session.calories,
-                    heartRate: store.status.heartRate,
-                    hrmConnected: store.status.hrmConnected,
-                    scale: min(max(h / 500, 1.0), 1.6)
-                )
-                .padding(.vertical, 8)
-
-                elevationCard
-                    .padding(.horizontal, 12)
-
-                SpeedInclineControls(vertical: false)
-                    .padding(.horizontal, 12)
+                    .animation(.easeInOut(duration: 0.3), value: program.encouragement != nil)
                     .padding(.top, 8)
+                    .onTapGesture {
+                        if program.program?.manual == true && program.running {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showDurationButtons.toggle()
+                            }
+                        }
+                    }
 
-                Spacer(minLength: 0)
+                    // Duration adjustment (manual programs only, shown on timer tap)
+                    if showDurationButtons && program.program?.manual == true && program.running {
+                        durationAdjustButtons
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
 
-                stopBar
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                    MetricsRow(
+                        speedMph: store.status.speedMph,
+                        distance: session.distance,
+                        vertFeet: session.vertFeet,
+                        calories: session.calories,
+                        heartRate: store.status.heartRate,
+                        hrmConnected: store.status.hrmConnected,
+                        scale: min(max(h / 500, 1.0), 1.6)
+                    )
+                    .padding(.vertical, 8)
+
+                    elevationCard
+                        .padding(.horizontal, 12)
+
+                    SpeedInclineControls(vertical: false)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+
+                    Spacer(minLength: 0)
+
+                    stopBar
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 12)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -271,7 +317,7 @@ struct RunningView: View {
                 )
             } else {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(.ultraThinMaterial)
+                    .fill(AppColors.glassBackground)
             }
 
             // HUD overlay
@@ -348,7 +394,7 @@ struct RunningView: View {
             }
         }
         .padding(20)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .glassPanel(cornerRadius: 16)
     }
 
     private func scheduleHUDHide() {
@@ -411,6 +457,7 @@ struct StopBarStyle: ButtonStyle {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 28)
-            .background(color.opacity(configuration.isPressed ? 0.6 : 0.85), in: RoundedRectangle(cornerRadius: 12))
+            .background(color.opacity(configuration.isPressed ? 0.45 : 0.38), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(color.opacity(0.45), lineWidth: 1))
     }
 }

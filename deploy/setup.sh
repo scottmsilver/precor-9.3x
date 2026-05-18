@@ -14,13 +14,16 @@ sudo systemctl disable --now treadmill_io 2>/dev/null || true
 sudo rm -f /etc/systemd/system/treadmill_io.service
 
 # --- OS runtime prerequisites -----------------------------------------------
-# A minimal/provisioned DietPi lacks these; the production Raspberry Pi OS box
-# has them pre-installed (the plan wrongly assumed them present). Install only
-# what's missing (idempotent): python3 + venv/pip for treadmill-server, and
-# libpigpio1 — the runtime shared library treadmill_io dynamically links
-# (libpigpio.so.1). The Pi's DietPi apt includes archive.raspberrypi.com, so
-# libpigpio1 resolves to the same 1.79-1+rpt1 production runs. Must precede
-# the venv step and the treadmill_io restart.
+# Make a freshly-provisioned, minimal Pi OS converge with a fully-loaded one:
+# install only what's missing (idempotent) so the operator never hand-runs
+# apt. A bare image typically lacks these; a long-lived box already has them.
+#   - python3 + venv/pip : treadmill-server
+#   - libpigpio1         : the runtime shared lib treadmill_io dynamically
+#                          links (libpigpio.so.1)
+#   - rsync              : used by the deploy path
+# Works on any Debian-based Pi OS whose apt provides libpigpio1 (DietPi and
+# Raspberry Pi OS both pull 1.79-1+rpt1 from archive.raspberrypi.com). Must
+# precede the venv step and the treadmill_io restart.
 need=""
 command -v python3 >/dev/null 2>&1 || need="$need python3 python3-venv python3-pip"
 if ! { [ -e /usr/lib/libpigpio.so.1 ] || [ -e /lib/libpigpio.so.1 ] \
