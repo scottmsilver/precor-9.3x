@@ -74,17 +74,26 @@ Details: [CLAUDE.md](CLAUDE.md)
 
 ## Quick Start
 
-**Prerequisites (Pi):** `libpigpio-dev`, `g++`, Python 3 with `google-genai`, `fastapi`, `uvicorn`, `gpxpy`. Gemini API key in `.gemini_key`.
+You need: a Raspberry Pi (any aarch64 model — Zero 2 W or 4), the treadmill
+serial tap wired per [HARDWARE.md](HARDWARE.md), Docker on your dev machine
+(for the cross toolchain), and a Gemini API key.
+
+**1. Build the OS image for your Pi.** The Pi runs a stock Debian-based Pi
+OS; you flash a reproducible image built for your hardware. See
+[`provisioning/`](provisioning/dietpi/README.md) for the image builder
+(DietPi is the reference implementation — adapt the regulatory/board
+settings for yours). Flash it, boot, confirm SSH.
+
+**2. Deploy the software.** Compiled code is **cross-built off-Pi** in one
+Docker toolchain — nothing is compiled on the Pi. The OS runtime
+prerequisites (`python3`, `libpigpio1`) are **installed automatically** by
+the deploy; you do not apt-install anything by hand.
 
 ```bash
-make                         # build C++ binary
-sudo ./build/treadmill_io    # start GPIO daemon (must be root)
-python3 python/server.py     # start web server → https://<pi>:8000
-```
-
-**Deploy to Pi:**
-```bash
-make deploy    # stages, rsyncs, builds on Pi, restarts all 4 services
+make deploy        # cross-build → rsync → restart all 4 services
+make deploy-key    # one-time per device: push your ./.gemini_key (a secret;
+                   #   never rsync'd by a normal deploy)
+make image         # OR: bake a flashable .img with everything pre-installed
 ```
 
 **Local dev (no Pi needed):**
@@ -92,7 +101,7 @@ make deploy    # stages, rsyncs, builds on Pi, restarts all 4 services
 TREADMILL_MOCK=1 ./scripts/dev.sh    # Caddy + server + Vite HMR
 ```
 
-API reference, tests, and dev docs: [CLAUDE.md](CLAUDE.md)
+API reference, deploy details, tests: [CLAUDE.md](CLAUDE.md)
 
 ## License
 

@@ -1,7 +1,21 @@
-# Pi Zero 2 W — Phase 1: Fast Boot to SSH
+# Building the OS Image for the Treadmill Pi
 
-Reproducible headless DietPi 64-bit bring-up. Spec:
-`docs/superpowers/specs/2026-05-16-pi-zero2w-boot-to-ssh-design.md`.
+This is how you build the base OS image the treadmill Pi runs. Flash the
+image, boot, confirm SSH — then `make deploy` (or `make image` to bake the
+full software family in). The software layer never hand-installs OS
+packages; the deploy step auto-installs the runtime prerequisites.
+
+**DietPi (Debian 12, 64-bit) is the reference implementation** because it
+boots fast and minimal on a 512 MB Zero 2 W, but nothing here is
+DietPi-specific in principle: the approach is *reproducible, audited config
+injection into a stock image, built entirely in userspace*. For other boards
+or a different Pi OS, keep the method and adapt the hardware-specific values
+(regulatory domain, board image, WiFi). The deploy/setup step then installs
+`python3` + `libpigpio1` on whatever Debian-based OS you flashed.
+
+The detailed research and rationale behind these steps lives in the design
+spec: `docs/superpowers/specs/2026-05-16-pi-zero2w-boot-to-ssh-design.md`
+(and the unified-image spec `2026-05-17-deploy-treadmill-zero2w-design.md`).
 
 ## Prerequisites (hard — a headless box can't tell you it failed)
 
@@ -80,7 +94,24 @@ provisioning/dietpi/build-image.sh \
    `dietpi-wifi.txt` and `dietpi.txt`; optionally enable a serial console.
    Recovery is manual by design in Phase 1.
 
-## Out of scope (later phases)
+## What this doc covers vs. the rest of deploy
 
-Tailscale, treadmill services & ordering, read-only/overlay root, `/data`,
-no-initramfs, kernel trimming, the unified custom image, the existing Pi 4.
+This doc is the **OS layer only** — getting a clean, reproducible,
+SSH-reachable Debian Pi onto the hardware. The **software layer** (the four
+treadmill services, the venv, OS-prereq auto-install, Path A early start,
+the headroom gate) is owned by the deploy pipeline:
+
+- `make deploy` — cross-build + rsync the software onto a booted Pi
+- `make image` — bake the full software family *into* a flashable `.img`
+  (this `provisioning/` toolkit + the deploy manifest, so a flashed Pi and
+  an rsync'd Pi are byte-identical)
+- `make deploy-key` — push the per-device Gemini key (a secret; never
+  rsync'd by a normal deploy)
+- `make ship-check` — end-to-end acceptance verdict on a live device
+
+See [`../../CLAUDE.md`](../../CLAUDE.md) (Deployment) and
+`docs/superpowers/specs/2026-05-17-deploy-treadmill-zero2w-design.md`.
+
+Genuinely still out of scope: read-only/overlay root, `/data` partition,
+no-initramfs / kernel trimming (image-size optimizations only pursued if the
+headroom gate ever fails on real hardware — it currently passes ~8× over).
