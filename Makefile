@@ -8,7 +8,7 @@ CPP_CROSS_IMG = treadmill-cross-cpp
 
 .PHONY: all clean test stage deploy image cross cross-cpp ftms deploy-ftms \
         test-ftms test-ftms-ble hrm deploy-hrm test-hrm test-pi test-all \
-        ship-check ship-check-nobelt
+        ship-check ship-check-nobelt deploy-key
 
 all:
 	$(MAKE) -C cpp
@@ -49,6 +49,12 @@ image: cross
 # depends on `cross` so the manifest's binaries exist before deploy.sh rsyncs.
 deploy: cross
 	deploy/deploy.sh
+
+# Push the per-device Gemini API key (local ./.gemini_key) to PI_HOST.
+# Separate from `deploy` on purpose: a normal deploy never touches the
+# device secret. Run once per device (or when the key rotates).
+deploy-key:
+	deploy/deploy.sh key
 
 ftms:
 	cd rust/ftms && cross build --release --target $(FTMS_TARGET)
