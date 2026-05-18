@@ -70,13 +70,21 @@ Details: [CLAUDE.md](CLAUDE.md)
 
 [Full reverse engineering writeup →](HARDWARE.md)
 
+**Custom hardware:** the breadboard tap was productized into a custom Pi
+Zero 2 W hat — dual RJ45 (`From Console` / `To Motor`), a Pololu D24V10F5
+buck so the treadmill's `+8V` rail powers the Pi, full 2×20 header. KiCad
+sources, gerbers, and wiring guides are in
+[`hardware/PiZeroHat/`](hardware/PiZeroHat/README.md) (adapted from the
+[vasya-zh/PiZeroHat](https://github.com/vasya-zh/PiZeroHat) pogo-pin base).
+
 ---
 
 ## Quick Start
 
 You need: a Raspberry Pi (any aarch64 model — Zero 2 W or 4), the treadmill
-serial tap wired per [HARDWARE.md](HARDWARE.md), Docker on your dev machine
-(for the cross toolchain), and a Gemini API key.
+serial tap (the custom hat in [`hardware/PiZeroHat/`](hardware/PiZeroHat/README.md),
+or a breadboard tap wired per [HARDWARE.md](HARDWARE.md)), Docker on your dev
+machine (for the cross toolchain), and a Gemini API key.
 
 **1. Build the OS image for your Pi.** The Pi runs a stock Debian-based Pi
 OS; you flash a reproducible image built for your hardware. See

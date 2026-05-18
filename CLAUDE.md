@@ -112,6 +112,12 @@ Console ──pin6──> [GPIO 27] Pi [GPIO 22] ──pin6──> Motor
 
 GPIO assignments live in `gpio.json` — all tools read from it at startup.
 
+The physical interface is the custom Pi Zero 2 W hat in
+[`hardware/PiZeroHat/`](hardware/PiZeroHat/README.md) (dual RJ45
+`From Console`/`To Motor`, onboard D24V10F5 buck off the treadmill's `+8V`;
+KiCad sources + gerbers + wiring docs there). A breadboard tap is the
+quick alternative — see [`HARDWARE.md`](HARDWARE.md).
+
 ### RS-485 Inverted Polarity (Critical)
 
 The serial bus uses RS-485 signaling which idles LOW (opposite of standard UART). All GPIO serial I/O must use `bb_serial_invert=1` for reads and manually inverted waveforms for writes. See `RS485_DISCOVERY.md` for the full investigation. The key takeaway: **both pins carry the same `[key:value]` KV text protocol** — earlier "binary frame" interpretations were caused by polarity confusion.

@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Perfboard Wiring Sheet — Treadmill HAT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f8fb;
+    --bg-grad: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --surface: #ffffff;
+    --text: #1a1f2c;
+    --muted: #5a6478;
+    --accent: #5b6cf5;
+    --accent-soft: #eef0ff;
+    --border: #dbe1ea;
+    --border-soft: #eef1f5;
+    --code-bg: #f3f5f8;
+
+    --warn: #d97706; --warn-bg: #fffbeb; --warn-border: #fcd34d;
+    --danger: #dc2626; --danger-bg: #fef2f2; --danger-border: #fca5a5;
+    --check: #059669; --check-bg: #f0fdf4; --check-border: #86efac;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 16px; line-height: 1.65;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .layout {
+    display: grid; grid-template-columns: 250px 1fr; gap: 32px;
+    max-width: 1240px; margin: 0 auto; padding: 32px 24px 80px;
+  }
+  .toc {
+    position: sticky; top: 24px; align-self: start;
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 12px; padding: 20px; font-size: 13.5px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.04);
+    max-height: calc(100vh - 48px); overflow-y: auto;
+  }
+  .toc h3 {
+    margin: 0 0 12px 0; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--muted); font-weight: 700;
+  }
+  .toc ul { list-style: none; margin: 0; padding: 0; }
+  .toc li { margin: 2px 0; }
+  .toc a {
+    color: var(--text); text-decoration: none; display: block;
+    padding: 6px 10px; border-radius: 6px;
+    transition: all 0.15s; border-left: 2px solid transparent;
+  }
+  .toc a:hover { background: var(--accent-soft); color: var(--accent); border-left-color: var(--accent); transform: translateX(2px); }
+  main { min-width: 0; background: var(--surface); border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.05); border: 1px solid var(--border-soft);
+    overflow: hidden; padding-bottom: 24px;
+  }
+  main > * { padding-left: 36px; padding-right: 36px; }
+
+  .hero {
+    background: var(--bg-grad); color: white; border-radius: 16px;
+    padding: 36px 40px; margin: 0 0 24px 0;
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: ""; position: absolute; top: -50%; right: -20%;
+    width: 400px; height: 400px;
+    background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+    border-radius: 50%;
+  }
+  .hero h1 { margin: 0 0 6px 0; font-size: 32px; font-weight: 700;
+    letter-spacing: -0.02em; position: relative; }
+  .hero-subtitle { margin: 0 0 24px 0; font-size: 15px; opacity: 0.9;
+    font-weight: 400; position: relative; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; position: relative; }
+  .stat { background: rgba(255,255,255,0.15); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.2); border-radius: 10px;
+    padding: 12px 14px; text-align: center; }
+  .stat-num { font-size: 22px; font-weight: 700; font-family: "JetBrains Mono", monospace; }
+  .stat-lbl { font-size: 11px; opacity: 0.85; text-transform: uppercase;
+    letter-spacing: 0.05em; margin-top: 2px; }
+
+  /* Hero needs to NOT have main padding (it's full-width inside main) */
+  main > .hero { margin-left: -36px; margin-right: -36px; border-radius: 12px 12px 16px 16px; padding: 36px 40px; }
+
+  h2 {
+    font-size: 22px; font-weight: 700; margin: 36px 0 14px 0;
+    padding-bottom: 10px; border-bottom: 2px solid var(--border-soft);
+    scroll-margin-top: 24px; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .h-icon { font-size: 20px; }
+  h3 { font-size: 16px; font-weight: 600; margin: 22px 0 8px 0;
+    color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+  p, ul, ol { margin: 8px 0 14px 0; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 4px 0; }
+  strong { font-weight: 600; color: #000; }
+  hr { border: none; border-top: 1px dashed var(--border); margin: 24px 0; }
+
+  code { font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 0.86em; background: var(--code-bg); padding: 2px 7px;
+    border-radius: 5px; color: #2d3748; font-weight: 500; }
+  pre { background: #0d1117; color: #e6edf3; border-radius: 10px;
+    padding: 18px 22px; overflow-x: auto; font-size: 13px; line-height: 1.5;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05), 0 4px 12px rgba(0,0,0,0.08); }
+  pre code { background: none; padding: 0; color: inherit; white-space: pre;
+    font-family: "JetBrains Mono", monospace; }
+
+  /* GRID coloring */
+  pre.grid { background: #0f1320; font-size: 13.5px; line-height: 1.55; }
+  .g-rowlabel { color: #6b7280; font-weight: 500; }
+  .g-col      { color: #4b5563; font-weight: 500; }
+  .g-empty    { color: #2a3142; }
+  .g-pi       { color: #c4b5fd; background: rgba(139,92,246,0.15); padding: 1px 2px; border-radius: 2px; font-weight: 600; }
+  .g-pwr      { color: #fdba74; background: rgba(255,107,53,0.18); padding: 1px 2px; border-radius: 2px; font-weight: 700; }
+  .g-gnd      { color: #5eead4; background: rgba(42,157,143,0.18); padding: 1px 2px; border-radius: 2px; font-weight: 700; }
+  .g-vout     { color: #67e8f9; background: rgba(6,182,212,0.18); padding: 1px 2px; border-radius: 2px; font-weight: 700; }
+  .g-nc       { color: #94a3b8; }
+  .g-res      { color: #fcd34d; background: rgba(245,158,11,0.18); padding: 1px 2px; border-radius: 2px; font-weight: 700; }
+  .g-conn     { color: #f9a8d4; background: rgba(236,72,153,0.18); padding: 1px 2px; border-radius: 2px; font-weight: 700; }
+
+  /* LEGEND — restyled as colored swatch cards */
+  .legend-heading { margin: 22px 0 10px 0; font-size: 13px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted); }
+  .legend-heading strong { color: var(--muted); font-weight: 700; }
+  ul.legend {
+    list-style: none; padding: 0; margin: 0 0 24px 0;
+    display: grid; grid-template-columns: 1fr; gap: 8px;
+  }
+  ul.legend li {
+    background: #fafbfd;
+    border: 1px solid var(--border-soft);
+    border-left: 4px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 0;
+    line-height: 1.55;
+    font-size: 14.5px;
+    color: #2a3142;
+  }
+  ul.legend li:hover { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+  ul.legend code { font-size: 14px; background: #eef0f4; color: #475569; padding: 3px 9px; border-radius: 5px; font-weight: 600; }
+  /* Colored legend code badges */
+  .lc { font-size: 14px !important; padding: 3px 10px !important; border-radius: 6px !important; font-weight: 700 !important; display: inline-block; min-width: 28px; text-align: center; }
+  .lc-pi    { background: #ede9fe !important; color: #6d28d9 !important; border: 1px solid #c4b5fd; }
+  .lc-pwr   { background: #ffedd5 !important; color: #c2410c !important; border: 1px solid #fdba74; }
+  .lc-gnd   { background: #ccfbf1 !important; color: #0f766e !important; border: 1px solid #5eead4; }
+  .lc-vout  { background: #cffafe !important; color: #0e7490 !important; border: 1px solid #67e8f9; }
+  .lc-res   { background: #fef3c7 !important; color: #b45309 !important; border: 1px solid #fcd34d; }
+  .lc-conn  { background: #fce7f3 !important; color: #be185d !important; border: 1px solid #f9a8d4; }
+  .lc-nc    { background: #f1f5f9 !important; color: #475569 !important; border: 1px solid #cbd5e1; }
+  .lc-empty { background: #f8fafc !important; color: #94a3b8 !important; border: 1px solid #e2e8f0; }
+  /* Color the left-border accent of legend items based on their leading code */
+  ul.legend li:has(.lc-pi)    { border-left-color: #8b5cf6; }
+  ul.legend li:has(.lc-pwr)   { border-left-color: #ff6b35; }
+  ul.legend li:has(.lc-gnd)   { border-left-color: #2a9d8f; }
+  ul.legend li:has(.lc-vout)  { border-left-color: #06b6d4; }
+  ul.legend li:has(.lc-res)   { border-left-color: #f59e0b; }
+  ul.legend li:has(.lc-conn)  { border-left-color: #ec4899; }
+  ul.legend li:has(.lc-nc)    { border-left-color: #94a3b8; }
+
+  /* Tables */
+  table { border-collapse: separate; border-spacing: 0; width: 100%;
+    margin: 14px 0 22px 0; font-size: 14px; border-radius: 10px;
+    overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+  th, td { border-bottom: 1px solid var(--border-soft); padding: 10px 14px;
+    text-align: left; vertical-align: top; }
+  th { background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+    font-weight: 600; color: var(--muted); text-transform: uppercase;
+    font-size: 11px; letter-spacing: 0.06em; border-bottom: 2px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #fafbfd; }
+  tr:hover td { background: var(--accent-soft) !important; }
+  td code { font-size: 0.92em; }
+
+  /* Callouts */
+  .callout { border-radius: 12px; padding: 18px 60px 22px 60px;
+    margin: 18px -36px; position: relative; border: 1px solid; }
+  .callout > h2 { border: none; margin-top: 0; padding-top: 0; padding-bottom: 6px; }
+  .callout > ul, .callout > p { margin-top: 8px; }
+  .callout-danger { background: var(--danger-bg); border-color: var(--danger-border); }
+  .callout-danger h2 { color: var(--danger); }
+  .callout-warn { background: var(--warn-bg); border-color: var(--warn-border); }
+  .callout-warn h2 { color: var(--warn); }
+  .callout-check { background: var(--check-bg); border-color: var(--check-border); }
+  .callout-check h2 { color: var(--check); }
+
+  @media print {
+    body { background: white; }
+    .layout { display: block; padding: 0; max-width: none; }
+    .toc { display: none; }
+    .hero { box-shadow: none; padding: 18px; margin-bottom: 12px; }
+    .hero::before { display: none; }
+    main { box-shadow: none; border: none; }
+    main > * { padding-left: 0; padding-right: 0; }
+    pre { font-size: 8.5pt; page-break-inside: avoid; background: #f4f4f4; color: #000; }
+    pre.grid { background: #f4f4f4; }
+    .g-empty { color: #aaa; }
+    .g-pi, .g-pwr, .g-gnd, .g-vout, .g-res, .g-conn { background: none; color: #000; font-weight: 700; }
+    table { page-break-inside: avoid; font-size: 9pt; }
+    h2 { page-break-after: avoid; }
+    .callout { margin-left: 0; margin-right: 0; padding-left: 18px; padding-right: 18px; }
+    ul.legend li { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc"><h3>Contents</h3><ul><li><a href="#grid-layout">Grid layout</a></li><li><a href="#component-placements">Component placements</a></li><li><a href="#hole-pi-gpio-pin-reference">Hole → Pi GPIO pin reference</a></li><li><a href="#jumper-list-back-of-board-insulated-wire">Jumper list (back of board, insulated wire)</a></li><li><a href="#total-21-jumper-wires-2-power-buses">Total: 21 jumper wires + 2 power buses</a></li><li><a href="#smoke-test-before-inserting-pi-before-plugging-in-cable">Smoke test (BEFORE inserting Pi, BEFORE plugging in cable)</a></li><li><a href="#first-power-test">First power test</a></li><li><a href="#pi-software-setup">Pi software setup</a></li><li><a href="#do-not">⚠ DO NOT</a></li><li><a href="#bus-jumpers-cross-over-note">Bus jumpers cross-over note</a></li></ul></nav>
+<main>
+
+<div class="hero">
+  <h1>Perfboard Wiring Sheet</h1>
+  <p class="hero-subtitle">Treadmill HAT — Raspberry Pi Zero 2 W serial tap</p>
+  <div class="stats">
+    <div class="stat"><div class="stat-num">24×20</div><div class="stat-lbl">perfboard</div></div>
+    <div class="stat"><div class="stat-num">21</div><div class="stat-lbl">jumper wires</div></div>
+    <div class="stat"><div class="stat-num">2</div><div class="stat-lbl">bus rails</div></div>
+    <div class="stat"><div class="stat-num">5+5</div><div class="stat-lbl">components</div></div>
+  </div>
+</div>
+
+
+<p><strong>Board:</strong> plain perfboard, 24 cols × 20 rows. Holes referenced as (row, col).</p>
+<p><strong>Layout:</strong>
+- Pi GPIO socket: pins 1-40 in rows 3-4, cols 3-22
+- +8V bus (bare wire): row 6, cols 2-22
+- GND bus (bare wire): row 8, cols 2-22
+- Components (R1, R2, R3, U1, C3, C4): rows 10-12
+- J1 (Console) 2×4 IDC header: rows 17-18, cols 2-5 (odd pins on row 18 / near edge, even pins on row 17)
+- J2 (Motor) 2×4 IDC header: rows 17-18, cols 13-16 (odd pins on row 18 / near edge, even pins on row 17)</p>
+<hr />
+<h2 id="grid-layout"><span class="h-icon">🟢</span> Grid layout</h2>
+<pre class="grid"><code>        <span class="g-col">01</span> <span class="g-col">02</span> <span class="g-col">03</span> <span class="g-col">04</span> <span class="g-col">05</span> <span class="g-col">06</span> <span class="g-col">07</span> <span class="g-col">08</span> <span class="g-col">09</span> <span class="g-col">10</span> <span class="g-col">11</span> <span class="g-col">12</span> <span class="g-col">13</span> <span class="g-col">14</span> <span class="g-col">15</span> <span class="g-col">16</span> <span class="g-col">17</span> <span class="g-col">18</span> <span class="g-col">19</span> <span class="g-col">20</span> <span class="g-col">21</span> <span class="g-col">22</span> <span class="g-col">23</span> <span class="g-col">24</span>
+<span class="g-rowlabel">R01</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R02</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R03</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-pi">01</span> <span class="g-pi">03</span> <span class="g-pi">05</span> <span class="g-pi">07</span> <span class="g-pi">09</span> <span class="g-pi">11</span> <span class="g-pi">13</span> <span class="g-pi">15</span> <span class="g-pi">17</span> <span class="g-pi">19</span> <span class="g-pi">21</span> <span class="g-pi">23</span> <span class="g-pi">25</span> <span class="g-pi">27</span> <span class="g-pi">29</span> <span class="g-pi">31</span> <span class="g-pi">33</span> <span class="g-pi">35</span> <span class="g-pi">37</span> <span class="g-pi">39</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R04</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-pi">02</span> <span class="g-pi">04</span> <span class="g-pi">06</span> <span class="g-pi">08</span> <span class="g-pi">10</span> <span class="g-pi">12</span> <span class="g-pi">14</span> <span class="g-pi">16</span> <span class="g-pi">18</span> <span class="g-pi">20</span> <span class="g-pi">22</span> <span class="g-pi">24</span> <span class="g-pi">26</span> <span class="g-pi">28</span> <span class="g-pi">30</span> <span class="g-pi">32</span> <span class="g-pi">34</span> <span class="g-pi">36</span> <span class="g-pi">38</span> <span class="g-pi">40</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R05</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R06</span>     <span class="g-empty">.</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-pwr">+</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R07</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R08</span>     <span class="g-empty">.</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-gnd">G</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R09</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R10</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-vout">Vo</span> <span class="g-gnd">Gu</span> <span class="g-pwr">Vi</span> <span class="g-nc">Sd</span> <span class="g-nc">Pg</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R11</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R12</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-res">R1</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-res">R1</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R13</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-res">R2</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-res">R2</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R14</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-res">R3</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-res">R3</span> <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R15</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R16</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R17</span>     <span class="g-empty">.</span>  <span class="g-conn">2</span>  <span class="g-conn">4</span>  <span class="g-conn">6</span>  <span class="g-conn">8</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-conn">2</span>  <span class="g-conn">4</span>  <span class="g-conn">6</span>  <span class="g-conn">8</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R18</span>     <span class="g-empty">.</span>  <span class="g-conn">1</span>  <span class="g-conn">3</span>  <span class="g-conn">5</span>  <span class="g-conn">7</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-conn">1</span>  <span class="g-conn">3</span>  <span class="g-conn">5</span>  <span class="g-conn">7</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R19</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+<span class="g-rowlabel">R20</span>     <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>  <span class="g-empty">.</span>
+</code></pre>
+<p><strong>Legend:</strong>
+- <code>.</code> — empty perfboard hole
+- <code>01</code>–<code>40</code> — Pi GPIO pin (row 3 = odd pins, row 4 = even pins). Pi sits in 2×20 socket at cols 3–22.
+- <code>+</code> — +8V bus (bare wire across row 6, cols 2–22)
+- <code>G</code> — GND bus (bare wire across row 8, cols 2–22)
+- <code>Vo</code> — U1 pin 1 VOUT (+5V output)
+- <code>Gu</code> — U1 pin 2 GND
+- <code>Vi</code> — U1 pin 3 VIN (+8V input)
+- <code>Sd</code> — U1 pin 4 ~SHDN (leave floating)
+- <code>Pg</code> — U1 pin 5 PG (leave floating)
+- <code>R1</code>/<code>R2</code>/<code>R3</code> — resistor leads at cols 6 and 10 (body spans cols 7–9 over the board)
+- Numbers <code>1</code>–<code>8</code> at rows 17–18 — RJ45 pin via 2×4 IDC ribbon header. Standard IDC numbering: <strong>odd pins on row 18 (near edge), even pins on row 17 (far edge)</strong>. Left block (cols 2–5) is <strong>J1 (Console)</strong>, right block (cols 13–16) is <strong>J2 (Motor)</strong>.
+- C3 leads share holes (10,14) and (10,15) with U1 GND/VIN. C4 leads share (10,13) and (10,14) with U1 VOUT/GND. Solder caps directly across the U1 pins on top side; U1 pins go through the same holes.</p>
+<hr />
+<h2 id="component-placements"><span class="h-icon">🔧</span> Component placements</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Position</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>U1</strong> D24V10F5 (5 pins horizontal)</td>
+<td>row 10, cols 13-17</td>
+<td>Pin 1 (VOUT) at (10, 13), Pin 5 (PG) at (10, 17)</td>
+</tr>
+<tr>
+<td><strong>C3</strong> ceramic disc 100nF</td>
+<td>leads share holes with U1</td>
+<td>Lead 1 in (10, 14) [U1 GND]; Lead 2 in (10, 15) [U1 VIN]</td>
+</tr>
+<tr>
+<td><strong>C4</strong> ceramic disc 100nF</td>
+<td>leads share holes with U1</td>
+<td>Lead 1 in (10, 13) [U1 VOUT]; Lead 2 in (10, 14) [U1 GND]</td>
+</tr>
+<tr>
+<td><strong>R1</strong> 100Ω horizontal</td>
+<td>leads at (12, 6) and (12, 10)</td>
+<td>Motor read line — left lead → J1/J2 pin 3, right lead → Pi GP17</td>
+</tr>
+<tr>
+<td><strong>R2</strong> 100Ω horizontal</td>
+<td>leads at (13, 6) and (13, 10)</td>
+<td>Console read — left → J1 pin 6, right → Pi GP27</td>
+</tr>
+<tr>
+<td><strong>R3</strong> 100Ω horizontal</td>
+<td>leads at (14, 6) and (14, 10)</td>
+<td>Motor write — left → J2 pin 6, right → Pi GP22</td>
+</tr>
+</tbody>
+</table>
+<p>(R1/R2/R3 stacked tightly at cols 6 and 10. Adjust spacing if leads touch.)</p>
+<hr />
+<h2 id="hole-pi-gpio-pin-reference"><span class="h-icon">🔌</span> Hole → Pi GPIO pin reference</h2>
+<p>Pi pin N is at: <strong>odd N → row 3, col 3 + (N-1)/2</strong>; <strong>even N → row 4, col 3 + (N-2)/2</strong></p>
+<p>Key pins you'll use:</p>
+<table>
+<thead>
+<tr>
+<th>Pi Pin</th>
+<th>Function</th>
+<th>Hole</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td>+5V</td>
+<td>(4, 3)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>GND</td>
+<td>(4, 5)</td>
+</tr>
+<tr>
+<td>11</td>
+<td>GP17</td>
+<td>(3, 8)</td>
+</tr>
+<tr>
+<td>13</td>
+<td>GP27</td>
+<td>(3, 9)</td>
+</tr>
+<tr>
+<td>15</td>
+<td>GP22</td>
+<td>(3, 10)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="jumper-list-back-of-board-insulated-wire"><span class="h-icon">🔗</span> Jumper list (back of board, insulated wire)</h2>
+<h3>Power rails (most critical — do first)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>From hole</th>
+<th>To hole</th>
+<th>Wire</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>J1 pin 1 (18, 2)</td>
+<td>GND bus (8, 2)</td>
+<td>thin (long, row 18 → row 8)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>J1 pin 7 (18, 5)</td>
+<td>GND bus (8, 5)</td>
+<td>thin (long, row 18 → row 8)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>J2 pin 1 (18, 13)</td>
+<td>GND bus (8, 13)</td>
+<td>thin (long)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>J2 pin 7 (18, 16)</td>
+<td>GND bus (8, 16)</td>
+<td>thin (long)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>U1 GND (10, 14)</td>
+<td>GND bus (8, 14)</td>
+<td>thin</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Pi pin 6 GND (4, 5)</td>
+<td>GND bus (8, 5)</td>
+<td>thin (shares hole with #2 at the bus end)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>J1 pin 2 (17, 2)</td>
+<td>+8V bus (6, 2)</td>
+<td>thin (insulated, hops over GND bus)</td>
+</tr>
+<tr>
+<td>8</td>
+<td>J1 pin 8 (17, 5)</td>
+<td>+8V bus (6, 5)</td>
+<td>thin (insulated, hops over GND bus)</td>
+</tr>
+<tr>
+<td>9</td>
+<td>J2 pin 2 (17, 13)</td>
+<td>+8V bus (6, 13)</td>
+<td>thin (insulated, hops over GND bus)</td>
+</tr>
+<tr>
+<td>10</td>
+<td>J2 pin 8 (17, 16)</td>
+<td>+8V bus (6, 16)</td>
+<td>thin (insulated, hops over GND bus)</td>
+</tr>
+<tr>
+<td>11</td>
+<td>U1 VIN (10, 15)</td>
+<td>+8V bus (6, 15)</td>
+<td>thin</td>
+</tr>
+</tbody>
+</table>
+<h3>+5V from regulator to Pi</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>From</th>
+<th>To</th>
+<th>Wire</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>12</td>
+<td>U1 VOUT (10, 13)</td>
+<td>Pi pin 2 +5V (4, 3)</td>
+<td>thin</td>
+</tr>
+</tbody>
+</table>
+<h3>Pass-through (J1 ↔ J2 direct wires)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>From</th>
+<th>To</th>
+<th>Wire</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>13</td>
+<td>J1 pin 4 (17, 3)</td>
+<td>J2 pin 4 (17, 14)</td>
+<td>thin (long, spans 11 cols, runs along row 17)</td>
+</tr>
+<tr>
+<td>14</td>
+<td>J1 pin 5 (18, 4)</td>
+<td>J2 pin 5 (18, 15)</td>
+<td>thin (long, spans 11 cols, runs along row 18)</td>
+</tr>
+</tbody>
+</table>
+<h3>Motor read tap (pin 3, both jacks share, Pi listens)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>From</th>
+<th>To</th>
+<th>Wire</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>15</td>
+<td>J1 pin 3 (18, 3)</td>
+<td>J2 pin 3 (18, 14)</td>
+<td>thin (long, spans 11 cols, runs along row 18 — parallel to #14, keep them apart)</td>
+</tr>
+<tr>
+<td>16</td>
+<td>J1 pin 3 (18, 3)</td>
+<td>R1 left lead (12, 6)</td>
+<td>thin</td>
+</tr>
+<tr>
+<td>17</td>
+<td>R1 right lead (12, 10)</td>
+<td>Pi GP17 pin 11 (3, 8)</td>
+<td>thin (will hop over buses — use insulated wire)</td>
+</tr>
+</tbody>
+</table>
+<h3>Console read (Pi reads from J1 side of pin 6)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>From</th>
+<th>To</th>
+<th>Wire</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>18</td>
+<td>J1 pin 6 (17, 4)</td>
+<td>R2 left lead (13, 6)</td>
+<td>thin</td>
+</tr>
+<tr>
+<td>19</td>
+<td>R2 right lead (13, 10)</td>
+<td>Pi GP27 pin 13 (3, 9)</td>
+<td>thin (hops over buses)</td>
+</tr>
+</tbody>
+</table>
+<h3>Motor write (Pi writes to J2 side of pin 6)</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>From</th>
+<th>To</th>
+<th>Wire</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>20</td>
+<td>J2 pin 6 (17, 15)</td>
+<td>R3 left lead (14, 6)</td>
+<td>thin (long, spans 9 cols)</td>
+</tr>
+<tr>
+<td>21</td>
+<td>R3 right lead (14, 10)</td>
+<td>Pi GP22 pin 15 (3, 10)</td>
+<td>thin (hops over buses)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="total-21-jumper-wires-2-power-buses"><span class="h-icon">🔗</span> Total: 21 jumper wires + 2 power buses</h2>
+<hr />
+<div class="callout callout-check"><h2 id="smoke-test-before-inserting-pi-before-plugging-in-cable"><span class="h-icon">🧪</span> Smoke test (BEFORE inserting Pi, BEFORE plugging in cable)</h2>
+<ul>
+<li>☐ Multimeter beep mode: GND bus (row 8) is one continuous net</li>
+<li>☐ Multimeter: +8V bus (row 6) is one continuous net</li>
+<li>☐ NO continuity between +8V bus and GND bus (no short!)</li>
+<li>☐ NO continuity between +5V trace (10, 13) and any other rail</li>
+<li>☐ U1 oriented correctly: pin 1 VOUT is leftmost (col 13), pin 5 PG is rightmost (col 17)</li>
+<li>☐ Pi NOT inserted yet</li>
+<li>☐ J1 and J2 headers seated firmly</li>
+</ul></div>
+<div class="callout callout-check"><h2 id="first-power-test"><span class="h-icon">⚡</span> First power test</h2>
+<ul>
+<li>☐ Plug treadmill cable into J2 only (the motor side, since that's where +8V comes from)</li>
+<li>☐ Multimeter on +8V bus reads ~8V (acceptable: 7-9V)</li>
+<li>☐ Multimeter on U1 VOUT (10, 13) reads ~5V (acceptable: 4.9-5.1V)</li>
+<li>☐ NOW insert Pi</li>
+</ul></div>
+<div class="callout callout-check"><h2 id="pi-software-setup"><span class="h-icon">💻</span> Pi software setup</h2>
+<ul>
+<li>☐ Pi boots (PWR LED solid, ACT LED blinks)</li>
+<li>☐ Configure GPIOs: GP17 = INPUT, GP27 = INPUT, GP22 = OUTPUT</li>
+<li>☐ Test reading GP17 — should see motor data when console is also connected</li>
+</ul></div>
+<hr />
+<div class="callout callout-danger"><h2 id="do-not"><span class="h-icon">⛔</span> ⚠ DO NOT</h2>
+<ul>
+<li>❌ Do NOT wire J1 pin 6 to J2 pin 6 (they MUST be separate — Pi is in the middle)</li>
+<li>❌ Do NOT wire U1 VOUT to Pi pin 1 or pin 17 (those are +3.3V — would destroy Pi)</li>
+<li>❌ Do NOT power up the Pi until you've verified +5V is correct on U1 output</li>
+</ul></div>
+<hr />
+<h2 id="bus-jumpers-cross-over-note"><span class="h-icon">🔗</span> Bus jumpers cross-over note</h2>
+<p>Use <strong>insulated wire on the back of the board for ALL jumpers</strong> — too many cross over the bare bus wires:
+- #7, #8, #9, #10 (J1/J2 +8V wires) cross OVER the GND bus on the way from row 17 up to row 6.
+- #17, #19, #21 (resistor right leads → Pi GPIO) cross OVER both the +8V bus (row 6) and GND bus (row 8) on the way from rows 12–14 up to row 3.
+- #14 and #15 (pin 5 pass-through and pin 3 tap) both run parallel along row 18 for ~11 cols. Keep them physically separated or use a slight offset — they're adjacent (row 18, cols 3–4 to cols 14–15).</p>
+<p>Bare wire on any of these = short. Insulated wire (24 AWG hookup) only.</p>
+</main>
+</div>
+</body>
+</html>
