@@ -7,7 +7,8 @@ HRM_BIN = rust/hrm/target/$(HRM_TARGET)/release/hrm-daemon
 CPP_CROSS_IMG = treadmill-cross-cpp
 
 .PHONY: all clean test stage deploy image cross cross-cpp ftms deploy-ftms \
-        test-ftms test-ftms-ble hrm deploy-hrm test-hrm test-pi test-all
+        test-ftms test-ftms-ble hrm deploy-hrm test-hrm test-pi test-all \
+        ship-check ship-check-nobelt
 
 all:
 	$(MAKE) -C cpp
@@ -82,3 +83,12 @@ test-pi: test
 	ssh $(PI_HOST) 'cd ~/treadmill && source $(VENV_DIR)/bin/activate && pytest python/tests/test_hardware_integration.py -v -s -m hardware'
 
 test-all: test test-pi
+
+# Live "ready to ship?" acceptance gate against PI_HOST + treadmill.
+# ship-check drives the belt (L1/L2/L4) — belt MUST be clear.
+# ship-check-nobelt runs only the non-moving checks (no treadmill needed).
+ship-check:
+	deploy/ship-check.sh --belt-clear
+
+ship-check-nobelt:
+	deploy/ship-check.sh --no-belt
