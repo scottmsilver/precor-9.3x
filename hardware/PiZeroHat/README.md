@@ -1,3 +1,46 @@
+# Treddy treadmill-interface board
+
+This is the **custom hardware** for the Precor 9.31 project: a Raspberry Pi
+Zero 2 W hat that sits inline on the treadmill's RS-485 serial cable between
+the console (Upper PCA) and motor controller (Lower PCA), so the Pi can
+monitor, proxy, and emulate the controller (see the protocol writeup in
+[`../../HARDWARE.md`](../../HARDWARE.md)).
+
+**What's on the board:**
+
+- **Dual RJ45** — `From Console` and `To Motor` (Amphenol 54602-x08
+  horizontal). Pin 6 is cut through the Pi (intercept + proxy/emulate);
+  pin 3 is tapped passively. Pinout/GPIO mapping is in
+  [`../../HARDWARE.md`](../../HARDWARE.md) and `gpio.json`.
+- **D24V10F5 buck** — Pololu 5 V 1 A step-down regulator off the
+  treadmill's `+8V` rail, so the Pi is powered from the treadmill (no
+  separate supply).
+- **Pi Zero v1.3 hat footprint** — full 2×20 header so I²C/SPI/GPIO stay
+  available; built on the pogo-pin PiZeroHat base (see *Upstream* below).
+
+**In this directory:**
+
+- `kicad/PiZeroHat.kicad_pro` / `.kicad_sch` / `.kicad_pcb` — the design
+  (open `kicad/PiZeroHat.kicad_pro` in KiCad)
+- `kicad/gerbers/` + `kicad/PiZeroHat-gerbers.zip` — fab-ready output
+- `kicad/WIRING.md`, `kicad/WIRING-CHECKLIST.md`,
+  `kicad/PERFBOARD-WIRING.{md,pdf,html}` — assembly / hand-wiring guides
+  (a perfboard build is a valid alternative to fabbing the PCB)
+- `lib/`, `kicad/Scott.pretty/`, `kicad/Scott.kicad_sym` — footprint /
+  symbol libraries the design depends on
+
+Per-user KiCad state, autosave backups, `fp-info-cache`, and editor
+`.history` are intentionally **not** vendored (regenerable / machine-local).
+
+---
+
+## Upstream (vendored from vasya-zh/PiZeroHat)
+
+The pogo-pin Pi-Zero-hat base is adapted from
+**<https://github.com/vasya-zh/PiZeroHat>** (vendored as plain files — not a
+submodule — so the design travels with this repo). Original README and BOM
+preserved below for attribution and the pogo-pin/standoff hardware list.
+
 # PiZeroHat
 
 KiCad component and example project for creating Raspberry Pi Zero Shields/Hats with USB and power lines directly (nor with extra cables), with a help of pogo pins (spring contacts).

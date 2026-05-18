@@ -112,6 +112,17 @@ The full forensic investigation is in [`RS485_DISCOVERY.md`](cpp/captures/RS485_
 
 ### What You Need
 
+Two options:
+
+**Custom board (permanent).** The Pi Zero 2 W hat in
+[`hardware/PiZeroHat/`](hardware/PiZeroHat/README.md) — dual RJ45
+(`From Console` / `To Motor`), an onboard Pololu D24V10F5 buck so the
+treadmill's `+8V` rail powers the Pi (no separate supply), full 2×20
+header. KiCad sources + fab-ready gerbers + a wiring checklist are in that
+directory; a perfboard build of the same circuit is documented there too.
+
+**Breadboard tap (quick).**
+
 - Raspberry Pi (any model with GPIO)
 - RJ45 pass-through breakout board ([example](https://www.amazon.com/dp/B0CQKBPGB6))
 - Jumper wires
