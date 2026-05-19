@@ -84,7 +84,7 @@ val appModule = module {
  * rationale. Extracted as a named unit so the trust behavior can be
  * unit-tested against a self-signed MockWebServer.
  */
-private fun trustAllTls(): Pair<SSLSocketFactory, X509TrustManager> {
+internal fun trustAllTls(): Pair<SSLSocketFactory, X509TrustManager> {
     val trustManager = object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
         override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
