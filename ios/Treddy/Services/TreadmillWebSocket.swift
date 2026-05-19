@@ -61,7 +61,7 @@ final class TreadmillWebSocket: TreadmillWebSocketClient {
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         serverURL = "\(wsURL)/ws"
 
-        // Trust all certs for local/Tailscale HTTPS
+        // Trust the Pi's self-signed cert for local HTTPS
         let config = URLSessionConfiguration.default
         session = URLSession(configuration: config, delegate: TrustAllDelegate(), delegateQueue: nil)
 
