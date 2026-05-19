@@ -28,7 +28,7 @@ stage() {
      python/treadmill_client.py python/hrm_client.py python/workout_db.py \
      python/db.py build/python/
   cp gpio.json pyproject.toml build/
-  cp deploy/setup.sh deploy/lib-artifacts.sh deploy/manifest.txt build/
+  cp deploy/setup.sh deploy/lib-artifacts.sh deploy/manifest.txt deploy/treadmill.avahi-service build/
   chmod +x build/setup.sh
   echo "Building UI..."
   rm -rf static/assets && mkdir -p static/assets
