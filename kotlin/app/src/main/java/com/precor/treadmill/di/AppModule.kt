@@ -21,7 +21,13 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 import retrofit2.Retrofit
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 val appModule = module {
 
@@ -37,11 +43,15 @@ val appModule = module {
     }
 
     single {
-        // Use the system default trust manager (validates certificate chains
-        // including Tailscale's CA) but relax hostname verification since
-        // users may connect via IP address or local hostname where the cert
-        // CN won't match.
+        // The treadmill is a personal LAN appliance serving a per-device
+        // self-signed cert (generated on the Pi at setup time). There is no CA
+        // to anchor to, and the cert SAN won't match an arbitrary IP/host, so
+        // we trust the cert unconditionally and skip hostname verification.
+        // Mirrors the iOS client (TrustAllDelegate) and the app's
+        // cleartext-allowed posture; acceptable for a non-internet-facing box.
+        val (sslSocketFactory, trustManager) = trustAllTls()
         OkHttpClient.Builder()
+            .sslSocketFactory(sslSocketFactory, trustManager)
             .hostnameVerifier { _, _ -> true }
             .addInterceptor(DynamicBaseUrlInterceptor(get()))
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -65,6 +75,24 @@ val appModule = module {
 
     viewModel { TreadmillViewModel(get(), get(), get()) }
     viewModel { VoiceViewModel(get(), get()) }
+}
+
+/**
+ * Builds an [SSLSocketFactory] + [X509TrustManager] pair that accept any
+ * server certificate. The treadmill serves a per-device self-signed cert with
+ * no CA to anchor to; see the OkHttpClient provider for the threat-model
+ * rationale. Extracted as a named unit so the trust behavior can be
+ * unit-tested against a self-signed MockWebServer.
+ */
+private fun trustAllTls(): Pair<SSLSocketFactory, X509TrustManager> {
+    val trustManager = object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+    val sslContext = SSLContext.getInstance("TLS")
+    sslContext.init(null, arrayOf<TrustManager>(trustManager), SecureRandom())
+    return sslContext.socketFactory to trustManager
 }
 
 /**
