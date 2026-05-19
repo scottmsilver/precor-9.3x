@@ -22,6 +22,7 @@ sudo rm -f /etc/systemd/system/treadmill_io.service
 #                          links (libpigpio.so.1)
 #   - rsync              : used by the deploy path
 #   - openssl            : per-device self-signed TLS cert (HTTPS)
+#   - avahi-daemon       : publishes the _treadmill._tcp mDNS service
 # Works on any Debian-based Pi OS whose apt provides libpigpio1 (DietPi and
 # Raspberry Pi OS both pull 1.79-1+rpt1 from archive.raspberrypi.com). Must
 # precede the venv step and the treadmill_io restart.
@@ -33,6 +34,7 @@ if ! { [ -e /usr/lib/libpigpio.so.1 ] || [ -e /lib/libpigpio.so.1 ] \
 fi
 command -v rsync >/dev/null 2>&1 || need="$need rsync"
 command -v openssl >/dev/null 2>&1 || need="$need openssl"
+[ -x /usr/sbin/avahi-daemon ] || need="$need avahi-daemon"
 if [ -n "$need" ]; then
   echo "Installing OS prerequisites:$need"
   sudo apt-get update -qq
@@ -89,6 +91,7 @@ if systemctl list-unit-files | grep -q '^treadmill-critical.target'; then
 fi
 [ -x /usr/local/bin/ftms-daemon ] && sudo systemctl enable ftms || true
 [ -x /usr/local/bin/hrm-daemon ]  && sudo systemctl enable hrm  || true
+sudo systemctl enable --now avahi-daemon 2>/dev/null || true
 
 # --- Trim ladder step 4: zram thin margin (compressed RAM swap, no SD wear) --
 if ! systemctl is-enabled systemd-zram-setup@zram0.service >/dev/null 2>&1; then
