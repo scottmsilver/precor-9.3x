@@ -31,7 +31,7 @@ manifest_rows() {
       */../*) echo "manifest: src contains '..': $line" >&2; return 1 ;;
     esac
     case $dest in
-      /usr/local/bin/*|/etc/systemd/system/*|'~/'*|/home/*) ;;
+      /usr/local/bin/*|/etc/systemd/system/*|/etc/avahi/services/*|'~/'*|/home/*) ;;
       *) echo "manifest: dest outside allowed roots: $line" >&2; return 1 ;;
     esac
     case $mode in [0-7][0-7][0-7][0-7]) ;; *)

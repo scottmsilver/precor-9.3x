@@ -78,12 +78,13 @@ echo "=== ship-check: $PI_HOST (belt-moving layers: $([ $RUN_BELT -eq 1 ] && ech
 # belt is never left moving.
 remote_safe_stop() {
   ssh -o ConnectTimeout=5 "$PI_HOST" 'python3 - <<PYSAFE
-import json,urllib.request
+import json,ssl,urllib.request
+_C=ssl.create_default_context(); _C.check_hostname=False; _C.verify_mode=ssl.CERT_NONE
 def post(p,b):
     try:
-        r=urllib.request.Request("http://127.0.0.1:'"$SERVER_PORT"'"+p,
+        r=urllib.request.Request("https://127.0.0.1:'"$SERVER_PORT"'"+p,
             data=json.dumps(b).encode(),headers={"Content-Type":"application/json"},method="POST")
-        urllib.request.urlopen(r,timeout=5).read()
+        urllib.request.urlopen(r,timeout=5,context=_C).read()
     except Exception: pass
 post("/api/speed",{"value":0})
 post("/api/program/stop",{})
@@ -94,27 +95,47 @@ PYSAFE' >/dev/null 2>&1 || true
 trap 'remote_safe_stop' EXIT INT TERM
 
 # All probing runs ON the Pi (treadmill_io is a Pi-local unix socket; the
-# server may be plain HTTP here with no tailscale cert). One heredoc,
+# server speaks HTTPS with a per-device self-signed cert, so probe with an
+# unverified TLS context — curl -sk equivalent). One heredoc,
 # structured output, own try/finally safe-stop, own exit code.
 set +e
 ssh "$PI_HOST" "SHIP_BELT=$RUN_BELT SERVER_PORT=$SERVER_PORT python3 - " <<'PYEOF'
-import json, os, socket, sys, time, urllib.request
+import json, os, socket, ssl, sys, time, urllib.request
 
 BELT = os.environ.get("SHIP_BELT") == "1"
 PORT = os.environ.get("SERVER_PORT", "8000")
-BASE = "http://127.0.0.1:%s" % PORT
+BASE = "https://127.0.0.1:%s" % PORT
 SOCK = "/tmp/treadmill_io.sock"
+
+# Per-device self-signed cert: verify nothing (curl -sk equivalent).
+SSLCTX = ssl.create_default_context()
+SSLCTX.check_hostname = False
+SSLCTX.verify_mode = ssl.CERT_NONE
 
 fails, warns = [], []
 def ok(tag, msg=""):   print("  PASS  %-26s %s" % (tag, msg))
 def bad(tag, msg=""):  print("  FAIL  %-26s %s" % (tag, msg)); fails.append(tag)
 def warn(tag, msg=""): print("  WARN  %-26s %s" % (tag, msg)); warns.append(tag)
 
+def check_mdns():
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["avahi-browse", "-rpt", "_treadmill._tcp"],
+            capture_output=True, text=True, timeout=10).stdout
+    except Exception as e:
+        warn("mdns_advert", "avahi-browse failed: %s" % e); return
+    if any(l.startswith("=") and "_treadmill._tcp" in l and "8000" in l
+           and "scheme=https" in l for l in out.splitlines()):
+        ok("mdns_advert", "_treadmill._tcp resolves (port 8000, scheme=https)")
+    else:
+        bad("mdns_advert", "no resolved _treadmill._tcp record")
+
 def http(method, path, body=None, timeout=8):
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(BASE + path, data=data,
         headers={"Content-Type": "application/json"}, method=method)
-    return urllib.request.urlopen(r, timeout=timeout).read().decode()
+    return urllib.request.urlopen(r, timeout=timeout, context=SSLCTX).read().decode()
 
 def cpp_status():
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -301,6 +322,8 @@ if BELT:
                 {k: d.get(k) for k in ("emulate","emu_speed","bus_speed","proxy")}))
 else:
     print("L1/L2-write/L4  SKIPPED (--no-belt)")
+
+check_mdns()
 
 print("")
 if fails:

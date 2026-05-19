@@ -163,6 +163,9 @@ zero-speed-on-emulate-start, auto proxy/emulate detection). `deploy.sh`:
   (CLAUDE.md rule; `server.py` already complies).
 - TLS: `setup.sh` derives the cert name from `hostname` (already
   host-agnostic) so each Pi gets its own `tailscale cert`.
+  > **Superseded 2026-05-19 (precor-9_3x-41a, commit 3b364b7):** the Tailscale
+  > cert path was dropped — `setup.sh` now mints a per-device self-signed cert
+  > on the Pi (no account / internet dependency).
 
 ## Validation gate & testing
 

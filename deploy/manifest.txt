@@ -19,3 +19,4 @@ unit  build/services/treadmill-io.service      /etc/systemd/system/        0644 
 unit  build/services/treadmill-server.service  /etc/systemd/system/        0644 root
 unit  build/services/ftms.service              /etc/systemd/system/        0644 root
 unit  build/services/hrm.service               /etc/systemd/system/        0644 root
+file  build/treadmill.avahi-service            /etc/avahi/services/treadmill.service 0644 root

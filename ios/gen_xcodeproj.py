@@ -157,6 +157,8 @@ def main():
         a("                CURRENT_PROJECT_VERSION = 1;")
         a("                GENERATE_INFOPLIST_FILE = YES;")
         a('                INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voice control for your treadmill";')
+        a('                INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Find your treadmill on the local network.";')
+        a('                INFOPLIST_KEY_NSBonjourServices = "_treadmill._tcp";')
         a("            };")
         a(f"            name = {name};")
         a("        };")

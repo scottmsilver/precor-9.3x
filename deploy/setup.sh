@@ -21,6 +21,8 @@ sudo rm -f /etc/systemd/system/treadmill_io.service
 #   - libpigpio1         : the runtime shared lib treadmill_io dynamically
 #                          links (libpigpio.so.1)
 #   - rsync              : used by the deploy path
+#   - openssl            : per-device self-signed TLS cert (HTTPS)
+#   - avahi-daemon       : publishes the _treadmill._tcp mDNS service
 # Works on any Debian-based Pi OS whose apt provides libpigpio1 (DietPi and
 # Raspberry Pi OS both pull 1.79-1+rpt1 from archive.raspberrypi.com). Must
 # precede the venv step and the treadmill_io restart.
@@ -31,6 +33,8 @@ if ! { [ -e /usr/lib/libpigpio.so.1 ] || [ -e /lib/libpigpio.so.1 ] \
   need="$need libpigpio1"
 fi
 command -v rsync >/dev/null 2>&1 || need="$need rsync"
+command -v openssl >/dev/null 2>&1 || need="$need openssl"
+[ -x /usr/sbin/avahi-daemon ] || need="$need avahi-daemon"
 if [ -n "$need" ]; then
   echo "Installing OS prerequisites:$need"
   sudo apt-get update -qq
@@ -87,6 +91,7 @@ if systemctl list-unit-files | grep -q '^treadmill-critical.target'; then
 fi
 [ -x /usr/local/bin/ftms-daemon ] && sudo systemctl enable ftms || true
 [ -x /usr/local/bin/hrm-daemon ]  && sudo systemctl enable hrm  || true
+sudo systemctl enable --now avahi-daemon 2>/dev/null || true
 
 # --- Trim ladder step 4: zram thin margin (compressed RAM swap, no SD wear) --
 if ! systemctl is-enabled systemd-zram-setup@zram0.service >/dev/null 2>&1; then
@@ -100,19 +105,28 @@ if ! systemctl is-enabled systemd-zram-setup@zram0.service >/dev/null 2>&1; then
   sudo systemctl start systemd-zram-setup@zram0.service 2>/dev/null || true
 fi
 
-# --- TLS cert (Tailscale, host-agnostic — derives name from this host) ------
-TS_DOMAIN=$(tailscale status --json 2>/dev/null \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))" 2>/dev/null || true)
-if [ -n "$TS_DOMAIN" ]; then
-  if sudo tailscale cert "$TS_DOMAIN"; then
-    sudo cp "$HOME/$TS_DOMAIN.crt" ts-cert.pem
-    sudo cp "$HOME/$TS_DOMAIN.key" ts-key.pem
-    sudo chown "$USER_NAME:$USER_NAME" ts-cert.pem ts-key.pem
-    ln -sf ts-cert.pem cert.pem
-    ln -sf ts-key.pem key.pem
-  else
-    echo "WARNING: TLS cert generation failed — server will run without HTTPS"
-  fi
+# --- TLS cert (per-device self-signed, generated on this host) --------------
+# The treadmill is a personal LAN appliance: no CA, no internet dependency.
+# Generate a self-signed cert once, on-device, so a freshly commissioned Pi
+# serves HTTPS out of the box — the iOS app's ATS hard-blocks cleartext, and
+# Android trusts this cert via a trust-all manager. The private key is a
+# per-device secret: gitignored and rsync-excluded (deploy.sh --exclude
+# '*.pem'), so a normal redeploy never clobbers or regenerates it. cwd here ==
+# server.py WorkingDirectory, and server.py reads cert.pem/key.pem relative to
+# it. Idempotent: (re)generate only if the key is missing or the cert is
+# absent/expired — an existing valid per-device cert is preserved.
+if [ ! -f key.pem ] || ! openssl x509 -in cert.pem -noout -checkend 0 >/dev/null 2>&1; then
+  HOST_SHORT="$(hostname -s)"
+  PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  SAN="DNS:${HOST_SHORT},DNS:${HOST_SHORT}.local,DNS:localhost,IP:127.0.0.1"
+  [ -n "$PRIMARY_IP" ] && SAN="${SAN},IP:${PRIMARY_IP}"
+  echo "Generating per-device self-signed TLS cert (CN=${HOST_SHORT}, SAN=${SAN})..."
+  rm -f cert.pem key.pem ts-cert.pem ts-key.pem
+  openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout key.pem -out cert.pem -days 3650 \
+    -subj "/CN=${HOST_SHORT}" -addext "subjectAltName=${SAN}"
+  chmod 600 key.pem
+  chmod 644 cert.pem
 fi
 
 # --- Venv: minimal deps only (trim ladder step 1) ---------------------------

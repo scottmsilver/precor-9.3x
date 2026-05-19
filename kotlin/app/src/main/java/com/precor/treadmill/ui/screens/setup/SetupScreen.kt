@@ -8,11 +8,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.precor.treadmill.data.preferences.ServerPreferences
+import com.precor.treadmill.discovery.TreadmillDiscovery
 import com.precor.treadmill.ui.theme.LocalPrecorColors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -27,6 +30,26 @@ fun SetupScreen(
     var url by remember { mutableStateOf("https://192.168.1.14:8000") }
     var error by remember { mutableStateOf<String?>(null) }
     var connecting by remember { mutableStateOf(false) }
+
+    // mDNS discovery: ~4s background scan, auto-connect on a single result,
+    // picker on multiple, fall through to the manual field on zero. See spec
+    // docs/superpowers/specs/2026-05-18-mdns-device-discovery-design.md.
+    val context = LocalContext.current
+    val discovery = remember { TreadmillDiscovery(context) }
+    val found by discovery.found.collectAsState()
+    var scanning by remember { mutableStateOf(true) }
+    DisposableEffect(Unit) {
+        discovery.start()
+        onDispose { discovery.stop() }
+    }
+    LaunchedEffect(Unit) { delay(4000); scanning = false }
+    LaunchedEffect(found) {
+        if (found.size == 1) {
+            serverPreferences.setServerUrl(found.first().baseUrl.trimEnd('/'))
+            discovery.stop()
+            onConnected()
+        }
+    }
 
     fun connect() {
         val trimmed = url.trim()
@@ -77,6 +100,50 @@ fun SetupScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.text2,
                 )
+
+                if (found.size > 1) {
+                    Text(
+                        text = "Select your treadmill",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.text2,
+                    )
+                    found.forEach { d ->
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    serverPreferences.setServerUrl(d.baseUrl.trimEnd('/'))
+                                    discovery.stop()
+                                    onConnected()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colors.green,
+                                contentColor = colors.bg,
+                            ),
+                            shape = MaterialTheme.shapes.medium,
+                        ) { Text("${d.name}  —  ${d.baseUrl}") }
+                    }
+                    Text(
+                        text = "— or enter manually —",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.text3,
+                    )
+                } else if (scanning && found.isEmpty()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = colors.green,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Looking for your treadmill…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.text2,
+                        )
+                    }
+                }
 
                 OutlinedTextField(
                     value = url,

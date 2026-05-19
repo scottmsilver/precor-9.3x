@@ -1,7 +1,7 @@
 import Foundation
 
 /// Shared URLSession delegate that trusts all server certificates.
-/// Used for Tailscale and self-signed certs on the local network.
+/// Used for the Pi's per-device self-signed cert on the local network.
 final class TrustAllDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
         -> (URLSession.AuthChallengeDisposition, URLCredential?) {

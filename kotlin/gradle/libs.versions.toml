@@ -57,6 +57,8 @@ datastore-preferences = { group = "androidx.datastore", name = "datastore-prefer
 
 # Testing
 junit = { group = "junit", name = "junit", version = "4.13.2" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
+okhttp-tls = { group = "com.squareup.okhttp3", name = "okhttp-tls", version.ref = "okhttp" }
 compose-ui-test = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 
