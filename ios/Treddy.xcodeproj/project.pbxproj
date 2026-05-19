@@ -5,84 +5,86 @@
     objectVersion = 56;
     objects = {
 
-        2D7E4153715945C386E3A32E /* RemoteLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/RemoteLogger.swift"; sourceTree = "<group>"; };
-        23D9E07594B14CC9ADD9BC50 /* TreadmillAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/TreadmillAPI.swift"; sourceTree = "<group>"; };
-        FDBD58339BA24218BE27603F /* TreadmillWebSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/TreadmillWebSocket.swift"; sourceTree = "<group>"; };
-        C18D5B80693C45E49DB0679D /* TrustAllDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/TrustAllDelegate.swift"; sourceTree = "<group>"; };
-        7EC32C3A74154AF2B0142007 /* AppRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/App/AppRoute.swift"; sourceTree = "<group>"; };
-        52CDD557FA7145A18CC54860 /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/App/AppShellView.swift"; sourceTree = "<group>"; };
-        61CF0248BCEC42F6990F7675 /* TreddyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/App/TreddyApp.swift"; sourceTree = "<group>"; };
-        515DCBA27CD640D59AE73044 /* AudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/AudioCapture.swift"; sourceTree = "<group>"; };
-        C2DA20478DAF474D9D3EB54A /* AudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/AudioPlayer.swift"; sourceTree = "<group>"; };
-        B8411D2C99934A0790402EFE /* FunctionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/FunctionBridge.swift"; sourceTree = "<group>"; };
-        07B89F8B15474EFBBB1FE10B /* GeminiLiveClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/GeminiLiveClient.swift"; sourceTree = "<group>"; };
-        3C974A343D754561B5D73F07 /* VoiceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/VoiceCoordinator.swift"; sourceTree = "<group>"; };
-        D8997AB631ED434C9A91411C /* TreadmillStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/State/TreadmillStore.swift"; sourceTree = "<group>"; };
-        D0C0136057D94242AD0899E9 /* TreadmillModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Models/TreadmillModels.swift"; sourceTree = "<group>"; };
-        3C2B9CD47045493D93EB10DE /* DebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/DebugView.swift"; sourceTree = "<group>"; };
-        1B87C6D824864476903F8F18 /* LobbyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/LobbyView.swift"; sourceTree = "<group>"; };
-        1B2E98C619464143A4481048 /* ProfilePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/ProfilePickerView.swift"; sourceTree = "<group>"; };
-        2B16B19FA6324CFCA2BAB82A /* RunningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/RunningView.swift"; sourceTree = "<group>"; };
-        7CBF061BCD9F4A079A1B73AE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/SettingsView.swift"; sourceTree = "<group>"; };
-        EA4B4E60180F42F9BB962908 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/SetupView.swift"; sourceTree = "<group>"; };
-        EDF6F3BD0B4747D6A9B2A6C9 /* AppColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/AppColors.swift"; sourceTree = "<group>"; };
-        52BC121CEF9D4CE88C6DFA5F /* DisconnectBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/DisconnectBanner.swift"; sourceTree = "<group>"; };
-        064B4574773440E4826C3824 /* ElevationProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/ElevationProfile.swift"; sourceTree = "<group>"; };
-        677A31EB36F84590BAF8E062 /* HrmSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/HrmSection.swift"; sourceTree = "<group>"; };
-        0F0EB5AF32384816B790BE63 /* MetricsRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/MetricsRow.swift"; sourceTree = "<group>"; };
-        5ADE0F5BB40A4B798E89248E /* NavRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/NavRail.swift"; sourceTree = "<group>"; };
-        F0F4CC09C7414742B835AC5B /* SpeedInclineControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/SpeedInclineControls.swift"; sourceTree = "<group>"; };
-        A7592D2BEFD9479AB9B3F481 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/ToastView.swift"; sourceTree = "<group>"; };
-        7FB754F48F834560B9203594 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Utils/Formatters.swift"; sourceTree = "<group>"; };
-        CD91C0E015064F7DAB47C318 /* bg_forest.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = "Treddy/Resources/bg_forest.jpg"; sourceTree = "<group>"; };
-        F63C6F3A3AA548C88927225A /* RemoteLogger.swift */ = {isa = PBXBuildFile; fileRef = 2D7E4153715945C386E3A32E; };
-        2863FBC6B59148C795A529C9 /* TreadmillAPI.swift */ = {isa = PBXBuildFile; fileRef = 23D9E07594B14CC9ADD9BC50; };
-        30F169BB477441159DF408B9 /* TreadmillWebSocket.swift */ = {isa = PBXBuildFile; fileRef = FDBD58339BA24218BE27603F; };
-        0C8997B0A35149A4A6E3E1EB /* TrustAllDelegate.swift */ = {isa = PBXBuildFile; fileRef = C18D5B80693C45E49DB0679D; };
-        EF7E0A6F454142A7949EE77A /* AppRoute.swift */ = {isa = PBXBuildFile; fileRef = 7EC32C3A74154AF2B0142007; };
-        0A4C21043D474BEFAE3C8134 /* AppShellView.swift */ = {isa = PBXBuildFile; fileRef = 52CDD557FA7145A18CC54860; };
-        FA6E138FECCD405A99070B51 /* TreddyApp.swift */ = {isa = PBXBuildFile; fileRef = 61CF0248BCEC42F6990F7675; };
-        F572EA1AF44E46299E46B668 /* AudioCapture.swift */ = {isa = PBXBuildFile; fileRef = 515DCBA27CD640D59AE73044; };
-        CE6A7433F28144FF9D9661A2 /* AudioPlayer.swift */ = {isa = PBXBuildFile; fileRef = C2DA20478DAF474D9D3EB54A; };
-        88C67B015185440EB4A851CD /* FunctionBridge.swift */ = {isa = PBXBuildFile; fileRef = B8411D2C99934A0790402EFE; };
-        021B916077DF4BE1874EAE1E /* GeminiLiveClient.swift */ = {isa = PBXBuildFile; fileRef = 07B89F8B15474EFBBB1FE10B; };
-        52FABB7F613849978C33DF44 /* VoiceCoordinator.swift */ = {isa = PBXBuildFile; fileRef = 3C974A343D754561B5D73F07; };
-        1BDCBA4D53F4440FBAC4BEDC /* TreadmillStore.swift */ = {isa = PBXBuildFile; fileRef = D8997AB631ED434C9A91411C; };
-        348142228931486786B98FBA /* TreadmillModels.swift */ = {isa = PBXBuildFile; fileRef = D0C0136057D94242AD0899E9; };
-        3AFB08EE6AE04CA8A0A49F9B /* DebugView.swift */ = {isa = PBXBuildFile; fileRef = 3C2B9CD47045493D93EB10DE; };
-        18FC552DABFF4E93AA7D9543 /* LobbyView.swift */ = {isa = PBXBuildFile; fileRef = 1B87C6D824864476903F8F18; };
-        BD183E2E1F9C465EB0E29D50 /* ProfilePickerView.swift */ = {isa = PBXBuildFile; fileRef = 1B2E98C619464143A4481048; };
-        4206A9B72CEC497FA34935AF /* RunningView.swift */ = {isa = PBXBuildFile; fileRef = 2B16B19FA6324CFCA2BAB82A; };
-        2D93D6DC870E4A878EE64C04 /* SettingsView.swift */ = {isa = PBXBuildFile; fileRef = 7CBF061BCD9F4A079A1B73AE; };
-        EA1CB9978CE947B0830644CF /* SetupView.swift */ = {isa = PBXBuildFile; fileRef = EA4B4E60180F42F9BB962908; };
-        BBC1A922CA3F4E8198AB3D0A /* AppColors.swift */ = {isa = PBXBuildFile; fileRef = EDF6F3BD0B4747D6A9B2A6C9; };
-        5386570C220A4FB0B06F97E2 /* DisconnectBanner.swift */ = {isa = PBXBuildFile; fileRef = 52BC121CEF9D4CE88C6DFA5F; };
-        4FB73D9A91DD4A769ABCB6FC /* ElevationProfile.swift */ = {isa = PBXBuildFile; fileRef = 064B4574773440E4826C3824; };
-        C945830BEEB84D19AFD4B9D0 /* HrmSection.swift */ = {isa = PBXBuildFile; fileRef = 677A31EB36F84590BAF8E062; };
-        94758C81CDEF4EA894ECD331 /* MetricsRow.swift */ = {isa = PBXBuildFile; fileRef = 0F0EB5AF32384816B790BE63; };
-        21D5742B1FA54FDB8673064D /* NavRail.swift */ = {isa = PBXBuildFile; fileRef = 5ADE0F5BB40A4B798E89248E; };
-        35A47FB2BA7B46C199800F3C /* SpeedInclineControls.swift */ = {isa = PBXBuildFile; fileRef = F0F4CC09C7414742B835AC5B; };
-        E2C6BDC8079A4A1BAB733341 /* ToastView.swift */ = {isa = PBXBuildFile; fileRef = A7592D2BEFD9479AB9B3F481; };
-        6DCB19F398E44A21B0841BE9 /* Formatters.swift */ = {isa = PBXBuildFile; fileRef = 7FB754F48F834560B9203594; };
-        B4E842B046C4457396FE27B3 /* bg_forest.jpg */ = {isa = PBXBuildFile; fileRef = CD91C0E015064F7DAB47C318; };
-        6371852552CE44A9B4003427 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Treddy.app; sourceTree = BUILT_PRODUCTS_DIR; };
-        7D04E7587E084A5CAECD7F6E = {isa = PBXGroup; children = (2D7E4153715945C386E3A32E, 23D9E07594B14CC9ADD9BC50, FDBD58339BA24218BE27603F, C18D5B80693C45E49DB0679D, 7EC32C3A74154AF2B0142007, 52CDD557FA7145A18CC54860, 61CF0248BCEC42F6990F7675, 515DCBA27CD640D59AE73044, C2DA20478DAF474D9D3EB54A, B8411D2C99934A0790402EFE, 07B89F8B15474EFBBB1FE10B, 3C974A343D754561B5D73F07, D8997AB631ED434C9A91411C, D0C0136057D94242AD0899E9, 3C2B9CD47045493D93EB10DE, 1B87C6D824864476903F8F18, 1B2E98C619464143A4481048, 2B16B19FA6324CFCA2BAB82A, 7CBF061BCD9F4A079A1B73AE, EA4B4E60180F42F9BB962908, EDF6F3BD0B4747D6A9B2A6C9, 52BC121CEF9D4CE88C6DFA5F, 064B4574773440E4826C3824, 677A31EB36F84590BAF8E062, 0F0EB5AF32384816B790BE63, 5ADE0F5BB40A4B798E89248E, F0F4CC09C7414742B835AC5B, A7592D2BEFD9479AB9B3F481, 7FB754F48F834560B9203594, CD91C0E015064F7DAB47C318, 2292275F4AD344B486AE64B8); sourceTree = "<group>"; };
-        2292275F4AD344B486AE64B8 = {isa = PBXGroup; children = (6371852552CE44A9B4003427); name = Products; sourceTree = "<group>"; };
-        2264099E4F27422780D4F631 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (F63C6F3A3AA548C88927225A, 2863FBC6B59148C795A529C9, 30F169BB477441159DF408B9, 0C8997B0A35149A4A6E3E1EB, EF7E0A6F454142A7949EE77A, 0A4C21043D474BEFAE3C8134, FA6E138FECCD405A99070B51, F572EA1AF44E46299E46B668, CE6A7433F28144FF9D9661A2, 88C67B015185440EB4A851CD, 021B916077DF4BE1874EAE1E, 52FABB7F613849978C33DF44, 1BDCBA4D53F4440FBAC4BEDC, 348142228931486786B98FBA, 3AFB08EE6AE04CA8A0A49F9B, 18FC552DABFF4E93AA7D9543, BD183E2E1F9C465EB0E29D50, 4206A9B72CEC497FA34935AF, 2D93D6DC870E4A878EE64C04, EA1CB9978CE947B0830644CF, BBC1A922CA3F4E8198AB3D0A, 5386570C220A4FB0B06F97E2, 4FB73D9A91DD4A769ABCB6FC, C945830BEEB84D19AFD4B9D0, 94758C81CDEF4EA894ECD331, 21D5742B1FA54FDB8673064D, 35A47FB2BA7B46C199800F3C, E2C6BDC8079A4A1BAB733341, 6DCB19F398E44A21B0841BE9); runOnlyForDeploymentPostprocessing = 0; };
-        4DA14ACCAA334548BCE0FE87 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (B4E842B046C4457396FE27B3); runOnlyForDeploymentPostprocessing = 0; };
-        A4A4F9DD0B884ABCBB40CF19 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
-        9AB0E7A7BD3145C499EBE599 = {
+        2F2B859B72E848BCBC60914F /* DiscoveryUrl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/DiscoveryUrl.swift"; sourceTree = "<group>"; };
+        64218E7CFBE64D169C4E46F2 /* RemoteLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/RemoteLogger.swift"; sourceTree = "<group>"; };
+        21B812097E7042B6B00ADDA4 /* TreadmillAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/TreadmillAPI.swift"; sourceTree = "<group>"; };
+        F15D54EF7A2E44B4BDEDED95 /* TreadmillWebSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/TreadmillWebSocket.swift"; sourceTree = "<group>"; };
+        24C99EE5B33349FCB9DA1655 /* TrustAllDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Services/TrustAllDelegate.swift"; sourceTree = "<group>"; };
+        5E2C1B9B1A4C416B9826645F /* AppRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/App/AppRoute.swift"; sourceTree = "<group>"; };
+        F425ADEC8C05442E93085A5E /* AppShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/App/AppShellView.swift"; sourceTree = "<group>"; };
+        E22BA64ED6B74B9390CCF1B6 /* TreddyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/App/TreddyApp.swift"; sourceTree = "<group>"; };
+        17ECB29612CD4A1C98EFF24D /* AudioCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/AudioCapture.swift"; sourceTree = "<group>"; };
+        5A70C782633D4363925D9533 /* AudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/AudioPlayer.swift"; sourceTree = "<group>"; };
+        DEB63BF8459640F0BDE56391 /* FunctionBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/FunctionBridge.swift"; sourceTree = "<group>"; };
+        46AC013DFF2846BB811C5568 /* GeminiLiveClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/GeminiLiveClient.swift"; sourceTree = "<group>"; };
+        37F9A106D9984DDB99008D16 /* VoiceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Voice/VoiceCoordinator.swift"; sourceTree = "<group>"; };
+        6921A2E618C64F3D9E0706E6 /* TreadmillStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/State/TreadmillStore.swift"; sourceTree = "<group>"; };
+        41450656B58F4A13AC4ABAAE /* TreadmillModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Models/TreadmillModels.swift"; sourceTree = "<group>"; };
+        B0EDBD7060244DBD8B6C281D /* DebugView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/DebugView.swift"; sourceTree = "<group>"; };
+        F965F7B881A344FD8C012F14 /* LobbyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/LobbyView.swift"; sourceTree = "<group>"; };
+        E496C3A3F9D04D28B89D676C /* ProfilePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/ProfilePickerView.swift"; sourceTree = "<group>"; };
+        52A678AF96AD4D65BB728B43 /* RunningView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/RunningView.swift"; sourceTree = "<group>"; };
+        C0D94B4941B945079C6367DE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/SettingsView.swift"; sourceTree = "<group>"; };
+        02A8D81B2654462DBDE64F80 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/SetupView.swift"; sourceTree = "<group>"; };
+        4CC167116508478EAE397B28 /* AppColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/AppColors.swift"; sourceTree = "<group>"; };
+        117081278C0147B89A3388BC /* DisconnectBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/DisconnectBanner.swift"; sourceTree = "<group>"; };
+        B9993B7F4539400EA3B5E077 /* ElevationProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/ElevationProfile.swift"; sourceTree = "<group>"; };
+        BC5E37A05D144D0ABC2EB767 /* HrmSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/HrmSection.swift"; sourceTree = "<group>"; };
+        2B44C0D9ECB74DD6ACAB9C54 /* MetricsRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/MetricsRow.swift"; sourceTree = "<group>"; };
+        A360154F23C84CD284C4E100 /* NavRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/NavRail.swift"; sourceTree = "<group>"; };
+        29AFC065122A4CA6B13BC7A0 /* SpeedInclineControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/SpeedInclineControls.swift"; sourceTree = "<group>"; };
+        0FC58B8F66CA4644AF59DEE3 /* ToastView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Components/ToastView.swift"; sourceTree = "<group>"; };
+        DC6C3FA4DCC243B78CFE0F00 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Treddy/Views/Utils/Formatters.swift"; sourceTree = "<group>"; };
+        D6E9E734957C4433B19021B7 /* bg_forest.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = "Treddy/Resources/bg_forest.jpg"; sourceTree = "<group>"; };
+        16E655DED1814CC8B06485D7 /* DiscoveryUrl.swift */ = {isa = PBXBuildFile; fileRef = 2F2B859B72E848BCBC60914F; };
+        722649A0F2454A89B843B9D0 /* RemoteLogger.swift */ = {isa = PBXBuildFile; fileRef = 64218E7CFBE64D169C4E46F2; };
+        0F6647E9EE6D4190BAD40CD5 /* TreadmillAPI.swift */ = {isa = PBXBuildFile; fileRef = 21B812097E7042B6B00ADDA4; };
+        D86CD4025C314FA09BCE5AC5 /* TreadmillWebSocket.swift */ = {isa = PBXBuildFile; fileRef = F15D54EF7A2E44B4BDEDED95; };
+        B3A5D52F495F454DB2561E2F /* TrustAllDelegate.swift */ = {isa = PBXBuildFile; fileRef = 24C99EE5B33349FCB9DA1655; };
+        F5B7D27165B04567913B5CDB /* AppRoute.swift */ = {isa = PBXBuildFile; fileRef = 5E2C1B9B1A4C416B9826645F; };
+        5D72D006BD6D45BFAB12BB5A /* AppShellView.swift */ = {isa = PBXBuildFile; fileRef = F425ADEC8C05442E93085A5E; };
+        1E15D71BA2B84D8B8C614439 /* TreddyApp.swift */ = {isa = PBXBuildFile; fileRef = E22BA64ED6B74B9390CCF1B6; };
+        F751B5DD86904AEBBFF3962A /* AudioCapture.swift */ = {isa = PBXBuildFile; fileRef = 17ECB29612CD4A1C98EFF24D; };
+        B1115A7ACB244945B0357640 /* AudioPlayer.swift */ = {isa = PBXBuildFile; fileRef = 5A70C782633D4363925D9533; };
+        C2BD3E5A723F42E491DA96E0 /* FunctionBridge.swift */ = {isa = PBXBuildFile; fileRef = DEB63BF8459640F0BDE56391; };
+        EF777E61EFF44957898A227D /* GeminiLiveClient.swift */ = {isa = PBXBuildFile; fileRef = 46AC013DFF2846BB811C5568; };
+        748E70F4CA2F4913B6A065C5 /* VoiceCoordinator.swift */ = {isa = PBXBuildFile; fileRef = 37F9A106D9984DDB99008D16; };
+        61873B11A96D47AC89E31678 /* TreadmillStore.swift */ = {isa = PBXBuildFile; fileRef = 6921A2E618C64F3D9E0706E6; };
+        015E02C104364E8CAB5A7731 /* TreadmillModels.swift */ = {isa = PBXBuildFile; fileRef = 41450656B58F4A13AC4ABAAE; };
+        53CF9B41496046378FF81211 /* DebugView.swift */ = {isa = PBXBuildFile; fileRef = B0EDBD7060244DBD8B6C281D; };
+        5BD4A7DD828B4E6E95E7E252 /* LobbyView.swift */ = {isa = PBXBuildFile; fileRef = F965F7B881A344FD8C012F14; };
+        A0D6170E8B2D4B3D929D128E /* ProfilePickerView.swift */ = {isa = PBXBuildFile; fileRef = E496C3A3F9D04D28B89D676C; };
+        23BBA9E4F3BC4C29BF34FD8A /* RunningView.swift */ = {isa = PBXBuildFile; fileRef = 52A678AF96AD4D65BB728B43; };
+        0193801D09804FB6ACCCEDD9 /* SettingsView.swift */ = {isa = PBXBuildFile; fileRef = C0D94B4941B945079C6367DE; };
+        692FF2CA10B04BA192C98A46 /* SetupView.swift */ = {isa = PBXBuildFile; fileRef = 02A8D81B2654462DBDE64F80; };
+        0629285F905B4D068847C519 /* AppColors.swift */ = {isa = PBXBuildFile; fileRef = 4CC167116508478EAE397B28; };
+        9E0EE7877FA84DB197A78AD8 /* DisconnectBanner.swift */ = {isa = PBXBuildFile; fileRef = 117081278C0147B89A3388BC; };
+        C52C68EA2ED041FF93BFABE3 /* ElevationProfile.swift */ = {isa = PBXBuildFile; fileRef = B9993B7F4539400EA3B5E077; };
+        C21C71256707496EA6FF819F /* HrmSection.swift */ = {isa = PBXBuildFile; fileRef = BC5E37A05D144D0ABC2EB767; };
+        78DBA0DAB8E548EBADBC6635 /* MetricsRow.swift */ = {isa = PBXBuildFile; fileRef = 2B44C0D9ECB74DD6ACAB9C54; };
+        E2F7B6B00E5D4EC29D4770B1 /* NavRail.swift */ = {isa = PBXBuildFile; fileRef = A360154F23C84CD284C4E100; };
+        180533C653BC401ABA8D84B8 /* SpeedInclineControls.swift */ = {isa = PBXBuildFile; fileRef = 29AFC065122A4CA6B13BC7A0; };
+        BC54562810044F11AABFB3A2 /* ToastView.swift */ = {isa = PBXBuildFile; fileRef = 0FC58B8F66CA4644AF59DEE3; };
+        5D62D94213BE480BA31B46B7 /* Formatters.swift */ = {isa = PBXBuildFile; fileRef = DC6C3FA4DCC243B78CFE0F00; };
+        D5B0B4ACAE2A4214B40BDF0B /* bg_forest.jpg */ = {isa = PBXBuildFile; fileRef = D6E9E734957C4433B19021B7; };
+        C152E99A52124F9FA043BE98 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Treddy.app; sourceTree = BUILT_PRODUCTS_DIR; };
+        119D4D7CBAD946E4B71682F5 = {isa = PBXGroup; children = (2F2B859B72E848BCBC60914F, 64218E7CFBE64D169C4E46F2, 21B812097E7042B6B00ADDA4, F15D54EF7A2E44B4BDEDED95, 24C99EE5B33349FCB9DA1655, 5E2C1B9B1A4C416B9826645F, F425ADEC8C05442E93085A5E, E22BA64ED6B74B9390CCF1B6, 17ECB29612CD4A1C98EFF24D, 5A70C782633D4363925D9533, DEB63BF8459640F0BDE56391, 46AC013DFF2846BB811C5568, 37F9A106D9984DDB99008D16, 6921A2E618C64F3D9E0706E6, 41450656B58F4A13AC4ABAAE, B0EDBD7060244DBD8B6C281D, F965F7B881A344FD8C012F14, E496C3A3F9D04D28B89D676C, 52A678AF96AD4D65BB728B43, C0D94B4941B945079C6367DE, 02A8D81B2654462DBDE64F80, 4CC167116508478EAE397B28, 117081278C0147B89A3388BC, B9993B7F4539400EA3B5E077, BC5E37A05D144D0ABC2EB767, 2B44C0D9ECB74DD6ACAB9C54, A360154F23C84CD284C4E100, 29AFC065122A4CA6B13BC7A0, 0FC58B8F66CA4644AF59DEE3, DC6C3FA4DCC243B78CFE0F00, D6E9E734957C4433B19021B7, 5D75B9C90BB14AB4B3DDDB56); sourceTree = "<group>"; };
+        5D75B9C90BB14AB4B3DDDB56 = {isa = PBXGroup; children = (C152E99A52124F9FA043BE98); name = Products; sourceTree = "<group>"; };
+        907784C13B984AA6A011C79B = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (16E655DED1814CC8B06485D7, 722649A0F2454A89B843B9D0, 0F6647E9EE6D4190BAD40CD5, D86CD4025C314FA09BCE5AC5, B3A5D52F495F454DB2561E2F, F5B7D27165B04567913B5CDB, 5D72D006BD6D45BFAB12BB5A, 1E15D71BA2B84D8B8C614439, F751B5DD86904AEBBFF3962A, B1115A7ACB244945B0357640, C2BD3E5A723F42E491DA96E0, EF777E61EFF44957898A227D, 748E70F4CA2F4913B6A065C5, 61873B11A96D47AC89E31678, 015E02C104364E8CAB5A7731, 53CF9B41496046378FF81211, 5BD4A7DD828B4E6E95E7E252, A0D6170E8B2D4B3D929D128E, 23BBA9E4F3BC4C29BF34FD8A, 0193801D09804FB6ACCCEDD9, 692FF2CA10B04BA192C98A46, 0629285F905B4D068847C519, 9E0EE7877FA84DB197A78AD8, C52C68EA2ED041FF93BFABE3, C21C71256707496EA6FF819F, 78DBA0DAB8E548EBADBC6635, E2F7B6B00E5D4EC29D4770B1, 180533C653BC401ABA8D84B8, BC54562810044F11AABFB3A2, 5D62D94213BE480BA31B46B7); runOnlyForDeploymentPostprocessing = 0; };
+        95F51633E49242CA8A796C90 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (D5B0B4ACAE2A4214B40BDF0B); runOnlyForDeploymentPostprocessing = 0; };
+        EE174FA814D34924A024C14E = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+        F606E442536A41D9A39DD286 = {
             isa = PBXNativeTarget;
-            buildConfigurationList = FB79F7F3888C494284A83C8D;
-            buildPhases = (2264099E4F27422780D4F631, 4DA14ACCAA334548BCE0FE87, A4A4F9DD0B884ABCBB40CF19);
+            buildConfigurationList = 210A0DC1945F4642899AA1A5;
+            buildPhases = (907784C13B984AA6A011C79B, 95F51633E49242CA8A796C90, EE174FA814D34924A024C14E);
             buildRules = ();
             dependencies = ();
             name = Treddy;
             productName = Treddy;
-            productReference = 6371852552CE44A9B4003427;
+            productReference = C152E99A52124F9FA043BE98;
             productType = "com.apple.product-type.application";
         };
-        06EE3D2901CA44A2A523E29F = {
+        161D38759A3947EEA1527035 = {
             isa = XCBuildConfiguration;
             buildSettings = {
                 PRODUCT_BUNDLE_IDENTIFIER = "com.treddy.app";
@@ -100,7 +102,7 @@
             };
             name = Debug;
         };
-        7ECB768415A84A87B0C5556E = {
+        C59E675D9A6C414EB69E9F22 = {
             isa = XCBuildConfiguration;
             buildSettings = {
                 PRODUCT_BUNDLE_IDENTIFIER = "com.treddy.app";
@@ -118,7 +120,7 @@
             };
             name = Release;
         };
-        42E1458B670D48828CA822FB = {
+        B64D1746119048CEA8B82824 = {
             isa = XCBuildConfiguration;
             buildSettings = {
                 ALWAYS_SEARCH_USER_PATHS = NO;
@@ -130,7 +132,7 @@
             };
             name = Debug;
         };
-        F4BA5F3B5B7F4975B1461700 = {
+        CCA2745D2E02456DAD97ACF1 = {
             isa = XCBuildConfiguration;
             buildSettings = {
                 ALWAYS_SEARCH_USER_PATHS = NO;
@@ -141,16 +143,16 @@
             };
             name = Release;
         };
-        FB79F7F3888C494284A83C8D = {isa = XCConfigurationList; buildConfigurations = (06EE3D2901CA44A2A523E29F, 7ECB768415A84A87B0C5556E); defaultConfigurationName = Debug; };
-        7B23D435267C4662A238A1A1 = {isa = XCConfigurationList; buildConfigurations = (42E1458B670D48828CA822FB, F4BA5F3B5B7F4975B1461700); defaultConfigurationName = Debug; };
-        9ABAF60B60B74956ABC99DE6 = {
+        210A0DC1945F4642899AA1A5 = {isa = XCConfigurationList; buildConfigurations = (161D38759A3947EEA1527035, C59E675D9A6C414EB69E9F22); defaultConfigurationName = Debug; };
+        1711A9FE7664470DBDCB7465 = {isa = XCConfigurationList; buildConfigurations = (B64D1746119048CEA8B82824, CCA2745D2E02456DAD97ACF1); defaultConfigurationName = Debug; };
+        3AE13C2EC5CE4D8394D94160 = {
             isa = PBXProject;
-            buildConfigurationList = 7B23D435267C4662A238A1A1;
+            buildConfigurationList = 1711A9FE7664470DBDCB7465;
             compatibilityVersion = "Xcode 14.0";
-            mainGroup = 7D04E7587E084A5CAECD7F6E;
-            productRefGroup = 2292275F4AD344B486AE64B8;
-            targets = (9AB0E7A7BD3145C499EBE599);
+            mainGroup = 119D4D7CBAD946E4B71682F5;
+            productRefGroup = 5D75B9C90BB14AB4B3DDDB56;
+            targets = (F606E442536A41D9A39DD286);
         };
     };
-    rootObject = 9ABAF60B60B74956ABC99DE6;
+    rootObject = 3AE13C2EC5CE4D8394D94160;
 }
