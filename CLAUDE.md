@@ -99,6 +99,18 @@ TREADMILL_MOCK=1 ./scripts/dev.sh  # mock mode, no Pi needed
 - Build (Rust/FTMS+HRM): `cross` for aarch64 cross-compilation, or `cargo build` on Pi
 - Test deps (header-only, vendored): `doctest` (testing), `rapidjson` (JSON)
 
+### Device Discovery (mDNS)
+
+The Pi advertises one DNS-SD service via a static Avahi file
+(`/etc/avahi/services/treadmill.service`, installed from
+`deploy/treadmill.avahi-service` through the manifest): type
+`_treadmill._tcp`, port 8000, TXT `scheme=https`, `path=/`. Native apps
+(Android `NsdManager`, iOS `NWBrowser`) discover it and either auto-connect
+(single result) or show a picker (multiple), with manual entry as the
+zero-result fallback. The web UI is exempt (same-origin). The `scheme=https`
+contract depends on the per-device self-signed cert work
+(`precor-9_3x-41a`).
+
 ## Architecture
 
 ### Hardware Wiring

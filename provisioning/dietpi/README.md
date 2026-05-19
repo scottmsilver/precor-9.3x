@@ -56,6 +56,8 @@ prevent WiFi association on a headless box.
 7. Eject, insert into the Zero 2 W, power on. First boot is unattended
    (~3-4 min incl. a reboot).
 8. `ssh dietpi@rpi-zero.local` — succeeds with your key; password SSH is refused.
+9. Once `make deploy` has run, the treadmill is discoverable on the LAN as
+   `_treadmill._tcp` (the iOS / Android apps auto-find it — no IP entry needed).
 
 ## Option B — Build a ready-to-flash image (no root)
 
