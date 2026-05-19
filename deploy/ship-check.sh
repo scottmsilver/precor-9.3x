@@ -117,6 +117,20 @@ def ok(tag, msg=""):   print("  PASS  %-26s %s" % (tag, msg))
 def bad(tag, msg=""):  print("  FAIL  %-26s %s" % (tag, msg)); fails.append(tag)
 def warn(tag, msg=""): print("  WARN  %-26s %s" % (tag, msg)); warns.append(tag)
 
+def check_mdns():
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["avahi-browse", "-rpt", "_treadmill._tcp"],
+            capture_output=True, text=True, timeout=10).stdout
+    except Exception as e:
+        warn("mdns_advert", "avahi-browse failed: %s" % e); return
+    if any(l.startswith("=") and "_treadmill._tcp" in l and "8000" in l
+           and "scheme=https" in l for l in out.splitlines()):
+        ok("mdns_advert", "_treadmill._tcp resolves (port 8000, scheme=https)")
+    else:
+        bad("mdns_advert", "no resolved _treadmill._tcp record")
+
 def http(method, path, body=None, timeout=8):
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(BASE + path, data=data,
@@ -308,6 +322,8 @@ if BELT:
                 {k: d.get(k) for k in ("emulate","emu_speed","bus_speed","proxy")}))
 else:
     print("L1/L2-write/L4  SKIPPED (--no-belt)")
+
+check_mdns()
 
 print("")
 if fails:
