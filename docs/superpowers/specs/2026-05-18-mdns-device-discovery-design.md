@@ -1,9 +1,9 @@
 # mDNS Device Discovery — Design Spec
 
 **Date:** 2026-05-18
-**Status:** Corrected 2026-05-19 (fixed the false "zero client changes" TLS
-claim; added the HTTPS prerequisite). Pending user spec-review gate before
-writing-plans.
+**Status:** Approved 2026-05-19 — user spec-review gate passed (corrected:
+false "zero client changes" TLS claim fixed; HTTPS prerequisite added).
+Proceeding to writing-plans.
 
 ## Problem
 
