@@ -2,9 +2,11 @@ import SwiftUI
 
 struct SetupView: View {
     @Environment(TreadmillStore.self) private var store
+    @StateObject private var discovery = TreadmillDiscovery()
     @State private var urlText = "https://rpi:8000"
     @State private var connecting = false
     @State private var errorMessage: String?
+    @State private var scanning = true
 
     var body: some View {
         VStack(spacing: 24) {
@@ -18,6 +20,35 @@ struct SetupView: View {
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 12) {
+                // mDNS discovery: auto-connect single (in .onChange below);
+                // picker when 2+; scanning indicator while looking; manual
+                // form always remains as the zero-result fallback.
+                if discovery.found.count > 1 {
+                    Text("Select your treadmill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    ForEach(discovery.found) { d in
+                        Button {
+                            Task { await awaitConnect(d.baseURL) }
+                        } label: {
+                            Text("\(d.name)  —  \(d.baseURL)")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.green)
+                        .frame(maxWidth: 360)
+                    }
+                    Text("— or enter manually —")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else if scanning && discovery.found.isEmpty {
+                    HStack {
+                        ProgressView()
+                        Text("Looking for your treadmill…")
+                    }
+                    .foregroundStyle(.secondary)
+                }
+
                 TextField("Server URL", text: $urlText)
                     .textFieldStyle(.roundedBorder)
                     .textContentType(.URL)
@@ -56,6 +87,14 @@ struct SetupView: View {
         .onAppear {
             let saved = UserDefaults.standard.string(forKey: "server_url") ?? ""
             if !saved.isEmpty { urlText = saved }
+            discovery.start()
+            Task { try? await Task.sleep(for: .seconds(4)); scanning = false }
+        }
+        .onDisappear { discovery.stop() }
+        .onChange(of: discovery.found) { _, list in
+            if list.count == 1 {
+                Task { await awaitConnect(list[0].baseURL) }
+            }
         }
     }
 
@@ -68,24 +107,24 @@ struct SetupView: View {
             errorMessage = "URL must start with http:// or https://"
             return
         }
-
-        connecting = true
         errorMessage = nil
-        store.serverURL = trimmed
+        Task { await awaitConnect(trimmed) }
+    }
 
-        // Poll for connection with timeout
-        Task {
-            for _ in 0..<10 {
-                try? await Task.sleep(for: .milliseconds(500))
-                if store.isConnected {
-                    store.completeSetup()
-                    connecting = false
-                    return
-                }
+    /// Shared connect-and-poll path used by the manual button, the picker
+    /// buttons, and the auto-connect-on-single-discovery flow.
+    private func awaitConnect(_ url: String) async {
+        connecting = true
+        defer { connecting = false }
+        store.serverURL = url
+        for _ in 0..<10 {
+            try? await Task.sleep(for: .milliseconds(500))
+            if store.isConnected {
+                store.completeSetup()
+                return
             }
-            errorMessage = "Could not connect to \(trimmed)"
-            connecting = false
         }
+        errorMessage = "Could not connect to \(url)"
     }
 }
 
