@@ -23,6 +23,7 @@ sudo rm -f /etc/systemd/system/treadmill_io.service
 #   - rsync              : used by the deploy path
 #   - openssl            : per-device self-signed TLS cert (HTTPS)
 #   - avahi-daemon       : publishes the _treadmill._tcp mDNS service
+#   - avahi-utils        : provides avahi-browse (ship-check mdns_advert + debug)
 # Works on any Debian-based Pi OS whose apt provides libpigpio1 (DietPi and
 # Raspberry Pi OS both pull 1.79-1+rpt1 from archive.raspberrypi.com). Must
 # precede the venv step and the treadmill_io restart.
@@ -35,6 +36,7 @@ fi
 command -v rsync >/dev/null 2>&1 || need="$need rsync"
 command -v openssl >/dev/null 2>&1 || need="$need openssl"
 [ -x /usr/sbin/avahi-daemon ] || need="$need avahi-daemon"
+command -v avahi-browse >/dev/null 2>&1 || need="$need avahi-utils"
 if [ -n "$need" ]; then
   echo "Installing OS prerequisites:$need"
   sudo apt-get update -qq
