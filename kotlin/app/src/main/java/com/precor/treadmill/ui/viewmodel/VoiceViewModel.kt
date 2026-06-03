@@ -219,7 +219,14 @@ class VoiceViewModel(
 
         override fun onInterrupted() {
             Log.d(TAG, "onInterrupted — flushing player (barge-in)")
+            // Flush is always safe (idempotent + needed for in-flight audio).
             player.flush()
+            // Don't bounce voiceState back to LISTENING if user deactivated.
+            // The server-side "barge-in" signal can arrive in response to silent
+            // context pushes (e.g. incline bumps) after the user toggled voice
+            // off; without this gate the UI flashes back to "active" even though
+            // no audio plays (audio still gated by onAudioChunk). precor-9_3x-hmo.
+            if (!userActivated) return
             _voiceState.value = VoiceState.LISTENING
         }
 
@@ -327,7 +334,15 @@ class VoiceViewModel(
                 stopMicCapture()
                 _voiceState.value = VoiceState.IDLE
             }
-            VoiceState.SPEAKING -> interrupt()
+            VoiceState.SPEAKING -> {
+                // Tap during Gemini's response = deactivate, not barge-in
+                // (mirrors LISTENING). Flushes pending audio so playback stops.
+                // precor-9_3x-hmo.
+                userActivated = false
+                audioPlayer?.flush()
+                stopMicCapture()
+                _voiceState.value = VoiceState.IDLE
+            }
         }
     }
 
@@ -359,6 +374,7 @@ class VoiceViewModel(
             Log.d(TAG, "Mic capture started successfully")
         } else {
             Log.e(TAG, "Failed to start mic capture — check RECORD_AUDIO permission")
+            userActivated = false   // precor-9_3x-hmo: don't leave armed on failure
             _voiceState.value = VoiceState.IDLE
         }
     }
@@ -376,6 +392,7 @@ class VoiceViewModel(
         geminiClient?.disconnect()
         geminiClient = null
         audioPlayer?.flush()
+        userActivated = false   // precor-9_3x-hmo: teardown also means deactivated
         _voiceState.value = VoiceState.IDLE
     }
 
