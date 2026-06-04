@@ -22,12 +22,16 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalGlassParams
+import com.precor.treadmill.ui.theme.LocalOverlayBackground
 import com.precor.treadmill.ui.theme.glassPanel
+import com.precor.treadmill.ui.theme.legibleOn
 import com.precor.treadmill.ui.theme.touchFingertip
 import com.precor.treadmill.ui.theme.touchFingerPad
 import com.precor.treadmill.ui.util.haptic
@@ -179,18 +183,20 @@ private fun ControlPanel(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(
+            LegibleText(
                 text = value,
                 color = accentColor,
-                fontSize = valueFontSize,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                lineHeight = (valueFontSize.value + 2).sp,
+                style = TextStyle(
+                    fontSize = valueFontSize,
+                    fontWeight = FontWeight.SemiBold,
+                    textAlign = TextAlign.Center,
+                    lineHeight = (valueFontSize.value + 2).sp,
+                ),
             )
-            Text(
+            LegibleText(
                 text = label,
-                color = Color(0x59E8E4DF),
-                fontSize = labelFontSize,
+                color = LocalGlassParams.current.textColor,
+                style = TextStyle(fontSize = labelFontSize),
             )
         }
 
@@ -276,7 +282,10 @@ private fun RepeatButton(
             },
         contentAlignment = Alignment.Center,
     ) {
-        // Chevron icon — scales proportionally with button size
+        // Chevron icon — scales proportionally with button size.
+        // The stroke color is a widget on the photo too, so run it through the same
+        // APCA guard as text before drawing it.
+        val chevronColor = color.legibleOn(LocalOverlayBackground.current)
         Canvas(
             modifier = Modifier.fillMaxHeight(0.4f).aspectRatio(1f),
         ) {
@@ -302,26 +311,26 @@ private fun RepeatButton(
                         lineTo(w / 2, topY)
                         lineTo(w - inset, topY + chevAmp)
                     }
-                    drawPath(path1, color, style = stroke)
+                    drawPath(path1, chevronColor, style = stroke)
                     val path2 = Path().apply {
                         moveTo(inset, topY + chevAmp + gap + chevAmp)
                         lineTo(w / 2, topY + chevAmp + gap)
                         lineTo(w - inset, topY + chevAmp + gap + chevAmp)
                     }
-                    drawPath(path2, color, style = stroke)
+                    drawPath(path2, chevronColor, style = stroke)
                 } else {
                     val path1 = Path().apply {
                         moveTo(inset, topY)
                         lineTo(w / 2, topY + chevAmp)
                         lineTo(w - inset, topY)
                     }
-                    drawPath(path1, color, style = stroke)
+                    drawPath(path1, chevronColor, style = stroke)
                     val path2 = Path().apply {
                         moveTo(inset, topY + chevAmp + gap)
                         lineTo(w / 2, topY + chevAmp + gap + chevAmp)
                         lineTo(w - inset, topY + chevAmp + gap)
                     }
-                    drawPath(path2, color, style = stroke)
+                    drawPath(path2, chevronColor, style = stroke)
                 }
             } else {
                 val chevAmp = h * 0.22f
@@ -337,7 +346,7 @@ private fun RepeatButton(
                         lineTo(w - inset, topY)
                     }
                 }
-                drawPath(path, color, style = stroke)
+                drawPath(path, chevronColor, style = stroke)
             }
         }
     }
