@@ -53,6 +53,28 @@ fun composite(bg: Rgb, tint: Rgb, a: Double) =
  * If the target is unreachable in-gamut, returns the most-legible variant found.
  * This is the guard every accent/overlay color passes through before it's drawn.
  */
+/**
+ * The single "glassiness" token: how much a glass surface must stand out (APCA Lc) from the
+ * photo around it to read as a distinct element. Lower = glassier, higher = more solid. This
+ * is the one taste constant; everything else about opacity is solved from it + legibility.
+ */
+const val GLASS_SURFACE_LC = 20.0
+
+/**
+ * Minimal [scrim] alpha so the scrimmed surface stands out from [bg] by at least [surfaceLc]
+ * APCA — i.e. the element reads as distinct from the photo behind/around it. This replaces a
+ * hand-picked opacity floor: it's adaptive (a surface whose color resembles the photo needs
+ * more opacity to be seen; a contrasting one needs less). Caps at [maxScrim].
+ */
+fun surfaceScrimAlpha(bg: Rgb, scrim: Rgb, surfaceLc: Double = GLASS_SURFACE_LC, maxScrim: Double = 0.92): Double {
+    var a = 0.0
+    while (a <= maxScrim + 1e-9) {
+        if (abs(apcaLc(composite(bg, scrim, a), bg)) >= surfaceLc) return a
+        a += 0.04
+    }
+    return maxScrim
+}
+
 data class Treatment(val scrimAlpha: Double, val color: Rgb)
 
 /**

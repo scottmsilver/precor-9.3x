@@ -64,6 +64,23 @@ class EngineTest {
         assertEquals("accent unchanged — scrim did the work", accent, t.color)
     }
 
+    @Test fun surfaceScrimAlphaMakesSurfaceStandOutFromBackground() {
+        val bg = rgb(180, 160, 120)   // bright photo
+        val scrim = rgb(20, 24, 20)   // dark tint
+        val a = surfaceScrimAlpha(bg, scrim, 20.0)
+        assertTrue("needs some scrim", a > 0.0)
+        assertTrue("surface clears the affordance target", abs(apcaLc(composite(bg, scrim, a), bg)) >= 19.0)
+    }
+
+    @Test fun surfaceScrimAlphaNeedsMoreWhenScrimMatchesBackground() {
+        // On BRIGHT green foliage, a green surface must be more opaque to stand out than a dark
+        // scrim (which diverges fast because dark-on-bright is high contrast).
+        val bg = rgb(120, 165, 95)
+        val similar = rgb(130, 180, 105)
+        val dark = rgb(18, 20, 18)
+        assertTrue(surfaceScrimAlpha(bg, similar, 20.0) > surfaceScrimAlpha(bg, dark, 20.0))
+    }
+
     @Test fun legibleTreatmentNoScrimWhenAlreadyLegible() {
         val t = legibleTreatment(rgb(255, 255, 255), rgb(20, 24, 20), rgb(20, 24, 20), 60.0)
         assertEquals(0.0, t.scrimAlpha, 1e-9)

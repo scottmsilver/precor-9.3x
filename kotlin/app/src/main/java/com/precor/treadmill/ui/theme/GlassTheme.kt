@@ -38,6 +38,8 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import com.precor.treadmill.ui.theme.readability.legibleTreatment
+import com.precor.treadmill.ui.theme.readability.surfaceScrimAlpha
+import com.precor.treadmill.ui.theme.readability.GLASS_SURFACE_LC
 
 /**
  * Glass panel parameters derived from background image brightness.
@@ -190,24 +192,24 @@ fun LegibleGlassPanel(
     // button passes its OWN brand color, so "how opaque should the surface be" is solved by
     // the SAME math as a scrim — raise the color's opacity until the accents clear APCA.
     scrimColor: Color = LocalOverlayScrimTint.current,
-    minOpacity: Float? = null,
-    maxOpacity: Float = 0.80f,
+    // The one "glassiness" token: how much the surface must stand out from the photo around it.
+    // Lower = glassier. Opacity is the MAX of (text legibility need, this surface-contrast need)
+    // — no hand-picked opacity floor.
+    surfaceLc: Double = GLASS_SURFACE_LC,
+    maxOpacity: Float = 0.92f,
     content: @Composable () -> Unit,
 ) {
     val sampler = LocalPhotoSampler.current
     val base = LocalGlassParams.current
-    val floor = (minOpacity ?: base.panelOpacity).coerceAtMost(maxOpacity)
     var rawBg by remember { mutableStateOf<Color?>(null) }
     val scrimRgb = scrimColor.toReadRgb()
     val alpha: Float = run {
-        val b = rawBg
-        if (b == null) floor
-        else {
-            val need = accents.maxOfOrNull { acc ->
-                legibleTreatment(acc.toReadRgb(), b.toReadRgb(), scrimRgb, targetLc).scrimAlpha
-            } ?: 0.0
-            maxOf(floor.toDouble(), need).toFloat().coerceIn(floor, maxOpacity)
-        }
+        val b = rawBg ?: return@run base.panelOpacity.coerceAtMost(maxOpacity) // pre-measure fallback
+        val legibilityNeed = accents.maxOfOrNull { acc ->
+            legibleTreatment(acc.toReadRgb(), b.toReadRgb(), scrimRgb, targetLc).scrimAlpha
+        } ?: 0.0
+        val affordanceNeed = surfaceScrimAlpha(b.toReadRgb(), scrimRgb, surfaceLc, maxOpacity.toDouble())
+        maxOf(legibilityNeed, affordanceNeed).toFloat().coerceIn(0f, maxOpacity)
     }
     val effectiveBg = composite((rawBg ?: base.panelBg).toReadRgb(), scrimRgb, alpha.toDouble()).toComposeColor()
     var m = modifier

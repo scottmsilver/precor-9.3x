@@ -117,11 +117,9 @@ private fun ActionButton(
         modifier = modifier.alpha(if (enabled) 1f else 0.4f),
         shape = RoundedCornerShape(14.dp),
         targetLc = 60.0,
-        // Keep it glassy: the border + rounded shape + brand color already say "button", so we
-        // only need a modest floor. The scrim math raises opacity on bright backgrounds where
-        // the label would otherwise wash out — firm where it must be, translucent elsewhere.
-        minOpacity = 0.46f,
-        maxOpacity = 0.92f,
+        // Opacity is solved, not hand-set: the MAX of (white label clears APCA) and (the brand
+        // surface stands out from the photo by GLASS_SURFACE_LC). Glassy where it can be, firm
+        // where it must be — same model as every other glass surface.
     ) {
         Button(
             onClick = onClick,
