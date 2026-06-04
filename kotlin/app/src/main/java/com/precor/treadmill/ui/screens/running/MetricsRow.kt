@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.TimerFontFamily
 import com.precor.treadmill.ui.theme.glassPanel
@@ -122,16 +123,16 @@ private fun HeartRateMetric(bpm: Int, scale: Float = 1f) {
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(
+        LegibleText(
             text = "\u2665",
             color = color,
-            fontSize = (14 * scale).sp,
             modifier = Modifier.scale(pulseScale),
+            style = TextStyle(fontSize = (14 * scale).sp),
         )
-        Text(
+        LegibleText(
             text = if (bpm > 0) bpm.toString() else "---",
+            color = color,
             style = TextStyle(
-                color = color,
                 fontSize = (15 * scale).sp,
                 fontWeight = FontWeight.SemiBold,
                 shadow = Shadow(
@@ -141,10 +142,10 @@ private fun HeartRateMetric(bpm: Int, scale: Float = 1f) {
                 ),
             ),
         )
-        Text(
+        LegibleText(
             text = "bpm",
+            color = LocalGlassParams.current.textColor,
             style = TextStyle(
-                color = LocalGlassParams.current.textColor.copy(alpha = 0.92f),
                 fontSize = (10 * scale).sp,
                 shadow = Shadow(
                     color = Color.Black.copy(alpha = 0.4f),
@@ -170,16 +171,16 @@ private fun MetricItem(
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(
+        LegibleText(
             text = value,
             color = color,
-            textAlign = TextAlign.Right,
             modifier = Modifier.widthIn(min = (40 * scale).dp).alignByBaseline(),
             style = TextStyle(
                 fontSize = (15 * scale).sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFeatureSettings = "tnum",
                 fontFamily = fontFamily,
+                textAlign = TextAlign.Right,
                 shadow = Shadow(
                     color = Color.Black.copy(alpha = 0.4f),
                     offset = Offset(0f, 1f),
@@ -187,12 +188,11 @@ private fun MetricItem(
                 ),
             ),
         )
-        Text(
+        LegibleText(
             text = label,
+            color = LocalGlassParams.current.textColor,
+            modifier = Modifier.alignByBaseline(),
             style = TextStyle(
-                // Readability-driven: engine-chosen text color, lightly de-emphasized
-                // (was a fixed 60%-alpha ivory that read faint over bright photos).
-                color = LocalGlassParams.current.textColor.copy(alpha = 0.92f),
                 fontSize = (10 * scale).sp,
                 shadow = Shadow(
                     color = Color.Black.copy(alpha = 0.4f),
@@ -200,7 +200,6 @@ private fun MetricItem(
                     blurRadius = 3f,
                 ),
             ),
-            modifier = Modifier.alignByBaseline(),
         )
     }
 }

@@ -12,10 +12,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Text
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.precor.treadmill.ui.theme.readability.Rgb
 import com.precor.treadmill.ui.theme.readability.Theme as ReadTheme
+import com.precor.treadmill.ui.theme.readability.ensureLegible
 
 /**
  * Glass panel parameters derived from background image brightness.
@@ -33,6 +38,9 @@ data class GlassParams(
     // Engine-chosen text color (ivory/charcoal). Defaults to the app's ivory so legacy
     // callers are unchanged; the running screen overrides it for readability-driven text.
     val textColor: Color = Color(0xFFE8E4DF),
+    // Effective background color behind panel text (scrim composited over the photo).
+    // This is what accent colors must be checked against by ensureLegible / LegibleText.
+    val panelBg: Color = Color(0xFF101010),
 ) {
     companion object {
         val Default = GlassParams()
@@ -101,6 +109,39 @@ fun Modifier.glassPanel(
 
 fun ReadTheme.composeTextColor() =
     Color(text.r.toInt().coerceIn(0,255), text.g.toInt().coerceIn(0,255), text.b.toInt().coerceIn(0,255))
+
+// --- Overlay-text legibility guard ------------------------------------------
+// Every piece of text drawn on top of the background photo should pass through
+// ensureLegible against the actual background behind it. LocalOverlayBackground
+// carries that background down the tree; LegibleText is the sanctioned way to
+// render overlay text so the APCA check cannot be forgotten.
+
+/** Effective background color behind overlay content at this point in the tree. */
+val LocalOverlayBackground = compositionLocalOf { Color(0xFF101010) }
+
+private fun Color.toReadRgb() = Rgb(red.toDouble() * 255, green.toDouble() * 255, blue.toDouble() * 255)
+private fun Rgb.toComposeColor() = Color(r.toInt().coerceIn(0, 255), g.toInt().coerceIn(0, 255), b.toInt().coerceIn(0, 255))
+
+/** Return this color adjusted (hue/chroma preserved) to clear [targetLc] APCA against [bg]. */
+fun Color.legibleOn(bg: Color, targetLc: Double = 60.0): Color =
+    ensureLegible(toReadRgb(), bg.toReadRgb(), targetLc).toComposeColor()
+
+/**
+ * Text drawn on top of the background photo, guaranteed legible: its color is run
+ * through APCA against [LocalOverlayBackground] before drawing. Use this instead of
+ * a raw `Text` for any overlay text so no color can be placed without the check.
+ */
+@Composable
+fun LegibleText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    targetLc: Double = 60.0,
+    style: TextStyle = LocalTextStyle.current,
+) {
+    val bg = LocalOverlayBackground.current
+    Text(text = text, modifier = modifier, style = style.copy(color = color.legibleOn(bg, targetLc)))
+}
 
 /** The engine's photo-derived scrim tint as an opaque Compose color (alpha applied by the panel). */
 fun ReadTheme.composeTintColor() =

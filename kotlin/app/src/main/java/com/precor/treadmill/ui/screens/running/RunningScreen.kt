@@ -42,6 +42,7 @@ import com.precor.treadmill.R
 import com.precor.treadmill.ui.components.ProgramBrowser
 import com.precor.treadmill.ui.theme.GlassParams
 import com.precor.treadmill.ui.theme.LocalGlassParams
+import com.precor.treadmill.ui.theme.LocalOverlayBackground
 import com.precor.treadmill.ui.theme.TimerFontFamily
 import com.precor.treadmill.ui.theme.composeTextColor
 import com.precor.treadmill.ui.theme.composeTintColor
@@ -50,6 +51,7 @@ import com.precor.treadmill.ui.theme.readability.NormRect
 import com.precor.treadmill.ui.theme.readability.Role
 import com.precor.treadmill.ui.theme.readability.Theme as ReadTheme
 import com.precor.treadmill.ui.theme.readability.chooseTheme
+import com.precor.treadmill.ui.theme.readability.composite
 import com.precor.treadmill.ui.theme.readability.cropMapRect
 import com.precor.treadmill.ui.theme.readability.fitRegion
 import com.precor.treadmill.ui.theme.readability.sampleRegion
@@ -140,11 +142,22 @@ private fun rememberRunReadability(): RunReadability {
         // that still read LocalGlassParams: drive their tint opacity from the metrics scrim
         // so they darken in step with the engine decision; keep the photo-derived blur.
         val metricsScrim = perRegion["speed"] ?: choice.theme.baseScrimAlpha
+        val panelOpacity = metricsScrim.toFloat().coerceIn(0.30f, 0.62f)
+        // The effective color behind panel text = the engine tint composited over the
+        // metrics-region photo at the panel opacity. Accent text is checked against this.
+        val speedAvg = regions.first { it.id == "speed" }.avg
+        val panelBgRgb = composite(speedAvg, choice.theme.tint, panelOpacity.toDouble())
+        val panelBg = Color(
+            panelBgRgb.r.toInt().coerceIn(0, 255),
+            panelBgRgb.g.toInt().coerceIn(0, 255),
+            panelBgRgb.b.toInt().coerceIn(0, 255),
+        )
         val glass = GlassParams.Default.copy(
             blur = choice.theme.blurDp.dp,
-            panelOpacity = metricsScrim.toFloat().coerceIn(0.30f, 0.62f),
+            panelOpacity = panelOpacity,
             tint = choice.theme.composeTintColor(),
             textColor = choice.theme.composeTextColor(),
+            panelBg = panelBg,
         )
         RunReadability(choice.theme, perRegion, glass)
     }
@@ -238,7 +251,10 @@ fun RunningScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        CompositionLocalProvider(LocalGlassParams provides readability.glass) {
+        CompositionLocalProvider(
+            LocalGlassParams provides readability.glass,
+            LocalOverlayBackground provides readability.glass.panelBg,
+        ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -487,7 +503,10 @@ private fun RunningScreenLandscape(
         }
 
         // 3-row layout: top (timer+metrics), middle (HUD+controls), bottom (buttons)
-        CompositionLocalProvider(LocalGlassParams provides readability.glass) {
+        CompositionLocalProvider(
+            LocalGlassParams provides readability.glass,
+            LocalOverlayBackground provides readability.glass.panelBg,
+        ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
