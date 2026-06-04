@@ -1,4 +1,4 @@
-import { hexToRgb, Rgb } from './color';
+import { hexToRgb, type Rgb } from './color';
 
 const Rco = 0.2126729, Gco = 0.7151522, Bco = 0.0721750;
 const normBG = 0.56, normTXT = 0.57, revTXT = 0.62, revBG = 0.65;
