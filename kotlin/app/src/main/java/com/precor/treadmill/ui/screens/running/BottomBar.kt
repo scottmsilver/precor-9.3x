@@ -139,7 +139,7 @@ private fun ActionButton(
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            Text(text, fontSize = fontSize, fontWeight = FontWeight.SemiBold)
+            Text(text, fontSize = fontSize, fontWeight = FontWeight.SemiBold) // legible-exempt: inside LegibleGlassPanel (white label solved)
         }
     }
 }

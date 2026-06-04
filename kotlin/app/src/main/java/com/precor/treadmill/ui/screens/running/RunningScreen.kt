@@ -382,7 +382,7 @@ fun RunningScreen(
                         label = "hero-bounce",
                     ) { showEncouragement ->
                         if (showEncouragement) {
-                            Text(
+                            Text( // legible-exempt: encouragementColor solved per-bg
                                 text = glowText(encouragement ?: ""),
                                 color = readability.encouragementColor,
                                 fontSize = 28.sp,
@@ -403,7 +403,7 @@ fun RunningScreen(
                                     .wrapContentHeight(Alignment.CenterVertically),
                             )
                         } else {
-                            Text(
+                            Text( // legible-exempt: freeTextColor solves its own polarity
                                 text = timerText(sess.elapsedDisplay),
                                 textAlign = TextAlign.Center,
                                 style = TextStyle(
@@ -621,7 +621,7 @@ private fun RunningScreenLandscape(
                             label = "hero-bounce-landscape",
                         ) { showEncouragement ->
                             if (showEncouragement) {
-                                Text(
+                                Text( // legible-exempt: encouragementColor solved per-bg
                                     text = glowText(encouragement ?: ""),
                                     color = readability.encouragementColor,
                                     fontSize = encourageFontSize,
@@ -642,7 +642,7 @@ private fun RunningScreenLandscape(
                                         .wrapContentHeight(Alignment.CenterVertically),
                                 )
                             } else {
-                                Text(
+                                Text( // legible-exempt: freeTextColor solves its own polarity
                                     text = timerText(sess.elapsedDisplay),
                                     textAlign = TextAlign.Center,
                                     style = TextStyle(
@@ -738,9 +738,9 @@ private fun DurationButton(
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
+        Text( // legible-exempt: on opaque pill
             text = "${if (deltaMinutes > 0) "+" else ""}${deltaMinutes}m",
-            color = if (deltaMinutes > 0) Color(0xFF6BC89B) else Color(0x59E8E4DF),
+            color = if (deltaMinutes > 0) Color(0xFF6BC89B) else Color(0x59E8E4DF), // legible-exempt: on opaque pill
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
         )
