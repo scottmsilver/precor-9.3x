@@ -96,18 +96,6 @@ fun Modifier.glassPanel(
     return m
 }
 
-private fun ReadTheme.tintColor(alpha: Double) =
-    Color(tint.r.toInt().coerceIn(0,255), tint.g.toInt().coerceIn(0,255), tint.b.toInt().coerceIn(0,255), (alpha*255).toInt().coerceIn(0,255))
-
-/** Panel driven by the readability engine: tint color from the photo, per-region scrim alpha. */
-fun Modifier.adaptivePanel(theme: ReadTheme, scrimAlpha: Double, shape: RoundedCornerShape = RoundedCornerShape(14.dp)): Modifier {
-    var m = this
-        .background(theme.tintColor(scrimAlpha), shape)
-        .border(1.dp, Color.White.copy(alpha = 0.22f), shape)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && theme.blurDp > 0) m = m.blur(theme.blurDp.dp)
-    return m
-}
-
 fun ReadTheme.composeTextColor() =
     Color(text.r.toInt().coerceIn(0,255), text.g.toInt().coerceIn(0,255), text.b.toInt().coerceIn(0,255))
 
