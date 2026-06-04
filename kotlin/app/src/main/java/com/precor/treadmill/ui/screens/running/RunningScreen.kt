@@ -144,6 +144,7 @@ private fun rememberRunReadability(): RunReadability {
             blur = choice.theme.blurDp.dp,
             panelOpacity = metricsScrim.toFloat().coerceIn(0.30f, 0.62f),
             tint = choice.theme.composeTintColor(),
+            textColor = choice.theme.composeTextColor(),
         )
         RunReadability(choice.theme, perRegion, glass)
     }

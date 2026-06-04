@@ -30,6 +30,9 @@ data class GlassParams(
     // Photo-derived scrim color (engine `Theme.tint`). Defaults to black so legacy
     // callers behave exactly as before; the running screen overrides it.
     val tint: Color = Color.Black,
+    // Engine-chosen text color (ivory/charcoal). Defaults to the app's ivory so legacy
+    // callers are unchanged; the running screen overrides it for readability-driven text.
+    val textColor: Color = Color(0xFFE8E4DF),
 ) {
     companion object {
         val Default = GlassParams()

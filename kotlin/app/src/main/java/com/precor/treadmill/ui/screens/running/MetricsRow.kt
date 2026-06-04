@@ -144,7 +144,7 @@ private fun HeartRateMetric(bpm: Int, scale: Float = 1f) {
         Text(
             text = "bpm",
             style = TextStyle(
-                color = Color(0x99E8E4DF),
+                color = LocalGlassParams.current.textColor.copy(alpha = 0.92f),
                 fontSize = (10 * scale).sp,
                 shadow = Shadow(
                     color = Color.Black.copy(alpha = 0.4f),
@@ -190,7 +190,9 @@ private fun MetricItem(
         Text(
             text = label,
             style = TextStyle(
-                color = Color(0x99E8E4DF), // brighter for glass
+                // Readability-driven: engine-chosen text color, lightly de-emphasized
+                // (was a fixed 60%-alpha ivory that read faint over bright photos).
+                color = LocalGlassParams.current.textColor.copy(alpha = 0.92f),
                 fontSize = (10 * scale).sp,
                 shadow = Shadow(
                     color = Color.Black.copy(alpha = 0.4f),
