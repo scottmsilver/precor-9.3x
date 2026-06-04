@@ -25,6 +25,8 @@ import com.precor.treadmill.ui.theme.readability.ensureLegible
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -203,7 +205,7 @@ fun LegibleGlassPanel(
     val base = LocalGlassParams.current
     var rawBg by remember { mutableStateOf<Color?>(null) }
     val scrimRgb = scrimColor.toReadRgb()
-    val alpha: Float = run {
+    val ownAlpha: Float = run {
         val b = rawBg ?: return@run base.panelOpacity.coerceAtMost(maxOpacity) // pre-measure fallback
         val legibilityNeed = accents.maxOfOrNull { acc ->
             legibleTreatment(acc.toReadRgb(), b.toReadRgb(), scrimRgb, targetLc).scrimAlpha
@@ -211,6 +213,15 @@ fun LegibleGlassPanel(
         val affordanceNeed = surfaceScrimAlpha(b.toReadRgb(), scrimRgb, surfaceLc, maxOpacity.toDouble())
         maxOf(legibilityNeed, affordanceNeed).toFloat().coerceIn(0f, maxOpacity)
     }
+    // If inside an opacity group (e.g. a button row), all members share the MAX need so they
+    // read uniformly; otherwise each panel is individually adaptive.
+    val group = LocalOpacityGroup.current
+    val key = remember { Any() }
+    DisposableEffect(group, ownAlpha) {
+        group?.report(key, ownAlpha)
+        onDispose { group?.release(key) }
+    }
+    val alpha = group?.maxAlpha() ?: ownAlpha
     val effectiveBg = composite((rawBg ?: base.panelBg).toReadRgb(), scrimRgb, alpha.toDouble()).toComposeColor()
     var m = modifier
         .onGloballyPositioned { c -> sampler?.bgAt(c)?.let { if (it != rawBg) rawBg = it } }
@@ -227,6 +238,19 @@ fun LegibleGlassPanel(
 
 /** Per-screen photo sampler so overlay widgets can measure their own background. Null off the photo. */
 val LocalPhotoSampler = compositionLocalOf<PhotoSampler?> { null }
+
+/**
+ * Groups glass surfaces (e.g. the buttons in one row) so they share a UNIFORM opacity — each
+ * reports its own computed need and every member renders at the group max, so a row reads as
+ * one consistent material instead of mismatched per-element opacities. Null = individually adaptive.
+ */
+class OpacityGroup {
+    private val needs = mutableStateMapOf<Any, Float>()
+    fun report(key: Any, alpha: Float) { needs[key] = alpha }
+    fun release(key: Any) { needs.remove(key) }
+    fun maxAlpha(): Float? = needs.values.maxOrNull()
+}
+val LocalOpacityGroup = compositionLocalOf<OpacityGroup?> { null }
 
 /** The scrim color the local-darkening lever uses (the engine's photo-cohesive dark tint). */
 val LocalOverlayScrimTint = compositionLocalOf { Color(0xFF101010) }

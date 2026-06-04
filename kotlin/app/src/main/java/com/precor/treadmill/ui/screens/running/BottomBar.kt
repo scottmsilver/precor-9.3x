@@ -18,6 +18,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import com.precor.treadmill.ui.theme.LegibleGlassPanel
+import com.precor.treadmill.ui.theme.OpacityGroup
+import com.precor.treadmill.ui.theme.LocalOpacityGroup
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
 import com.precor.treadmill.ui.theme.touchFingerPad
 import com.precor.treadmill.ui.theme.touchThumbPad
 import com.precor.treadmill.ui.util.haptic
@@ -57,7 +61,8 @@ fun BottomBar(
             )
         }
 
-        // Action buttons
+        // Action buttons — grouped so they share one uniform opacity (consistent glass across the row)
+        CompositionLocalProvider(LocalOpacityGroup provides remember { OpacityGroup() }) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -93,6 +98,7 @@ fun BottomBar(
                     modifier = Modifier.weight(1f).height(stopHeight),
                 )
             }
+        }
         }
     }
 }
