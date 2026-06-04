@@ -12,10 +12,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.precor.treadmill.ui.theme.LocalPrecorColors
+import com.precor.treadmill.ui.theme.legibleOn
 import com.precor.treadmill.ui.theme.PillShape
 
 @Composable
@@ -51,14 +53,15 @@ fun VoiceOverlay(
             modifier = Modifier.fillMaxWidth(),
             contentAlignment = Alignment.TopCenter,
         ) {
+            // App-level overlay: no photo sampler here, so make the pill its own SOLID-enough
+            // surface (so whatever's behind doesn't bleed through) and run the label through the
+            // legibility guard against that surface (fixes the old red-on-red translucent pill).
+            val pillColor = if (isListening) colors.red else colors.purple
+            val pillBg = pillColor.copy(alpha = 0.9f)
             Row(
                 modifier = Modifier
                     .padding(top = 8.dp)
-                    .background(
-                        color = if (isListening) colors.red.copy(alpha = 0.15f)
-                        else colors.purple.copy(alpha = 0.15f),
-                        shape = PillShape,
-                    )
+                    .background(color = pillBg, shape = PillShape)
                     .padding(horizontal = 16.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -69,12 +72,12 @@ fun VoiceOverlay(
                             .size(8.dp)
                             .alpha(pulseAlpha)
                             .clip(CircleShape)
-                            .background(colors.red),
+                            .background(Color.White),
                     )
                 }
                 Text(
                     text = if (isListening) "Listening..." else "Speaking...",
-                    color = if (isListening) colors.red else colors.purple,
+                    color = Color.White.legibleOn(pillColor),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                 )
