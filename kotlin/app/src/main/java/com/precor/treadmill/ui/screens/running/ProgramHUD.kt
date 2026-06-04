@@ -33,7 +33,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.glassPanel
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
@@ -246,10 +248,10 @@ fun ProgramHUD(
                         )
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 ) {
-                    Text(
+                    LegibleText(
                         text = "${pgm.currentInterval + 1} of ${pgm.intervalCount}",
-                        color = Color(0x59E8E4DF),
-                        fontSize = 11.sp,
+                        color = LocalGlassParams.current.textColor,
+                        style = TextStyle(fontSize = 11.sp),
                     )
                 }
             }
