@@ -53,3 +53,44 @@ def test_endpoint_validates_hash():
     client = TestClient(server.app)
     r = client.post("/api/background/advise", json={})
     assert r.status_code == 422 or r.status_code == 400
+
+
+def test_endpoint_rejects_oversized_image(monkeypatch):
+    import server
+
+    called = {"n": 0}
+    monkeypatch.setattr(server.program_engine, "advise_background", lambda b: called.__setitem__("n", 1))
+    client = TestClient(server.app)
+    huge = "A" * (server.MAX_ADVISE_B64_LEN + 4)  # oversized base64 string
+    r = client.post("/api/background/advise", json={"image_hash": "x", "image_b64": huge})
+    # Rejected either by pydantic max_length (422) or the pre-decode length check (400);
+    # either way Gemini is never called.
+    assert r.status_code in (400, 422)
+    assert called["n"] == 0
+
+
+def test_endpoint_keys_cache_by_server_digest_not_client_hash(monkeypatch):
+    import server
+
+    monkeypatch.setattr(
+        server.program_engine,
+        "advise_background",
+        lambda b: {"palette_hue": 1.0, "suggested_polarity": "light", "mood": "m", "busy_zones": []},
+    )
+    server._background_advice_cache.clear()
+    client = TestClient(server.app)
+    img = base64.b64encode(b"\xff\xd8jpeg").decode()
+    # Store advice for these bytes under an attacker-chosen hash.
+    client.post("/api/background/advise", json={"image_hash": "attacker", "image_b64": img})
+    # A later image-less lookup under the attacker hash must NOT return the stored prior:
+    # writes are keyed by the server-computed sha256, not the client string.
+    r = client.post("/api/background/advise", json={"image_hash": "attacker"})
+    assert r.json()["palette_hue"] is None  # neutral prior, not the poisoned value
+
+
+def test_sanitize_busy_zone_drops_unexpected_fields_and_clamps():
+    z = program_engine._sanitize_busy_zone(
+        {"x": 2.0, "y": -1, "w": 0.5, "h": 0.5, "note": "n" * 200, "evil": "x" * 99999}
+    )
+    assert z == {"x": 1.0, "y": 0.0, "w": 0.5, "h": 0.5, "note": "n" * 60}
+    assert "evil" not in z

@@ -14,6 +14,7 @@ Usage:
 import asyncio
 import base64
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -720,8 +721,8 @@ class ProxyRequest(BaseModel):
 
 
 class BackgroundAdviseRequest(BaseModel):
-    image_hash: str
-    image_b64: str | None = None
+    image_hash: str = Field(max_length=128)
+    image_b64: str | None = Field(default=None, max_length=8_000_000)
 
 
 class GenerateRequest(BaseModel):
@@ -1141,6 +1142,9 @@ async def get_config():
 
 _BACKGROUND_ADVICE_FILE = "background_advice.json"
 MAX_ADVISE_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB cap on untrusted base64 image
+# Reject oversized base64 by string length BEFORE allocating the decoded bytes.
+MAX_ADVISE_B64_LEN = (MAX_ADVISE_IMAGE_BYTES // 3 + 1) * 4 + 4
+MAX_ADVICE_CACHE_ENTRIES = 256  # bound on-disk cache growth (public endpoint)
 
 
 def _load_background_advice_cache() -> dict:
@@ -1169,23 +1173,34 @@ _background_advice_cache: dict = _load_background_advice_cache()
 async def background_advise(req: BackgroundAdviseRequest):
     """Return a cached Gemini overlay prior for a background image.
 
-    Keyed by image_hash. On cache miss with an image, calls Gemini and caches
-    the result. On cache miss with no image, returns the neutral prior without
-    caching. The base64 image is untrusted: it is size-capped and validated,
-    never shelled out, and never logged.
+    Writes are keyed by a server-computed SHA-256 of the actual image bytes, so a
+    client cannot poison an arbitrary hash with advice for unrelated bytes. To get
+    a cache hit on a later image-less request, the client must send
+    image_hash = sha256(image) (the same digest the server stores under). On a
+    miss with no image, the neutral prior is returned without caching. The base64
+    image is untrusted: capped by string length before decode and by byte length
+    after, validated, never shelled out, never logged. The on-disk cache is
+    bounded to MAX_ADVICE_CACHE_ENTRIES.
     """
-    if req.image_hash in _background_advice_cache:
-        return _background_advice_cache[req.image_hash]
+    # Image-less request: read-only lookup by the client-supplied digest.
     if not req.image_b64:
-        return program_engine.NEUTRAL_PRIOR
+        return _background_advice_cache.get(req.image_hash, program_engine.NEUTRAL_PRIOR)
+    if len(req.image_b64) > MAX_ADVISE_B64_LEN:
+        raise HTTPException(status_code=400, detail="image too large")
     try:
         image_bytes = base64.b64decode(req.image_b64, validate=True)
     except Exception:
         raise HTTPException(status_code=400, detail="image_b64 is not valid base64")
     if len(image_bytes) > MAX_ADVISE_IMAGE_BYTES:
         raise HTTPException(status_code=400, detail="image too large")
+    key = hashlib.sha256(image_bytes).hexdigest()
+    if key in _background_advice_cache:
+        return _background_advice_cache[key]
     prior = program_engine.advise_background(image_bytes)
-    _background_advice_cache[req.image_hash] = prior
+    if len(_background_advice_cache) >= MAX_ADVICE_CACHE_ENTRIES:
+        # Drop the oldest entry (dicts preserve insertion order) to bound growth.
+        _background_advice_cache.pop(next(iter(_background_advice_cache)), None)
+    _background_advice_cache[key] = prior
     _save_background_advice_cache()
     return prior
 

@@ -103,7 +103,25 @@ def call_gemini_image(image_bytes: bytes):
             types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
             prompt,
         ],
+        # Bound output so a prompt-injected image can't force large/expensive parsing.
+        config=types.GenerateContentConfig(max_output_tokens=512),
     )
+
+
+def _sanitize_busy_zone(z: dict) -> dict:
+    """Keep only the expected fields, clamped, dropping any other model-supplied keys."""
+
+    def _coord(v):
+        return min(1.0, max(0.0, float(v))) if isinstance(v, (int, float)) else 0.0
+
+    note = z.get("note")
+    return {
+        "x": _coord(z.get("x")),
+        "y": _coord(z.get("y")),
+        "w": _coord(z.get("w")),
+        "h": _coord(z.get("h")),
+        "note": note[:60] if isinstance(note, str) else "",
+    }
 
 
 def advise_background(image_bytes: bytes) -> dict:
@@ -121,7 +139,7 @@ def advise_background(image_bytes: bytes) -> dict:
     if isinstance(raw.get("mood"), str):
         out["mood"] = raw["mood"][:40]
     if isinstance(raw.get("busy_zones"), list):
-        out["busy_zones"] = [z for z in raw["busy_zones"] if isinstance(z, dict)][:6]
+        out["busy_zones"] = [_sanitize_busy_zone(z) for z in raw["busy_zones"] if isinstance(z, dict)][:6]
     return out
 
 
