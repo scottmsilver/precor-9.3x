@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { harmonizePalette, beautyCost, fitRegion } from './engine';
+import { harmonizePalette, beautyCost, fitRegion, chooseTheme } from './engine';
 import { DEFAULT_WEIGHTS, ROLE_TARGET_LC, MAX_REGION_SCRIM, type Theme } from './types';
 import { rgbToOklch } from './color';
 
@@ -41,5 +41,30 @@ describe('fitRegion', () => {
     const lightText = { ...theme, text: { r: 150, g: 150, b: 150 } }; // deliberately weak
     const r = fitRegion(lightText, region);
     expect(typeof r.met).toBe('boolean');
+  });
+});
+
+describe('chooseTheme', () => {
+  const regions = [
+    { id: 'timer', role: 'hero', avg: { r: 90, g: 110, b: 95 }, dominant: { r: 90, g: 110, b: 95 }, luma: 100 },
+    { id: 'speed', role: 'body', avg: { r: 200, g: 205, b: 190 }, dominant: { r: 200, g: 205, b: 190 }, luma: 200 },
+  ] as any[];
+
+  it('returns a single Theme under which EVERY region meets its target', () => {
+    const t = chooseTheme(regions, { paletteHue: 150 }, ROLE_TARGET_LC);
+    for (const region of regions) {
+      const fit = fitRegion(t.theme, region);
+      expect(fit.met).toBe(true);
+    }
+  });
+
+  it('falls back to a legible max-scrim neutral theme on a pathological mid-tone image', () => {
+    const midted = [
+      { id: 'timer', role: 'hero', avg: { r: 128, g: 128, b: 128 }, dominant: { r: 128, g: 128, b: 128 }, luma: 128 },
+    ] as any[];
+    const t = chooseTheme(midted, {}, ROLE_TARGET_LC);
+    expect(t.theme.baseScrimAlpha).toBeGreaterThan(0);
+    const fit = fitRegion(t.theme, midted[0]);
+    expect(fit.lc).toBeGreaterThan(40); // legible-enough fallback, never 0
   });
 });

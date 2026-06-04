@@ -1,5 +1,5 @@
 import { rgbToOklch, oklchToRgb, rgbToOklab, oklabDeltaE, type Oklch, type Rgb } from './color';
-import { IVORY, CHARCOAL, ROLE_TARGET_LC, MAX_REGION_SCRIM, type RegionStats, type Theme, type TintCandidate, type BeautyWeights } from './types';
+import { IVORY, CHARCOAL, ROLE_TARGET_LC, MAX_REGION_SCRIM, SCRIM_STEPS, BLUR_STEPS, DEFAULT_WEIGHTS, type RegionStats, type Theme, type TintCandidate, type BeautyWeights, type Role, type AdvicePrior } from './types';
 import { apcaLc } from './apca';
 
 function muted(lch: Oklch): Oklch {
@@ -61,6 +61,54 @@ export function fitRegion(theme: Theme, region: RegionStats): RegionFit {
   }
   const bg = composite(region.avg, theme.tint, MAX_REGION_SCRIM);
   return { scrimAlpha: MAX_REGION_SCRIM, lc: Math.abs(apcaLc(theme.text, bg)), met: false };
+}
+
+export interface ThemeChoice { theme: Theme; cost: number; runnersUp: { theme: Theme; cost: number }[]; }
+
+function moodOf(prior: AdvicePrior, avgLuma: number): 'cool' | 'warm' | 'dark' | 'neutral' {
+  if (prior.mood?.includes('dark') || avgLuma < 70) return 'dark';
+  if (prior.mood?.includes('cool')) return 'cool';
+  if (prior.mood?.includes('warm')) return 'warm';
+  return 'neutral';
+}
+
+export function chooseTheme(
+  regions: RegionStats[],
+  prior: AdvicePrior,
+  _targets: Record<Role, number>,
+  weights: BeautyWeights = DEFAULT_WEIGHTS,
+): ThemeChoice {
+  const globalAvg: Rgb = {
+    r: regions.reduce((s, r) => s + r.avg.r, 0) / regions.length,
+    g: regions.reduce((s, r) => s + r.avg.g, 0) / regions.length,
+    b: regions.reduce((s, r) => s + r.avg.b, 0) / regions.length,
+  };
+  const palette = harmonizePalette({ avg: globalAvg, dominant: regions[0].dominant }, prior);
+  const avgLuma = regions.reduce((s, r) => s + r.luma, 0) / regions.length;
+  const mood = moodOf(prior, avgLuma);
+  const textOrder = prior.suggestedPolarity === 'dark' ? [CHARCOAL, IVORY] : [IVORY, CHARCOAL];
+
+  const scored: { theme: Theme; cost: number }[] = [];
+  for (const tintC of palette) {
+    for (const text of textOrder) {
+      for (const baseScrimAlpha of SCRIM_STEPS) {
+        for (const blurDp of BLUR_STEPS) {
+          const theme: Theme = { tint: tintC.color, text, blurDp, baseScrimAlpha };
+          const allMet = regions.every(r => fitRegion(theme, r).met);
+          if (!allMet) continue;
+          scored.push({ theme, cost: beautyCost(theme, palette, weights, mood) });
+        }
+      }
+    }
+  }
+
+  if (scored.length === 0) {
+    // pathological: maximum legibility fallback (neutral dark scrim, ivory text)
+    const theme: Theme = { tint: { r: 18, g: 18, b: 18 }, text: IVORY, blurDp: 2, baseScrimAlpha: MAX_REGION_SCRIM };
+    return { theme, cost: Infinity, runnersUp: [] };
+  }
+  scored.sort((a, b) => a.cost - b.cost);
+  return { theme: scored[0].theme, cost: scored[0].cost, runnersUp: scored.slice(1, 4) };
 }
 
 export { IVORY, CHARCOAL };
