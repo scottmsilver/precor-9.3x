@@ -7,7 +7,7 @@ const stats = { avg: { r: 60, g: 90, b: 70 }, dominant: { r: 40, g: 80, b: 60 },
 
 describe('harmonizePalette', () => {
   it('biases toward the prior hue and always includes a neutral fallback', () => {
-    const pal = harmonizePalette({ avg: stats.avg, dominant: stats.dominant }, { paletteHue: 200 });
+    const pal = harmonizePalette(stats.dominant, { paletteHue: 200 });
     expect(pal.length).toBeGreaterThanOrEqual(3);
     const nearPrior = pal.some(c => Math.abs(((rgbToOklch(c.color).h - 200 + 540) % 360) - 180) < 40);
     expect(nearPrior).toBe(true);
@@ -51,7 +51,7 @@ describe('chooseTheme', () => {
   ] as any[];
 
   it('returns a single Theme under which EVERY region meets its target', () => {
-    const t = chooseTheme(regions, { paletteHue: 150 }, ROLE_TARGET_LC);
+    const t = chooseTheme(regions, { paletteHue: 150 });
     for (const region of regions) {
       const fit = fitRegion(t.theme, region);
       expect(fit.met).toBe(true);
@@ -62,7 +62,7 @@ describe('chooseTheme', () => {
     const midted = [
       { id: 'timer', role: 'hero', avg: { r: 128, g: 128, b: 128 }, dominant: { r: 128, g: 128, b: 128 }, luma: 128 },
     ] as any[];
-    const t = chooseTheme(midted, {}, ROLE_TARGET_LC);
+    const t = chooseTheme(midted, {});
     expect(t.theme.baseScrimAlpha).toBeGreaterThan(0);
     const fit = fitRegion(t.theme, midted[0]);
     expect(fit.lc).toBeGreaterThan(40); // legible-enough fallback, never 0

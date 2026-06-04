@@ -1,6 +1,8 @@
 import { rgbToOklch, oklchToRgb, rgbToOklab, oklabDeltaE, type Oklch, type Rgb } from './color';
-import { IVORY, CHARCOAL, ROLE_TARGET_LC, MAX_REGION_SCRIM, SCRIM_STEPS, BLUR_STEPS, DEFAULT_WEIGHTS, type RegionStats, type Theme, type TintCandidate, type BeautyWeights, type Role, type AdvicePrior } from './types';
+import { IVORY, CHARCOAL, ROLE_TARGET_LC, MAX_REGION_SCRIM, SCRIM_STEPS, BLUR_STEPS, DEFAULT_WEIGHTS, type RegionStats, type Theme, type TintCandidate, type BeautyWeights, type AdvicePrior } from './types';
 import { apcaLc } from './apca';
+
+const clamp255 = (x: number) => Math.max(0, Math.min(255, x));
 
 function muted(lch: Oklch): Oklch {
   // keep tints dark and gently saturated so they read as "scrim" not "paint"
@@ -8,16 +10,17 @@ function muted(lch: Oklch): Oklch {
 }
 
 export function harmonizePalette(
-  stats: Pick<RegionStats, 'avg' | 'dominant'>,
+  dominant: Rgb,
   prior: { paletteHue?: number },
 ): TintCandidate[] {
-  const domH = rgbToOklch(stats.dominant).h;
+  const domH = rgbToOklch(dominant).h;
   const hues: number[] = [domH];
   if (prior.paletteHue != null) hues.push(prior.paletteHue);
   hues.push((domH + 180) % 360); // complementary, muted
   const out: TintCandidate[] = hues.map(h => {
-    const color = oklchToRgb(muted({ L: 0.26, C: 0.05, h }));
-    const dist = oklabDeltaE(rgbToOklab(color), rgbToOklab(stats.dominant));
+    const raw = oklchToRgb(muted({ L: 0.26, C: 0.05, h }));
+    const color = { r: clamp255(raw.r), g: clamp255(raw.g), b: clamp255(raw.b) };
+    const dist = oklabDeltaE(rgbToOklab(color), rgbToOklab(dominant));
     return { color, paletteDistance: dist };
   });
   // neutral charcoal fallback (always legible, never off-palette)
@@ -34,7 +37,8 @@ export function beautyCost(
   const tintDist = Math.min(...palette.map(c =>
     oklabDeltaE(rgbToOklab(c.color), rgbToOklab(theme.tint))));
   let cost = w.scrim * theme.baseScrimAlpha + w.blur * (theme.blurDp / 3) + w.palette * tintDist;
-  const isCharcoalText = theme.text === CHARCOAL || (theme.text.r < 80 && theme.text.g < 80);
+  const textLuma = 0.299 * theme.text.r + 0.587 * theme.text.g + 0.114 * theme.text.b;
+  const isCharcoalText = textLuma < 128;
   if (isCharcoalText && mood === 'dark') cost += w.charcoalOnDark;
   return cost;
 }
@@ -75,15 +79,13 @@ function moodOf(prior: AdvicePrior, avgLuma: number): 'cool' | 'warm' | 'dark' |
 export function chooseTheme(
   regions: RegionStats[],
   prior: AdvicePrior,
-  _targets: Record<Role, number>,
   weights: BeautyWeights = DEFAULT_WEIGHTS,
 ): ThemeChoice {
-  const globalAvg: Rgb = {
-    r: regions.reduce((s, r) => s + r.avg.r, 0) / regions.length,
-    g: regions.reduce((s, r) => s + r.avg.g, 0) / regions.length,
-    b: regions.reduce((s, r) => s + r.avg.b, 0) / regions.length,
-  };
-  const palette = harmonizePalette({ avg: globalAvg, dominant: regions[0].dominant }, prior);
+  if (regions.length === 0) {
+    return { theme: { tint: { r: 18, g: 18, b: 18 }, text: IVORY, blurDp: 2, baseScrimAlpha: MAX_REGION_SCRIM }, cost: Infinity, runnersUp: [] };
+  }
+  const palette = harmonizePalette(regions[0].dominant, prior);
+  // left-fold sum, divide once — Kotlin port must accumulate in the same order
   const avgLuma = regions.reduce((s, r) => s + r.luma, 0) / regions.length;
   const mood = moodOf(prior, avgLuma);
   const textOrder = prior.suggestedPolarity === 'dark' ? [CHARCOAL, IVORY] : [IVORY, CHARCOAL];
@@ -107,6 +109,7 @@ export function chooseTheme(
     const theme: Theme = { tint: { r: 18, g: 18, b: 18 }, text: IVORY, blurDp: 2, baseScrimAlpha: MAX_REGION_SCRIM };
     return { theme, cost: Infinity, runnersUp: [] };
   }
+  // stable sort + fixed candidate-grid order => deterministic runners-up (mirror grid order in Kotlin)
   scored.sort((a, b) => a.cost - b.cost);
   return { theme: scored[0].theme, cost: scored[0].cost, runnersUp: scored.slice(1, 4) };
 }

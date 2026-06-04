@@ -4,7 +4,7 @@ import type { RegionStats, Role } from './types';
 export interface NormRect { x: number; y: number; w: number; h: number; }
 
 export function sampleRegion(img: ImageData, rect: NormRect, id: string, role: Role): RegionStats {
-  const x0 = Math.floor(rect.x * img.width), y0 = Math.floor(rect.y * img.height);
+  const x0 = Math.max(0, Math.floor(rect.x * img.width)), y0 = Math.max(0, Math.floor(rect.y * img.height));
   const x1 = Math.min(img.width, Math.ceil((rect.x + rect.w) * img.width));
   const y1 = Math.min(img.height, Math.ceil((rect.y + rect.h) * img.height));
   let sr = 0, sg = 0, sb = 0, n = 0;
@@ -21,8 +21,10 @@ export function sampleRegion(img: ImageData, rect: NormRect, id: string, role: R
   n = Math.max(1, n);
   const avg: Rgb = { r: sr / n, g: sg / n, b: sb / n };
   let bestKey = 0, bestCount = -1;
-  for (const [k, c] of buckets) if (c > bestCount) { bestCount = c; bestKey = k; }
+  // tie-break by lowest quantized key so the result is independent of map iteration order (TS<->Kotlin parity)
+  for (const [k, c] of buckets) if (c > bestCount || (c === bestCount && k < bestKey)) { bestCount = c; bestKey = k; }
   const dominant: Rgb = {
+    // bucket-center reconstruction (32*bucket+16); intentional approximation — Kotlin must use the same formula
     r: ((bestKey >> 6) & 7) * 32 + 16,
     g: ((bestKey >> 3) & 7) * 32 + 16,
     b: (bestKey & 7) * 32 + 16,
