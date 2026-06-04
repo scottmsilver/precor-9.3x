@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 class EngineTest {
     private fun region(j: JSONObject): RegionStats {
@@ -34,5 +35,21 @@ class EngineTest {
         )
         val theme = chooseTheme(regions, AdvicePrior(paletteHue = 150.0)).theme
         for (r in regions) assertTrue(fitRegion(theme, r).met)
+    }
+
+    @Test fun ensureLegibleLeavesAlreadyLegibleColorUnchanged() {
+        // white on black already clears any target → returned untouched.
+        assertEquals(rgb(255, 255, 255), ensureLegible(rgb(255, 255, 255), rgb(0, 0, 0), 60.0))
+    }
+
+    @Test fun ensureLegibleFixesLowContrastAccent() {
+        val bg = rgb(100, 130, 120)        // greenish panel background
+        val accent = rgb(107, 143, 139)    // muted grey-teal — nearly same luminance
+        assertTrue("accent should start illegible", abs(apcaLc(accent, bg)) < 45.0)
+        val fixed = ensureLegible(accent, bg, 60.0)
+        assertTrue("fixed should clear the target", abs(apcaLc(fixed, bg)) >= 59.0)
+        // hue broadly preserved (still greenish, not shifted to a different family)
+        val h = rgbToOklch(fixed).h
+        assertTrue("hue stays in green range, got $h", h in 120.0..200.0)
     }
 }

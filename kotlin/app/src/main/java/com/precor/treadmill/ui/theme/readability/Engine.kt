@@ -41,8 +41,40 @@ fun beautyCost(theme: Theme, palette: List<TintCandidate>, w: BeautyWeights, moo
     return cost
 }
 
-private fun composite(bg: Rgb, tint: Rgb, a: Double) =
+/** Alpha-blend `tint` over `bg` at opacity `a` (0..1). Public so the UI can compute the
+ *  effective color behind a scrimmed panel (the background APCA must measure against). */
+fun composite(bg: Rgb, tint: Rgb, a: Double) =
     Rgb(bg.r*(1-a)+tint.r*a, bg.g*(1-a)+tint.g*a, bg.b*(1-a)+tint.b*a)
+
+/**
+ * Return a variant of [color] that clears [targetLc] APCA against [bg], preserving the
+ * color's hue and chroma (OKLCH) and only moving its lightness toward the contrast-
+ * increasing direction. If [color] already clears the target it is returned unchanged.
+ * If the target is unreachable in-gamut, returns the most-legible variant found.
+ * This is the guard every accent/overlay color passes through before it's drawn.
+ */
+fun ensureLegible(color: Rgb, bg: Rgb, targetLc: Double): Rgb {
+    if (abs(apcaLc(color, bg)) >= targetLc) return color
+    val lch = rgbToOklch(color)
+    fun atL(l: Double): Rgb {
+        val raw = oklchToRgb(Oklch(l.coerceIn(0.0, 1.0), lch.C, lch.h))
+        return Rgb(clamp255(raw.r), clamp255(raw.g), clamp255(raw.b))
+    }
+    // Choose direction by which extreme actually yields more contrast on THIS background
+    // (OKLCH lightness is a poor proxy — a mid green is perceptually "light" but APCA-dark).
+    val step = if (abs(apcaLc(atL(0.98), bg)) >= abs(apcaLc(atL(0.05), bg))) 0.02 else -0.02
+    var L = lch.L
+    var best = color
+    var bestLc = abs(apcaLc(color, bg))
+    repeat(60) {
+        L = (L + step).coerceIn(0.0, 1.0)
+        val cand = atL(L)
+        val lc = abs(apcaLc(cand, bg))
+        if (lc > bestLc) { bestLc = lc; best = cand }
+        if (lc >= targetLc) return cand
+    }
+    return best
+}
 
 fun fitRegion(theme: Theme, region: RegionStats): RegionFit {
     val target = ROLE_TARGET_LC.getValue(region.role)
