@@ -27,6 +27,9 @@ data class GlassParams(
     val panelOpacity: Float = 0.34f,
     val borderOpacity: Float = 0.30f,
     val overlayOpacity: Float = 0.12f,
+    // Photo-derived scrim color (engine `Theme.tint`). Defaults to black so legacy
+    // callers behave exactly as before; the running screen overrides it.
+    val tint: Color = Color.Black,
 ) {
     companion object {
         val Default = GlassParams()
@@ -85,7 +88,7 @@ fun Modifier.glassPanel(
     shape: RoundedCornerShape = RoundedCornerShape(12.dp),
 ): Modifier {
     var m = this
-        .background(Color.Black.copy(alpha = params.panelOpacity), shape)
+        .background(params.tint.copy(alpha = params.panelOpacity), shape)
         .border(1.dp, Color.White.copy(alpha = params.borderOpacity), shape)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         m = m.blur(params.blur)
@@ -107,6 +110,10 @@ fun Modifier.adaptivePanel(theme: ReadTheme, scrimAlpha: Double, shape: RoundedC
 
 fun ReadTheme.composeTextColor() =
     Color(text.r.toInt().coerceIn(0,255), text.g.toInt().coerceIn(0,255), text.b.toInt().coerceIn(0,255))
+
+/** The engine's photo-derived scrim tint as an opaque Compose color (alpha applied by the panel). */
+fun ReadTheme.composeTintColor() =
+    Color(tint.r.toInt().coerceIn(0,255), tint.g.toInt().coerceIn(0,255), tint.b.toInt().coerceIn(0,255))
 
 fun Modifier.glassPanelTinted(
     params: GlassParams,

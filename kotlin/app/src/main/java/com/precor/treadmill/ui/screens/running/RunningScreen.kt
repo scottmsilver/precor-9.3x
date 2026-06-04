@@ -44,6 +44,7 @@ import com.precor.treadmill.ui.theme.GlassParams
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.TimerFontFamily
 import com.precor.treadmill.ui.theme.composeTextColor
+import com.precor.treadmill.ui.theme.composeTintColor
 import com.precor.treadmill.ui.theme.readability.AdvicePrior
 import com.precor.treadmill.ui.theme.readability.NormRect
 import com.precor.treadmill.ui.theme.readability.Role
@@ -133,6 +134,7 @@ private fun rememberRunReadability(): RunReadability {
         val glass = GlassParams.Default.copy(
             blur = choice.theme.blurDp.dp,
             panelOpacity = metricsScrim.toFloat().coerceIn(0.30f, 0.62f),
+            tint = choice.theme.composeTintColor(),
         )
         RunReadability(choice.theme, perRegion, glass)
     }
