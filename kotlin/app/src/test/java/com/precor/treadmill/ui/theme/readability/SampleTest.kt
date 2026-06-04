@@ -11,4 +11,31 @@ class SampleTest {
         assertEquals(80.0, s.avg.r, 1.0)
         assertEquals(160.0, s.avg.g, 1.0)
     }
+
+    @Test fun cropMapIsIdentityWhenAspectMatches() {
+        // container same aspect as image -> no crop, rect unchanged.
+        val r = cropMapRect(100, 100, 100f, 100f, NormRect(0.2, 0.3, 0.4, 0.5))
+        assertEquals(0.2, r.x, 1e-6); assertEquals(0.3, r.y, 1e-6)
+        assertEquals(0.4, r.w, 1e-6); assertEquals(0.5, r.h, 1e-6)
+    }
+
+    @Test fun cropMapTallerContainerCropsSides() {
+        // square image into a 100x200 (taller) container: ContentScale.Crop scales x2,
+        // shows the middle 50% horizontally, full height.
+        val r = cropMapRect(100, 100, 100f, 200f, NormRect(0.0, 0.0, 1.0, 1.0))
+        assertEquals(0.25, r.x, 1e-6); assertEquals(0.0, r.y, 1e-6)
+        assertEquals(0.5, r.w, 1e-6); assertEquals(1.0, r.h, 1e-6)
+    }
+
+    @Test fun cropMapWiderContainerCropsTopBottom() {
+        // square image into a 200x100 (wider) container: shows full width, middle 50% vertically.
+        val r = cropMapRect(100, 100, 200f, 100f, NormRect(0.0, 0.0, 1.0, 1.0))
+        assertEquals(0.0, r.x, 1e-6); assertEquals(0.25, r.y, 1e-6)
+        assertEquals(1.0, r.w, 1e-6); assertEquals(0.5, r.h, 1e-6)
+    }
+
+    @Test fun cropMapDegradesToInputOnZeroContainer() {
+        val rect = NormRect(0.1, 0.1, 0.2, 0.2)
+        assertEquals(rect, cropMapRect(100, 100, 0f, 0f, rect))
+    }
 }

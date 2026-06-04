@@ -50,6 +50,7 @@ import com.precor.treadmill.ui.theme.readability.NormRect
 import com.precor.treadmill.ui.theme.readability.Role
 import com.precor.treadmill.ui.theme.readability.Theme as ReadTheme
 import com.precor.treadmill.ui.theme.readability.chooseTheme
+import com.precor.treadmill.ui.theme.readability.cropMapRect
 import com.precor.treadmill.ui.theme.readability.fitRegion
 import com.precor.treadmill.ui.theme.readability.sampleRegion
 import com.precor.treadmill.ui.util.glowText
@@ -108,7 +109,13 @@ private data class RunReadability(
 @Composable
 private fun rememberRunReadability(): RunReadability {
     val context = LocalContext.current
-    return remember {
+    // The background is drawn full-screen with ContentScale.Crop, so sample the
+    // pixels the user actually sees by mapping each block through the same crop.
+    val config = LocalConfiguration.current
+    val density = LocalDensity.current
+    val containerW = with(density) { config.screenWidthDp.dp.toPx() }
+    val containerH = with(density) { config.screenHeightDp.dp.toPx() }
+    return remember(containerW, containerH) {
         val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
         val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.bg_forest, opts)
         if (bmp == null) {
@@ -123,7 +130,9 @@ private fun rememberRunReadability(): RunReadability {
             Triple("distance", Role.BODY, NormRect(0.66, 0.30, 0.26, 0.12)),
             Triple("hint", Role.MUTED, NormRect(0.30, 0.84, 0.40, 0.08)),
         )
-        val regions = blocks.map { (id, role, rect) -> sampleRegion(bmp, rect, id, role) }
+        val regions = blocks.map { (id, role, rect) ->
+            sampleRegion(bmp, cropMapRect(bmp.width, bmp.height, containerW, containerH, rect), id, role)
+        }
         bmp.recycle()
         val choice = chooseTheme(regions, AdvicePrior())
         val perRegion = regions.associate { it.id to fitRegion(choice.theme, it).scrimAlpha }

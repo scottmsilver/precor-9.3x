@@ -39,3 +39,25 @@ fun sampleRegion(bitmap: Bitmap, rect: NormRect, id: String, role: Role): Region
     bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
     return sampleRegionPixels(pixels, bitmap.width, bitmap.height, rect, id, role)
 }
+
+/**
+ * Map a container-normalized rect (where a text block sits ON SCREEN) into the
+ * image-normalized rect of the source bitmap, accounting for `ContentScale.Crop`
+ * (scale-to-fill + center-crop). Without this, sampling the full bitmap at the
+ * block's screen position reads pixels the user never sees, so the APCA result
+ * wouldn't match what's actually rendered behind the text. Degrades to the input
+ * rect when container size is unknown (0).
+ */
+fun cropMapRect(imgW: Int, imgH: Int, containerW: Float, containerH: Float, rect: NormRect): NormRect {
+    if (containerW <= 0f || containerH <= 0f || imgW <= 0 || imgH <= 0) return rect
+    val scale = maxOf(containerW / imgW, containerH / imgH)
+    val offsetX = (imgW * scale - containerW) / 2f  // cropped-off margin (scaled px)
+    val offsetY = (imgH * scale - containerH) / 2f
+    fun toU(cx: Float) = ((cx + offsetX) / scale / imgW).toDouble().coerceIn(0.0, 1.0)
+    fun toV(cy: Float) = ((cy + offsetY) / scale / imgH).toDouble().coerceIn(0.0, 1.0)
+    val u0 = toU(rect.x.toFloat() * containerW)
+    val v0 = toV(rect.y.toFloat() * containerH)
+    val u1 = toU((rect.x + rect.w).toFloat() * containerW)
+    val v1 = toV((rect.y + rect.h).toFloat() * containerH)
+    return NormRect(u0, v0, u1 - u0, v1 - v0)
+}
