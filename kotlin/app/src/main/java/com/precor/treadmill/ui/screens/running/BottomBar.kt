@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.glassPanelTinted
+import com.precor.treadmill.ui.theme.legibleOn
 import com.precor.treadmill.ui.theme.touchFingerPad
 import com.precor.treadmill.ui.theme.touchThumbPad
 import com.precor.treadmill.ui.util.haptic
@@ -73,7 +74,8 @@ fun BottomBar(
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent,
-                        contentColor = Color.White,
+                        // Guarantee the label contrasts the button's own tint (its identity color).
+                        contentColor = Color.White.legibleOn(Color(0xFF6BC89B)),
                     ),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
@@ -90,7 +92,8 @@ fun BottomBar(
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent,
-                        contentColor = Color(0xFFC45C52),
+                        // Was red text on a red tint (illegible) — nudge it to a legible red.
+                        contentColor = Color(0xFFC45C52).legibleOn(Color(0xFFC45C52)),
                     ),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
@@ -112,7 +115,7 @@ fun BottomBar(
                     enabled = isRunning,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.Transparent,
-                        contentColor = Color.White,
+                        contentColor = Color.White.legibleOn(Color(0xFFC45C52)),
                         disabledContainerColor = Color.Transparent,
                         disabledContentColor = Color(0x59E8E4DF),
                     ),

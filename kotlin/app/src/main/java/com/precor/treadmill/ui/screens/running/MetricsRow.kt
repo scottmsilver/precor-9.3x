@@ -20,10 +20,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LegibleGlassPanel
 import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.TimerFontFamily
-import com.precor.treadmill.ui.theme.glassPanel
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import kotlin.math.max
 
@@ -50,9 +50,12 @@ fun MetricsRow(
         modifier = modifier,
     ) {
         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        LegibleGlassPanel(
+            accents = listOf(Color(0xFF6B8F8B), Color(0xFFA69882), Color(0xFFE8E4DF)),
+            shape = RoundedCornerShape(10.dp),
+        ) {
         Row(
             modifier = Modifier
-                .glassPanel(LocalGlassParams.current, RoundedCornerShape(10.dp))
                 .padding(horizontal = 20.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.Bottom,
@@ -91,6 +94,7 @@ fun MetricsRow(
                 scale = scale,
             )
         }
+        } // LegibleGlassPanel
         } // Box
     }
 }

@@ -27,10 +27,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LegibleGlassPanel
 import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
-import com.precor.treadmill.ui.theme.glassPanel
 import com.precor.treadmill.ui.theme.legibleOn
 import com.precor.treadmill.ui.theme.touchFingertip
 import com.precor.treadmill.ui.theme.touchFingerPad
@@ -140,10 +140,13 @@ private fun ControlPanel(
     val btnW = touchFingertip()
     val btnH = touchFingerPad()
 
+    LegibleGlassPanel(
+        accents = listOf(accentColor),
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+    ) {
     Row(
-        modifier = modifier
-            .glassPanel(LocalGlassParams.current, RoundedCornerShape(16.dp))
-            .padding(5.dp),
+        modifier = Modifier.padding(5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(1.dp),
     ) {
@@ -227,6 +230,7 @@ private fun ControlPanel(
                 modifier = if (fillHeight) Modifier.weight(1f).width(btnW) else Modifier.size(btnW, btnH),
             )
         }
+    }
     }
 }
 

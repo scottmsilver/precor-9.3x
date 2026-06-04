@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
@@ -154,10 +155,8 @@ class PhotoSampler(
     private val imgH: Int,
     private val containerW: Float,
     private val containerH: Float,
-    private val tint: Rgb,
-    private val scrimAlpha: Double,
 ) {
-    /** The composited background color behind [coords], or null if not measurable yet. */
+    /** The RAW (un-scrimmed) average photo color behind [coords], or null if not measurable yet. */
     fun bgAt(coords: LayoutCoordinates): Color? {
         if (!coords.isAttached || containerW <= 0f || containerH <= 0f) return null
         val r = coords.boundsInWindow()
@@ -169,8 +168,52 @@ class PhotoSampler(
             (r.height / containerH).toDouble(),
         )
         val mapped = cropMapRect(imgW, imgH, containerW, containerH, rect)
-        val stats = sampleRegionPixels(pixels, imgW, imgH, mapped, "x", Role.BODY)
-        return composite(stats.avg, tint, scrimAlpha).toComposeColor()
+        return sampleRegionPixels(pixels, imgW, imgH, mapped, "x", Role.BODY).avg.toComposeColor()
+    }
+}
+
+/**
+ * A glass panel that darkens itself UNIFORMLY (one scrim value, consistent across its whole
+ * area) just enough to make its [accents] clear [targetLc] APCA over the actual photo behind
+ * it — measured at the panel's real bounds via [LocalPhotoSampler]. Provides the resulting
+ * effective background + opacity to its [content] (via [LocalGlassParams]/[LocalOverlayBackground])
+ * so text inside is checked against the right background. This is the per-panel analog of the
+ * engine's region scrim: every panel on the photo gets its own consistent darkening.
+ */
+@Composable
+fun LegibleGlassPanel(
+    accents: List<Color>,
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape = RoundedCornerShape(12.dp),
+    targetLc: Double = 70.0,
+    content: @Composable () -> Unit,
+) {
+    val sampler = LocalPhotoSampler.current
+    val tint = LocalOverlayScrimTint.current
+    val base = LocalGlassParams.current
+    var rawBg by remember { mutableStateOf<Color?>(null) }
+    val tintRgb = tint.toReadRgb()
+    val alpha: Float = run {
+        val b = rawBg
+        if (b == null) base.panelOpacity
+        else {
+            val need = accents.maxOfOrNull { acc ->
+                legibleTreatment(acc.toReadRgb(), b.toReadRgb(), tintRgb, targetLc).scrimAlpha
+            } ?: 0.0
+            maxOf(base.panelOpacity.toDouble(), need).toFloat().coerceIn(0.30f, 0.80f)
+        }
+    }
+    val effectiveBg = composite((rawBg ?: base.panelBg).toReadRgb(), tintRgb, alpha.toDouble()).toComposeColor()
+    var m = modifier
+        .onGloballyPositioned { c -> sampler?.bgAt(c)?.let { if (it != rawBg) rawBg = it } }
+        .background(tint.copy(alpha = alpha), shape)
+        .border(1.dp, Color.White.copy(alpha = base.borderOpacity), shape)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && base.blur.value > 0f) m = m.blur(base.blur)
+    androidx.compose.foundation.layout.Box(modifier = m) {
+        CompositionLocalProvider(
+            LocalOverlayBackground provides effectiveBg,
+            LocalGlassParams provides base.copy(panelOpacity = alpha, panelBg = effectiveBg),
+        ) { content() }
     }
 }
 
@@ -198,17 +241,12 @@ fun LegibleText(
     targetLc: Double = 60.0,
     style: TextStyle = LocalTextStyle.current,
 ) {
-    val sampler = LocalPhotoSampler.current
-    val fallbackBg = LocalOverlayBackground.current
-    var measuredBg by remember { mutableStateOf<Color?>(null) }
-    val bg = measuredBg ?: fallbackBg
-    val measure = if (sampler != null) {
-        Modifier.onGloballyPositioned { c -> sampler.bgAt(c)?.let { if (it != measuredBg) measuredBg = it } }
-    } else Modifier
-    // Background darkening is applied UNIFORMLY at the panel level (consistent in x/y), so
-    // here we only fall back to a per-element color nudge if the uniform panel still leaves
-    // this color short — no per-element scrim, which the eye would read as patchy.
-    Text(text = text, modifier = modifier.then(measure), style = style.copy(color = color.legibleOn(bg, targetLc)))
+    // Background darkening is applied UNIFORMLY by the enclosing LegibleGlassPanel (consistent
+    // in x/y), which provides the effective background here. We only fall back to a per-element
+    // color nudge if that uniform panel still leaves this color short — no per-element scrim,
+    // which the eye would read as patchy.
+    val bg = LocalOverlayBackground.current
+    Text(text = text, modifier = modifier, style = style.copy(color = color.legibleOn(bg, targetLc)))
 }
 
 /** The engine's photo-derived scrim tint as an opaque Compose color (alpha applied by the panel). */
