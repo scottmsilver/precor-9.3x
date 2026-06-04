@@ -12,6 +12,7 @@ Usage:
 """
 
 import asyncio
+import base64
 import datetime
 import json
 import logging
@@ -21,9 +22,10 @@ import subprocess
 import time
 from contextlib import asynccontextmanager
 
+import program_engine
 import uvicorn
 from db import DEFAULT_WEIGHT_LBS, GUEST_PROFILE_ID, TreadmillDB  # noqa: F401
-from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -717,6 +719,11 @@ class ProxyRequest(BaseModel):
     enabled: bool
 
 
+class BackgroundAdviseRequest(BaseModel):
+    image_hash: str
+    image_b64: str | None = None
+
+
 class GenerateRequest(BaseModel):
     prompt: str = Field(max_length=5000)
 
@@ -1130,6 +1137,57 @@ async def get_config():
         "system_prompt": system_prompt,
         "smartass_addendum": SMARTASS_ADDENDUM,
     }
+
+
+_BACKGROUND_ADVICE_FILE = "background_advice.json"
+MAX_ADVISE_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB cap on untrusted base64 image
+
+
+def _load_background_advice_cache() -> dict:
+    """Load the on-disk background-advice cache; tolerate missing/corrupt file."""
+    try:
+        with open(_BACKGROUND_ADVICE_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_background_advice_cache() -> None:
+    """Persist the background-advice cache to disk (best effort)."""
+    try:
+        with open(_BACKGROUND_ADVICE_FILE, "w") as f:
+            json.dump(_background_advice_cache, f)
+    except OSError:
+        log.warning("failed to persist background advice cache")
+
+
+_background_advice_cache: dict = _load_background_advice_cache()
+
+
+@app.post("/api/background/advise")
+async def background_advise(req: BackgroundAdviseRequest):
+    """Return a cached Gemini overlay prior for a background image.
+
+    Keyed by image_hash. On cache miss with an image, calls Gemini and caches
+    the result. On cache miss with no image, returns the neutral prior without
+    caching. The base64 image is untrusted: it is size-capped and validated,
+    never shelled out, and never logged.
+    """
+    if req.image_hash in _background_advice_cache:
+        return _background_advice_cache[req.image_hash]
+    if not req.image_b64:
+        return program_engine.NEUTRAL_PRIOR
+    try:
+        image_bytes = base64.b64decode(req.image_b64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="image_b64 is not valid base64")
+    if len(image_bytes) > MAX_ADVISE_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="image too large")
+    prior = program_engine.advise_background(image_bytes)
+    _background_advice_cache[req.image_hash] = prior
+    _save_background_advice_cache()
+    return prior
 
 
 @app.post("/api/device-log")
@@ -2062,8 +2120,6 @@ async def api_tts(req: TTSRequest):
             config=config,
         )
         audio_data = resp.candidates[0].content.parts[0].inline_data.data
-        import base64
-
         audio_b64 = base64.b64encode(audio_data).decode("ascii")
         return {
             "ok": True,

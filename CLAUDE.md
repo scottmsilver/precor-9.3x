@@ -313,6 +313,7 @@ Note: `make test` automatically stops the `treadmill-io` service before running 
 |----------|--------|-------------|
 | `/api/chat` | POST | Send message to AI coach. Body: `{"message": "..."}`. Returns `{"text": "...", "actions": [...]}` |
 | `/api/tool` | POST | Generic tool execution (used by voice clients). Body: `{"name": "...", "args": {...}, "context": "..."}`. Forwards to `_exec_fn()`. |
+| `/api/background/advise` | POST | Get cached Gemini overlay prior for a background. Body: `{"image_hash":"...","image_b64":"..."}` |
 
 ### WebSocket
 | Endpoint | Description |
