@@ -186,27 +186,33 @@ fun LegibleGlassPanel(
     modifier: Modifier = Modifier,
     shape: RoundedCornerShape = RoundedCornerShape(12.dp),
     targetLc: Double = 70.0,
+    // The surface color. Defaults to the engine's dark tint (a neutral scrim); a colored
+    // button passes its OWN brand color, so "how opaque should the surface be" is solved by
+    // the SAME math as a scrim — raise the color's opacity until the accents clear APCA.
+    scrimColor: Color = LocalOverlayScrimTint.current,
+    minOpacity: Float? = null,
+    maxOpacity: Float = 0.80f,
     content: @Composable () -> Unit,
 ) {
     val sampler = LocalPhotoSampler.current
-    val tint = LocalOverlayScrimTint.current
     val base = LocalGlassParams.current
+    val floor = (minOpacity ?: base.panelOpacity).coerceAtMost(maxOpacity)
     var rawBg by remember { mutableStateOf<Color?>(null) }
-    val tintRgb = tint.toReadRgb()
+    val scrimRgb = scrimColor.toReadRgb()
     val alpha: Float = run {
         val b = rawBg
-        if (b == null) base.panelOpacity
+        if (b == null) floor
         else {
             val need = accents.maxOfOrNull { acc ->
-                legibleTreatment(acc.toReadRgb(), b.toReadRgb(), tintRgb, targetLc).scrimAlpha
+                legibleTreatment(acc.toReadRgb(), b.toReadRgb(), scrimRgb, targetLc).scrimAlpha
             } ?: 0.0
-            maxOf(base.panelOpacity.toDouble(), need).toFloat().coerceIn(0.30f, 0.80f)
+            maxOf(floor.toDouble(), need).toFloat().coerceIn(floor, maxOpacity)
         }
     }
-    val effectiveBg = composite((rawBg ?: base.panelBg).toReadRgb(), tintRgb, alpha.toDouble()).toComposeColor()
+    val effectiveBg = composite((rawBg ?: base.panelBg).toReadRgb(), scrimRgb, alpha.toDouble()).toComposeColor()
     var m = modifier
         .onGloballyPositioned { c -> sampler?.bgAt(c)?.let { if (it != rawBg) rawBg = it } }
-        .background(tint.copy(alpha = alpha), shape)
+        .background(scrimColor.copy(alpha = alpha), shape)
         .border(1.dp, Color.White.copy(alpha = base.borderOpacity), shape)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && base.blur.value > 0f) m = m.blur(base.blur)
     androidx.compose.foundation.layout.Box(modifier = m) {
