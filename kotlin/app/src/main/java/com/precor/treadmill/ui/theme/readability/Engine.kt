@@ -53,6 +53,32 @@ fun composite(bg: Rgb, tint: Rgb, a: Double) =
  * If the target is unreachable in-gamut, returns the most-legible variant found.
  * This is the guard every accent/overlay color passes through before it's drawn.
  */
+data class Treatment(val scrimAlpha: Double, val color: Rgb)
+
+/**
+ * Make [accent] legible against [bg] preferring to DARKEN the local background (a scrim of
+ * [scrimTint]) over changing the accent — so the accent keeps its true hue. Returns the
+ * minimal scrim alpha that clears [targetLc] with the color unchanged; if even [maxScrim]
+ * is not enough (e.g. accent ≈ scrim color, or darkening hurts), it clamps the scrim and
+ * nudges the color the rest of the way via [ensureLegible]. scrimAlpha 0 = already legible.
+ */
+fun legibleTreatment(
+    accent: Rgb,
+    bg: Rgb,
+    scrimTint: Rgb,
+    targetLc: Double,
+    maxScrim: Double = 0.85,
+): Treatment {
+    if (abs(apcaLc(accent, bg)) >= targetLc) return Treatment(0.0, accent)
+    var a = 0.0
+    while (a <= maxScrim + 1e-9) {
+        if (abs(apcaLc(accent, composite(bg, scrimTint, a))) >= targetLc) return Treatment(a, accent)
+        a += 0.05
+    }
+    val over = composite(bg, scrimTint, maxScrim)
+    return Treatment(maxScrim, ensureLegible(accent, over, targetLc))
+}
+
 fun ensureLegible(color: Rgb, bg: Rgb, targetLc: Double): Rgb {
     if (abs(apcaLc(color, bg)) >= targetLc) return color
     val lch = rgbToOklch(color)

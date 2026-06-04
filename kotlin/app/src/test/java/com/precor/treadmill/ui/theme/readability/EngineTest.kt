@@ -42,6 +42,33 @@ class EngineTest {
         assertEquals(rgb(255, 255, 255), ensureLegible(rgb(255, 255, 255), rgb(0, 0, 0), 60.0))
     }
 
+    @Test fun legibleTreatmentDarkensBackgroundAndStaysLegibleKeepingHue() {
+        val bg = rgb(180, 200, 150)        // bright greenish gap (low contrast for a green accent)
+        val accent = rgb(107, 200, 139)    // mid green accent
+        val scrimTint = rgb(20, 24, 20)    // dark engine tint
+        assertTrue("starts illegible", abs(apcaLc(accent, bg)) < 60.0)
+        val t = legibleTreatment(accent, bg, scrimTint, 70.0)
+        assertTrue("applies a local scrim (darkens the background)", t.scrimAlpha > 0.0)
+        val over = composite(bg, scrimTint, t.scrimAlpha)
+        assertTrue("legible after treatment, got ${abs(apcaLc(t.color, over))}", abs(apcaLc(t.color, over)) >= 69.0)
+        assertTrue("hue stays green, got ${rgbToOklch(t.color).h}", rgbToOklch(t.color).h in 120.0..200.0)
+    }
+
+    @Test fun legibleTreatmentKeepsColorExactlyWhenScrimAloneSuffices() {
+        // A light accent reaches the target purely by darkening the background — color untouched.
+        val bg = rgb(150, 170, 140)
+        val accent = rgb(210, 235, 205)
+        val scrimTint = rgb(15, 18, 15)
+        val t = legibleTreatment(accent, bg, scrimTint, 55.0)
+        assertTrue("applies a scrim", t.scrimAlpha > 0.0)
+        assertEquals("accent unchanged — scrim did the work", accent, t.color)
+    }
+
+    @Test fun legibleTreatmentNoScrimWhenAlreadyLegible() {
+        val t = legibleTreatment(rgb(255, 255, 255), rgb(20, 24, 20), rgb(20, 24, 20), 60.0)
+        assertEquals(0.0, t.scrimAlpha, 1e-9)
+    }
+
     @Test fun ensureLegibleFixesLowContrastAccent() {
         val bg = rgb(100, 130, 120)        // greenish panel background
         val accent = rgb(107, 143, 139)    // muted grey-teal — nearly same luminance

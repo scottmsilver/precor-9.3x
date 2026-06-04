@@ -32,6 +32,11 @@ import com.precor.treadmill.ui.theme.readability.Role
 import com.precor.treadmill.ui.theme.readability.composite
 import com.precor.treadmill.ui.theme.readability.cropMapRect
 import com.precor.treadmill.ui.theme.readability.sampleRegionPixels
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import com.precor.treadmill.ui.theme.readability.legibleTreatment
 
 /**
  * Glass panel parameters derived from background image brightness.
@@ -172,11 +177,18 @@ class PhotoSampler(
 /** Per-screen photo sampler so overlay widgets can measure their own background. Null off the photo. */
 val LocalPhotoSampler = compositionLocalOf<PhotoSampler?> { null }
 
+/** The scrim color the local-darkening lever uses (the engine's photo-cohesive dark tint). */
+val LocalOverlayScrimTint = compositionLocalOf { Color(0xFF101010) }
+
 /**
- * Text drawn on top of the background photo, guaranteed legible: its color is run through
- * APCA against the actual pixels behind it (measured via [LocalPhotoSampler] at layout
- * time, falling back to [LocalOverlayBackground] until measured). Use this instead of a
- * raw `Text` for any overlay text so no color can be placed without the check.
+ * Text drawn on top of the background photo, guaranteed legible by a two-lever guard run
+ * against the actual pixels behind it (measured via [LocalPhotoSampler], falling back to
+ * [LocalOverlayBackground] until laid out):
+ *   1. darken the local background — a soft scrim of [LocalOverlayScrimTint] drawn behind
+ *      the text, only as strong as needed (zero when the color already passes), so accent
+ *      colors keep their true hue;
+ *   2. nudge the text color — only if even max scrim is not enough.
+ * Use this instead of a raw `Text` for any overlay text so the check can't be skipped.
  */
 @Composable
 fun LegibleText(
@@ -188,12 +200,33 @@ fun LegibleText(
 ) {
     val sampler = LocalPhotoSampler.current
     val fallbackBg = LocalOverlayBackground.current
+    val scrimTint = LocalOverlayScrimTint.current
     var measuredBg by remember { mutableStateOf<Color?>(null) }
     val bg = measuredBg ?: fallbackBg
+    val treatment = legibleTreatment(color.toReadRgb(), bg.toReadRgb(), scrimTint.toReadRgb(), targetLc)
+    val finalColor = treatment.color.toComposeColor()
+    val scrimA = treatment.scrimAlpha.toFloat()
     val measure = if (sampler != null) {
         Modifier.onGloballyPositioned { c -> sampler.bgAt(c)?.let { if (it != measuredBg) measuredBg = it } }
     } else Modifier
-    Text(text = text, modifier = modifier.then(measure), style = style.copy(color = color.legibleOn(bg, targetLc)))
+    Text(
+        text = text,
+        modifier = modifier
+            .then(measure)
+            .drawBehind {
+                if (scrimA > 0.01f) {
+                    val padX = size.height * 0.35f
+                    val padY = size.height * 0.18f
+                    drawRoundRect(
+                        color = scrimTint.copy(alpha = scrimA),
+                        topLeft = Offset(-padX, -padY),
+                        size = Size(size.width + padX * 2, size.height + padY * 2),
+                        cornerRadius = CornerRadius(size.height, size.height),
+                    )
+                }
+            },
+        style = style.copy(color = finalColor),
+    )
 }
 
 /** The engine's photo-derived scrim tint as an opaque Compose color (alpha applied by the panel). */

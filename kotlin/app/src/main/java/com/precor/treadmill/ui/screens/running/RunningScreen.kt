@@ -43,6 +43,7 @@ import com.precor.treadmill.ui.components.ProgramBrowser
 import com.precor.treadmill.ui.theme.GlassParams
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
+import com.precor.treadmill.ui.theme.LocalOverlayScrimTint
 import com.precor.treadmill.ui.theme.LocalPhotoSampler
 import com.precor.treadmill.ui.theme.PhotoSampler
 import com.precor.treadmill.ui.theme.TimerFontFamily
@@ -266,6 +267,7 @@ fun RunningScreen(
             LocalGlassParams provides readability.glass,
             LocalOverlayBackground provides readability.glass.panelBg,
             LocalPhotoSampler provides readability.sampler,
+            LocalOverlayScrimTint provides readability.glass.tint,
         ) {
     Column(
         modifier = Modifier
@@ -519,6 +521,7 @@ private fun RunningScreenLandscape(
             LocalGlassParams provides readability.glass,
             LocalOverlayBackground provides readability.glass.panelBg,
             LocalPhotoSampler provides readability.sampler,
+            LocalOverlayScrimTint provides readability.glass.tint,
         ) {
         Column(
             modifier = Modifier
