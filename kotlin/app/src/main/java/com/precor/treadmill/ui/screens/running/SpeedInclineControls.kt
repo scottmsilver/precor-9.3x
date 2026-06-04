@@ -186,6 +186,7 @@ private fun ControlPanel(
             LegibleText(
                 text = value,
                 color = accentColor,
+                targetLc = 70.0,
                 style = TextStyle(
                     fontSize = valueFontSize,
                     fontWeight = FontWeight.SemiBold,
@@ -285,7 +286,7 @@ private fun RepeatButton(
         // Chevron icon — scales proportionally with button size.
         // The stroke color is a widget on the photo too, so run it through the same
         // APCA guard as text before drawing it.
-        val chevronColor = color.legibleOn(LocalOverlayBackground.current)
+        val chevronColor = color.legibleOn(LocalOverlayBackground.current, targetLc = 70.0)
         Canvas(
             modifier = Modifier.fillMaxHeight(0.4f).aspectRatio(1f),
         ) {

@@ -132,6 +132,7 @@ private fun HeartRateMetric(bpm: Int, scale: Float = 1f) {
         LegibleText(
             text = if (bpm > 0) bpm.toString() else "---",
             color = color,
+            targetLc = 70.0,
             style = TextStyle(
                 fontSize = (15 * scale).sp,
                 fontWeight = FontWeight.SemiBold,
@@ -174,6 +175,7 @@ private fun MetricItem(
         LegibleText(
             text = value,
             color = color,
+            targetLc = 70.0,
             modifier = Modifier.widthIn(min = (40 * scale).dp).alignByBaseline(),
             style = TextStyle(
                 fontSize = (15 * scale).sp,

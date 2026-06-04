@@ -43,6 +43,8 @@ import com.precor.treadmill.ui.components.ProgramBrowser
 import com.precor.treadmill.ui.theme.GlassParams
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
+import com.precor.treadmill.ui.theme.LocalPhotoSampler
+import com.precor.treadmill.ui.theme.PhotoSampler
 import com.precor.treadmill.ui.theme.TimerFontFamily
 import com.precor.treadmill.ui.theme.composeTextColor
 import com.precor.treadmill.ui.theme.composeTintColor
@@ -55,6 +57,7 @@ import com.precor.treadmill.ui.theme.readability.composite
 import com.precor.treadmill.ui.theme.readability.cropMapRect
 import com.precor.treadmill.ui.theme.readability.fitRegion
 import com.precor.treadmill.ui.theme.readability.sampleRegion
+import com.precor.treadmill.ui.theme.readability.sampleRegionPixels
 import com.precor.treadmill.ui.util.glowText
 import com.precor.treadmill.ui.util.timerText
 import com.precor.treadmill.ui.util.haptic
@@ -100,6 +103,7 @@ private data class RunReadability(
     val theme: ReadTheme,
     val scrims: Map<String, Double>,
     val glass: GlassParams,
+    val sampler: PhotoSampler?,
 )
 
 /**
@@ -123,8 +127,14 @@ private fun rememberRunReadability(): RunReadability {
         if (bmp == null) {
             // decodeResource can return null — fall back to the engine's neutral theme.
             val neutral = chooseTheme(emptyList(), AdvicePrior()).theme
-            return@remember RunReadability(neutral, emptyMap(), GlassParams.Default)
+            return@remember RunReadability(neutral, emptyMap(), GlassParams.Default, null)
         }
+        // Pull the pixels once; reused for block sampling AND the per-element PhotoSampler.
+        val pxW = bmp.width
+        val pxH = bmp.height
+        val px = IntArray(pxW * pxH)
+        bmp.getPixels(px, 0, pxW, 0, 0, pxW, pxH)
+        bmp.recycle()
         val blocks = listOf(
             Triple("timer", Role.HERO, NormRect(0.30, 0.06, 0.40, 0.18)),
             Triple("speed", Role.BODY, NormRect(0.08, 0.30, 0.26, 0.12)),
@@ -133,9 +143,8 @@ private fun rememberRunReadability(): RunReadability {
             Triple("hint", Role.MUTED, NormRect(0.30, 0.84, 0.40, 0.08)),
         )
         val regions = blocks.map { (id, role, rect) ->
-            sampleRegion(bmp, cropMapRect(bmp.width, bmp.height, containerW, containerH, rect), id, role)
+            sampleRegionPixels(px, pxW, pxH, cropMapRect(pxW, pxH, containerW, containerH, rect), id, role)
         }
-        bmp.recycle()
         val choice = chooseTheme(regions, AdvicePrior())
         val perRegion = regions.associate { it.id to fitRegion(choice.theme, it).scrimAlpha }
         // Bridge to GlassParams for child panels (MetricsRow / HUD / controls / bottom bar)
@@ -159,7 +168,9 @@ private fun rememberRunReadability(): RunReadability {
             textColor = choice.theme.composeTextColor(),
             panelBg = panelBg,
         )
-        RunReadability(choice.theme, perRegion, glass)
+        // Per-element sampler: each overlay widget measures the actual pixels behind it.
+        val sampler = PhotoSampler(px, pxW, pxH, containerW, containerH, choice.theme.tint, panelOpacity.toDouble())
+        RunReadability(choice.theme, perRegion, glass, sampler)
     }
 }
 
@@ -254,6 +265,7 @@ fun RunningScreen(
         CompositionLocalProvider(
             LocalGlassParams provides readability.glass,
             LocalOverlayBackground provides readability.glass.panelBg,
+            LocalPhotoSampler provides readability.sampler,
         ) {
     Column(
         modifier = Modifier
@@ -506,6 +518,7 @@ private fun RunningScreenLandscape(
         CompositionLocalProvider(
             LocalGlassParams provides readability.glass,
             LocalOverlayBackground provides readability.glass.panelBg,
+            LocalPhotoSampler provides readability.sampler,
         ) {
         Column(
             modifier = Modifier

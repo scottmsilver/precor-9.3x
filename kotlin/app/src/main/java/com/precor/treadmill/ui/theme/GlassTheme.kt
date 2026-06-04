@@ -21,6 +21,17 @@ import androidx.compose.ui.unit.dp
 import com.precor.treadmill.ui.theme.readability.Rgb
 import com.precor.treadmill.ui.theme.readability.Theme as ReadTheme
 import com.precor.treadmill.ui.theme.readability.ensureLegible
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import com.precor.treadmill.ui.theme.readability.NormRect
+import com.precor.treadmill.ui.theme.readability.Role
+import com.precor.treadmill.ui.theme.readability.composite
+import com.precor.treadmill.ui.theme.readability.cropMapRect
+import com.precor.treadmill.ui.theme.readability.sampleRegionPixels
 
 /**
  * Glass panel parameters derived from background image brightness.
@@ -127,9 +138,45 @@ fun Color.legibleOn(bg: Color, targetLc: Double = 60.0): Color =
     ensureLegible(toReadRgb(), bg.toReadRgb(), targetLc).toComposeColor()
 
 /**
- * Text drawn on top of the background photo, guaranteed legible: its color is run
- * through APCA against [LocalOverlayBackground] before drawing. Use this instead of
- * a raw `Text` for any overlay text so no color can be placed without the check.
+ * Samples the *actual* background pixels behind a widget at its measured screen bounds
+ * (after ContentScale.Crop), composited with the panel scrim. This is what overlay
+ * colors are checked against, so legibility is measured against what's really rendered
+ * behind each element — not one screen-wide estimate.
+ */
+class PhotoSampler(
+    private val pixels: IntArray,
+    private val imgW: Int,
+    private val imgH: Int,
+    private val containerW: Float,
+    private val containerH: Float,
+    private val tint: Rgb,
+    private val scrimAlpha: Double,
+) {
+    /** The composited background color behind [coords], or null if not measurable yet. */
+    fun bgAt(coords: LayoutCoordinates): Color? {
+        if (!coords.isAttached || containerW <= 0f || containerH <= 0f) return null
+        val r = coords.boundsInWindow()
+        if (r.width <= 0f || r.height <= 0f) return null
+        val rect = NormRect(
+            (r.left / containerW).toDouble(),
+            (r.top / containerH).toDouble(),
+            (r.width / containerW).toDouble(),
+            (r.height / containerH).toDouble(),
+        )
+        val mapped = cropMapRect(imgW, imgH, containerW, containerH, rect)
+        val stats = sampleRegionPixels(pixels, imgW, imgH, mapped, "x", Role.BODY)
+        return composite(stats.avg, tint, scrimAlpha).toComposeColor()
+    }
+}
+
+/** Per-screen photo sampler so overlay widgets can measure their own background. Null off the photo. */
+val LocalPhotoSampler = compositionLocalOf<PhotoSampler?> { null }
+
+/**
+ * Text drawn on top of the background photo, guaranteed legible: its color is run through
+ * APCA against the actual pixels behind it (measured via [LocalPhotoSampler] at layout
+ * time, falling back to [LocalOverlayBackground] until measured). Use this instead of a
+ * raw `Text` for any overlay text so no color can be placed without the check.
  */
 @Composable
 fun LegibleText(
@@ -139,8 +186,14 @@ fun LegibleText(
     targetLc: Double = 60.0,
     style: TextStyle = LocalTextStyle.current,
 ) {
-    val bg = LocalOverlayBackground.current
-    Text(text = text, modifier = modifier, style = style.copy(color = color.legibleOn(bg, targetLc)))
+    val sampler = LocalPhotoSampler.current
+    val fallbackBg = LocalOverlayBackground.current
+    var measuredBg by remember { mutableStateOf<Color?>(null) }
+    val bg = measuredBg ?: fallbackBg
+    val measure = if (sampler != null) {
+        Modifier.onGloballyPositioned { c -> sampler.bgAt(c)?.let { if (it != measuredBg) measuredBg = it } }
+    } else Modifier
+    Text(text = text, modifier = modifier.then(measure), style = style.copy(color = color.legibleOn(bg, targetLc)))
 }
 
 /** The engine's photo-derived scrim tint as an opaque Compose color (alpha applied by the panel). */
