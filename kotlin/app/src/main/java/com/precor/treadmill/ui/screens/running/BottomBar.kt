@@ -117,10 +117,11 @@ private fun ActionButton(
         modifier = modifier.alpha(if (enabled) 1f else 0.4f),
         shape = RoundedCornerShape(14.dp),
         targetLc = 60.0,
-        // Floor is high because a button must read as a SOLID tappable surface — a higher bar
-        // than mere label legibility. The scrim math raises it further on bright backgrounds.
-        minOpacity = 0.82f,
-        maxOpacity = 0.96f,
+        // Keep it glassy: the border + rounded shape + brand color already say "button", so we
+        // only need a modest floor. The scrim math raises opacity on bright backgrounds where
+        // the label would otherwise wash out — firm where it must be, translucent elsewhere.
+        minOpacity = 0.46f,
+        maxOpacity = 0.92f,
     ) {
         Button(
             onClick = onClick,
