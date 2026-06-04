@@ -200,33 +200,15 @@ fun LegibleText(
 ) {
     val sampler = LocalPhotoSampler.current
     val fallbackBg = LocalOverlayBackground.current
-    val scrimTint = LocalOverlayScrimTint.current
     var measuredBg by remember { mutableStateOf<Color?>(null) }
     val bg = measuredBg ?: fallbackBg
-    val treatment = legibleTreatment(color.toReadRgb(), bg.toReadRgb(), scrimTint.toReadRgb(), targetLc)
-    val finalColor = treatment.color.toComposeColor()
-    val scrimA = treatment.scrimAlpha.toFloat()
     val measure = if (sampler != null) {
         Modifier.onGloballyPositioned { c -> sampler.bgAt(c)?.let { if (it != measuredBg) measuredBg = it } }
     } else Modifier
-    Text(
-        text = text,
-        modifier = modifier
-            .then(measure)
-            .drawBehind {
-                if (scrimA > 0.01f) {
-                    val padX = size.height * 0.35f
-                    val padY = size.height * 0.18f
-                    drawRoundRect(
-                        color = scrimTint.copy(alpha = scrimA),
-                        topLeft = Offset(-padX, -padY),
-                        size = Size(size.width + padX * 2, size.height + padY * 2),
-                        cornerRadius = CornerRadius(size.height, size.height),
-                    )
-                }
-            },
-        style = style.copy(color = finalColor),
-    )
+    // Background darkening is applied UNIFORMLY at the panel level (consistent in x/y), so
+    // here we only fall back to a per-element color nudge if the uniform panel still leaves
+    // this color short — no per-element scrim, which the eye would read as patchy.
+    Text(text = text, modifier = modifier.then(measure), style = style.copy(color = color.legibleOn(bg, targetLc)))
 }
 
 /** The engine's photo-derived scrim tint as an opaque Compose color (alpha applied by the panel). */

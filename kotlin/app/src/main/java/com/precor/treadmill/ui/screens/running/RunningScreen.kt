@@ -57,6 +57,8 @@ import com.precor.treadmill.ui.theme.readability.chooseTheme
 import com.precor.treadmill.ui.theme.readability.composite
 import com.precor.treadmill.ui.theme.readability.cropMapRect
 import com.precor.treadmill.ui.theme.readability.fitRegion
+import com.precor.treadmill.ui.theme.readability.legibleTreatment
+import com.precor.treadmill.ui.theme.readability.rgb
 import com.precor.treadmill.ui.theme.readability.sampleRegion
 import com.precor.treadmill.ui.theme.readability.sampleRegionPixels
 import com.precor.treadmill.ui.util.glowText
@@ -152,7 +154,22 @@ private fun rememberRunReadability(): RunReadability {
         // that still read LocalGlassParams: drive their tint opacity from the metrics scrim
         // so they darken in step with the engine decision; keep the photo-derived blur.
         val metricsScrim = perRegion["speed"] ?: choice.theme.baseScrimAlpha
-        val panelOpacity = metricsScrim.toFloat().coerceIn(0.30f, 0.62f)
+        // Panel-wide UNIFORM darkening: one scrim value across the whole panel (the eye
+        // expects a consistent change in x and y, not patchy per-element pills). Raise it
+        // until the known accent colors clear their target over the panel regions, so the
+        // accents keep their true hue. Per-element scrims are avoided.
+        val panelAccents = listOf(
+            rgb(107, 143, 139), // pace teal
+            rgb(166, 152, 130), // vert / incline orange
+            rgb(107, 200, 155), // speed green
+        )
+        val panelRegions = regions
+            .filter { it.id == "speed" || it.id == "incline" || it.id == "distance" }
+            .map { it.avg }
+        val accentScrim = panelRegions.maxOfOrNull { rb ->
+            panelAccents.maxOf { acc -> legibleTreatment(acc, rb, choice.theme.tint, 70.0).scrimAlpha }
+        } ?: 0.0
+        val panelOpacity = maxOf(metricsScrim, accentScrim).toFloat().coerceIn(0.30f, 0.72f)
         // The effective color behind panel text = the engine tint composited over the
         // metrics-region photo at the panel opacity. Accent text is checked against this.
         val speedAvg = regions.first { it.id == "speed" }.avg
