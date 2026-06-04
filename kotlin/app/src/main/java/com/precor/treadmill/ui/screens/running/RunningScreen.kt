@@ -57,6 +57,11 @@ import com.precor.treadmill.ui.theme.readability.chooseTheme
 import com.precor.treadmill.ui.theme.readability.composite
 import com.precor.treadmill.ui.theme.readability.cropMapRect
 import com.precor.treadmill.ui.theme.readability.fitRegion
+import com.precor.treadmill.ui.theme.readability.Rgb
+import com.precor.treadmill.ui.theme.readability.legibleTreatment
+import com.precor.treadmill.ui.theme.readability.apcaLc
+import com.precor.treadmill.ui.theme.readability.CHARCOAL
+import com.precor.treadmill.ui.theme.readability.IVORY
 import com.precor.treadmill.ui.theme.readability.sampleRegion
 import com.precor.treadmill.ui.theme.readability.sampleRegionPixels
 import com.precor.treadmill.ui.util.glowText
@@ -105,7 +110,29 @@ private data class RunReadability(
     val scrims: Map<String, Double>,
     val glass: GlassParams,
     val sampler: PhotoSampler?,
+    // Free-floating hero text (timer) solved against ITS measured background: its own polarity
+    // (dark over a bright sky, light over dark) plus a scrim only if a mid-tone forces one.
+    val freeTextColor: Color,
+    val freeScrimAlpha: Double,
 )
+
+/**
+ * Solve free-floating text over the raw photo: pick the polarity (ivory/charcoal) with the most
+ * natural contrast against [bg], and only add a tint scrim if neither polarity reaches [target].
+ * Returns the chosen text color and the scrim alpha (0 = none needed).
+ */
+private fun solveFreeText(bg: Rgb, tint: Rgb, target: Double): Pair<Rgb, Double> {
+    val ivoryLc = kotlin.math.abs(apcaLc(IVORY, bg))
+    val charcoalLc = kotlin.math.abs(apcaLc(CHARCOAL, bg))
+    // Always take the polarity with the most natural contrast. A darkening scrim only helps the
+    // LIGHT (ivory) choice — for dark (charcoal) text on a bright bg darkening would hurt, so use
+    // it as-is (already the strongest option there).
+    return if (charcoalLc >= ivoryLc) {
+        CHARCOAL to 0.0
+    } else {
+        IVORY to (if (ivoryLc >= target) 0.0 else legibleTreatment(IVORY, bg, tint, target).scrimAlpha)
+    }
+}
 
 /**
  * Sample the local background under each text block of the running layout, pick one
@@ -124,11 +151,11 @@ private fun rememberRunReadability(): RunReadability {
     val containerH = with(density) { config.screenHeightDp.dp.toPx() }
     return remember(containerW, containerH) {
         val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
-        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.bg_forest, opts)
+        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.bg_lake, opts)
         if (bmp == null) {
             // decodeResource can return null — fall back to the engine's neutral theme.
             val neutral = chooseTheme(emptyList(), AdvicePrior()).theme
-            return@remember RunReadability(neutral, emptyMap(), GlassParams.Default, null)
+            return@remember RunReadability(neutral, emptyMap(), GlassParams.Default, null, Color(0xFFE8E4DF), 0.0)
         }
         // Pull the pixels once; reused for block sampling AND the per-element PhotoSampler.
         val pxW = bmp.width
@@ -175,7 +202,17 @@ private fun rememberRunReadability(): RunReadability {
         )
         // Per-element sampler: each overlay widget measures the actual pixels behind it.
         val sampler = PhotoSampler(px, pxW, pxH, containerW, containerH)
-        RunReadability(choice.theme, perRegion, glass, sampler)
+        // Free-floating text (timer/encouragement/hint) over the raw photo: solve its own
+        // polarity + scrim against the timer region (the brightest hero spot).
+        val (freeRgb, freeScrim) = solveFreeText(
+            regions.first { it.id == "timer" }.avg, choice.theme.tint, 75.0,
+        )
+        val freeColor = Color(
+            freeRgb.r.toInt().coerceIn(0, 255),
+            freeRgb.g.toInt().coerceIn(0, 255),
+            freeRgb.b.toInt().coerceIn(0, 255),
+        )
+        RunReadability(choice.theme, perRegion, glass, sampler, freeColor, freeScrim)
     }
 }
 
@@ -250,8 +287,7 @@ fun RunningScreen(
     // The free-floating hero timer carries no panel, so paint the engine's computed
     // per-region scrim behind it as a soft radial tint (the "gradient scrim" lever) —
     // this is what makes the timer clear its APCA target over a bright clearing.
-    val timerScrimColor = theme.composeTintColor()
-        .copy(alpha = (readability.scrims["timer"] ?: theme.baseScrimAlpha).toFloat())
+    val timerScrimColor = theme.composeTintColor().copy(alpha = readability.freeScrimAlpha.toFloat())
 
     // 3-row layout: top (timer+metrics), middle (HUD), bottom (buttons)
     Box(
@@ -261,7 +297,7 @@ fun RunningScreen(
     ) {
         // Background image (full-bleed; per-region scrim handles legibility)
         Image(
-            painter = painterResource(R.drawable.bg_forest),
+            painter = painterResource(R.drawable.bg_lake),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -276,7 +312,8 @@ fun RunningScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(top = 0.dp, bottom = EdgePad),
+            .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top))
+                .padding(top = 0.dp, bottom = EdgePad),
     ) {
         // ROW 1: Timer + Metrics (wraps content)
         Box(
@@ -359,7 +396,7 @@ fun RunningScreen(
                                 text = timerText(sess.elapsedDisplay),
                                 textAlign = TextAlign.Center,
                                 style = TextStyle(
-                                    color = theme.composeTextColor(),
+                                    color = readability.freeTextColor,
                                     fontSize = 96.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     fontFamily = TimerFontFamily,
@@ -494,12 +531,11 @@ private fun RunningScreenLandscape(
     ) {
         val readability = rememberRunReadability()
         val theme = readability.theme
-        val timerScrimColor = theme.composeTintColor()
-            .copy(alpha = (readability.scrims["timer"] ?: theme.baseScrimAlpha).toFloat())
+        val timerScrimColor = theme.composeTintColor().copy(alpha = readability.freeScrimAlpha.toFloat())
 
         // Background image (full-bleed; per-region scrim handles legibility)
         Image(
-            painter = painterResource(R.drawable.bg_forest),
+            painter = painterResource(R.drawable.bg_lake),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -530,6 +566,7 @@ private fun RunningScreenLandscape(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top))
                 .padding(top = 0.dp, bottom = EdgePad),
         ) {
             // ROW 1: Timer + Metrics (wraps content)
@@ -598,7 +635,7 @@ private fun RunningScreenLandscape(
                                     text = timerText(sess.elapsedDisplay),
                                     textAlign = TextAlign.Center,
                                     style = TextStyle(
-                                        color = theme.composeTextColor(),
+                                        color = readability.freeTextColor,
                                         fontSize = timerFontSize,
                                         fontWeight = FontWeight.SemiBold,
                                         fontFamily = TimerFontFamily,
