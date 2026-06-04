@@ -208,6 +208,11 @@ fun RunningScreen(
 
     val readability = rememberRunReadability()
     val theme = readability.theme
+    // The free-floating hero timer carries no panel, so paint the engine's computed
+    // per-region scrim behind it as a soft radial tint (the "gradient scrim" lever) —
+    // this is what makes the timer clear its APCA target over a bright clearing.
+    val timerScrimColor = theme.composeTintColor()
+        .copy(alpha = (readability.scrims["timer"] ?: theme.baseScrimAlpha).toFloat())
 
     // 3-row layout: top (timer+metrics), middle (HUD), bottom (buttons)
     Box(
@@ -249,6 +254,18 @@ fun RunningScreen(
                         ),
                 )
             }
+
+            // Engine-computed scrim behind the hero timer (soft radial, photo-tinted).
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .blur(48.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            colors = listOf(timerScrimColor, Color.Transparent),
+                        ),
+                    ),
+            )
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -433,6 +450,8 @@ private fun RunningScreenLandscape(
     ) {
         val readability = rememberRunReadability()
         val theme = readability.theme
+        val timerScrimColor = theme.composeTintColor()
+            .copy(alpha = (readability.scrims["timer"] ?: theme.baseScrimAlpha).toFloat())
 
         // Background image (full-bleed; per-region scrim handles legibility)
         Image(
@@ -471,6 +490,17 @@ private fun RunningScreenLandscape(
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.Center,
             ) {
+                // Engine-computed scrim behind the hero timer (soft radial, photo-tinted).
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .blur(48.dp)
+                        .background(
+                            brush = Brush.radialGradient(
+                                colors = listOf(timerScrimColor, Color.Transparent),
+                            ),
+                        ),
+                )
                 Column(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
