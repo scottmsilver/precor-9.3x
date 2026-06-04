@@ -62,6 +62,8 @@ import com.precor.treadmill.ui.theme.readability.legibleTreatment
 import com.precor.treadmill.ui.theme.readability.apcaLc
 import com.precor.treadmill.ui.theme.readability.CHARCOAL
 import com.precor.treadmill.ui.theme.readability.IVORY
+import com.precor.treadmill.ui.theme.readability.rgb
+import com.precor.treadmill.ui.theme.readability.ensureLegible
 import com.precor.treadmill.ui.theme.readability.sampleRegion
 import com.precor.treadmill.ui.theme.readability.sampleRegionPixels
 import com.precor.treadmill.ui.util.glowText
@@ -114,6 +116,9 @@ private data class RunReadability(
     // (dark over a bright sky, light over dark) plus a scrim only if a mid-tone forces one.
     val freeTextColor: Color,
     val freeScrimAlpha: Double,
+    // The encouragement message keeps its green identity but is luminance-nudged to stay legible
+    // over the timer-region background.
+    val encouragementColor: Color,
 )
 
 /**
@@ -155,7 +160,7 @@ private fun rememberRunReadability(): RunReadability {
         if (bmp == null) {
             // decodeResource can return null — fall back to the engine's neutral theme.
             val neutral = chooseTheme(emptyList(), AdvicePrior()).theme
-            return@remember RunReadability(neutral, emptyMap(), GlassParams.Default, null, Color(0xFFE8E4DF), 0.0)
+            return@remember RunReadability(neutral, emptyMap(), GlassParams.Default, null, Color(0xFFE8E4DF), 0.0, Color(0xFF6BC89B))
         }
         // Pull the pixels once; reused for block sampling AND the per-element PhotoSampler.
         val pxW = bmp.width
@@ -212,7 +217,13 @@ private fun rememberRunReadability(): RunReadability {
             freeRgb.g.toInt().coerceIn(0, 255),
             freeRgb.b.toInt().coerceIn(0, 255),
         )
-        RunReadability(choice.theme, perRegion, glass, sampler, freeColor, freeScrim)
+        val encRgb = ensureLegible(rgb(107, 200, 155), regions.first { it.id == "timer" }.avg, 60.0)
+        val encouragementColor = Color(
+            encRgb.r.toInt().coerceIn(0, 255),
+            encRgb.g.toInt().coerceIn(0, 255),
+            encRgb.b.toInt().coerceIn(0, 255),
+        )
+        RunReadability(choice.theme, perRegion, glass, sampler, freeColor, freeScrim, encouragementColor)
     }
 }
 
@@ -373,7 +384,7 @@ fun RunningScreen(
                         if (showEncouragement) {
                             Text(
                                 text = glowText(encouragement ?: ""),
-                                color = Color(0xFF6BC89B),
+                                color = readability.encouragementColor,
                                 fontSize = 28.sp,
                                 fontWeight = FontWeight.Medium,
                                 fontFamily = TimerFontFamily,
@@ -612,7 +623,7 @@ private fun RunningScreenLandscape(
                             if (showEncouragement) {
                                 Text(
                                     text = glowText(encouragement ?: ""),
-                                    color = Color(0xFF6BC89B),
+                                    color = readability.encouragementColor,
                                     fontSize = encourageFontSize,
                                     fontWeight = FontWeight.Medium,
                                     fontFamily = TimerFontFamily,
