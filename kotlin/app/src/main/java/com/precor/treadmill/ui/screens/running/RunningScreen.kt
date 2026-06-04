@@ -1,6 +1,7 @@
 package com.precor.treadmill.ui.screens.running
 
 import android.content.res.Configuration
+import android.graphics.BitmapFactory
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.Typeface
@@ -39,9 +40,17 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.precor.treadmill.R
 import com.precor.treadmill.ui.components.ProgramBrowser
+import com.precor.treadmill.ui.theme.GlassParams
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.TimerFontFamily
-import com.precor.treadmill.ui.theme.rememberGlassParams
+import com.precor.treadmill.ui.theme.composeTextColor
+import com.precor.treadmill.ui.theme.readability.AdvicePrior
+import com.precor.treadmill.ui.theme.readability.NormRect
+import com.precor.treadmill.ui.theme.readability.Role
+import com.precor.treadmill.ui.theme.readability.Theme as ReadTheme
+import com.precor.treadmill.ui.theme.readability.chooseTheme
+import com.precor.treadmill.ui.theme.readability.fitRegion
+import com.precor.treadmill.ui.theme.readability.sampleRegion
 import com.precor.treadmill.ui.util.glowText
 import com.precor.treadmill.ui.util.timerText
 import com.precor.treadmill.ui.util.haptic
@@ -74,6 +83,58 @@ private fun timerGlyphBounds(fontSize: TextUnit): Pair<Int, Int> {
         paint.getTextBounds("0:00", 0, 4, bounds)
         // bounds.top is negative (above baseline), bounds.bottom is positive (below baseline)
         (-bounds.top) to bounds.bottom
+    }
+}
+
+/**
+ * Holds the readability decision for the running screen: one coherent photo-derived
+ * Theme (tint + ivory/charcoal text + blur), the per-region scrim alphas that each
+ * text block needs to clear its APCA target, and a bridging [GlassParams] so the
+ * child panels that still read [LocalGlassParams] stay visually coherent.
+ */
+private data class RunReadability(
+    val theme: ReadTheme,
+    val scrims: Map<String, Double>,
+    val glass: GlassParams,
+)
+
+/**
+ * Sample the local background under each text block of the running layout, pick one
+ * coherent Theme via the readability engine, and compute the per-region scrim alphas.
+ * Runs once (remembered) — no Gemini call; a neutral [AdvicePrior] still yields a
+ * legible-by-construction result via APCA.
+ */
+@Composable
+private fun rememberRunReadability(): RunReadability {
+    val context = LocalContext.current
+    return remember {
+        val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.bg_forest, opts)
+        if (bmp == null) {
+            // decodeResource can return null — fall back to the engine's neutral theme.
+            val neutral = chooseTheme(emptyList(), AdvicePrior()).theme
+            return@remember RunReadability(neutral, emptyMap(), GlassParams.Default)
+        }
+        val blocks = listOf(
+            Triple("timer", Role.HERO, NormRect(0.30, 0.06, 0.40, 0.18)),
+            Triple("speed", Role.BODY, NormRect(0.08, 0.30, 0.26, 0.12)),
+            Triple("incline", Role.BODY, NormRect(0.37, 0.30, 0.26, 0.12)),
+            Triple("distance", Role.BODY, NormRect(0.66, 0.30, 0.26, 0.12)),
+            Triple("hint", Role.MUTED, NormRect(0.30, 0.84, 0.40, 0.08)),
+        )
+        val regions = blocks.map { (id, role, rect) -> sampleRegion(bmp, rect, id, role) }
+        bmp.recycle()
+        val choice = chooseTheme(regions, AdvicePrior())
+        val perRegion = regions.associate { it.id to fitRegion(choice.theme, it).scrimAlpha }
+        // Bridge to GlassParams for child panels (MetricsRow / HUD / controls / bottom bar)
+        // that still read LocalGlassParams: drive their tint opacity from the metrics scrim
+        // so they darken in step with the engine decision; keep the photo-derived blur.
+        val metricsScrim = perRegion["speed"] ?: choice.theme.baseScrimAlpha
+        val glass = GlassParams.Default.copy(
+            blur = choice.theme.blurDp.dp,
+            panelOpacity = metricsScrim.toFloat().coerceIn(0.30f, 0.62f),
+        )
+        RunReadability(choice.theme, perRegion, glass)
     }
 }
 
@@ -143,7 +204,8 @@ fun RunningScreen(
         (glyphAbove + glyphBelow + 2 * edgePadPx).toDp()
     }
 
-    val glassParams = rememberGlassParams(R.drawable.bg_forest)
+    val readability = rememberRunReadability()
+    val theme = readability.theme
 
     // 3-row layout: top (timer+metrics), middle (HUD), bottom (buttons)
     Box(
@@ -151,7 +213,7 @@ fun RunningScreen(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        // Background image
+        // Background image (full-bleed; per-region scrim handles legibility)
         Image(
             painter = painterResource(R.drawable.bg_forest),
             contentDescription = null,
@@ -159,23 +221,7 @@ fun RunningScreen(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Overlay gradient
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.05f),
-                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
-                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
-                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.08f),
-                        ),
-                    ),
-                ),
-        )
-
-        CompositionLocalProvider(LocalGlassParams provides glassParams) {
+        CompositionLocalProvider(LocalGlassParams provides readability.glass) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -250,7 +296,7 @@ fun RunningScreen(
                                 text = timerText(sess.elapsedDisplay),
                                 textAlign = TextAlign.Center,
                                 style = TextStyle(
-                                    color = Color(0xFFE8E4DF),
+                                    color = theme.composeTextColor(),
                                     fontSize = 96.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     fontFamily = TimerFontFamily,
@@ -383,30 +429,15 @@ private fun RunningScreenLandscape(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        val glassParams = rememberGlassParams(R.drawable.bg_forest)
+        val readability = rememberRunReadability()
+        val theme = readability.theme
 
-        // Background image
+        // Background image (full-bleed; per-region scrim handles legibility)
         Image(
             painter = painterResource(R.drawable.bg_forest),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
-        )
-
-        // Overlay gradient
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.05f),
-                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
-                            Color.Black.copy(alpha = glassParams.overlayOpacity / 2f),
-                            Color.Black.copy(alpha = glassParams.overlayOpacity + 0.08f),
-                        ),
-                    ),
-                ),
         )
 
         // Proportional scaling (reference: ~740dp tablet landscape)
@@ -425,7 +456,7 @@ private fun RunningScreenLandscape(
         }
 
         // 3-row layout: top (timer+metrics), middle (HUD+controls), bottom (buttons)
-        CompositionLocalProvider(LocalGlassParams provides glassParams) {
+        CompositionLocalProvider(LocalGlassParams provides readability.glass) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -486,7 +517,7 @@ private fun RunningScreenLandscape(
                                     text = timerText(sess.elapsedDisplay),
                                     textAlign = TextAlign.Center,
                                     style = TextStyle(
-                                        color = Color(0xFFE8E4DF),
+                                        color = theme.composeTextColor(),
                                         fontSize = timerFontSize,
                                         fontWeight = FontWeight.SemiBold,
                                         fontFamily = TimerFontFamily,
