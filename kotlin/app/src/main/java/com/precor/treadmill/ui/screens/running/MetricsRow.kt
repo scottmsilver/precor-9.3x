@@ -60,8 +60,9 @@ fun MetricsRow(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.Bottom,
         ) {
-            // Heart rate (only when HRM connected)
-            if (status.hrmConnected) {
+            // Heart rate — only when there's an actual reading (not merely "connected", which
+            // would otherwise show a bare "---" with no real HR behind it).
+            if (status.hrmConnected && status.heartRate > 0) {
                 HeartRateMetric(bpm = status.heartRate, scale = scale)
                 Spacer(Modifier.width((20 * scale).dp))
             }

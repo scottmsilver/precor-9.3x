@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useProgram } from '../state/useProgram';
 import { useTreadmillActions, showBounceMessage } from '../state/TreadmillContext';
 import { haptic } from '../utils/haptics';
+import { fmtDur } from '../utils/formatters';
 import ElevationProfile from './ElevationProfile';
 import MountainView from './MountainView';
 
@@ -113,15 +114,22 @@ export default function ProgramHUD(): React.ReactElement | null {
           }
         </div>
 
-        {/* Position counter */}
+        {/* Position counter + when the next step lands (absolute session-clock time, so it
+            pairs with the hero timer counting up toward it). */}
         {pgm.intervalCount > 1 && (
           <div style={{
             position: 'absolute', top: 8, right: 10,
             fontSize: 11, color: 'var(--text3)',
             background: 'rgba(30,29,27,0.6)', padding: '2px 8px', borderRadius: 4,
             pointerEvents: 'none',
+            display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
           }}>
-            {pgm.currentInterval + 1} of {pgm.intervalCount}
+            <span>{pgm.currentInterval + 1} of {pgm.intervalCount}</span>
+            {pgm.currentIv && !pgm.completed && (
+              <span style={{ fontSize: 10, opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>
+                {pgm.nextIv ? 'next' : 'finish'} {fmtDur(pgm.totalElapsed + pgm.ivRemaining)}
+              </span>
+            )}
           </div>
         )}
 

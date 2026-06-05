@@ -27,7 +27,9 @@ export default function HeartRate(): React.ReactElement | null {
     injectPulseStyle();
   }, []);
 
-  if (!status.hrmConnected) return null;
+  // Only show the cell when there's an actual reading — not merely "connected" (which would
+  // otherwise render a bare "---" with no real HR behind it).
+  if (!status.hrmConnected || status.heartRate <= 0) return null;
 
   const bpm = status.heartRate;
   const color = hrColor(bpm);
