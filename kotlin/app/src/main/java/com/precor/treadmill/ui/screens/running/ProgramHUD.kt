@@ -39,6 +39,7 @@ import com.precor.treadmill.ui.theme.LegibleGlassPanel
 import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.glassPanel
+import com.precor.treadmill.ui.util.fmtDur
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -241,9 +242,11 @@ fun ProgramHUD(
                 )
             }
 
-            // Position counter overlay (top-right)
+            // Position counter overlay (top-right): "X of N" + when the next step lands
+            // (absolute session-clock time, so it pairs with the hero timer counting up).
             if (pgm.intervalCount > 1) {
-                Box(
+                Column(
+                    horizontalAlignment = Alignment.End,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = 8.dp, end = 10.dp)
@@ -258,6 +261,14 @@ fun ProgramHUD(
                         color = LocalGlassParams.current.textColor,
                         style = TextStyle(fontSize = 11.sp),
                     )
+                    if (pgm.currentIv != null && !pgm.completed) {
+                        val nextLabel = if (pgm.nextIv == null) "finish" else "next"
+                        LegibleText(
+                            text = "$nextLabel ${fmtDur(pgm.totalElapsed + pgm.ivRemaining)}",
+                            color = LocalGlassParams.current.textColor.copy(alpha = 0.7f),
+                            style = TextStyle(fontSize = 10.sp, fontFeatureSettings = "tnum"),
+                        )
+                    }
                 }
             }
 
