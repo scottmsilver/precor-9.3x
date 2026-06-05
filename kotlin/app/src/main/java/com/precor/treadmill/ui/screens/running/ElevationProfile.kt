@@ -139,7 +139,7 @@ fun ElevationProfile(
                 AnnotatedString(labelText),
                 style = TextStyle(color = labelColor, fontSize = 9.sp, fontWeight = FontWeight.Medium),
             )
-            drawText(result, topLeft = Offset(cx(ML - TICK - 2) - result.size.width, cy(y) - result.size.height / 2f))
+            drawText(result, topLeft = Offset(cx(ML - TICK - 2) - result.size.width, cy(y) - result.size.height / 2f)) // legible-exempt: labelColor solved via legibleOn(panelBg), dimmed for hierarchy
         }
 
         // X-axis grid lines + ticks + labels
@@ -155,7 +155,7 @@ fun ElevationProfile(
                 AnnotatedString(label),
                 style = TextStyle(color = labelColor, fontSize = 9.sp, fontWeight = FontWeight.Medium),
             )
-            drawText(result, topLeft = Offset(cx(svgX) - result.size.width / 2f, cy(MT + H + TICK + 1)))
+            drawText(result, topLeft = Offset(cx(svgX) - result.size.width / 2f, cy(MT + H + TICK + 1))) // legible-exempt: labelColor solved via legibleOn(panelBg), dimmed for hierarchy
         }
 
         // Build staircase path

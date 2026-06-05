@@ -86,6 +86,33 @@ class EngineTest {
         assertEquals(0.0, t.scrimAlpha, 1e-9)
     }
 
+    @Test fun solveFreeTextEscalatesWhenChosenPolarityMissesTarget() {
+        // Mid-tone grey: charcoal naturally out-contrasts ivory, but charcoal alone still misses
+        // the HERO target. The old logic returned CHARCOAL with no scrim (washed-out timer); the
+        // solver must escalate so the final text + its scrim actually clears the target.
+        val bg = rgb(176, 176, 176)
+        val tint = rgb(16, 16, 18)
+        val target = 75.0
+        assertTrue("charcoal naturally wins here", abs(apcaLc(CHARCOAL, bg)) > abs(apcaLc(IVORY, bg)))
+        assertTrue("but charcoal alone misses target", abs(apcaLc(CHARCOAL, bg)) < target)
+        val (color, scrim) = solveFreeText(bg, tint, target)
+        val over = composite(bg, tint, scrim)
+        assertTrue("legible after its scrim, got ${abs(apcaLc(color, over))}", abs(apcaLc(color, over)) >= target - 1.0)
+    }
+
+    @Test fun solveFreeTextKeepsCharcoalGlassyOnBrightBg() {
+        // On a genuinely bright background charcoal clears on its own → no scrim (stays glassy).
+        val (color, scrim) = solveFreeText(rgb(235, 235, 230), rgb(16, 16, 18), 75.0)
+        assertEquals("charcoal chosen", CHARCOAL, color)
+        assertEquals("no scrim needed", 0.0, scrim, 1e-9)
+    }
+
+    @Test fun solveFreeTextUsesIvoryWithoutScrimOnDarkBg() {
+        val (color, scrim) = solveFreeText(rgb(20, 22, 20), rgb(16, 16, 18), 75.0)
+        assertEquals("ivory chosen", IVORY, color)
+        assertEquals("no scrim needed", 0.0, scrim, 1e-9)
+    }
+
     @Test fun ensureLegibleFixesLowContrastAccent() {
         val bg = rgb(100, 130, 120)        // greenish panel background
         val accent = rgb(107, 143, 139)    // muted grey-teal — nearly same luminance

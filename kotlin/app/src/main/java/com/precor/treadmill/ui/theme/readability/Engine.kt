@@ -124,6 +124,24 @@ fun ensureLegible(color: Rgb, bg: Rgb, targetLc: Double): Rgb {
     return best
 }
 
+/**
+ * Solve free-floating text drawn directly on the raw photo (e.g. the hero timer). Picks the
+ * polarity (ivory/charcoal) that reads best against [bg] and returns it with the minimal tint
+ * scrim ([scrimAlpha] 0 = none). Charcoal is kept scrim-free ONLY when it already clears
+ * [target] on its own (a genuinely bright background) — a darkening scrim can't help dark text.
+ * Otherwise we fall back to ivory + a darkening scrim, the reliable monotonic lever (more scrim
+ * -> darker bg -> ivory contrast only grows), so a mid-tone background can never leave the text
+ * below target with no scrim.
+ */
+fun solveFreeText(bg: Rgb, tint: Rgb, target: Double): Pair<Rgb, Double> {
+    // Keep charcoal scrim-free ONLY when it already clears the target on its own (a genuinely
+    // bright bg) — a darkening scrim can't help dark text. Otherwise fall back to ivory + a
+    // darkening scrim, the reliable monotonic lever, so a mid-tone bg can't leave text below target.
+    if (abs(apcaLc(CHARCOAL, bg)) >= target) return CHARCOAL to 0.0
+    val ivoryLc = abs(apcaLc(IVORY, bg))
+    return IVORY to (if (ivoryLc >= target) 0.0 else legibleTreatment(IVORY, bg, tint, target).scrimAlpha)
+}
+
 fun fitRegion(theme: Theme, region: RegionStats): RegionFit {
     val target = ROLE_TARGET_LC.getValue(region.role)
     var alpha = theme.baseScrimAlpha

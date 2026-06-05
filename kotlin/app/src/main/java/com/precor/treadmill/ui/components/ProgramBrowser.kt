@@ -1,12 +1,13 @@
 package com.precor.treadmill.ui.components
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalPrecorColors
 
 /**
@@ -36,12 +37,10 @@ fun ProgramBrowser(
     }
 
     Column(modifier = modifier) {
-        Text(
+        LegibleText(
             text = "MY WORKOUTS",
             color = colors.text3,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.3.sp,
+            style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp),
             modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp),
         )
         WorkoutList(
@@ -50,12 +49,10 @@ fun ProgramBrowser(
             onAfterLoad = onAfterLoad,
             onWorkoutDeleted = { historyListKey++ },
         )
-        Text(
+        LegibleText(
             text = "YOUR PROGRAMS",
             color = colors.text3,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.3.sp,
+            style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp),
             modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 8.dp),
         )
         HistoryList(

@@ -59,6 +59,7 @@ import com.precor.treadmill.ui.theme.readability.cropMapRect
 import com.precor.treadmill.ui.theme.readability.fitRegion
 import com.precor.treadmill.ui.theme.readability.Rgb
 import com.precor.treadmill.ui.theme.readability.legibleTreatment
+import com.precor.treadmill.ui.theme.readability.solveFreeText
 import com.precor.treadmill.ui.theme.readability.apcaLc
 import com.precor.treadmill.ui.theme.readability.CHARCOAL
 import com.precor.treadmill.ui.theme.readability.IVORY
@@ -120,24 +121,6 @@ private data class RunReadability(
     // over the timer-region background.
     val encouragementColor: Color,
 )
-
-/**
- * Solve free-floating text over the raw photo: pick the polarity (ivory/charcoal) with the most
- * natural contrast against [bg], and only add a tint scrim if neither polarity reaches [target].
- * Returns the chosen text color and the scrim alpha (0 = none needed).
- */
-private fun solveFreeText(bg: Rgb, tint: Rgb, target: Double): Pair<Rgb, Double> {
-    val ivoryLc = kotlin.math.abs(apcaLc(IVORY, bg))
-    val charcoalLc = kotlin.math.abs(apcaLc(CHARCOAL, bg))
-    // Always take the polarity with the most natural contrast. A darkening scrim only helps the
-    // LIGHT (ivory) choice — for dark (charcoal) text on a bright bg darkening would hurt, so use
-    // it as-is (already the strongest option there).
-    return if (charcoalLc >= ivoryLc) {
-        CHARCOAL to 0.0
-    } else {
-        IVORY to (if (ivoryLc >= target) 0.0 else legibleTreatment(IVORY, bg, tint, target).scrimAlpha)
-    }
-}
 
 /**
  * Sample the local background under each text block of the running layout, pick one

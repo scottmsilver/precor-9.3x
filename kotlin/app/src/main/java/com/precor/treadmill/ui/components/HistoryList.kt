@@ -17,6 +17,7 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.sp
 import com.precor.treadmill.data.remote.TreadmillApi
 import com.precor.treadmill.data.remote.models.HistoryEntry
 import com.precor.treadmill.data.remote.models.SaveWorkoutRequest
+import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalPrecorColors
 import com.precor.treadmill.ui.util.fmtDur
 import android.widget.Toast
@@ -121,12 +123,10 @@ fun HistoryList(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
+                LegibleText(
                     text = "RECENT PROGRAMS",
                     color = colors.text3,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.3.sp,
+                    style = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.3.sp),
                 )
             }
             Row(

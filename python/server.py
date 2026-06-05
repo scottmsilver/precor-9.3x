@@ -1167,6 +1167,7 @@ def _save_background_advice_cache() -> None:
 
 
 _background_advice_cache: dict = _load_background_advice_cache()
+_background_advice_lock = asyncio.Lock()  # serializes cache eviction + persist
 
 
 @app.post("/api/background/advise")
@@ -1196,13 +1197,18 @@ async def background_advise(req: BackgroundAdviseRequest):
     key = hashlib.sha256(image_bytes).hexdigest()
     if key in _background_advice_cache:
         return _background_advice_cache[key]
-    prior = program_engine.advise_background(image_bytes)
-    if len(_background_advice_cache) >= MAX_ADVICE_CACHE_ENTRIES:
-        # Drop the oldest entry (dicts preserve insertion order) to bound growth.
-        _background_advice_cache.pop(next(iter(_background_advice_cache)), None)
-    _background_advice_cache[key] = prior
-    _save_background_advice_cache()
-    return prior
+    # Offload the blocking Gemini call so the event loop keeps serving other requests.
+    prior = await asyncio.to_thread(program_engine.advise_background, image_bytes)
+    # Serialize the eviction + insert + persist so concurrent requests can't corrupt the
+    # bound or interleave file writes; double-check the key in case another request raced us.
+    async with _background_advice_lock:
+        if key not in _background_advice_cache:
+            if len(_background_advice_cache) >= MAX_ADVICE_CACHE_ENTRIES:
+                # Drop the oldest entry (dicts preserve insertion order) to bound growth.
+                _background_advice_cache.pop(next(iter(_background_advice_cache)), None)
+            _background_advice_cache[key] = prior
+            _save_background_advice_cache()
+        return _background_advice_cache[key]
 
 
 @app.post("/api/device-log")

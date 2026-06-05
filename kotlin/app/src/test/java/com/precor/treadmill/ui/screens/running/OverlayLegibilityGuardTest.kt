@@ -22,7 +22,10 @@ class OverlayLegibilityGuardTest {
     // Files whose text genuinely never sits on the photo (none today) would be listed here.
     private val exemptFiles = emptySet<String>()
 
-    private val rawText = Regex("""(^|[^A-Za-z])Text\(""") // `Text(` but not `LegibleText(`/`TextStyle(`
+    // `Text(`/`BasicText(`/`ClickableText(` (but not `LegibleText(`/`TextStyle(`) and canvas
+    // `drawText(` — every glyph-rendering primitive that paints over the photo. Adding any of
+    // these without `// legible-exempt: why` fails the build.
+    private val rawText = Regex("""(^|[^A-Za-z])(Text|BasicText|ClickableText)\(|\bdrawText\s*\(""")
     private val faintIvory = Regex("""Color\(0x(59|99)E8E4DF\)""")
     private val importLine = Regex("""^\s*import\s""")
 
@@ -42,6 +45,18 @@ class OverlayLegibilityGuardTest {
                 "`// legible-exempt: why`):\n${violations.joinToString("\n")}",
             violations.isEmpty(),
         )
+    }
+
+    @Test
+    fun guardFlagsTextRenderingEvasionsButNotLegibleWrappers() {
+        // The primitives that paint glyphs over the photo must all be caught...
+        for (s in listOf("Text(", "  Text(", "Row { Text(", "BasicText(", "ClickableText(", "drawText(", "drawText (")) {
+            assertTrue("should flag: $s", rawText.containsMatchIn(s))
+        }
+        // ...but the sanctioned wrapper and unrelated tokens must NOT be flagged.
+        for (s in listOf("LegibleText(", "TextStyle(", "TextMeasurer(", "val textColor =")) {
+            assertTrue("should NOT flag: $s", !rawText.containsMatchIn(s))
+        }
     }
 
     @Test

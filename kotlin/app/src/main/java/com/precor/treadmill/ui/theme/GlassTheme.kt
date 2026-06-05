@@ -273,10 +273,16 @@ fun LegibleText(
     targetLc: Double = 60.0,
     style: TextStyle = LocalTextStyle.current,
 ) {
-    // Background darkening is applied UNIFORMLY by the enclosing LegibleGlassPanel (consistent
-    // in x/y), which provides the effective background here. We only fall back to a per-element
-    // color nudge if that uniform panel still leaves this color short — no per-element scrim,
-    // which the eye would read as patchy.
+    // Off the photo (no PhotoSampler in scope — e.g. the lobby's solid background) the given
+    // color is a deliberate hierarchy choice (faint labels, exact alpha) and is left untouched.
+    // Over the photo we solve it: background darkening is applied UNIFORMLY by the enclosing
+    // LegibleGlassPanel (consistent in x/y), which provides the effective background here; we
+    // only fall back to a per-element color nudge if that uniform panel still leaves the color
+    // short — no per-element scrim, which the eye would read as patchy.
+    if (LocalPhotoSampler.current == null) {
+        Text(text = text, modifier = modifier, style = style.copy(color = color))
+        return
+    }
     val bg = LocalOverlayBackground.current
     Text(text = text, modifier = modifier, style = style.copy(color = color.legibleOn(bg, targetLc)))
 }
