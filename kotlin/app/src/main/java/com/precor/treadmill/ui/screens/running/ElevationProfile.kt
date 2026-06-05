@@ -12,6 +12,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LocalOverlayBackground
+import com.precor.treadmill.ui.theme.legibleOn
 import com.precor.treadmill.ui.viewmodel.ElevationSegment
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import kotlin.math.roundToInt
@@ -25,23 +27,6 @@ private const val MR = 4f   // margin right
 private const val MT = 4f   // margin top
 private const val MB = 18f  // margin bottom
 private const val TICK = 4f
-
-// Boosted for visibility over glass panels
-private val doneAreaColor = Color(0xFF6BC89B).copy(alpha = 0.35f)
-private val futureAreaColor = Color(0xFF6BC89B).copy(alpha = 0.15f)
-private val doneStrokeColor = Color(0xFF6BC89B).copy(alpha = 0.7f)
-private val futureStrokeColor = Color(0xFF6BC89B).copy(alpha = 0.30f)
-private val axisColor = Color(0xFFE8E4DF).copy(alpha = 0.35f)
-private val gridColor = Color(0xFFE8E4DF).copy(alpha = 0.20f)
-private val tickColor = Color(0xFFE8E4DF).copy(alpha = 0.40f)
-private val labelColor = Color(0xFFE8E4DF).copy(alpha = 0.65f)
-private val dotColor = Color(0xFF6BC89B)
-private val dotBorderColor = Color(0xFFE8E4DF)
-private val stepDotCompletedColor = Color(0xFF6BC89B).copy(alpha = 0.9f)
-private val stepDotCurrentColor = Color(0xFF6BC89B)
-private val stepDotCurrentGlowColor = Color(0xFF6BC89B).copy(alpha = 0.25f)
-private val stepDotFutureStrokeColor = Color(0xFFE8E4DF).copy(alpha = 0.45f)
-private val stepTrackColor = Color(0xFFE8E4DF).copy(alpha = 0.18f)
 
 private fun inclineY(inc: Float, yMax: Float): Float = MT + H - PAD - (inc / yMax) * (H - PAD * 2)
 
@@ -95,6 +80,28 @@ fun ElevationProfile(
     val pgm by viewModel.derivedProgram.collectAsState()
     val textMeasurer = rememberTextMeasurer()
 
+    // Graph colors run through the legibility guard against the panel background, then the
+    // intentional alphas are applied. Two bases (green accent, ivory chrome) keep the chart
+    // legible over whatever the panel sits on, without hand-picking per-photo values.
+    val panelBg = LocalOverlayBackground.current
+    val green = Color(0xFF6BC89B).legibleOn(panelBg, 60.0)
+    val ivory = Color(0xFFE8E4DF).legibleOn(panelBg, 60.0)
+    val doneAreaColor = green.copy(alpha = 0.35f)
+    val futureAreaColor = green.copy(alpha = 0.15f)
+    val doneStrokeColor = green.copy(alpha = 0.7f)
+    val futureStrokeColor = green.copy(alpha = 0.30f)
+    val axisColor = ivory.copy(alpha = 0.35f)
+    val gridColor = ivory.copy(alpha = 0.20f)
+    val tickColor = ivory.copy(alpha = 0.40f)
+    val labelColor = ivory.copy(alpha = 0.65f)
+    val dotColor = green
+    val dotBorderColor = ivory
+    val stepDotCompletedColor = green.copy(alpha = 0.9f)
+    val stepDotCurrentColor = green
+    val stepDotCurrentGlowColor = green.copy(alpha = 0.25f)
+    val stepDotFutureStrokeColor = ivory.copy(alpha = 0.45f)
+    val stepTrackColor = ivory.copy(alpha = 0.18f)
+
     val totalW = ML + W + MR
     val totalH = MT + H + MB
 
@@ -132,7 +139,7 @@ fun ElevationProfile(
                 AnnotatedString(labelText),
                 style = TextStyle(color = labelColor, fontSize = 9.sp, fontWeight = FontWeight.Medium),
             )
-            drawText(result, topLeft = Offset(cx(ML - TICK - 2) - result.size.width, cy(y) - result.size.height / 2f))
+            drawText(result, topLeft = Offset(cx(ML - TICK - 2) - result.size.width, cy(y) - result.size.height / 2f)) // legible-exempt: labelColor solved via legibleOn(panelBg), dimmed for hierarchy
         }
 
         // X-axis grid lines + ticks + labels
@@ -148,7 +155,7 @@ fun ElevationProfile(
                 AnnotatedString(label),
                 style = TextStyle(color = labelColor, fontSize = 9.sp, fontWeight = FontWeight.Medium),
             )
-            drawText(result, topLeft = Offset(cx(svgX) - result.size.width / 2f, cy(MT + H + TICK + 1)))
+            drawText(result, topLeft = Offset(cx(svgX) - result.size.width / 2f, cy(MT + H + TICK + 1))) // legible-exempt: labelColor solved via legibleOn(panelBg), dimmed for hierarchy
         }
 
         // Build staircase path

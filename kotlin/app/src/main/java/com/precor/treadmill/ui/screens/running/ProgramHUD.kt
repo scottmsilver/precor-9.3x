@@ -33,7 +33,10 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
+import com.precor.treadmill.ui.theme.LegibleGlassPanel
+import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalGlassParams
 import com.precor.treadmill.ui.theme.glassPanel
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
@@ -124,10 +127,14 @@ fun ProgramHUD(
             .fillMaxSize()
             .padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
+        LegibleGlassPanel(
+            accents = listOf(Color(0xFF6BC89B), Color(0xFFE8E4DF)),
+            modifier = Modifier.fillMaxSize(),
+            shape = RoundedCornerShape(16.dp),
+        ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .glassPanel(LocalGlassParams.current, RoundedCornerShape(16.dp))
                 .onGloballyPositioned { cardCoords = it }
                 .onSizeChanged { cardSize = it }
                 .pointerInput(pgm.running, pgm.intervalCount) {
@@ -246,10 +253,10 @@ fun ProgramHUD(
                         )
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 ) {
-                    Text(
+                    LegibleText(
                         text = "${pgm.currentInterval + 1} of ${pgm.intervalCount}",
-                        color = Color(0x59E8E4DF),
-                        fontSize = 11.sp,
+                        color = LocalGlassParams.current.textColor,
+                        style = TextStyle(fontSize = 11.sp),
                     )
                 }
             }
@@ -443,6 +450,7 @@ fun ProgramHUD(
                     }
                 }
             }
+        }
         }
     }
 }

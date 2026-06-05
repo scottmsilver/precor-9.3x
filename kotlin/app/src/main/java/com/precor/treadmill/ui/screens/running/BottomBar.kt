@@ -15,9 +15,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
-import com.precor.treadmill.ui.theme.LocalGlassParams
-import com.precor.treadmill.ui.theme.glassPanelTinted
+import com.precor.treadmill.ui.theme.LegibleGlassPanel
+import com.precor.treadmill.ui.theme.OpacityGroup
+import com.precor.treadmill.ui.theme.LocalOpacityGroup
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
 import com.precor.treadmill.ui.theme.touchFingerPad
 import com.precor.treadmill.ui.theme.touchThumbPad
 import com.precor.treadmill.ui.util.haptic
@@ -57,7 +61,8 @@ fun BottomBar(
             )
         }
 
-        // Action buttons
+        // Action buttons — grouped so they share one uniform opacity (consistent glass across the row)
+        CompositionLocalProvider(LocalOpacityGroup provides remember { OpacityGroup() }) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -65,67 +70,76 @@ fun BottomBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (pgm.paused) {
-                // Resume + Reset
-                Button(
-                    onClick = {
-                        viewModel.pauseProgram()
-                        haptic(context, 25)
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = Color.White,
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .weight(2f)
-                        .height(defaultHeight)
-                        .glassPanelTinted(LocalGlassParams.current, Color(0xFF6BC89B), shape = RoundedCornerShape(14.dp)),
-                ) {
-                    Text("Resume", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                }
-                Button(
-                    onClick = {
-                        viewModel.resetAll()
-                        haptic(context, longArrayOf(50, 30, 50))
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = Color(0xFFC45C52),
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(defaultHeight)
-                        .glassPanelTinted(LocalGlassParams.current, Color(0xFFC45C52), tintAlpha = 0.4f, shape = RoundedCornerShape(14.dp)),
-                ) {
-                    Text("Reset", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                }
+                // Resume (green) + Reset (red) — each button's brand color IS its scrim: the
+                // color's opacity is solved like any scrim so the white label clears APCA over
+                // the photo behind it, keeping the button solidly green/red as needed.
+                ActionButton(
+                    text = "Resume",
+                    brand = Color(0xFF6BC89B),
+                    onClick = { viewModel.pauseProgram(); haptic(context, 25) },
+                    fontSize = 17.sp,
+                    modifier = Modifier.weight(2f).height(defaultHeight),
+                )
+                ActionButton(
+                    text = "Reset",
+                    brand = Color(0xFFC45C52),
+                    onClick = { viewModel.resetAll(); haptic(context, longArrayOf(50, 30, 50)) },
+                    fontSize = 15.sp,
+                    modifier = Modifier.weight(1f).height(defaultHeight),
+                )
             } else {
                 // Stop button
-                Button(
-                    onClick = {
-                        if (isRunning) {
-                            viewModel.pauseProgram()
-                            haptic(context, longArrayOf(50, 30, 50))
-                        }
-                    },
+                ActionButton(
+                    text = "Stop",
+                    brand = Color(0xFFC45C52),
+                    onClick = { if (isRunning) { viewModel.pauseProgram(); haptic(context, longArrayOf(50, 30, 50)) } },
                     enabled = isRunning,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Transparent,
-                        contentColor = Color.White,
-                        disabledContainerColor = Color.Transparent,
-                        disabledContentColor = Color(0x59E8E4DF),
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(stopHeight)
-                        .alpha(if (isRunning) 1f else 0.4f)
-                        .glassPanelTinted(LocalGlassParams.current, Color(0xFFC45C52), shape = RoundedCornerShape(14.dp)),
-                ) {
-                    Text("Stop", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                }
+                    fontSize = 17.sp,
+                    modifier = Modifier.weight(1f).height(stopHeight),
+                )
             }
+        }
+        }
+    }
+}
+
+/**
+ * An action button whose brand color is its scrim: [LegibleGlassPanel] raises the color's
+ * opacity (the same APCA scrim math) until the white label clears over the photo behind it,
+ * so the button reads as a solid green/red surface — as solid as needed, no more.
+ */
+@Composable
+private fun ActionButton(
+    text: String,
+    brand: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    fontSize: TextUnit = 17.sp,
+) {
+    LegibleGlassPanel(
+        accents = listOf(Color.White),
+        scrimColor = brand,
+        modifier = modifier.alpha(if (enabled) 1f else 0.4f),
+        shape = RoundedCornerShape(14.dp),
+        targetLc = 60.0,
+        // Opacity is solved, not hand-set: the MAX of (white label clears APCA) and (the brand
+        // surface stands out from the photo by GLASS_SURFACE_LC). Glassy where it can be, firm
+        // where it must be — same model as every other glass surface.
+    ) {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.Transparent,
+                contentColor = Color.White,
+                disabledContainerColor = Color.Transparent,
+                disabledContentColor = Color.White.copy(alpha = 0.6f),
+            ),
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Text(text, fontSize = fontSize, fontWeight = FontWeight.SemiBold) // legible-exempt: inside LegibleGlassPanel (white label solved)
         }
     }
 }

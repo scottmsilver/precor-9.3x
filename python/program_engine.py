@@ -67,6 +67,82 @@ def get_client() -> genai.Client:
     return _client
 
 
+def _extract_json(text: str) -> str:
+    """Strip ```json fences (if present) and return the bare JSON text."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("```", 2)[1]
+        if t.startswith("json"):
+            t = t[4:]
+    return t.strip()
+
+
+# --- Background advisor (server-side Gemini prior for on-device readability) ---
+
+NEUTRAL_PRIOR = {
+    "palette_hue": None,
+    "suggested_polarity": "light",
+    "mood": "neutral",
+    "busy_zones": [],
+}
+
+
+def call_gemini_image(image_bytes: bytes):
+    """Single multimodal call. Separated so tests can patch it."""
+    client = get_client()
+    prompt = (
+        "You are tuning text overlays on this background photo. Respond ONLY with JSON: "
+        '{"palette_hue": <0-360 OKLCH hue the photo wants for tints>, '
+        '"suggested_polarity": "light"|"dark" (light=ivory text, dark=charcoal text), '
+        '"mood": "<short label like cool-forest>", '
+        '"busy_zones": [{"x":0-1,"y":0-1,"w":0-1,"h":0-1,"note":"..."}]}'
+    )
+    return client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[
+            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+            prompt,
+        ],
+        # Bound output so a prompt-injected image can't force large/expensive parsing.
+        config=types.GenerateContentConfig(max_output_tokens=512),
+    )
+
+
+def _sanitize_busy_zone(z: dict) -> dict:
+    """Keep only the expected fields, clamped, dropping any other model-supplied keys."""
+
+    def _coord(v):
+        return min(1.0, max(0.0, float(v))) if isinstance(v, (int, float)) else 0.0
+
+    note = z.get("note")
+    return {
+        "x": _coord(z.get("x")),
+        "y": _coord(z.get("y")),
+        "w": _coord(z.get("w")),
+        "h": _coord(z.get("h")),
+        "note": note[:60] if isinstance(note, str) else "",
+    }
+
+
+def advise_background(image_bytes: bytes) -> dict:
+    """Return an AdvicePrior dict. Never raises; degrades to NEUTRAL_PRIOR."""
+    try:
+        resp = call_gemini_image(image_bytes)
+        raw = json.loads(_extract_json(resp.text))
+    except Exception:
+        return dict(NEUTRAL_PRIOR)
+    out = dict(NEUTRAL_PRIOR)
+    if isinstance(raw.get("palette_hue"), (int, float)):
+        out["palette_hue"] = float(raw["palette_hue"])
+    if raw.get("suggested_polarity") in ("light", "dark"):
+        out["suggested_polarity"] = raw["suggested_polarity"]
+    if isinstance(raw.get("mood"), str):
+        out["mood"] = raw["mood"][:40]
+    if isinstance(raw.get("busy_zones"), list):
+        out["busy_zones"] = [_sanitize_busy_zone(z) for z in raw["busy_zones"] if isinstance(z, dict)][:6]
+    return out
+
+
 # Application-level limits (hardware supports wider ranges)
 MIN_SPEED = 0.5
 MAX_SPEED = 12.0

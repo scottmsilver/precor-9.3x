@@ -9,12 +9,39 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Text
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.precor.treadmill.ui.theme.readability.Rgb
+import com.precor.treadmill.ui.theme.readability.Theme as ReadTheme
+import com.precor.treadmill.ui.theme.readability.ensureLegible
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import com.precor.treadmill.ui.theme.readability.NormRect
+import com.precor.treadmill.ui.theme.readability.Role
+import com.precor.treadmill.ui.theme.readability.composite
+import com.precor.treadmill.ui.theme.readability.cropMapRect
+import com.precor.treadmill.ui.theme.readability.sampleRegionPixels
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import com.precor.treadmill.ui.theme.readability.legibleTreatment
+import com.precor.treadmill.ui.theme.readability.surfaceScrimAlpha
+import com.precor.treadmill.ui.theme.readability.GLASS_SURFACE_LC
 
 /**
  * Glass panel parameters derived from background image brightness.
@@ -26,6 +53,15 @@ data class GlassParams(
     val panelOpacity: Float = 0.34f,
     val borderOpacity: Float = 0.30f,
     val overlayOpacity: Float = 0.12f,
+    // Photo-derived scrim color (engine `Theme.tint`). Defaults to black so legacy
+    // callers behave exactly as before; the running screen overrides it.
+    val tint: Color = Color.Black,
+    // Engine-chosen text color (ivory/charcoal). Defaults to the app's ivory so legacy
+    // callers are unchanged; the running screen overrides it for readability-driven text.
+    val textColor: Color = Color(0xFFE8E4DF),
+    // Effective background color behind panel text (scrim composited over the photo).
+    // This is what accent colors must be checked against by ensureLegible / LegibleText.
+    val panelBg: Color = Color(0xFF101010),
 ) {
     companion object {
         val Default = GlassParams()
@@ -84,13 +120,176 @@ fun Modifier.glassPanel(
     shape: RoundedCornerShape = RoundedCornerShape(12.dp),
 ): Modifier {
     var m = this
-        .background(Color.Black.copy(alpha = params.panelOpacity), shape)
+        .background(params.tint.copy(alpha = params.panelOpacity), shape)
         .border(1.dp, Color.White.copy(alpha = params.borderOpacity), shape)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         m = m.blur(params.blur)
     }
     return m
 }
+
+fun ReadTheme.composeTextColor() =
+    Color(text.r.toInt().coerceIn(0,255), text.g.toInt().coerceIn(0,255), text.b.toInt().coerceIn(0,255))
+
+// --- Overlay-text legibility guard ------------------------------------------
+// Every piece of text drawn on top of the background photo should pass through
+// ensureLegible against the actual background behind it. LocalOverlayBackground
+// carries that background down the tree; LegibleText is the sanctioned way to
+// render overlay text so the APCA check cannot be forgotten.
+
+/** Effective background color behind overlay content at this point in the tree. */
+val LocalOverlayBackground = compositionLocalOf { Color(0xFF101010) }
+
+private fun Color.toReadRgb() = Rgb(red.toDouble() * 255, green.toDouble() * 255, blue.toDouble() * 255)
+private fun Rgb.toComposeColor() = Color(r.toInt().coerceIn(0, 255), g.toInt().coerceIn(0, 255), b.toInt().coerceIn(0, 255))
+
+/** Return this color adjusted (hue/chroma preserved) to clear [targetLc] APCA against [bg]. */
+fun Color.legibleOn(bg: Color, targetLc: Double = 60.0): Color =
+    ensureLegible(toReadRgb(), bg.toReadRgb(), targetLc).toComposeColor()
+
+/**
+ * Samples the *actual* background pixels behind a widget at its measured screen bounds
+ * (after ContentScale.Crop), composited with the panel scrim. This is what overlay
+ * colors are checked against, so legibility is measured against what's really rendered
+ * behind each element — not one screen-wide estimate.
+ */
+class PhotoSampler(
+    private val pixels: IntArray,
+    private val imgW: Int,
+    private val imgH: Int,
+    private val containerW: Float,
+    private val containerH: Float,
+) {
+    /** The RAW (un-scrimmed) average photo color behind [coords], or null if not measurable yet. */
+    fun bgAt(coords: LayoutCoordinates): Color? {
+        if (!coords.isAttached || containerW <= 0f || containerH <= 0f) return null
+        val r = coords.boundsInWindow()
+        if (r.width <= 0f || r.height <= 0f) return null
+        val rect = NormRect(
+            (r.left / containerW).toDouble(),
+            (r.top / containerH).toDouble(),
+            (r.width / containerW).toDouble(),
+            (r.height / containerH).toDouble(),
+        )
+        val mapped = cropMapRect(imgW, imgH, containerW, containerH, rect)
+        return sampleRegionPixels(pixels, imgW, imgH, mapped, "x", Role.BODY).avg.toComposeColor()
+    }
+}
+
+/**
+ * A glass panel that darkens itself UNIFORMLY (one scrim value, consistent across its whole
+ * area) just enough to make its [accents] clear [targetLc] APCA over the actual photo behind
+ * it — measured at the panel's real bounds via [LocalPhotoSampler]. Provides the resulting
+ * effective background + opacity to its [content] (via [LocalGlassParams]/[LocalOverlayBackground])
+ * so text inside is checked against the right background. This is the per-panel analog of the
+ * engine's region scrim: every panel on the photo gets its own consistent darkening.
+ */
+@Composable
+fun LegibleGlassPanel(
+    accents: List<Color>,
+    modifier: Modifier = Modifier,
+    shape: RoundedCornerShape = RoundedCornerShape(12.dp),
+    targetLc: Double = 70.0,
+    // The surface color. Defaults to the engine's dark tint (a neutral scrim); a colored
+    // button passes its OWN brand color, so "how opaque should the surface be" is solved by
+    // the SAME math as a scrim — raise the color's opacity until the accents clear APCA.
+    scrimColor: Color = LocalOverlayScrimTint.current,
+    // The one "glassiness" token: how much the surface must stand out from the photo around it.
+    // Lower = glassier. Opacity is the MAX of (text legibility need, this surface-contrast need)
+    // — no hand-picked opacity floor.
+    surfaceLc: Double = GLASS_SURFACE_LC,
+    maxOpacity: Float = 0.92f,
+    content: @Composable () -> Unit,
+) {
+    val sampler = LocalPhotoSampler.current
+    val base = LocalGlassParams.current
+    var rawBg by remember { mutableStateOf<Color?>(null) }
+    val scrimRgb = scrimColor.toReadRgb()
+    val ownAlpha: Float = run {
+        val b = rawBg ?: return@run base.panelOpacity.coerceAtMost(maxOpacity) // pre-measure fallback
+        val legibilityNeed = accents.maxOfOrNull { acc ->
+            legibleTreatment(acc.toReadRgb(), b.toReadRgb(), scrimRgb, targetLc).scrimAlpha
+        } ?: 0.0
+        val affordanceNeed = surfaceScrimAlpha(b.toReadRgb(), scrimRgb, surfaceLc, maxOpacity.toDouble())
+        maxOf(legibilityNeed, affordanceNeed).toFloat().coerceIn(0f, maxOpacity)
+    }
+    // If inside an opacity group (e.g. a button row), all members share the MAX need so they
+    // read uniformly; otherwise each panel is individually adaptive.
+    val group = LocalOpacityGroup.current
+    val key = remember { Any() }
+    DisposableEffect(group, ownAlpha) {
+        group?.report(key, ownAlpha)
+        onDispose { group?.release(key) }
+    }
+    val alpha = group?.maxAlpha() ?: ownAlpha
+    val effectiveBg = composite((rawBg ?: base.panelBg).toReadRgb(), scrimRgb, alpha.toDouble()).toComposeColor()
+    var m = modifier
+        .onGloballyPositioned { c -> sampler?.bgAt(c)?.let { if (it != rawBg) rawBg = it } }
+        .background(scrimColor.copy(alpha = alpha), shape)
+        .border(1.dp, Color.White.copy(alpha = base.borderOpacity), shape)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && base.blur.value > 0f) m = m.blur(base.blur)
+    androidx.compose.foundation.layout.Box(modifier = m) {
+        CompositionLocalProvider(
+            LocalOverlayBackground provides effectiveBg,
+            LocalGlassParams provides base.copy(panelOpacity = alpha, panelBg = effectiveBg),
+        ) { content() }
+    }
+}
+
+/** Per-screen photo sampler so overlay widgets can measure their own background. Null off the photo. */
+val LocalPhotoSampler = compositionLocalOf<PhotoSampler?> { null }
+
+/**
+ * Groups glass surfaces (e.g. the buttons in one row) so they share a UNIFORM opacity — each
+ * reports its own computed need and every member renders at the group max, so a row reads as
+ * one consistent material instead of mismatched per-element opacities. Null = individually adaptive.
+ */
+class OpacityGroup {
+    private val needs = mutableStateMapOf<Any, Float>()
+    fun report(key: Any, alpha: Float) { needs[key] = alpha }
+    fun release(key: Any) { needs.remove(key) }
+    fun maxAlpha(): Float? = needs.values.maxOrNull()
+}
+val LocalOpacityGroup = compositionLocalOf<OpacityGroup?> { null }
+
+/** The scrim color the local-darkening lever uses (the engine's photo-cohesive dark tint). */
+val LocalOverlayScrimTint = compositionLocalOf { Color(0xFF101010) }
+
+/**
+ * Text drawn on top of the background photo, guaranteed legible by a two-lever guard run
+ * against the actual pixels behind it (measured via [LocalPhotoSampler], falling back to
+ * [LocalOverlayBackground] until laid out):
+ *   1. darken the local background — a soft scrim of [LocalOverlayScrimTint] drawn behind
+ *      the text, only as strong as needed (zero when the color already passes), so accent
+ *      colors keep their true hue;
+ *   2. nudge the text color — only if even max scrim is not enough.
+ * Use this instead of a raw `Text` for any overlay text so the check can't be skipped.
+ */
+@Composable
+fun LegibleText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    targetLc: Double = 60.0,
+    style: TextStyle = LocalTextStyle.current,
+) {
+    // Off the photo (no PhotoSampler in scope — e.g. the lobby's solid background) the given
+    // color is a deliberate hierarchy choice (faint labels, exact alpha) and is left untouched.
+    // Over the photo we solve it: background darkening is applied UNIFORMLY by the enclosing
+    // LegibleGlassPanel (consistent in x/y), which provides the effective background here; we
+    // only fall back to a per-element color nudge if that uniform panel still leaves the color
+    // short — no per-element scrim, which the eye would read as patchy.
+    if (LocalPhotoSampler.current == null) {
+        Text(text = text, modifier = modifier, style = style.copy(color = color))
+        return
+    }
+    val bg = LocalOverlayBackground.current
+    Text(text = text, modifier = modifier, style = style.copy(color = color.legibleOn(bg, targetLc)))
+}
+
+/** The engine's photo-derived scrim tint as an opaque Compose color (alpha applied by the panel). */
+fun ReadTheme.composeTintColor() =
+    Color(tint.r.toInt().coerceIn(0,255), tint.g.toInt().coerceIn(0,255), tint.b.toInt().coerceIn(0,255))
 
 fun Modifier.glassPanelTinted(
     params: GlassParams,

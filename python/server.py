@@ -12,7 +12,9 @@ Usage:
 """
 
 import asyncio
+import base64
 import datetime
+import hashlib
 import json
 import logging
 import os
@@ -21,9 +23,10 @@ import subprocess
 import time
 from contextlib import asynccontextmanager
 
+import program_engine
 import uvicorn
 from db import DEFAULT_WEIGHT_LBS, GUEST_PROFILE_ID, TreadmillDB  # noqa: F401
-from fastapi import FastAPI, File, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -717,6 +720,11 @@ class ProxyRequest(BaseModel):
     enabled: bool
 
 
+class BackgroundAdviseRequest(BaseModel):
+    image_hash: str = Field(max_length=128)
+    image_b64: str | None = Field(default=None, max_length=8_000_000)
+
+
 class GenerateRequest(BaseModel):
     prompt: str = Field(max_length=5000)
 
@@ -1130,6 +1138,77 @@ async def get_config():
         "system_prompt": system_prompt,
         "smartass_addendum": SMARTASS_ADDENDUM,
     }
+
+
+_BACKGROUND_ADVICE_FILE = "background_advice.json"
+MAX_ADVISE_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB cap on untrusted base64 image
+# Reject oversized base64 by string length BEFORE allocating the decoded bytes.
+MAX_ADVISE_B64_LEN = (MAX_ADVISE_IMAGE_BYTES // 3 + 1) * 4 + 4
+MAX_ADVICE_CACHE_ENTRIES = 256  # bound on-disk cache growth (public endpoint)
+
+
+def _load_background_advice_cache() -> dict:
+    """Load the on-disk background-advice cache; tolerate missing/corrupt file."""
+    try:
+        with open(_BACKGROUND_ADVICE_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_background_advice_cache() -> None:
+    """Persist the background-advice cache to disk (best effort)."""
+    try:
+        with open(_BACKGROUND_ADVICE_FILE, "w") as f:
+            json.dump(_background_advice_cache, f)
+    except OSError:
+        log.warning("failed to persist background advice cache")
+
+
+_background_advice_cache: dict = _load_background_advice_cache()
+_background_advice_lock = asyncio.Lock()  # serializes cache eviction + persist
+
+
+@app.post("/api/background/advise")
+async def background_advise(req: BackgroundAdviseRequest):
+    """Return a cached Gemini overlay prior for a background image.
+
+    Writes are keyed by a server-computed SHA-256 of the actual image bytes, so a
+    client cannot poison an arbitrary hash with advice for unrelated bytes. To get
+    a cache hit on a later image-less request, the client must send
+    image_hash = sha256(image) (the same digest the server stores under). On a
+    miss with no image, the neutral prior is returned without caching. The base64
+    image is untrusted: capped by string length before decode and by byte length
+    after, validated, never shelled out, never logged. The on-disk cache is
+    bounded to MAX_ADVICE_CACHE_ENTRIES.
+    """
+    # Image-less request: read-only lookup by the client-supplied digest.
+    if not req.image_b64:
+        return _background_advice_cache.get(req.image_hash, program_engine.NEUTRAL_PRIOR)
+    if len(req.image_b64) > MAX_ADVISE_B64_LEN:
+        raise HTTPException(status_code=400, detail="image too large")
+    try:
+        image_bytes = base64.b64decode(req.image_b64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="image_b64 is not valid base64")
+    if len(image_bytes) > MAX_ADVISE_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="image too large")
+    key = hashlib.sha256(image_bytes).hexdigest()
+    if key in _background_advice_cache:
+        return _background_advice_cache[key]
+    # Offload the blocking Gemini call so the event loop keeps serving other requests.
+    prior = await asyncio.to_thread(program_engine.advise_background, image_bytes)
+    # Serialize the eviction + insert + persist so concurrent requests can't corrupt the
+    # bound or interleave file writes; double-check the key in case another request raced us.
+    async with _background_advice_lock:
+        if key not in _background_advice_cache:
+            if len(_background_advice_cache) >= MAX_ADVICE_CACHE_ENTRIES:
+                # Drop the oldest entry (dicts preserve insertion order) to bound growth.
+                _background_advice_cache.pop(next(iter(_background_advice_cache)), None)
+            _background_advice_cache[key] = prior
+            _save_background_advice_cache()
+        return _background_advice_cache[key]
 
 
 @app.post("/api/device-log")
@@ -2062,8 +2141,6 @@ async def api_tts(req: TTSRequest):
             config=config,
         )
         audio_data = resp.candidates[0].content.parts[0].inline_data.data
-        import base64
-
         audio_b64 = base64.b64encode(audio_data).decode("ascii")
         return {
             "ok": True,
