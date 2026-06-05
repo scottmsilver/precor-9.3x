@@ -18,8 +18,9 @@ Build produces hashed filenames in `static/assets/` (gitignored). `static/index.
 
 | Directory | Purpose |
 |-----------|---------|
-| `routes/` | Page components: `Lobby.tsx`, `Running.tsx`, `Debug.tsx` |
+| `routes/` | Page components: `Lobby.tsx`, `Running.tsx`, `Debug.tsx`, `BgLab.tsx` (`/bg-lab` readability tuning bench, dev-only) |
 | `components/` | Reusable UI components (ElevationProfile, buttons, etc.) |
+| `bglab/` | TS port of the adaptive-readability engine (APCA + theme solve); kept identical to the Kotlin port via `docs/bg-lab/golden.json`. See root CLAUDE.md "Adaptive Text Readability". |
 | `state/` | TreadmillContext + useReducer, API helpers, WebSocket |
 | `voice/` | `GeminiLiveClient.ts` (WebSocket), `useVoice.ts` (lifecycle hook) |
 | `styles/` | Global styles and CSS |

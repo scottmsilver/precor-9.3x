@@ -188,6 +188,15 @@ A Rust daemon (`rust/hrm/`) that acts as a BLE GATT client, scanning for and con
 
 `python/server.py` serves a React + TypeScript SPA (source in `web/`, builds to `static/`) with WebSocket for real-time KV data streaming and REST endpoints for speed/incline/mode control. Runs as a systemd service (`treadmill-server.service`).
 
+### Adaptive Text Readability (on-photo legibility)
+
+The running screen draws a full-bleed background photo; all text/widgets over it are made legible by an adaptive system rather than hand-tuned opacities. Design: [`docs/superpowers/specs/2026-06-03-adaptive-text-readability-design.md`](docs/superpowers/specs/2026-06-03-adaptive-text-readability-design.md).
+
+- **Pure engine** — APCA Lc contrast + a minimized "beauty cost" pick one coherent screen `Theme` (photo-derived tint + ivory/charcoal text + blur) plus per-region scrim. Implemented **twice** and kept numerically identical: `web/src/bglab/` (TS) and `kotlin/.../ui/theme/readability/` (Kotlin), both asserting against `docs/bg-lab/golden.json` golden vectors. APCA is the on-device guarantee.
+- **Compose bridge** (`kotlin/.../ui/theme/GlassTheme.kt`) — `LegibleGlassPanel` darkens each panel just enough for its accents to clear APCA over the real pixels behind it (`PhotoSampler`); `LegibleText` solves text color (photo-aware: passthrough off-photo, e.g. the Lobby); buttons solve their brand-color opacity *as a scrim* with the same math (`OpacityGroup` keeps a row uniform); the hero timer solves its own polarity (`solveFreeText`) and sits below a display cutout.
+- **Structural guard** — `OverlayLegibilityGuardTest` scans `screens/running/` and **fails the build** on raw `Text(`/`BasicText(`/`ClickableText(`/`drawText(` not routed through the system (or marked `// legible-exempt: why`), so on-photo text can't be added without the guarantee.
+- **Server advisor** — `POST /api/background/advise` returns a cached Gemini "prior" (palette hue / polarity / mood) that only *nudges* the engine; it is **non-authoritative** (APCA still decides). Tuning bench: web `/bg-lab` route (dev-only, not shipped to the treadmill).
+
 ### AI Coach — Gemini Integration
 
 `python/program_engine.py` handles Gemini API calls and interval program execution:
