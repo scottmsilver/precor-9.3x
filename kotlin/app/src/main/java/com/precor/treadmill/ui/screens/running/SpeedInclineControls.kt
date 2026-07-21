@@ -414,16 +414,27 @@ private fun ChevronFieldPanel(
         val bg = LocalOverlayBackground.current
         val restColor = Color(0xFFEEF4F1).legibleOn(bg, targetLc = 60.0)
         val pressColor = accentColor.legibleOn(bg, targetLc = 70.0)
+        val seamColor = Color.White.copy(alpha = 0.085f)
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
-                // --- fine halves (the big targets) ---
-                Column(modifier = Modifier.weight(0.74f).fillMaxHeight()) {
+                // --- fine halves (the big targets), 2/3 of the card ---
+                Column(modifier = Modifier.weight(2f).fillMaxHeight()) {
                     FieldZone(
                         delta = smallDelta, enabled = enabled, onAdjust = onAdjust,
                         isUp = true, isDouble = false, restColor = restColor, pressColor = pressColor,
                         description = "Increase $metricName by $smallAmount",
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
+                    // Midpoint indicator: a hairline with a CENTER GAP so it cues the
+                    // up/down boundary without striking through the value overlay.
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.weight(1f).height(1.dp).background(seamColor))
+                        Spacer(Modifier.width(112.dp))
+                        Box(Modifier.weight(1f).height(1.dp).background(seamColor))
+                    }
                     FieldZone(
                         delta = -smallDelta, enabled = enabled, onAdjust = onAdjust,
                         isUp = false, isDouble = false, restColor = restColor, pressColor = pressColor,
@@ -437,15 +448,24 @@ private fun ChevronFieldPanel(
                         .fillMaxHeight()
                         .width(1.dp)
                         .padding(vertical = 12.dp)
-                        .background(Color.White.copy(alpha = 0.085f)),
+                        .background(seamColor),
                 )
-                // --- coarse rail (explicit double-chevron buttons, full height) ---
-                Column(modifier = Modifier.weight(0.26f).fillMaxHeight()) {
+                // --- coarse rail (explicit double-chevron buttons), 1/3 of the card ---
+                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     FieldZone(
                         delta = largeDelta, enabled = enabled, onAdjust = onAdjust,
                         isUp = true, isDouble = true, restColor = restColor, pressColor = pressColor,
                         description = "Increase $metricName by $largeAmount",
                         modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                    // Midpoint indicator: nothing floats over the rail, so a simple
+                    // inset hairline marks the up/down boundary.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp)
+                            .height(1.dp)
+                            .background(seamColor),
                     )
                     FieldZone(
                         delta = -largeDelta, enabled = enabled, onAdjust = onAdjust,
@@ -460,7 +480,7 @@ private fun ChevronFieldPanel(
             // the 56sp line box + hanging unit label made the centered ink block sag
             // ~8px below the card midline (design review); this rebalances the gaps.
             Column(
-                modifier = Modifier.fillMaxHeight().fillMaxWidth(0.74f).offset(y = (-10).dp),
+                modifier = Modifier.fillMaxHeight().fillMaxWidth(0.667f).offset(y = (-10).dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
