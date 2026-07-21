@@ -206,7 +206,6 @@ fun RidgelineMap(
     markerPos: Double,
     modifier: Modifier = Modifier,
     metricsPillRect: Rect? = null,
-    nextPillRect: Rect? = null,
 ) {
     val measurer = rememberTextMeasurer()
 
@@ -245,7 +244,7 @@ fun RidgelineMap(
     Canvas(modifier = modifier) {
         drawRidgeline(
             route, markerPos, pulseR, pulseA, elevLo.toDouble(),
-            measurer, metricsPillRect, nextPillRect, overlayBg,
+            measurer, metricsPillRect, overlayBg,
         )
     }
 }
@@ -272,7 +271,6 @@ private fun DrawScope.drawRidgeline(
     elevLo: Double,
     measurer: TextMeasurer,
     metricsPillRect: Rect?,
-    nextPillRect: Rect?,
     overlayBg: Color,
 ) {
     val W = size.width
@@ -481,7 +479,6 @@ private fun DrawScope.drawRidgeline(
         Rect(it.left - pillMargin, it.top - pillMargin, it.right + pillMargin, it.bottom + pillMargin)
     }
     val metricsGuard = inflated(metricsPillRect)
-    val nextGuard = inflated(nextPillRect)
     val placedChipY = ArrayList<Float>()
     placedChipY.add(mPos.y)
     var i = route.idxAt(camLo)
@@ -520,8 +517,7 @@ private fun DrawScope.drawRidgeline(
                     right = max(cx + 4f, pillLeft + pillW),
                     bottom = pillTop + 24f,
                 )
-                val hitsPill = (metricsGuard?.overlaps(chipRect) == true) ||
-                    (nextGuard?.overlaps(chipRect) == true)
+                val hitsPill = metricsGuard?.overlaps(chipRect) == true
                 if (!hitsPill) {
                     placedChipY.add(pos.y)
                     drawRoundRectCompat(pillLeft, pillTop, pillW, 24f, 6f, RidgelineTheme.pillBg)
@@ -558,11 +554,9 @@ private fun DrawScope.drawRidgeline(
                 fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
             ),
         )
-        // Whole-route views end near the top edge, where the NEXT pill lives — if the
-        // right-pointing flag + label would tuck under it, mirror them to the left
-        // (same dodge idea as the grade chips).
-        val flagRect = Rect(fx - 2f, fy - 30f * dp, fx + 26f * dp + finishTl.size.width + 12f, fy + 24f)
-        val dir = if (nextGuard?.overlaps(flagRect) == true) -1f else 1f
+        // If the right-pointing flag + label would run off the map's drawable area
+        // (whole-route views end near the top-right), mirror them to the left.
+        val dir = if (fx + 26f * dp + finishTl.size.width + 12f > mapW) -1f else 1f
         drawLine(RidgelineTheme.fg, Offset(fx, fy), Offset(fx, fy - 30f * dp), strokeWidth = 2.5f)
         val flag = Path().apply {
             moveTo(fx, fy - 30f * dp)
@@ -596,7 +590,9 @@ private fun DrawScope.drawRidgeline(
         // Start the strip BELOW the top-right NEXT pill (it shares the right edge), so the two
         // don't overlap; fall back to topY when the pill isn't measured yet. The finish flag's pole
         // is drawn ~17px ABOVE mTop, so add that clearance too or the flag tucks under the pill.
-        val mTop = nextPillRect?.let { (it.bottom + 10f * dp + 18f).toFloat() } ?: topY
+        // With the NEXT pill gone the strip owns the full right edge (the finish
+        // flag's pole extends ~17px above mTop; topY leaves room for it).
+        val mTop = topY
         val mBot = botY
         val mW = stripW
         // Full-route overview in the position domain (whole program, start → finish).
@@ -673,6 +669,51 @@ private fun DrawScope.drawRidgeline(
         }
         drawPath(miniFlag, RidgelineTheme.elev)
         drawCircle(RidgelineTheme.elev, radius = 4.5f, center = Offset(mx, ftY))
+        // --- last/next transition ticks (replaces the NEXT pill) ---
+        // The boundary you just crossed (dim) and the one coming up (accent), each
+        // labeled with its program time to the left of the strip, so "where am I
+        // between transitions" reads at a glance.
+        run {
+            val curIvIdx = route.idxAt(md)
+            val lastB = route.startOf(curIvIdx)
+            val nextB = route.endOf(curIvIdx)
+            fun transitionTick(pos: Double, isNext: Boolean) {
+                val y = yOf(pos)
+                val color = if (isNext) RidgelineTheme.accent else RidgelineTheme.dim
+                drawLine(
+                    color,
+                    Offset(mx - mW / 2f - 5f, y),
+                    Offset(mx + mW / 2f + 5f, y),
+                    strokeWidth = if (isNext) 2f else 1.5f,
+                    alpha = if (isNext) 1f else 0.7f,
+                )
+                val tl = measurer.measure(
+                    ridgelineFmtTime(pos),
+                    style = TextStyle(
+                        color = color.legibleOn(overlayBg, targetLc = if (isNext) 60.0 else 45.0),
+                        fontFamily = RidgelineMonoFamily,
+                        fontSize = 11.sp,
+                        fontWeight = if (isNext) FontWeight.SemiBold else FontWeight.Normal,
+                        fontFeatureSettings = "tnum",
+                    ),
+                )
+                // coerceAtLeast/AtMost (not coerceIn): an inverted range on a degenerate
+                // tiny canvas must clamp, not throw (codex review).
+                val labelY = (y - tl.size.height / 2f)
+                    .coerceAtMost(mBot - tl.size.height).coerceAtLeast(mTop)
+                drawText( // legible-exempt: solved via legibleOn over the photo
+                    tl,
+                    topLeft = Offset(mx - mW / 2f - 10f - tl.size.width, labelY),
+                )
+            }
+            val lastVisible = lastB > 0.5                    // start already labeled 0:00
+            val nextVisible = nextB < route.total - 0.5      // finish has its own flag
+            // If both would collide (short interval), keep the upcoming one.
+            val collide = lastVisible && nextVisible &&
+                kotlin.math.abs(yOf(lastB) - yOf(nextB)) < 16f
+            if (lastVisible && !collide) transitionTick(lastB, isNext = false)
+            if (nextVisible) transitionTick(nextB, isNext = true)
+        }
         // current-position marker
         drawCircle(RidgelineTheme.bg, radius = 7f, center = Offset(mx, yOf(md)))
         drawCircle(RidgelineTheme.accent, radius = 5f, center = Offset(mx, yOf(md)))
