@@ -65,26 +65,47 @@ fun SpeedInclineControls(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             val panelModifier = if (fillHeight) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth()
-            ControlPanel(
-                value = (status.emuSpeed / 10.0).let { "%.1f".format(it) },
-                label = "mph",
-                accentColor = Color(0xFF6BC89B),
-                smallDelta = 1.0, largeDelta = 10.0,
-                enabled = status.treadmillConnected,
-                onAdjust = { speedAdjust(it.toInt()) },
-                fillHeight = fillHeight,
-                modifier = panelModifier,
-            )
-            ControlPanel(
-                value = formatIncline(status.emuIncline),
-                label = "% incline",
-                accentColor = Color(0xFFA69882),
-                smallDelta = 0.5, largeDelta = 1.0,
-                enabled = status.treadmillConnected,
-                onAdjust = inclineAdjust,
-                fillHeight = fillHeight,
-                modifier = panelModifier,
-            )
+            if (fillHeight) {
+                // HUD rail: "chevron field" steppers — the whole card is button surface
+                // (big fine halves + full-height coarse rail), value text overlaid.
+                ChevronFieldPanel(
+                    value = (status.emuSpeed / 10.0).let { "%.1f".format(it) },
+                    label = "mph",
+                    accentColor = Color(0xFF6BC89B),
+                    smallDelta = 1.0, largeDelta = 10.0,
+                    enabled = status.treadmillConnected,
+                    onAdjust = { speedAdjust(it.toInt()) },
+                    modifier = panelModifier,
+                )
+                ChevronFieldPanel(
+                    value = formatIncline(status.emuIncline),
+                    label = "% incline",
+                    accentColor = Color(0xFFA69882),
+                    smallDelta = 0.5, largeDelta = 1.0,
+                    enabled = status.treadmillConnected,
+                    onAdjust = inclineAdjust,
+                    modifier = panelModifier,
+                )
+            } else {
+                ControlPanel(
+                    value = (status.emuSpeed / 10.0).let { "%.1f".format(it) },
+                    label = "mph",
+                    accentColor = Color(0xFF6BC89B),
+                    smallDelta = 1.0, largeDelta = 10.0,
+                    enabled = status.treadmillConnected,
+                    onAdjust = { speedAdjust(it.toInt()) },
+                    modifier = panelModifier,
+                )
+                ControlPanel(
+                    value = formatIncline(status.emuIncline),
+                    label = "% incline",
+                    accentColor = Color(0xFFA69882),
+                    smallDelta = 0.5, largeDelta = 1.0,
+                    enabled = status.treadmillConnected,
+                    onAdjust = inclineAdjust,
+                    modifier = panelModifier,
+                )
+            }
         }
     } else {
         Row(
@@ -352,6 +373,212 @@ private fun RepeatButton(
                     }
                 }
                 drawPath(path, chevronColor, style = stroke)
+            }
+        }
+    }
+}
+
+/**
+ * "Chevron field" stepper for the HUD rail: the entire card is button surface.
+ * Layout — big FINE halves on the left ~74% (tap top = up, bottom = down; each half
+ * IS a giant ghosted chevron), and a full-height COARSE rail on the right ~26%
+ * (double chevrons). The value text floats over the fine zone and ignores touches.
+ * Press states light the pressed glyph and flood the zone with a faint accent tint.
+ * Same hold-to-repeat physics as [RepeatButton] (400ms, then 150ms, 75ms after 5).
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun ChevronFieldPanel(
+    value: String,
+    label: String,
+    accentColor: Color,
+    smallDelta: Double,
+    largeDelta: Double,
+    enabled: Boolean,
+    onAdjust: (Double) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val metricName = if (label.contains("incline", ignoreCase = true)) "incline" else "speed"
+    val smallAmount = if (metricName == "speed") "%.1f mph".format(smallDelta / 10.0) else "%.1f%%".format(smallDelta)
+    val largeAmount = if (metricName == "speed") "%.1f mph".format(largeDelta / 10.0) else "%.1f%%".format(largeDelta)
+
+    LegibleGlassPanel(
+        accents = listOf(accentColor),
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        // Chevron strokes are widgets on the photo — run them through the APCA guard.
+        val chevronColor = accentColor.legibleOn(LocalOverlayBackground.current, targetLc = 70.0)
+        Box(modifier = Modifier.fillMaxSize()) {
+            Row(modifier = Modifier.fillMaxSize()) {
+                // --- fine halves (the big targets) ---
+                Column(modifier = Modifier.weight(0.74f).fillMaxHeight()) {
+                    FieldZone(
+                        delta = smallDelta, enabled = enabled, onAdjust = onAdjust,
+                        isUp = true, isDouble = false, color = chevronColor,
+                        description = "Increase $metricName by $smallAmount",
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                    FieldZone(
+                        delta = -smallDelta, enabled = enabled, onAdjust = onAdjust,
+                        isUp = false, isDouble = false, color = chevronColor,
+                        description = "Decrease $metricName by $smallAmount",
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                }
+                // seam between fine and coarse
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .padding(vertical = 12.dp)
+                        .background(Color.White.copy(alpha = 0.085f)),
+                )
+                // --- coarse rail (explicit double-chevron buttons, full height) ---
+                Column(modifier = Modifier.weight(0.26f).fillMaxHeight()) {
+                    FieldZone(
+                        delta = largeDelta, enabled = enabled, onAdjust = onAdjust,
+                        isUp = true, isDouble = true, color = chevronColor,
+                        description = "Increase $metricName by $largeAmount",
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                    FieldZone(
+                        delta = -largeDelta, enabled = enabled, onAdjust = onAdjust,
+                        isUp = false, isDouble = true, color = chevronColor,
+                        description = "Decrease $metricName by $largeAmount",
+                        modifier = Modifier.weight(1f).fillMaxWidth(),
+                    )
+                }
+            }
+            // --- value overlay: floats over the FINE zone only; no pointer modifiers,
+            // so touches pass straight through to the zones underneath. ---
+            Column(
+                modifier = Modifier.fillMaxHeight().fillMaxWidth(0.74f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                LegibleText(
+                    text = value,
+                    color = accentColor,
+                    targetLc = 70.0,
+                    style = TextStyle(
+                        // Display face, not the mono — the mono's full-cell decimal reads
+                        // as "0 . 0" at this size (same reasoning as the map chips).
+                        fontFamily = RidgelineLabelFamily,
+                        fontSize = 56.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                        fontFeatureSettings = "tnum",
+                        shadow = androidx.compose.ui.graphics.Shadow(
+                            color = Color.Black.copy(alpha = 0.55f),
+                            blurRadius = 18f,
+                        ),
+                    ),
+                )
+                LegibleText(
+                    text = label,
+                    color = LocalGlassParams.current.textColor,
+                    style = TextStyle(fontSize = 13.sp, fontFamily = RidgelineLabelFamily),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One pressable zone of the chevron field. The glyph is the affordance: ghosted at
+ * rest (fine 14% / coarse 30%), lit to 60% while held, with a faint accent flood on
+ * the whole zone. Hold-to-repeat matches [RepeatButton].
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun FieldZone(
+    delta: Double,
+    enabled: Boolean,
+    onAdjust: (Double) -> Unit,
+    isUp: Boolean,
+    isDouble: Boolean,
+    color: Color,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    var pressed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(pressed) {
+        if (!pressed || !enabled) return@LaunchedEffect
+        onAdjust(delta)
+        delay(400)
+        var count = 0
+        while (pressed) {
+            onAdjust(delta)
+            count++
+            delay(if (count > 5) 75 else 150)
+        }
+    }
+
+    val glyphAlpha by animateFloatAsState(
+        targetValue = if (pressed) 0.60f else if (isDouble) 0.30f else 0.14f,
+        animationSpec = tween(120),
+        label = "chev-glyph",
+    )
+    val floodAlpha by animateFloatAsState(
+        targetValue = if (pressed) 0.10f else 0f,
+        animationSpec = tween(120),
+        label = "chev-flood",
+    )
+
+    Box(
+        modifier = modifier
+            .semantics { contentDescription = description }
+            .background(if (isDouble) Color.White.copy(alpha = 0.03f) else Color.Transparent)
+            .background(color.copy(alpha = floodAlpha))
+            .pointerInteropFilter { event ->
+                if (!enabled) return@pointerInteropFilter false
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> { pressed = true; true }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { pressed = false; true }
+                    else -> false
+                }
+            },
+        contentAlignment = when {
+            isDouble -> Alignment.Center
+            isUp -> Alignment.TopCenter
+            else -> Alignment.BottomCenter
+        },
+    ) {
+        if (isDouble) {
+            // coarse: compact double chevron, centered in its half
+            Canvas(modifier = Modifier.size(30.dp, 30.dp)) {
+                val w = size.width; val h = size.height
+                val sw = w * 0.13f
+                val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val inset = sw / 2
+                val amp = h * 0.32f; val gap = h * 0.18f
+                val topY = (h - (amp * 2 + gap)) / 2
+                fun chev(y0: Float) = Path().apply {
+                    if (isUp) { moveTo(inset, y0 + amp); lineTo(w / 2, y0); lineTo(w - inset, y0 + amp) }
+                    else { moveTo(inset, y0); lineTo(w / 2, y0 + amp); lineTo(w - inset, y0) }
+                }
+                drawPath(chev(topY), color, alpha = glyphAlpha, style = stroke)
+                drawPath(chev(topY + amp + gap), color, alpha = glyphAlpha, style = stroke)
+            }
+        } else {
+            // fine: the half IS a giant ghosted chevron, biased toward its outer edge
+            Canvas(
+                modifier = Modifier
+                    .padding(top = if (isUp) 10.dp else 0.dp, bottom = if (isUp) 0.dp else 10.dp)
+                    .fillMaxWidth(0.66f)
+                    .aspectRatio(150f / 72f),
+            ) {
+                val w = size.width; val h = size.height
+                val sw = h * 0.13f
+                val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val inset = sw / 2 + w * 0.04f
+                val path = Path().apply {
+                    if (isUp) { moveTo(inset, h * 0.82f); lineTo(w / 2, h * 0.18f); lineTo(w - inset, h * 0.82f) }
+                    else { moveTo(inset, h * 0.18f); lineTo(w / 2, h * 0.82f); lineTo(w - inset, h * 0.18f) }
+                }
+                drawPath(path, color, alpha = glyphAlpha, style = stroke)
             }
         }
     }
