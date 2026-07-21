@@ -190,6 +190,9 @@ private const val POS_WINDOW = 1500.0
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
+// Throttle key for the path-vs-chip alignment validation log (draws run per frame).
+private var lastAlignmentLogKey: Int = 0
+
 /**
  * The Ridgeline route map: program-progress-vs-switchback plot. Vertical axis = route
  * position (planned program seconds — so the dot climbs steadily and every bend is an
@@ -408,11 +411,18 @@ private fun DrawScope.drawRidgeline(
         if (bp > camLo && bp < min(camHi, route.total)) samplePos.add(bp)
     }
     samplePos.sort()
+    // Validation capture: the EXACT point the path polyline uses at each interval
+    // boundary, compared against the chip anchors afterwards (logged once per route/size).
+    val boundarySet = HashSet<Double>().also {
+        for (b in 1 until route.count) it.add(route.startOf(b))
+    }
+    val boundaryPathPts = HashMap<Double, Offset>()
     data class Seg(val key: String, val trav: Boolean, val g: Double, val pts: MutableList<Offset>)
     val segs = ArrayList<Seg>()
     var curS: Seg? = null
     for (d in samplePos) {
         val p = Offset(worldX(d), screenY(d))
+        if (d in boundarySet) boundaryPathPts[d] = p
         val trav = d <= md
         val g = route.gradeAt(d)
         val key = if (trav) "T" else "G" + Math.round(g)
@@ -497,6 +507,8 @@ private fun DrawScope.drawRidgeline(
     // sides are blocked.
     val placedChipRects = ArrayList<Rect>()
     placedChipRects.add(Rect(mPos.x - 20f, mPos.y - 20f, mPos.x + 20f, mPos.y + 20f))
+    // (boundary sec, anchor point drawn, grade) for the path-vs-chip validation log.
+    val chipAnchors = ArrayList<Triple<Double, Offset, Double>>()
     var i = route.idxAt(camLo)
     var chipCount = 0
     while (chipCount < 40 && i < route.count) {
@@ -511,7 +523,7 @@ private fun DrawScope.drawRidgeline(
                 // shows BOTH values of the transition — incline and speed — each in its
                 // theme color, solved against the photo+scrim so it stays legible.
                 val gradeTl = measurer.measure(
-                    "${Math.round(route.gradeIdx(i))}%",
+                    "%.1f%%".format(route.gradeIdx(i)),
                     style = TextStyle(
                         color = color.legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineMonoFamily,
@@ -533,10 +545,11 @@ private fun DrawScope.drawRidgeline(
                 fun chipRectFor(side: Int): Rect {
                     val cx0 = pos.x + side * 22f
                     val pl = if (side < 0) cx0 - pillW else cx0
+                    // Extent covers the anchor dot AT THE BEND (pos.x) plus the pill.
                     return Rect(
-                        left = min(cx0 - 4f, pl),
+                        left = min(pos.x - 5f, pl),
                         top = pillTop,
-                        right = max(cx0 + 4f, pl + pillW),
+                        right = max(pos.x + 5f, pl + pillW),
                         bottom = pillTop + 24f,
                     )
                 }
@@ -564,7 +577,11 @@ private fun DrawScope.drawRidgeline(
                         cornerRadius = androidx.compose.ui.geometry.CornerRadius(6f, 6f),
                         style = Stroke(width = 1f),
                     )
-                    drawCircle(color, radius = 4f, center = Offset(cx, pos.y))
+                    // Anchor dot sits EXACTLY on the bend (pos = the boundary's path
+                    // point) — not offset toward the pill, which visually parked it on
+                    // whichever segment happened to pass 22px to the side.
+                    drawCircle(color, radius = 4f, center = pos)
+                    chipAnchors.add(Triple(bs, pos, route.gradeIdx(i)))
                     drawText( // legible-exempt: solved via legibleOn over the photo
                         gradeTl,
                         topLeft = Offset(pillLeft + 7f, pos.y - gradeTl.size.height / 2f),
@@ -577,6 +594,30 @@ private fun DrawScope.drawRidgeline(
             }
         }
         i++; chipCount++
+    }
+
+    // --- path-vs-chip alignment validation (adb logcat -s RidgelineSync) ---
+    // Proves the invariant the chips rely on: the anchor dot is drawn at the SAME
+    // point the path polyline passes through at that boundary. Logged once per
+    // route/canvas-size combination (the draw pass runs every frame).
+    run {
+        val key = 31 * route.hashCode() + 31 * size.width.toInt() + size.height.toInt()
+        if (key != lastAlignmentLogKey && chipAnchors.isNotEmpty()) {
+            lastAlignmentLogKey = key
+            for ((bpos, anchor, grade) in chipAnchors) {
+                val pathPt = boundaryPathPts[bpos]
+                val dx = pathPt?.let { kotlin.math.abs(it.x - anchor.x) } ?: Float.NaN
+                val dy = pathPt?.let { kotlin.math.abs(it.y - anchor.y) } ?: Float.NaN
+                val ok = pathPt != null && dx < 0.5f && dy < 0.5f
+                android.util.Log.d(
+                    "RidgelineSync",
+                    "chip@%.0fs (%.1f%%): path=(%.1f,%.1f) dot=(%.1f,%.1f) d=(%.2f,%.2f) %s".format(
+                        bpos, grade, pathPt?.x ?: Float.NaN, pathPt?.y ?: Float.NaN,
+                        anchor.x, anchor.y, dx, dy, if (ok) "ALIGNED" else "MISALIGNED",
+                    ),
+                )
+            }
+        }
     }
 
     // --- finish flag (if within window) ---
@@ -759,7 +800,7 @@ private fun DrawScope.drawRidgeline(
                 val ng = route.gradeIdx(ni)
                 val ns = route.speedIdx(ni)
                 val gradeTl = measurer.measure(
-                    "${Math.round(ng)}%",
+                    "%.1f%%".format(ng),
                     style = TextStyle(
                         color = RidgelineTheme.gradeColor(ng).legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineMonoFamily,
