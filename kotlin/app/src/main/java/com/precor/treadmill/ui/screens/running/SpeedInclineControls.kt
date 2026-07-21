@@ -378,9 +378,10 @@ private fun RepeatButton(
 
 /**
  * "Chevron field" stepper for the HUD rail: the entire card is button surface.
- * Layout — big FINE halves on the left ~74% (tap top = up, bottom = down; each half
- * IS a giant ghosted chevron), and a full-height COARSE rail on the right ~26%
- * (double chevrons). The value text floats over the fine zone and ignores touches.
+ * Layout — full-height COARSE rail (double chevrons) on the INSIDE third (left,
+ * toward the map), big FINE halves on the OUTSIDE two-thirds (screen edge, where
+ * the thumb lands; tap top = up, bottom = down; each half IS a giant ghosted
+ * chevron). The value text floats over the fine zone and ignores touches.
  * Press states light the pressed glyph and flood the zone with a faint accent tint.
  * Same hold-to-repeat physics as [RepeatButton] (400ms, then 150ms, 75ms after 5).
  */
