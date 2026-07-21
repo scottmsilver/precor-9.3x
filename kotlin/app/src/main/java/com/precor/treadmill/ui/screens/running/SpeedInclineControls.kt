@@ -1,6 +1,7 @@
 package com.precor.treadmill.ui.screens.running
 
 import android.view.MotionEvent
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -407,21 +408,25 @@ private fun ChevronFieldPanel(
         modifier = modifier,
         shape = RoundedCornerShape(16.dp),
     ) {
-        // Chevron strokes are widgets on the photo — run them through the APCA guard.
-        val chevronColor = accentColor.legibleOn(LocalOverlayBackground.current, targetLc = 70.0)
+        // Rest-state glyphs are NEUTRAL ivory on both cards (one material across the
+        // rail); the metric's accent appears only on press (lit glyph + flood).
+        // Both run through the APCA guard — they're widgets on the photo.
+        val bg = LocalOverlayBackground.current
+        val restColor = Color(0xFFEEF4F1).legibleOn(bg, targetLc = 60.0)
+        val pressColor = accentColor.legibleOn(bg, targetLc = 70.0)
         Box(modifier = Modifier.fillMaxSize()) {
             Row(modifier = Modifier.fillMaxSize()) {
                 // --- fine halves (the big targets) ---
                 Column(modifier = Modifier.weight(0.74f).fillMaxHeight()) {
                     FieldZone(
                         delta = smallDelta, enabled = enabled, onAdjust = onAdjust,
-                        isUp = true, isDouble = false, color = chevronColor,
+                        isUp = true, isDouble = false, restColor = restColor, pressColor = pressColor,
                         description = "Increase $metricName by $smallAmount",
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                     FieldZone(
                         delta = -smallDelta, enabled = enabled, onAdjust = onAdjust,
-                        isUp = false, isDouble = false, color = chevronColor,
+                        isUp = false, isDouble = false, restColor = restColor, pressColor = pressColor,
                         description = "Decrease $metricName by $smallAmount",
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
@@ -438,13 +443,13 @@ private fun ChevronFieldPanel(
                 Column(modifier = Modifier.weight(0.26f).fillMaxHeight()) {
                     FieldZone(
                         delta = largeDelta, enabled = enabled, onAdjust = onAdjust,
-                        isUp = true, isDouble = true, color = chevronColor,
+                        isUp = true, isDouble = true, restColor = restColor, pressColor = pressColor,
                         description = "Increase $metricName by $largeAmount",
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
                     FieldZone(
                         delta = -largeDelta, enabled = enabled, onAdjust = onAdjust,
-                        isUp = false, isDouble = true, color = chevronColor,
+                        isUp = false, isDouble = true, restColor = restColor, pressColor = pressColor,
                         description = "Decrease $metricName by $largeAmount",
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                     )
@@ -486,9 +491,12 @@ private fun ChevronFieldPanel(
 }
 
 /**
- * One pressable zone of the chevron field. The glyph is the affordance: ghosted at
- * rest (fine 14% / coarse 30%), lit to 60% while held, with a faint accent flood on
- * the whole zone. Hold-to-repeat matches [RepeatButton].
+ * One pressable zone of the chevron field. The glyph is the affordance: neutral ivory
+ * ghost at rest (fine 24% / coarse 32% — tuned for photo-glass, not black glass), lit
+ * in the metric's accent at 80% while held, with a faint accent flood on the zone.
+ * Geometry per design review: one stroke family (12.5% of glyph height), ~100° apexes,
+ * butt caps on the big glyph (round caps left 6dp blobs), fine glyph sized by HEIGHT
+ * (40% of the half) so it never crowds the value. Hold-to-repeat matches [RepeatButton].
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -498,7 +506,8 @@ private fun FieldZone(
     onAdjust: (Double) -> Unit,
     isUp: Boolean,
     isDouble: Boolean,
-    color: Color,
+    restColor: Color,
+    pressColor: Color,
     description: String,
     modifier: Modifier = Modifier,
 ) {
@@ -517,9 +526,14 @@ private fun FieldZone(
     }
 
     val glyphAlpha by animateFloatAsState(
-        targetValue = if (pressed) 0.60f else if (isDouble) 0.30f else 0.14f,
+        targetValue = if (pressed) 0.80f else if (isDouble) 0.32f else 0.24f,
         animationSpec = tween(120),
         label = "chev-glyph",
+    )
+    val glyphColor by animateColorAsState(
+        targetValue = if (pressed) pressColor else restColor,
+        animationSpec = tween(120),
+        label = "chev-color",
     )
     val floodAlpha by animateFloatAsState(
         targetValue = if (pressed) 0.10f else 0f,
@@ -531,7 +545,7 @@ private fun FieldZone(
         modifier = modifier
             .semantics { contentDescription = description }
             .background(if (isDouble) Color.White.copy(alpha = 0.03f) else Color.Transparent)
-            .background(color.copy(alpha = floodAlpha))
+            .background(pressColor.copy(alpha = floodAlpha))
             .pointerInteropFilter { event ->
                 if (!enabled) return@pointerInteropFilter false
                 when (event.action) {
@@ -547,38 +561,41 @@ private fun FieldZone(
         },
     ) {
         if (isDouble) {
-            // coarse: compact double chevron, centered in its half
-            Canvas(modifier = Modifier.size(30.dp, 30.dp)) {
+            // coarse: double chevron at ~42% of rail width so it reads as the fine
+            // glyph's sibling (stroke family 12.5% of height, gap/amp = 0.4).
+            Canvas(modifier = Modifier.size(40.dp, 40.dp)) {
                 val w = size.width; val h = size.height
-                val sw = w * 0.13f
+                val sw = h * 0.125f
                 val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
                 val inset = sw / 2
-                val amp = h * 0.32f; val gap = h * 0.18f
+                val amp = h * 0.36f; val gap = h * 0.14f
                 val topY = (h - (amp * 2 + gap)) / 2
                 fun chev(y0: Float) = Path().apply {
                     if (isUp) { moveTo(inset, y0 + amp); lineTo(w / 2, y0); lineTo(w - inset, y0 + amp) }
                     else { moveTo(inset, y0); lineTo(w / 2, y0 + amp); lineTo(w - inset, y0) }
                 }
-                drawPath(chev(topY), color, alpha = glyphAlpha, style = stroke)
-                drawPath(chev(topY + amp + gap), color, alpha = glyphAlpha, style = stroke)
+                drawPath(chev(topY), glyphColor, alpha = glyphAlpha, style = stroke)
+                drawPath(chev(topY + amp + gap), glyphColor, alpha = glyphAlpha, style = stroke)
             }
         } else {
-            // fine: the half IS a giant ghosted chevron, biased toward its outer edge
+            // fine: glyph sized by HEIGHT (40% of the half) so wide cards don't blow it
+            // up past the value; ~100° apex (rise/run ≈ 0.84); butt caps kill the dots.
             Canvas(
                 modifier = Modifier
                     .padding(top = if (isUp) 10.dp else 0.dp, bottom = if (isUp) 0.dp else 10.dp)
-                    .fillMaxWidth(0.66f)
-                    .aspectRatio(150f / 72f),
+                    .fillMaxHeight(0.40f)
+                    .aspectRatio(150f / 72f, matchHeightConstraintsFirst = true),
             ) {
                 val w = size.width; val h = size.height
-                val sw = h * 0.13f
-                val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
-                val inset = sw / 2 + w * 0.04f
+                val sw = h * 0.125f
+                val stroke = Stroke(width = sw, cap = StrokeCap.Butt, join = StrokeJoin.Round)
+                val rise = h * 0.72f
+                val inset = (w / 2f - rise / 0.84f).coerceAtLeast(sw / 2f)
                 val path = Path().apply {
-                    if (isUp) { moveTo(inset, h * 0.82f); lineTo(w / 2, h * 0.18f); lineTo(w - inset, h * 0.82f) }
-                    else { moveTo(inset, h * 0.18f); lineTo(w / 2, h * 0.82f); lineTo(w - inset, h * 0.18f) }
+                    if (isUp) { moveTo(inset, h * 0.86f); lineTo(w / 2, h * 0.14f); lineTo(w - inset, h * 0.86f) }
+                    else { moveTo(inset, h * 0.14f); lineTo(w / 2, h * 0.86f); lineTo(w - inset, h * 0.14f) }
                 }
-                drawPath(path, color, alpha = glyphAlpha, style = stroke)
+                drawPath(path, glyphColor, alpha = glyphAlpha, style = stroke)
             }
         }
     }
