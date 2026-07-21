@@ -484,14 +484,19 @@ private fun DrawScope.drawRidgeline(
     // falls inside (or within ~12dp of) the metrics-pill or NEXT-pill rect, so the
     // chips never collide with the overlay pills (matches the target).
     val mPos = Offset(worldX(md), screenY(md))
-    val minChipGap = 34f * dp
     val pillMargin = 12f * dp
     fun inflated(r: Rect?): Rect? = r?.let {
         Rect(it.left - pillMargin, it.top - pillMargin, it.right + pillMargin, it.bottom + pillMargin)
     }
     val metricsGuard = inflated(metricsPillRect)
-    val placedChipY = ArrayList<Float>()
-    placedChipY.add(mPos.y)
+    // De-clutter by REAL rect collision (not a vertical-gap heuristic): a naive
+    // min-y-gap silently ate the chip of any interval starting shortly after the
+    // previous one — on a 60-min route a 120s climb is ~19px tall, so every
+    // "steep push" chip right after it was dropped. Chips now flip to the other
+    // side of the bend when the natural side collides, and only skip when both
+    // sides are blocked.
+    val placedChipRects = ArrayList<Rect>()
+    placedChipRects.add(Rect(mPos.x - 20f, mPos.y - 20f, mPos.x + 20f, mPos.y + 20f))
     var i = route.idxAt(camLo)
     var chipCount = 0
     while (chipCount < 40 && i < route.count) {
@@ -499,9 +504,8 @@ private fun DrawScope.drawRidgeline(
         if (bs > camHi) break
         if (bs >= camLo && bs >= md - 15.0) {
             val pos = Offset(worldX(bs), screenY(bs))
-            val tooClose = placedChipY.any { kotlin.math.abs(it - pos.y) < minChipGap }
-            if (!tooClose) {
-                val side = if (pos.x < centerX) -1 else 1
+            run {
+                val naturalSide = if (pos.x < centerX) -1 else 1
                 val color = RidgelineTheme.gradeColor(route.gradeIdx(i))
                 // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
                 // shows BOTH values of the transition — incline and speed — each in its
@@ -522,22 +526,36 @@ private fun DrawScope.drawRidgeline(
                         fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                     ),
                 )
-                val cx = pos.x + side * 22f
                 // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
                 // "8% 3.0" text, anchor dot). Pill butts against the anchor dot at cx.
                 val pillW = gradeTl.size.width + 6f + spdTl.size.width + 14f
-                val pillLeft = if (side < 0) cx - pillW else cx
                 val pillTop = pos.y - 12f
-                // Full drawn extent of the chip: dot at cx + pill.
-                val chipRect = Rect(
-                    left = min(cx - 4f, pillLeft),
-                    top = pillTop,
-                    right = max(cx + 4f, pillLeft + pillW),
-                    bottom = pillTop + 24f,
-                )
-                val hitsPill = metricsGuard?.overlaps(chipRect) == true
-                if (!hitsPill) {
-                    placedChipY.add(pos.y)
+                fun chipRectFor(side: Int): Rect {
+                    val cx0 = pos.x + side * 22f
+                    val pl = if (side < 0) cx0 - pillW else cx0
+                    return Rect(
+                        left = min(cx0 - 4f, pl),
+                        top = pillTop,
+                        right = max(cx0 + 4f, pl + pillW),
+                        bottom = pillTop + 24f,
+                    )
+                }
+                fun blocked(r: Rect): Boolean {
+                    val inflatedR = Rect(r.left - 4f, r.top - 4f, r.right + 4f, r.bottom + 4f)
+                    return (metricsGuard?.overlaps(inflatedR) == true) ||
+                        placedChipRects.any { it.overlaps(inflatedR) }
+                }
+                // Natural side first; flip if it collides; skip only if both blocked.
+                var side = naturalSide
+                var chipRect = chipRectFor(side)
+                if (blocked(chipRect)) {
+                    side = -naturalSide
+                    chipRect = chipRectFor(side)
+                }
+                if (!blocked(chipRect)) {
+                    val cx = pos.x + side * 22f
+                    val pillLeft = if (side < 0) cx - pillW else cx
+                    placedChipRects.add(chipRect)
                     drawRoundRectCompat(pillLeft, pillTop, pillW, 24f, 6f, RidgelineTheme.pillBg)
                     drawRoundRect(
                         color = color,
