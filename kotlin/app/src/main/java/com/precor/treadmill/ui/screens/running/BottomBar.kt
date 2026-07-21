@@ -32,6 +32,7 @@ fun BottomBar(
     viewModel: TreadmillViewModel,
     showControls: Boolean = true,
     externalPadding: Boolean = false,
+    uniformHeight: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val status by viewModel.status.collectAsState()
@@ -40,7 +41,9 @@ fun BottomBar(
 
     val isRunning = status.emulate && (status.emuSpeed > 0 || (pgm.running && !pgm.paused))
     val defaultHeight = touchFingerPad()
-    val stopHeight = touchThumbPad()
+    // Stop is normally the largest emergency target (thumb pad). In the landscape HUD the action
+    // bar has a fixed footprint, so keep one height across paused/running to avoid the row resizing.
+    val stopHeight = if (uniformHeight) defaultHeight else touchThumbPad()
 
     // Use safeDrawing insets for bottom — covers nav bar, display cutouts, and curved screens
     val bottomSafe = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
@@ -61,12 +64,14 @@ fun BottomBar(
             )
         }
 
-        // Action buttons — grouped so they share one uniform opacity (consistent glass across the row)
+        // Action buttons — grouped so they share one uniform opacity (consistent glass across the row).
+        // externalPadding (HUD) zeroes the internal horizontal inset so the row's left/right edges
+        // line up with the panels above it (which the caller positions with its own padding).
         CompositionLocalProvider(LocalOpacityGroup provides remember { OpacityGroup() }) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = if (externalPadding) 0.dp else 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (pgm.paused) {

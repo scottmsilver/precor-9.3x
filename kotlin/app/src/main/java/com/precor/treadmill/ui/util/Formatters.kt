@@ -41,11 +41,12 @@ fun fmtDur(secs: Number?): String {
 
 /** Format speed as pace mm:ss min/mi. */
 fun paceDisplay(speedMph: Double): String {
-    if (speedMph <= 0.0) return "--:--"
+    // Matches sim.jsx fmtPace: <0.4 mph reads as no pace; carry s==60 to next minute.
+    if (speedMph < 0.4) return "--:--"
     val minPerMile = 60.0 / speedMph
     val m = floor(minPerMile).toInt()
     val s = round((minPerMile - m) * 60).toInt()
-    return "$m:${s.toString().padStart(2, '0')}"
+    return if (s == 60) "${m + 1}:00" else "$m:${s.toString().padStart(2, '0')}"
 }
 
 private val glowPurple = Color(0xFF8B7FA0)

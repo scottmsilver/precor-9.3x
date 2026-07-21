@@ -452,7 +452,8 @@ class TreadmillViewModel(
     }
 
     fun setIncline(value: Double) {
-        val clamped = (Math.round(value * 2) / 2.0).coerceIn(0.0, 99.0)
+        // Safety: application layer enforces 0..15 (hardware accepts 0..99). Per CLAUDE.md.
+        val clamped = (Math.round(value * 2) / 2.0).coerceIn(0.0, 15.0)
         dirtyIncline = SystemClock.elapsedRealtime()
         _status.update { it.copy(emuIncline = clamped) }
         debouncedSetIncline.invoke(clamped)
@@ -468,7 +469,8 @@ class TreadmillViewModel(
 
     fun adjustIncline(delta: Double) {
         val cur = _status.value.emuIncline
-        val newInc = (Math.round((cur + delta) * 2) / 2.0).coerceIn(0.0, 99.0)
+        // Safety: application layer enforces 0..15 (hardware accepts 0..99). Per CLAUDE.md.
+        val newInc = (Math.round((cur + delta) * 2) / 2.0).coerceIn(0.0, 15.0)
         dirtyIncline = SystemClock.elapsedRealtime()
         _status.update { it.copy(emuIncline = newInc) }
         debouncedSetIncline.invoke(newInc)
