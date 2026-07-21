@@ -394,13 +394,24 @@ private fun DrawScope.drawRidgeline(
     // contributed zero path. Position sampling gives every second of the program
     // its proportional share of track.)
     val M = 140
-    data class Seg(val key: String, val trav: Boolean, val g: Double, val pts: MutableList<Offset>)
-    val segs = ArrayList<Seg>()
-    var curS: Seg? = null
+    // Uniform samples PLUS the exact interval boundaries, so the path's color change
+    // (and the chip anchored there) sits precisely on the bend instead of up to one
+    // sample step away.
+    val samplePos = ArrayList<Double>(M + route.count + 2)
     for (k in 0..M) {
         val p0 = camLo + (k.toDouble() / M) * EW
         if (p0 > route.total + 1e-6) break
-        val d = min(p0, route.total)
+        samplePos.add(min(p0, route.total))
+    }
+    for (b in 1 until route.count) {
+        val bp = route.startOf(b)
+        if (bp > camLo && bp < min(camHi, route.total)) samplePos.add(bp)
+    }
+    samplePos.sort()
+    data class Seg(val key: String, val trav: Boolean, val g: Double, val pts: MutableList<Offset>)
+    val segs = ArrayList<Seg>()
+    var curS: Seg? = null
+    for (d in samplePos) {
         val p = Offset(worldX(d), screenY(d))
         val trav = d <= md
         val g = route.gradeAt(d)
@@ -492,24 +503,31 @@ private fun DrawScope.drawRidgeline(
             if (!tooClose) {
                 val side = if (pos.x < centerX) -1 else 1
                 val color = RidgelineTheme.gradeColor(route.gradeIdx(i))
-                // Geometry (dot, pill border) keeps the true grade color; the chip TEXT is
-                // solved against the photo+scrim background so it stays legible.
-                val textColor = color.legibleOn(overlayBg, targetLc = 60.0)
-                val label = "${Math.round(route.gradeIdx(i))}%"
-                val tl = measurer.measure(
-                    label,
+                // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
+                // shows BOTH values of the transition — incline and speed — each in its
+                // theme color, solved against the photo+scrim so it stays legible.
+                val gradeTl = measurer.measure(
+                    "${Math.round(route.gradeIdx(i))}%",
                     style = TextStyle(
-                        color = textColor, fontFamily = RidgelineMonoFamily,
+                        color = color.legibleOn(overlayBg, targetLc = 60.0),
+                        fontFamily = RidgelineMonoFamily,
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    ),
+                )
+                val spdTl = measurer.measure(
+                    "%.1f".format(route.speedIdx(i)),
+                    style = TextStyle(
+                        color = RidgelineTheme.speedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0),
+                        fontFamily = RidgelineMonoFamily,
                         fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                     ),
                 )
                 val cx = pos.x + side * 22f
                 // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
-                // centered text, anchor dot). Pill butts against the anchor dot at cx.
-                val pillW = tl.size.width + 14f
+                // "8% 3.0" text, anchor dot). Pill butts against the anchor dot at cx.
+                val pillW = gradeTl.size.width + 6f + spdTl.size.width + 14f
                 val pillLeft = if (side < 0) cx - pillW else cx
                 val pillTop = pos.y - 12f
-                val textLeft = pillLeft + (pillW - tl.size.width) / 2f
                 // Full drawn extent of the chip: dot at cx + pill.
                 val chipRect = Rect(
                     left = min(cx - 4f, pillLeft),
@@ -530,8 +548,12 @@ private fun DrawScope.drawRidgeline(
                     )
                     drawCircle(color, radius = 4f, center = Offset(cx, pos.y))
                     drawText( // legible-exempt: solved via legibleOn over the photo
-                        tl,
-                        topLeft = Offset(textLeft, pos.y - tl.size.height / 2f),
+                        gradeTl,
+                        topLeft = Offset(pillLeft + 7f, pos.y - gradeTl.size.height / 2f),
+                    )
+                    drawText( // legible-exempt: solved via legibleOn over the photo
+                        spdTl,
+                        topLeft = Offset(pillLeft + 7f + gradeTl.size.width + 6f, pos.y - spdTl.size.height / 2f),
                     )
                 }
             }
@@ -634,24 +656,26 @@ private fun DrawScope.drawRidgeline(
             val vTop = yOf(min(mEnd, camHi))
             val vBot = yOf(max(mStart, camLo))
             // Leader lines bridging the strip's viewport back to the switchback map.
+            // Neutral ivory, not accent green — the frame is chrome, not route data
+            // (green would read as "current/next" like the marker and next tick).
             val leaderX = mx - mW / 2f - 6f
             val mapRightEdge = mapW
             val dash = PathEffect.dashPathEffect(floatArrayOf(2f, 5f))
             drawLine(
-                RidgelineTheme.accent, Offset(leaderX, vTop), Offset(mapRightEdge, topY),
-                strokeWidth = 1f, alpha = 0.35f, pathEffect = dash,
+                RidgelineTheme.fg, Offset(leaderX, vTop), Offset(mapRightEdge, topY),
+                strokeWidth = 1f, alpha = 0.28f, pathEffect = dash,
             )
             drawLine(
-                RidgelineTheme.accent, Offset(leaderX, vBot), Offset(mapRightEdge, botY),
-                strokeWidth = 1f, alpha = 0.35f, pathEffect = dash,
+                RidgelineTheme.fg, Offset(leaderX, vBot), Offset(mapRightEdge, botY),
+                strokeWidth = 1f, alpha = 0.28f, pathEffect = dash,
             )
-            // viewport-highlight fill + bright-green 1.5px border
+            // viewport-highlight fill + neutral 1.5px border
             drawRoundRectCompat(
                 mx - mW / 2f - 6f, vTop, mW + 12f, max(10f, vBot - vTop), 4f,
-                RidgelineTheme.accent.copy(alpha = 0.09f),
+                RidgelineTheme.fg.copy(alpha = 0.07f),
             )
             drawRoundRect(
-                color = RidgelineTheme.accent,
+                color = RidgelineTheme.fg.copy(alpha = 0.55f),
                 topLeft = Offset(mx - mW / 2f - 6f, vTop),
                 size = Size(mW + 12f, max(10f, vBot - vTop)),
                 cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f),
@@ -693,12 +717,14 @@ private fun DrawScope.drawRidgeline(
                     strokeWidth = if (isNext) 2f else 1.5f,
                     alpha = if (isNext) 1f else 0.7f,
                 )
+                // With the NEXT pill gone these labels are the only transition info on
+                // screen — sized to be glanceable mid-run (next > last).
                 val timeTl = measurer.measure(
                     ridgelineFmtTime(pos),
                     style = TextStyle(
                         color = color.legibleOn(overlayBg, targetLc = if (isNext) 60.0 else 45.0),
                         fontFamily = RidgelineMonoFamily,
-                        fontSize = 11.sp,
+                        fontSize = if (isNext) 14.sp else 12.sp,
                         fontWeight = if (isNext) FontWeight.SemiBold else FontWeight.Normal,
                         fontFeatureSettings = "tnum",
                     ),
@@ -719,7 +745,7 @@ private fun DrawScope.drawRidgeline(
                     style = TextStyle(
                         color = RidgelineTheme.gradeColor(ng).legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineMonoFamily,
-                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         fontFeatureSettings = "tnum",
                     ),
                 )
@@ -728,7 +754,7 @@ private fun DrawScope.drawRidgeline(
                     style = TextStyle(
                         color = RidgelineTheme.speedColor(ns).legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineMonoFamily,
-                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         fontFeatureSettings = "tnum",
                     ),
                 )
@@ -751,9 +777,9 @@ private fun DrawScope.drawRidgeline(
             val lastVisible = lastB > 0.5                    // the start needs no tick
             val nextVisible = nextB < route.total - 0.5      // finish has its own flag
             // If both would collide (short interval), keep the upcoming one (its
-            // two-line label needs the extra clearance).
+            // two-line 14sp label needs the extra clearance).
             val collide = lastVisible && nextVisible &&
-                kotlin.math.abs(yOf(lastB) - yOf(nextB)) < 30f
+                kotlin.math.abs(yOf(lastB) - yOf(nextB)) < 44f
             if (lastVisible && !collide) transitionTick(lastB, isNext = false)
             if (nextVisible) transitionTick(nextB, isNext = true)
         }
