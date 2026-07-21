@@ -786,12 +786,15 @@ private fun DrawScope.drawRidgeline(
                     alpha = if (isNext) 1f else 0.7f,
                 )
                 // With the NEXT pill gone these labels are the only transition info on
-                // screen — sized to be glanceable mid-run (next > last).
+                // screen — sized to be glanceable mid-run (next > last). Space Grotesk,
+                // not the mono: these times are STATIC labels (a boundary's timestamp,
+                // not a counting clock), so the mono's fixed-advance colon just reads
+                // as "5 : 00".
                 val timeTl = measurer.measure(
                     ridgelineFmtTime(pos),
                     style = TextStyle(
                         color = color.legibleOn(overlayBg, targetLc = if (isNext) 60.0 else 45.0),
-                        fontFamily = RidgelineMonoFamily,
+                        fontFamily = RidgelineLabelFamily,
                         fontSize = if (isNext) 14.sp else 12.sp,
                         fontWeight = if (isNext) FontWeight.SemiBold else FontWeight.Normal,
                         fontFeatureSettings = "tnum",
