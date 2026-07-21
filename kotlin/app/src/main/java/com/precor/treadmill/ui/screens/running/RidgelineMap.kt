@@ -293,9 +293,11 @@ private fun DrawScope.drawRidgeline(
     val hasMini = route.total > POS_WINDOW * 1.12
     val fitsWhole = !hasMini
     // centerX/amplitude derived from the ACTUAL drawable width, not a fixed design canvas.
-    // Ratios match design (centerX 600/638, ampBase 442/482 on W=1280), branched on hasMini.
-    val centerX = mapW * (if (hasMini) 0.469f else 0.498f)
-    val ampBase = mapW * (if (hasMini) 0.345f else 0.377f)
+    // Wider than the design's ratios (centerX 600/638, ampBase 442/482 on W=1280):
+    // steep programs squeezed the path into the left-center of the panel, so the
+    // amplitude grows to fill the drawable width (chips clamp to stay on-canvas).
+    val centerX = mapW * 0.50f
+    val ampBase = mapW * (if (hasMini) 0.40f else 0.44f)
 
     val md = markerDist.coerceIn(0.0, route.total)
     // View window in route position (planned seconds). A whole-route view spans the
@@ -319,7 +321,8 @@ private fun DrawScope.drawRidgeline(
         val g = (route.gradeAt(max(0.0, pos - smoothSec)) + route.gradeAt(pos) + route.gradeAt(pos + smoothSec)) / 3.0
         // amplitude eases narrower on steep pitches (design exact: 0.55 floor + organic
         // jitter). Relies on the base-turn term so flat routes still meander wide.
-        val amp = ampBase * (0.55f + 0.45f * (1f - min(1f, (g / 16.0).toFloat()))) *
+        // steep-pitch floor raised 0.55 -> 0.65 so steep routes still sweep wide
+        val amp = ampBase * (0.65f + 0.35f * (1f - min(1f, (g / 16.0).toFloat()))) *
             (0.85f + 0.15f * sin(u * 1.7 + 0.4).toFloat())
         return centerX + amp * sin(route.phaseAt(pos) + 0.4 * sin(u * 1.23 + 0.7)).toFloat()
     }
@@ -548,9 +551,15 @@ private fun DrawScope.drawRidgeline(
                 // "8% 3.0" text, anchor dot). Pill butts against the anchor dot at cx.
                 val pillW = gradeTl.size.width + 6f + spdTl.size.width + 14f
                 val pillTop = pos.y - 12f
-                fun chipRectFor(side: Int): Rect {
+                // Pill clamped onto the canvas: with the wider route sweep, extreme
+                // bends would otherwise push a left/right pill off the drawable area.
+                fun pillLeftFor(side: Int): Float {
                     val cx0 = pos.x + side * 22f
-                    val pl = if (side < 0) cx0 - pillW else cx0
+                    return (if (side < 0) cx0 - pillW else cx0)
+                        .coerceIn(4f, max(4f, mapW - pillW - 4f))
+                }
+                fun chipRectFor(side: Int): Rect {
+                    val pl = pillLeftFor(side)
                     // Extent covers the anchor dot AT THE BEND (pos.x) plus the pill.
                     return Rect(
                         left = min(pos.x - 5f, pl),
@@ -572,8 +581,7 @@ private fun DrawScope.drawRidgeline(
                     chipRect = chipRectFor(side)
                 }
                 if (!blocked(chipRect)) {
-                    val cx = pos.x + side * 22f
-                    val pillLeft = if (side < 0) cx - pillW else cx
+                    val pillLeft = pillLeftFor(side)
                     placedChipRects.add(chipRect)
                     drawRoundRectCompat(pillLeft, pillTop, pillW, 24f, 6f, RidgelineTheme.pillBg)
                     drawRoundRect(
