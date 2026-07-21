@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -311,12 +312,14 @@ fun RidgelineHud(
                 )
 
                 // Top-left overlay stack: timer pill just above the metrics pill —
-                // ON the map, so neither burns layout height. The chip-dodge guard
-                // rect covers the whole stack (chips shouldn't collide with either).
+                // ON the map, so neither burns layout height. IntrinsicSize.Max +
+                // fillMaxWidth children = both boxes share the wider one's width.
+                // The chip-dodge guard rect covers the whole stack.
                 Column(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(16.dp)
+                        .width(IntrinsicSize.Max)
                         .onSizeChanged { sz ->
                             metricsRect = androidx.compose.ui.geometry.Rect(
                                 left = pad, top = pad,
@@ -325,8 +328,9 @@ fun RidgelineHud(
                         },
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    TimerPanel(elapsed = sess.elapsedDisplay)
+                    TimerPanel(elapsed = sess.elapsedDisplay, modifier = Modifier.fillMaxWidth())
                     MetricsPill(
+                        modifier = Modifier.fillMaxWidth(),
                         vert = sess.vertDisplay,
                         dist = sess.distDisplay,
                         // null when no live reading — the pill drops the row entirely.
@@ -636,18 +640,21 @@ private fun TimerPanel(elapsed: String, modifier: Modifier = Modifier) {
         modifier = modifier,
         shape = RoundedCornerShape(12.dp),
     ) {
-        LegibleText(
-            text = elapsed,
-            color = RidgelineTheme.fg,
-            targetLc = 75.0,
-            modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp),
-            style = TextStyle(
-                fontFamily = RidgelineLabelFamily,
-                fontSize = 26.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFeatureSettings = "tnum",
-            ),
-        )
+        // Centered so the pill can stretch to match the metrics pill's width.
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            LegibleText(
+                text = elapsed,
+                color = RidgelineTheme.fg,
+                targetLc = 75.0,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp),
+                style = TextStyle(
+                    fontFamily = RidgelineLabelFamily,
+                    fontSize = 26.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFeatureSettings = "tnum",
+                ),
+            )
+        }
     }
 }
 
