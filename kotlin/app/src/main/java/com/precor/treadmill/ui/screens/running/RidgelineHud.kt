@@ -253,17 +253,10 @@ fun RidgelineHud(
                 .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // --- LHS column: standalone TIMER panel on top, map below ---
-            Column(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-            // Small pill, left-aligned, sitting just above the map (not a full-width slab).
-            TimerPanel(elapsed = sess.elapsedDisplay)
             // --- MAP (now inside a glass panel like every other element) ---
             LegibleGlassPanel(
                 accents = listOf(RidgelineTheme.accent),
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 shape = RoundedCornerShape(16.dp),
             ) {
             BoxWithConstraints(
@@ -317,13 +310,10 @@ fun RidgelineHud(
                     modifier = Modifier.fillMaxSize(),
                 )
 
-                // Metrics pill, top-left
-                MetricsPill(
-                    vert = sess.vertDisplay,
-                    dist = sess.distDisplay,
-                    hr = if (status.hrmConnected && status.heartRate > 0) status.heartRate.toString() else "--",
-                    // Estimated power (design sim formula): speed*16 + incline*9 + 40.
-                    watts = Math.round(curSpdMph * 16.0 + status.emuIncline * 9.0 + 40.0).toString(),
+                // Top-left overlay stack: timer pill just above the metrics pill —
+                // ON the map, so neither burns layout height. The chip-dodge guard
+                // rect covers the whole stack (chips shouldn't collide with either).
+                Column(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(16.dp)
@@ -333,7 +323,18 @@ fun RidgelineHud(
                                 right = pad + sz.width, bottom = pad + sz.height,
                             )
                         },
-                )
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TimerPanel(elapsed = sess.elapsedDisplay)
+                    MetricsPill(
+                        vert = sess.vertDisplay,
+                        dist = sess.distDisplay,
+                        // null when no live reading — the pill drops the row entirely.
+                        hr = if (status.hrmConnected && status.heartRate > 0) status.heartRate.toString() else null,
+                        // Estimated power (design sim formula): speed*16 + incline*9 + 40.
+                        watts = Math.round(curSpdMph * 16.0 + status.emuIncline * 9.0 + 40.0).toString(),
+                    )
+                }
 
                 // (The NEXT pill is gone — the minimap strip now carries the last/next
                 // transition ticks with their program times.)
@@ -378,7 +379,6 @@ fun RidgelineHud(
                 )
             }
             } // map LegibleGlassPanel
-            } // LHS column (timer + map)
 
             // --- RAIL (fixed ~298dp): the ORIGINAL speed/incline controls (no count-up). ---
             SpeedInclineControls(
@@ -421,7 +421,7 @@ private fun tightNum(s: String): AnnotatedString = buildAnnotatedString {
 private fun MetricsPill(
     vert: String,
     dist: String,
-    hr: String,
+    hr: String?,
     watts: String,
     modifier: Modifier = Modifier,
 ) {
@@ -437,7 +437,8 @@ private fun MetricsPill(
         ) {
             MetricRow("ELEVATION", vert, "ft", big = true)
             MetricRow("DISTANCE", dist, "mi")
-            MetricRow("HEART", hr, "bpm")
+            // No HRM connected -> no HEART row at all (don't burn a row on "--").
+            if (hr != null) MetricRow("HEART", hr, "bpm")
             MetricRow("POWER", watts, "w")
         }
     }
