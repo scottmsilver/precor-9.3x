@@ -522,20 +522,26 @@ private fun DrawScope.drawRidgeline(
                 // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
                 // shows BOTH values of the transition — incline and speed — each in its
                 // theme color, solved against the photo+scrim so it stays legible.
+                // Values set in the proportional display face (Space Grotesk), not the
+                // mono: a monospace "." gets a full advance cell, so "7.5%" read as
+                // "7 . 5 %". Times elsewhere keep the mono (fixed advance is a feature
+                // for a counting clock, but a defect for static values).
                 val gradeTl = measurer.measure(
                     "%.1f%%".format(route.gradeIdx(i)),
                     style = TextStyle(
                         color = color.legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineMonoFamily,
+                        fontFamily = RidgelineLabelFamily,
                         fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        fontFeatureSettings = "tnum",
                     ),
                 )
                 val spdTl = measurer.measure(
                     "%.1f".format(route.speedIdx(i)),
                     style = TextStyle(
                         color = RidgelineTheme.speedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineMonoFamily,
+                        fontFamily = RidgelineLabelFamily,
                         fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                        fontFeatureSettings = "tnum",
                     ),
                 )
                 // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
@@ -579,8 +585,11 @@ private fun DrawScope.drawRidgeline(
                     )
                     // Anchor dot sits EXACTLY on the bend (pos = the boundary's path
                     // point) — not offset toward the pill, which visually parked it on
-                    // whichever segment happened to pass 22px to the side.
-                    drawCircle(color, radius = 4f, center = pos)
+                    // whichever segment happened to pass 22px to the side. Fixed ivory
+                    // over a dark ring: a grade-colored dot camouflaged against the
+                    // very segment it marks.
+                    drawCircle(RidgelineTheme.bg, radius = 5.5f, center = pos)
+                    drawCircle(RidgelineTheme.fg, radius = 3.5f, center = pos)
                     chipAnchors.add(Triple(bs, pos, route.gradeIdx(i)))
                     drawText( // legible-exempt: solved via legibleOn over the photo
                         gradeTl,
@@ -799,11 +808,13 @@ private fun DrawScope.drawRidgeline(
                 val ni = min(route.idxAt(pos + 1.0), route.count - 1)
                 val ng = route.gradeIdx(ni)
                 val ns = route.speedIdx(ni)
+                // Proportional display face for values (mono "." gets a full cell —
+                // "7 . 5"); the time above keeps the mono for stable counting width.
                 val gradeTl = measurer.measure(
                     "%.1f%%".format(ng),
                     style = TextStyle(
                         color = RidgelineTheme.gradeColor(ng).legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineMonoFamily,
+                        fontFamily = RidgelineLabelFamily,
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         fontFeatureSettings = "tnum",
                     ),
@@ -812,7 +823,7 @@ private fun DrawScope.drawRidgeline(
                     "%.1f".format(ns),
                     style = TextStyle(
                         color = RidgelineTheme.speedColor(ns).legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineMonoFamily,
+                        fontFamily = RidgelineLabelFamily,
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         fontFeatureSettings = "tnum",
                     ),
