@@ -273,18 +273,23 @@ private fun RepeatButton(
 ) {
     var pressed by remember { mutableStateOf(false) }
 
-    // Hold-to-repeat coroutine
-    LaunchedEffect(pressed) {
+    // Hold-to-repeat coroutine. Keyed on `enabled` too, and re-checked in the loop:
+    // these repeats drive the real belt, so a control disabled mid-hold must stop
+    // immediately (codex review — the old effect captured enabled=true forever).
+    LaunchedEffect(pressed, enabled) {
         if (!pressed || !enabled) return@LaunchedEffect
         onAdjust(delta)
         delay(400) // initial delay
         var count = 0
-        while (pressed) {
+        while (pressed && enabled) {
             onAdjust(delta)
             count++
             delay(if (count > 5) 75 else 150)
         }
     }
+    // Belt-safety net: if the activity pauses (screen off, app switch) mid-hold we
+    // may never see the UP event — kill the press on ON_PAUSE.
+    StopPressOnPause { pressed = false }
 
     Box(
         modifier = modifier
@@ -294,18 +299,10 @@ private fun RepeatButton(
                 shape = RoundedCornerShape(10.dp),
             )
             .pointerInteropFilter { event ->
-                if (!enabled) return@pointerInteropFilter false
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        pressed = true
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        pressed = false
-                        true
-                    }
-                    else -> false
-                }
+                val next = pressAfterMotionEvent(pressed, event.actionMasked, enabled)
+                val consumed = next != pressed || (next && event.actionMasked == MotionEvent.ACTION_DOWN)
+                pressed = next
+                consumed
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -535,17 +532,22 @@ private fun FieldZone(
 ) {
     var pressed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(pressed) {
+    // Keyed on `enabled` too, and re-checked in the loop: these repeats drive the
+    // real belt, so a control disabled mid-hold must stop immediately (codex review).
+    LaunchedEffect(pressed, enabled) {
         if (!pressed || !enabled) return@LaunchedEffect
         onAdjust(delta)
         delay(400)
         var count = 0
-        while (pressed) {
+        while (pressed && enabled) {
             onAdjust(delta)
             count++
             delay(if (count > 5) 75 else 150)
         }
     }
+    // Belt-safety net: activity pause (screen off, app switch) mid-hold may swallow
+    // the UP event — kill the press on ON_PAUSE.
+    StopPressOnPause { pressed = false }
 
     val glyphAlpha by animateFloatAsState(
         targetValue = if (pressed) 0.80f else if (isDouble) 0.32f else 0.24f,
@@ -569,12 +571,10 @@ private fun FieldZone(
             .background(if (isDouble) Color.White.copy(alpha = 0.03f) else Color.Transparent)
             .background(pressColor.copy(alpha = floodAlpha))
             .pointerInteropFilter { event ->
-                if (!enabled) return@pointerInteropFilter false
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> { pressed = true; true }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { pressed = false; true }
-                    else -> false
-                }
+                val next = pressAfterMotionEvent(pressed, event.actionMasked, enabled)
+                val consumed = next != pressed || (next && event.actionMasked == MotionEvent.ACTION_DOWN)
+                pressed = next
+                consumed
             },
         // ONE alignment system (design review): every glyph anchors to the card's
         // top/bottom edge — the coarse pair's padding is chosen so its ink center
@@ -629,5 +629,42 @@ private fun FieldZone(
                 drawPath(path, glyphColor, alpha = glyphAlpha, style = stroke)
             }
         }
+    }
+}
+
+/**
+ * Press-state transition for the stepper zones/buttons. Pure so it's unit-testable —
+ * these presses drive REAL belt commands via hold-to-repeat, so every way a finger
+ * can stop pressing must clear the state:
+ *  - ACTION_UP / ACTION_CANCEL — normal lift or system cancel,
+ *  - ACTION_POINTER_UP — the holding finger lifts while ANOTHER finger is on screen
+ *    (was ignored before: repeats kept firing with no finger on the button),
+ *  - and DOWN only starts a press while enabled.
+ */
+internal fun pressAfterMotionEvent(current: Boolean, actionMasked: Int, enabled: Boolean): Boolean =
+    when (actionMasked) {
+        MotionEvent.ACTION_DOWN -> enabled
+        MotionEvent.ACTION_UP,
+        MotionEvent.ACTION_CANCEL,
+        MotionEvent.ACTION_POINTER_UP,
+        -> false
+        else -> current
+    }
+
+/**
+ * Belt-safety net shared by the stepper controls: clears the press when the activity
+ * pauses (screen off, app switch), where the matching UP event may never arrive and a
+ * hold-to-repeat loop would otherwise keep driving the belt.
+ */
+@Composable
+private fun StopPressOnPause(onPause: () -> Unit) {
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    val onPauseState = rememberUpdatedState(onPause)
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE) onPauseState.value()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 }
