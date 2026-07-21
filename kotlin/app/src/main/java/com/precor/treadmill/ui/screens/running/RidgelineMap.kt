@@ -43,25 +43,42 @@ import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 
-// --- Route model (finite, distance domain in miles) -------------------------
-// Ported from makeRoute() in DirectionD.jsx (the finite/intervals branch).
+// --- Route model (finite, POSITION domain = planned program seconds) ---------
+// Ported from makeRoute() in DirectionD.jsx (the finite/intervals branch), then
+// re-domained: layout position is program TIME, so every interval gets screen
+// length proportional to how long you actually run it, and interval boundaries
+// (where the incline changes) are structurally the program's own clock — they
+// can never drift from the route bends. A distance-domain layout let a 25s
+// sprint own 68% of the track while a 75s recovery collapsed to a sliver.
+// The organic detail (switchback phase, amplitude jitter, vert feet) is still
+// integrated over PLANNED MILES internally, so the mile-tuned design constants
+// keep their look.
 
 /** One planned interval, in the route's domain. */
-data class RouteInterval(val grade: Double, val speed: Double, val len: Double)
+data class RouteInterval(val grade: Double, val speed: Double, val durSec: Double)
 
 /** Finite climbing route assembled from planned intervals. */
 class RidgelineRoute(intervals: List<RouteInterval>) {
     private val iv: List<RouteInterval> = if (intervals.isEmpty())
-        listOf(RouteInterval(2.0, 4.0, 0.5)) else intervals
+        listOf(RouteInterval(2.0, 4.0, 450.0)) else intervals
+    // Cumulative boundaries in both domains: seconds (layout) and miles (detail).
     private val cum: DoubleArray = DoubleArray(iv.size + 1).also {
-        for (i in iv.indices) it[i + 1] = it[i] + iv[i].len
+        for (i in iv.indices) it[i + 1] = it[i] + max(1.0, iv[i].durSec)
+    }
+    private val cumMi: DoubleArray = DoubleArray(iv.size + 1).also {
+        for (i in iv.indices) it[i + 1] = it[i] + max(1.0, iv[i].durSec) * iv[i].speed / 3600.0
     }
     val count: Int = iv.size
+
+    /** Route length in the layout domain: planned seconds. */
     val total: Double = cum[count]
 
-    fun idxAt(d: Double): Int {
+    /** Planned miles over the whole route (for labels/diagnostics). */
+    val totalMi: Double = cumMi[count]
+
+    fun idxAt(pos: Double): Int {
         var i = 0
-        while (i < count - 1 && cum[i + 1] <= d) i++
+        while (i < count - 1 && cum[i + 1] <= pos) i++
         return i
     }
 
@@ -70,68 +87,88 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     fun startOf(i: Int): Double = cum[min(i, count)]
     fun endOf(i: Int): Double = cum[min(i + 1, count)]
 
-    fun gradeAt(d: Double): Double = gradeIdx(idxAt(d))
+    fun gradeAt(pos: Double): Double = gradeIdx(idxAt(pos))
 
-    /** Vertical feet climbed to reach distance d. */
-    fun vertAt(d: Double): Double {
-        var v = 0.0; var i = 0; var start = 0.0; var guard = 0
-        while (start < d - 1e-9 && guard++ < 6000) {
-            val end = min(endOf(i), d)
-            v += (end - start) * gradeIdx(i) / 100.0 * 5280.0
-            start = end; i++
-            if (i >= count) break
-        }
-        return v
+    /**
+     * Exact program-position → route-position mapping. In the time domain this is
+     * simply the program clock (interval start + elapsed, clamped), which is the
+     * whole point: an incline change can't miss its bend.
+     */
+    fun posAtProgram(i: Int, elapsedSec: Double): Double {
+        if (i < 0) return 0.0
+        if (i >= count) return total
+        return cum[i] + min(max(0.0, elapsedSec), cum[i + 1] - cum[i])
     }
 
-    /** Planned elapsed seconds to reach distance d (uses planned speeds). */
-    fun timeAtDist(d: Double): Double {
-        var t = 0.0; var i = 0; var start = 0.0; var guard = 0
-        while (start < d - 1e-9 && guard++ < 6000) {
-            val end = min(endOf(i), d)
-            val spd = max(0.1, speedIdx(i))
-            t += (end - start) / spd * 3600.0
-            start = end; i++
-            if (i >= count) break
-        }
-        return t
+    /** Planned miles covered by route position [pos] (piecewise per-interval speed). */
+    fun distAt(pos: Double): Double {
+        val p = pos.coerceIn(0.0, total)
+        val i = idxAt(p)
+        return cumMi[i] + (p - cum[i]) * speedIdx(i) / 3600.0
+    }
+
+    /** Vertical feet climbed to reach route position [pos]. */
+    fun vertAt(pos: Double): Double {
+        val p = pos.coerceIn(0.0, total)
+        val i = idxAt(p)
+        var v = 0.0
+        for (k in 0 until i) v += (cumMi[k + 1] - cumMi[k]) * gradeIdx(k)
+        v += (p - cum[i]) * speedIdx(i) / 3600.0 * gradeIdx(i)
+        return v / 100.0 * 5280.0
     }
 
     // switchback turn-phase: turns accumulate per foot climbed, denser where steep.
-    fun phaseAt(d: Double): Double {
-        var i = 0; var dStart = 0.0; var ph = 0.0; var guard = 0
-        while (dStart < d - 1e-9 && guard++ < 8000) {
+    // Integrated over planned miles (mile-tuned constants), walked by position.
+    fun phaseAt(pos: Double): Double {
+        val p = pos.coerceIn(0.0, total)
+        var ph = 0.0
+        var i = 0
+        while (i < count && cum[i] < p - 1e-9) {
+            val end = min(endOf(i), p)
+            val segMi = (end - cum[i]) * speedIdx(i) / 3600.0
             val g = gradeIdx(i)
-            val dEnd = endOf(i)
-            val end = min(dEnd, d)
-            val vGain = (end - dStart) * g / 100.0 * 5280.0
+            val vGain = segMi * g / 100.0 * 5280.0
             val noise = 0.82 + 0.36 * sin(i * 5.13 + 1.7)
             // Distance-driven base turn term so FLAT real-program routes still meander
             // into multiple switchbacks (design only ever fed steep synthetic routes,
             // where the grade-gated vGain term alone sufficed). BASE_TURNS_PER_MILE is
             // tuned so a flat 1-mi segment yields ~2-3 half-cycles of sin(phase).
-            ph += SW_A * ((0.5 + g / 8.0) * noise * vGain + BASE_TURNS_PER_MILE * (end - dStart))
-            dStart = end; i++
-            if (i >= count) break
+            ph += SW_A * ((0.5 + g / 8.0) * noise * vGain + BASE_TURNS_PER_MILE * segMi)
+            i++
         }
-        return ph
+        return ph * phaseScale
     }
 
-    /** Invert vertAt: distance (miles) at a given elevation (feet climbed). */
-    fun distAtElev(e: Double): Double {
-        var i = 0; var dStart = 0.0; var v = 0.0; var guard = 0
-        while (guard++ < 8000) {
+    // Short routes accumulate almost no natural phase (a 2-min program is ~0.1mi),
+    // which would draw as a straight stub. Scale the whole route's phase up to a
+    // floor of ~2.2π so even tiny routes sweep at least one full S-curve; long
+    // routes (natural phase ≥ the floor) are untouched.
+    private val phaseScale: Double
+
+    init {
+        var raw = 0.0
+        for (i in 0 until count) {
+            val segMi = cumMi[i + 1] - cumMi[i]
             val g = gradeIdx(i)
-            val dEnd = endOf(i)
-            val segLen = dEnd - dStart
-            val segV = segLen * g / 100.0 * 5280.0
-            if (v + segV >= e || i >= count - 1) {
-                val frac = if (segV > 1e-9) (e - v) / segV else 0.0
-                return dStart + max(0.0, min(segLen, frac * segLen))
-            }
-            v += segV; dStart = dEnd; i++
+            val noise = 0.82 + 0.36 * sin(i * 5.13 + 1.7)
+            raw += SW_A * ((0.5 + g / 8.0) * noise * (segMi * g / 100.0 * 5280.0) + BASE_TURNS_PER_MILE * segMi)
         }
-        return dStart
+        phaseScale = if (raw > 1e-9) max(1.0, MIN_TOTAL_PHASE / raw) else 1.0
+    }
+
+    /** Invert vertAt: route position (seconds) at a given elevation (feet climbed). */
+    fun posAtElev(e: Double): Double {
+        var v = 0.0
+        for (i in 0 until count) {
+            val segMi = cumMi[i + 1] - cumMi[i]
+            val segV = segMi * gradeIdx(i) / 100.0 * 5280.0
+            if (v + segV >= e || i == count - 1) {
+                val frac = if (segV > 1e-9) ((e - v) / segV).coerceIn(0.0, 1.0) else 0.0
+                return cum[i] + frac * (cum[i + 1] - cum[i])
+            }
+            v += segV
+        }
+        return total
     }
 
     companion object {
@@ -139,29 +176,34 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
         // Half-cycles per mile contributed independent of grade (keeps flat routes wavy).
         // 0.030 * 250 * 1mi ≈ 7.5 rad ≈ 2.4 half-cycles for a flat 1-mi segment.
         const val BASE_TURNS_PER_MILE = 250.0
+        // Minimum total switchback sweep for the whole route (~2.2π ≈ one full S).
+        const val MIN_TOTAL_PHASE = 7.0
     }
 }
 
-// Feet of climb shown at once. Lowered from the design's 540 so that typical (shorter)
-// treadmill programs exceed the window and therefore WINDOW: the camera pans as you climb
-// and the minimap's viewport box + leader lines activate, instead of staying dormant on
-// routes whose whole climb fits on screen.
-private const val ELEV_WINDOW = 220.0
+// Route-position (planned seconds) shown at once. 25 minutes per screen: a typical
+// 45-60min program exceeds the window and therefore WINDOWS — the camera pans as you
+// progress and the minimap's viewport box + leader lines activate — while shorter
+// programs fit whole and always FILL the panel (no more collapsing a short/flat
+// route into a stub against a fixed feet-of-climb window).
+private const val POS_WINDOW = 1500.0
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
 /**
- * The Ridgeline route map: elevation-vs-switchback plot. Vertical axis = feet climbed,
- * horizontal = centerX + amp*sin(phase). Travelled portion dim, ahead colored by grade.
- * Contours as faint polylines, pulsing accent marker at current position, grade chips at
- * interval boundaries, vertical minimap strip on the right.
+ * The Ridgeline route map: program-progress-vs-switchback plot. Vertical axis = route
+ * position (planned program seconds — so the dot climbs steadily and every bend is an
+ * incline change), horizontal = centerX + amp*sin(phase). Travelled portion dim, ahead
+ * colored by grade. Contours mark real elevations crossed, pulsing accent marker at
+ * current position, grade chips at interval boundaries, vertical minimap strip on the
+ * right.
  *
- * @param markerDistMiles current distance along the route (drives the marker position).
+ * @param markerPos current route position in planned seconds (drives the marker).
  */
 @Composable
 fun RidgelineMap(
     route: RidgelineRoute,
-    markerDistMiles: Double,
+    markerPos: Double,
     modifier: Modifier = Modifier,
     metricsPillRect: Rect? = null,
     nextPillRect: Rect? = null,
@@ -185,10 +227,10 @@ fun RidgelineMap(
         label = "pulse-a",
     )
 
-    // Eased CAMERA PAN: the elevation window's lower bound eases to its target (the same
+    // Eased CAMERA PAN: the view window's lower bound eases to its target (the same
     // page/lead step the design computes) with an easeInOutCubic over ~1s, so the colored
-    // map glides instead of snapping when the climb nears the top edge.
-    val targetLo = remember(route, markerDistMiles) { computeTargetLo(route, markerDistMiles) }
+    // map glides instead of snapping when progress nears the top edge.
+    val targetLo = remember(route, markerPos) { computeTargetLo(route, markerPos) }
     val elevLo by animateFloatAsState(
         targetValue = targetLo.toFloat(),
         animationSpec = tween(1000, easing = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)),
@@ -202,25 +244,23 @@ fun RidgelineMap(
 
     Canvas(modifier = modifier) {
         drawRidgeline(
-            route, markerDistMiles, pulseR, pulseA, elevLo.toDouble(),
+            route, markerPos, pulseR, pulseA, elevLo.toDouble(),
             measurer, metricsPillRect, nextPillRect, overlayBg,
         )
     }
 }
 
-/** Window math shared with the draw pass: lower edge (feet) of the elevation window. */
-private fun computeTargetLo(route: RidgelineRoute, markerDist: Double): Double {
-    val totalVert = route.vertAt(route.total)
-    val fitsWhole = totalVert <= ELEV_WINDOW * 1.12
+/** Window math shared with the draw pass: lower edge (route seconds) of the view window. */
+private fun computeTargetLo(route: RidgelineRoute, markerPos: Double): Double {
+    val fitsWhole = route.total <= POS_WINDOW * 1.12
     if (fitsWhole) return 0.0
-    val md = markerDist.coerceIn(0.0, route.total)
-    val E = route.vertAt(max(0.0, md))
-    val EW = ELEV_WINDOW
+    val md = markerPos.coerceIn(0.0, route.total)
+    val EW = POS_WINDOW
     val PAGE = EW * 0.40
     val LEAD = EW * 0.42
     return min(
-        max(0.0, kotlin.math.floor((E - LEAD) / PAGE) * PAGE),
-        max(0.0, totalVert - EW),
+        max(0.0, kotlin.math.floor((md - LEAD) / PAGE) * PAGE),
+        max(0.0, route.total - EW),
     )
 }
 
@@ -249,7 +289,7 @@ private fun DrawScope.drawRidgeline(
     val botY = H - 50f * dp
 
     val totalVert = route.vertAt(route.total)
-    val hasMini = totalVert > ELEV_WINDOW * 1.12
+    val hasMini = route.total > POS_WINDOW * 1.12
     val fitsWhole = !hasMini
     // centerX/amplitude derived from the ACTUAL drawable width, not a fixed design canvas.
     // Ratios match design (centerX 600/638, ampBase 442/482 on W=1280), branched on hasMini.
@@ -257,22 +297,30 @@ private fun DrawScope.drawRidgeline(
     val ampBase = mapW * (if (hasMini) 0.345f else 0.377f)
 
     val md = markerDist.coerceIn(0.0, route.total)
-    val E = route.vertAt(max(0.0, md))
-    val EW = if (fitsWhole) max(160.0, totalVert) else ELEV_WINDOW
+    // View window in route position (planned seconds). A whole-route view spans the
+    // full route (2% headroom), so short programs FILL the panel instead of collapsing
+    // against a fixed feet-of-climb window.
+    val EW = if (fitsWhole) route.total * 1.02 else POS_WINDOW
 
-    // Elevation camera: lower edge is the eased value passed in (animated in the composable).
-    // When the whole climb fits, it rests at 0.
-    val elevLoLocal = if (fitsWhole) 0.0 else elevLo
-    val elevHi = elevLoLocal + EW
-    fun screenY(e: Double): Float = (botY - ((e - elevLoLocal) / EW) * (botY - topY)).toFloat()
+    // Camera: lower edge is the eased value passed in (animated in the composable).
+    // When the whole route fits, it rests at 0.
+    val camLo = if (fitsWhole) 0.0 else elevLo
+    val camHi = camLo + EW
+    fun screenY(pos: Double): Float = (botY - ((pos - camLo) / EW) * (botY - topY)).toFloat()
 
-    fun worldX(d: Double): Float {
-        val g = (route.gradeAt(max(0.0, d - 0.05)) + route.gradeAt(max(0.0, d)) + route.gradeAt(d + 0.05)) / 3.0
+    // Organic detail (amplitude jitter, phase wobble, grade smoothing) is tuned in the
+    // design's MILE domain — feed it planned miles via distAt so the look is preserved.
+    // Grade smoothing keeps its ±0.05mi reach by converting through the LOCAL interval
+    // speed (0.05mi = 180/speed seconds), not a fixed time radius (codex review).
+    fun worldX(pos: Double): Float {
+        val u = route.distAt(pos)
+        val smoothSec = 180.0 / max(0.5, route.speedIdx(route.idxAt(pos)))
+        val g = (route.gradeAt(max(0.0, pos - smoothSec)) + route.gradeAt(pos) + route.gradeAt(pos + smoothSec)) / 3.0
         // amplitude eases narrower on steep pitches (design exact: 0.55 floor + organic
-        // d-jitter). Relies on #1 base-turn term so flat routes still meander wide.
+        // jitter). Relies on the base-turn term so flat routes still meander wide.
         val amp = ampBase * (0.55f + 0.45f * (1f - min(1f, (g / 16.0).toFloat()))) *
-            (0.85f + 0.15f * sin(d * 1.7 + 0.4).toFloat())
-        return centerX + amp * sin(route.phaseAt(d) + 0.4 * sin(d * 1.23 + 0.7)).toFloat()
+            (0.85f + 0.15f * sin(u * 1.7 + 0.4).toFloat())
+        return centerX + amp * sin(route.phaseAt(pos) + 0.4 * sin(u * 1.23 + 0.7)).toFloat()
     }
 
     // --- background radial gradient (glow -> bg at 64%, centered 60%/8% top) ---
@@ -312,11 +360,15 @@ private fun DrawScope.drawRidgeline(
         )
     }
 
-    // --- contours (constant-elevation bands) ---
+    // --- contours (constant-elevation bands, mapped through the route's climb) ---
+    // Contours live at real elevations; posAtElev places each at the route position
+    // where that elevation is first reached. Flat routes simply have few/none.
     val CFT = 38.0
-    var ce = kotlin.math.ceil(elevLoLocal / CFT) * CFT
-    while (ce <= elevHi + 1) {
-        val y = screenY(ce)
+    val vertLo = route.vertAt(camLo)
+    val vertHi = route.vertAt(min(camHi, route.total))
+    var ce = kotlin.math.ceil(max(CFT, vertLo) / CFT) * CFT
+    while (ce <= vertHi + 1) {
+        val y = screenY(route.posAtElev(ce))
         val major = kotlin.math.abs(ce % 190.0) < CFT / 2
         val path = Path()
         var first = true
@@ -339,17 +391,20 @@ private fun DrawScope.drawRidgeline(
         ce += CFT
     }
 
-    // --- route: sample across the elevation window, group into colored runs ---
+    // --- route: sample uniformly along the route POSITION visible in the window ---
+    // (Elevation-indexed sampling skipped flat segments entirely — a 0% interval
+    // contributed zero path. Position sampling gives every second of the program
+    // its proportional share of track.)
     val M = 140
     data class Seg(val key: String, val trav: Boolean, val g: Double, val pts: MutableList<Offset>)
     val segs = ArrayList<Seg>()
     var curS: Seg? = null
     for (k in 0..M) {
-        val e = elevLoLocal + (k.toDouble() / M) * EW
-        if (e > totalVert + 0.5) break
-        val d = route.distAtElev(e)
-        val p = Offset(worldX(d), screenY(e))
-        val trav = e <= E
+        val p0 = camLo + (k.toDouble() / M) * EW
+        if (p0 > route.total + 1e-6) break
+        val d = min(p0, route.total)
+        val p = Offset(worldX(d), screenY(d))
+        val trav = d <= md
         val g = route.gradeAt(d)
         val key = if (trav) "T" else "G" + Math.round(g)
         val s = curS
@@ -395,9 +450,9 @@ private fun DrawScope.drawRidgeline(
         )
     }
 
-    // --- auto-extend dashed ghost line: cue that the climb continues above the window ---
-    if (elevHi < totalVert - 0.5) {
-        val tx = worldX(route.distAtElev(elevHi))
+    // --- auto-extend dashed ghost line: cue that the route continues above the window ---
+    if (camHi < route.total - 0.5) {
+        val tx = worldX(camHi)
         val ghost = Path().apply {
             moveTo(tx, topY)
             lineTo(tx - 34f * dp, topY - 22f * dp)
@@ -419,7 +474,7 @@ private fun DrawScope.drawRidgeline(
     // marker or of a chip we already placed, AND skip any chip whose drawn extent
     // falls inside (or within ~12dp of) the metrics-pill or NEXT-pill rect, so the
     // chips never collide with the overlay pills (matches the target).
-    val mPos = Offset(worldX(md), screenY(E))
+    val mPos = Offset(worldX(md), screenY(md))
     val minChipGap = 34f * dp
     val pillMargin = 12f * dp
     fun inflated(r: Rect?): Rect? = r?.let {
@@ -429,14 +484,13 @@ private fun DrawScope.drawRidgeline(
     val nextGuard = inflated(nextPillRect)
     val placedChipY = ArrayList<Float>()
     placedChipY.add(mPos.y)
-    var i = route.idxAt(route.distAtElev(elevLoLocal))
+    var i = route.idxAt(camLo)
     var chipCount = 0
     while (chipCount < 40 && i < route.count) {
         val bs = route.startOf(i)
-        val be = route.vertAt(bs)
-        if (be > elevHi) break
-        if (be >= elevLoLocal && bs >= md - 0.02) {
-            val pos = Offset(worldX(bs), screenY(be))
+        if (bs > camHi) break
+        if (bs >= camLo && bs >= md - 15.0) {
+            val pos = Offset(worldX(bs), screenY(bs))
             val tooClose = placedChipY.any { kotlin.math.abs(it - pos.y) < minChipGap }
             if (!tooClose) {
                 val side = if (pos.x < centerX) -1 else 1
@@ -490,18 +544,9 @@ private fun DrawScope.drawRidgeline(
     }
 
     // --- finish flag (if within window) ---
-    if (totalVert <= elevHi + 1) {
+    if (route.total <= camHi + 1) {
         val fx = worldX(route.total)
-        val fy = screenY(totalVert)
-        drawLine(RidgelineTheme.fg, Offset(fx, fy), Offset(fx, fy - 30f * dp), strokeWidth = 2.5f)
-        val flag = Path().apply {
-            moveTo(fx, fy - 30f * dp)
-            lineTo(fx + 26f * dp, fy - 24f * dp)
-            lineTo(fx, fy - 17f * dp)
-            close()
-        }
-        drawPath(flag, RidgelineTheme.elev)
-        drawCircle(RidgelineTheme.elev, radius = 5f, center = Offset(fx, fy))
+        val fy = screenY(route.total)
         // "FINISH · N,NNN ft" amber mono label
         val finishLabel = "FINISH · ${"%,d".format(Math.round(totalVert))} ft"
         val finishTl = measurer.measure(
@@ -513,9 +558,24 @@ private fun DrawScope.drawRidgeline(
                 fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
             ),
         )
+        // Whole-route views end near the top edge, where the NEXT pill lives — if the
+        // right-pointing flag + label would tuck under it, mirror them to the left
+        // (same dodge idea as the grade chips).
+        val flagRect = Rect(fx - 2f, fy - 30f * dp, fx + 26f * dp + finishTl.size.width + 12f, fy + 24f)
+        val dir = if (nextGuard?.overlaps(flagRect) == true) -1f else 1f
+        drawLine(RidgelineTheme.fg, Offset(fx, fy), Offset(fx, fy - 30f * dp), strokeWidth = 2.5f)
+        val flag = Path().apply {
+            moveTo(fx, fy - 30f * dp)
+            lineTo(fx + dir * 26f * dp, fy - 24f * dp)
+            lineTo(fx, fy - 17f * dp)
+            close()
+        }
+        drawPath(flag, RidgelineTheme.elev)
+        drawCircle(RidgelineTheme.elev, radius = 5f, center = Offset(fx, fy))
+        val labelLeft = if (dir < 0) fx - 12f - finishTl.size.width else fx + 12f
         drawText( // legible-exempt: solved via legibleOn over the photo
             finishTl,
-            topLeft = Offset(fx + 12f, fy + 22f - finishTl.size.height),
+            topLeft = Offset(labelLeft, fy + 22f - finishTl.size.height),
         )
     }
 
@@ -539,10 +599,11 @@ private fun DrawScope.drawRidgeline(
         val mTop = nextPillRect?.let { (it.bottom + 10f * dp + 18f).toFloat() } ?: topY
         val mBot = botY
         val mW = stripW
+        // Full-route overview in the position domain (whole program, start → finish).
         val mStart = 0.0
-        val mEnd = max(1.0, totalVert)
+        val mEnd = max(1.0, route.total)
         val span = max(1.0, mEnd - mStart)
-        fun yOf(e: Double): Float = (mBot - ((e - mStart) / span) * (mBot - mTop)).toFloat()
+        fun yOf(pos: Double): Float = (mBot - ((pos - mStart) / span) * (mBot - mTop)).toFloat()
 
         // track background (rounded) + subtle 1px T.line border
         drawRoundRectCompat(
@@ -561,8 +622,8 @@ private fun DrawScope.drawRidgeline(
             val e0 = mStart + (k.toDouble() / K) * span
             val e1 = mStart + ((k + 1).toDouble() / K) * span
             val em = (e0 + e1) / 2.0
-            val g = route.gradeAt(route.distAtElev(em))
-            val trav = em <= E
+            val g = route.gradeAt(em)
+            val trav = em <= md
             val yTop = yOf(e1)
             val hh = max(1f, yOf(e0) - yOf(e1) + 0.6f)
             drawRect(
@@ -574,8 +635,8 @@ private fun DrawScope.drawRidgeline(
         }
         // viewport box highlighting the detailed slice (only meaningful when windowed)
         if (hasMini) {
-            val vTop = yOf(min(mEnd, elevHi))
-            val vBot = yOf(max(mStart, elevLoLocal))
+            val vTop = yOf(min(mEnd, camHi))
+            val vBot = yOf(max(mStart, camLo))
             // Leader lines bridging the strip's viewport back to the switchback map.
             val leaderX = mx - mW / 2f - 6f
             val mapRightEdge = mapW
@@ -602,7 +663,7 @@ private fun DrawScope.drawRidgeline(
             )
         }
         // finish flag at top
-        val ftY = yOf(totalVert)
+        val ftY = yOf(route.total)
         drawLine(RidgelineTheme.fg, Offset(mx, ftY), Offset(mx, ftY - 17f), strokeWidth = 2f, cap = StrokeCap.Round)
         val miniFlag = Path().apply {
             moveTo(mx + 1f, ftY - 17f)
@@ -613,11 +674,11 @@ private fun DrawScope.drawRidgeline(
         drawPath(miniFlag, RidgelineTheme.elev)
         drawCircle(RidgelineTheme.elev, radius = 4.5f, center = Offset(mx, ftY))
         // current-position marker
-        drawCircle(RidgelineTheme.bg, radius = 7f, center = Offset(mx, yOf(E)))
-        drawCircle(RidgelineTheme.accent, radius = 5f, center = Offset(mx, yOf(E)))
-        // "0 ft" at bottom
+        drawCircle(RidgelineTheme.bg, radius = 7f, center = Offset(mx, yOf(md)))
+        drawCircle(RidgelineTheme.accent, radius = 5f, center = Offset(mx, yOf(md)))
+        // "0:00" at bottom — the strip is the program timeline (start → finish)
         val zeroTl = measurer.measure(
-            "0 ft",
+            "0:00",
             style = TextStyle(
                 color = RidgelineTheme.dim2.legibleOn(overlayBg, targetLc = 45.0),
                 fontFamily = RidgelineMonoFamily,
