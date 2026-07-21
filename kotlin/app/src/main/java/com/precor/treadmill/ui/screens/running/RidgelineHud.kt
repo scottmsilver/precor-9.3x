@@ -298,18 +298,15 @@ fun RidgelineHud(
                         }
                     },
             ) {
-                // Measured on-screen bounds (px, in map-canvas coords) of the two
-                // overlay pills, fed to the map so grade chips never collide with them.
+                // Measured on-screen bounds (px, in map-canvas coords) of the metrics
+                // pill, fed to the map so grade chips never collide with it.
                 var metricsRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-                var nextRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
                 val pad = with(density) { 16.dp.toPx() }
-                val canvasW = with(density) { maxWidth.toPx() }
 
                 RidgelineMap(
                     route = route,
                     markerPos = markerDist,
                     metricsPillRect = metricsRect,
-                    nextPillRect = nextRect,
                     modifier = Modifier.fillMaxSize(),
                 )
 
@@ -331,21 +328,8 @@ fun RidgelineHud(
                         },
                 )
 
-                // Next pill, top-right — right edge sits at (canvasWidth - pad).
-                NextPill(
-                    route = route,
-                    markerDist = markerDist,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(16.dp)
-                        .onSizeChanged { sz ->
-                            val rightEdge = canvasW - pad
-                            nextRect = androidx.compose.ui.geometry.Rect(
-                                left = rightEdge - sz.width, top = pad,
-                                right = rightEdge, bottom = pad + sz.height,
-                            )
-                        },
-                )
+                // (The NEXT pill is gone — the minimap strip now carries the last/next
+                // transition ticks with their program times.)
 
                 // Double-tap skip feedback flashes (left / right halves).
                 SkipFeedbackFlash(
@@ -627,124 +611,6 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPlayPauseGlyph(
         val x1 = (size.width - 2 * barW - gap) / 2
         drawRect(c, Offset(x1, size.height * 0.12f), Size(barW, size.height * 0.76f))
         drawRect(c, Offset(x1 + barW + gap, size.height * 0.12f), Size(barW, size.height * 0.76f))
-    }
-}
-
-@Composable
-private fun NextPill(route: RidgelineRoute, markerDist: Double, modifier: Modifier = Modifier) {
-    // Single-interval / constant program: show "Profile" + "constant" (grade/speed from idx 0).
-    val single = route.count == 1
-    // Coerced index for grade/speed lookups; unclamped for the ETA so the last interval
-    // shows the finish time (startOf clamps to total), not the start of the last segment.
-    val ni = (route.idxAt(markerDist) + 1).coerceAtMost(route.count - 1)
-    val niRaw = route.idxAt(markerDist) + 1
-    val ng = if (single) route.gradeIdx(0) else route.gradeIdx(ni)
-    val ns = if (single) route.speedIdx(0) else route.speedIdx(ni)
-    // Route position IS planned seconds, so the boundary position is the "at" time.
-    val nextAt = route.startOf(niRaw)
-    val gradeC = RidgelineTheme.gradeColor(ng)
-    val speedC = RidgelineTheme.speedColor(ns)
-
-    // Accents = the colored value glyphs (grade, speed) plus the fg numerics, so the panel
-    // dims the photo enough for them to clear APCA.
-    LegibleGlassPanel(
-        accents = listOf(gradeC, speedC, RidgelineTheme.fg),
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-    ) {
-        val bg = LocalOverlayBackground.current
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp),
-            horizontalAlignment = Alignment.End,
-        ) {
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                LegibleText(
-                    text = (if (single) "profile" else "next").uppercase(),
-                    color = RidgelineTheme.dim,
-                    style = TextStyle(
-                        fontFamily = RidgelineLabelFamily,
-                        fontSize = 11.sp,
-                        letterSpacing = 1.6.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                if (single) {
-                    LegibleText(
-                        text = "constant",
-                        color = RidgelineTheme.fg,
-                        style = TextStyle(
-                            fontFamily = RidgelineMonoFamily,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        ),
-                    )
-                } else {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        LegibleText(
-                            text = "at ",
-                            color = RidgelineTheme.dim,
-                            style = TextStyle(
-                                fontFamily = RidgelineLabelFamily,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                            ),
-                        )
-                        LegibleText(
-                            text = ridgelineFmtTime(nextAt),
-                            color = RidgelineTheme.fg,
-                            style = TextStyle(
-                                fontFamily = RidgelineMonoFamily,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                fontFeatureSettings = "tnum",
-                            ),
-                        )
-                    }
-                }
-            }
-            Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 8.dp)) {
-                // grade colored by grade — keep the hue, solve contrast via legibleOn
-                LegibleText(
-                    text = "${Math.round(ng)}",
-                    color = gradeC,
-                    targetLc = 70.0,
-                    style = TextStyle(
-                        fontFamily = RidgelineMonoFamily,
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFeatureSettings = "tnum",
-                    ),
-                )
-                LegibleText(
-                    text = "%",
-                    color = RidgelineTheme.dim,
-                    modifier = Modifier.padding(start = 1.dp, bottom = 3.dp),
-                    style = TextStyle(fontFamily = RidgelineLabelFamily, fontSize = 14.sp),
-                )
-                Box(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .height(24.dp)
-                        .width(1.dp)
-                        .background(RidgelineTheme.line),
-                )
-                // speed colored by its own hardness; tightNum needs AnnotatedString → legibleOn
-                Text( // legible-exempt: solved via legibleOn over the photo
-                    text = tightNum("%.1f".format(ns)),
-                    color = speedC.legibleOn(bg, targetLc = 70.0),
-                    fontFamily = RidgelineMonoFamily,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    style = TextStyle(fontFeatureSettings = "tnum"),
-                )
-                LegibleText(
-                    text = " mph",
-                    color = RidgelineTheme.dim,
-                    modifier = Modifier.padding(bottom = 2.dp),
-                    style = TextStyle(fontFamily = RidgelineLabelFamily, fontSize = 13.sp),
-                )
-            }
-        }
     }
 }
 
