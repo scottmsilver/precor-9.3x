@@ -670,13 +670,19 @@ private fun DrawScope.drawRidgeline(
         drawPath(miniFlag, RidgelineTheme.elev)
         drawCircle(RidgelineTheme.elev, radius = 4.5f, center = Offset(mx, ftY))
         // --- last/next transition ticks (replaces the NEXT pill) ---
-        // The boundary you just crossed (dim) and the one coming up (accent), each
-        // labeled with its program time to the left of the strip, so "where am I
-        // between transitions" reads at a glance.
+        // The boundary you just crossed (dim, time only) and the one coming up
+        // (accent, time PLUS the incoming grade/speed — the actual change the tick
+        // announces), left of the strip, so "where am I between transitions and
+        // what's coming" reads at a glance.
         run {
             val curIvIdx = route.idxAt(md)
             val lastB = route.startOf(curIvIdx)
             val nextB = route.endOf(curIvIdx)
+            // coerceAtLeast/AtMost (not coerceIn): an inverted range on a degenerate
+            // tiny canvas must clamp, not throw (codex review).
+            fun clampY(top: Float, h: Int): Float =
+                top.coerceAtMost(mBot - h).coerceAtLeast(mTop)
+            val labelRight = mx - mW / 2f - 10f
             fun transitionTick(pos: Double, isNext: Boolean) {
                 val y = yOf(pos)
                 val color = if (isNext) RidgelineTheme.accent else RidgelineTheme.dim
@@ -687,7 +693,7 @@ private fun DrawScope.drawRidgeline(
                     strokeWidth = if (isNext) 2f else 1.5f,
                     alpha = if (isNext) 1f else 0.7f,
                 )
-                val tl = measurer.measure(
+                val timeTl = measurer.measure(
                     ridgelineFmtTime(pos),
                     style = TextStyle(
                         color = color.legibleOn(overlayBg, targetLc = if (isNext) 60.0 else 45.0),
@@ -697,40 +703,63 @@ private fun DrawScope.drawRidgeline(
                         fontFeatureSettings = "tnum",
                     ),
                 )
-                // coerceAtLeast/AtMost (not coerceIn): an inverted range on a degenerate
-                // tiny canvas must clamp, not throw (codex review).
-                val labelY = (y - tl.size.height / 2f)
-                    .coerceAtMost(mBot - tl.size.height).coerceAtLeast(mTop)
+                if (!isNext) {
+                    drawText( // legible-exempt: solved via legibleOn over the photo
+                        timeTl,
+                        topLeft = Offset(labelRight - timeTl.size.width, clampY(y - timeTl.size.height / 2f, timeTl.size.height)),
+                    )
+                    return
+                }
+                // Upcoming interval's values — what actually changes at this boundary.
+                val ni = min(route.idxAt(pos + 1.0), route.count - 1)
+                val ng = route.gradeIdx(ni)
+                val ns = route.speedIdx(ni)
+                val gradeTl = measurer.measure(
+                    "${Math.round(ng)}%",
+                    style = TextStyle(
+                        color = RidgelineTheme.gradeColor(ng).legibleOn(overlayBg, targetLc = 60.0),
+                        fontFamily = RidgelineMonoFamily,
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        fontFeatureSettings = "tnum",
+                    ),
+                )
+                val spdTl = measurer.measure(
+                    "%.1f".format(ns),
+                    style = TextStyle(
+                        color = RidgelineTheme.speedColor(ns).legibleOn(overlayBg, targetLc = 60.0),
+                        fontFamily = RidgelineMonoFamily,
+                        fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                        fontFeatureSettings = "tnum",
+                    ),
+                )
+                // Two stacked lines straddling the tick: time above, "8% 3.0" below.
+                val timeY = clampY(y - timeTl.size.height - 1f, timeTl.size.height)
                 drawText( // legible-exempt: solved via legibleOn over the photo
-                    tl,
-                    topLeft = Offset(mx - mW / 2f - 10f - tl.size.width, labelY),
+                    timeTl,
+                    topLeft = Offset(labelRight - timeTl.size.width, timeY),
+                )
+                val rowY = clampY(y + 2f, gradeTl.size.height)
+                drawText( // legible-exempt: solved via legibleOn over the photo
+                    spdTl,
+                    topLeft = Offset(labelRight - spdTl.size.width, rowY),
+                )
+                drawText( // legible-exempt: solved via legibleOn over the photo
+                    gradeTl,
+                    topLeft = Offset(labelRight - spdTl.size.width - 6f - gradeTl.size.width, rowY),
                 )
             }
-            val lastVisible = lastB > 0.5                    // start already labeled 0:00
+            val lastVisible = lastB > 0.5                    // the start needs no tick
             val nextVisible = nextB < route.total - 0.5      // finish has its own flag
-            // If both would collide (short interval), keep the upcoming one.
+            // If both would collide (short interval), keep the upcoming one (its
+            // two-line label needs the extra clearance).
             val collide = lastVisible && nextVisible &&
-                kotlin.math.abs(yOf(lastB) - yOf(nextB)) < 16f
+                kotlin.math.abs(yOf(lastB) - yOf(nextB)) < 30f
             if (lastVisible && !collide) transitionTick(lastB, isNext = false)
             if (nextVisible) transitionTick(nextB, isNext = true)
         }
         // current-position marker
         drawCircle(RidgelineTheme.bg, radius = 7f, center = Offset(mx, yOf(md)))
         drawCircle(RidgelineTheme.accent, radius = 5f, center = Offset(mx, yOf(md)))
-        // "0:00" at bottom — the strip is the program timeline (start → finish)
-        val zeroTl = measurer.measure(
-            "0:00",
-            style = TextStyle(
-                color = RidgelineTheme.dim2.legibleOn(overlayBg, targetLc = 45.0),
-                fontFamily = RidgelineMonoFamily,
-                fontSize = 10.sp,
-                fontFeatureSettings = "tnum",
-            ),
-        )
-        drawText( // legible-exempt: solved via legibleOn over the photo
-            zeroTl,
-            topLeft = Offset(mx - zeroTl.size.width / 2f, mBot + 6f),
-        )
     }
 }
 
