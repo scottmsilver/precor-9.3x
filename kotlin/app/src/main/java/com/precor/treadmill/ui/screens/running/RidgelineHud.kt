@@ -253,10 +253,19 @@ fun RidgelineHud(
                 .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // --- LHS column: standalone TIMER panel on top, map below ---
+            Column(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+            TimerPanel(
+                elapsed = sess.elapsedDisplay,
+                modifier = Modifier.fillMaxWidth().height(72.dp),
+            )
             // --- MAP (now inside a glass panel like every other element) ---
             LegibleGlassPanel(
                 accents = listOf(RidgelineTheme.accent),
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
             ) {
             BoxWithConstraints(
@@ -371,6 +380,7 @@ fun RidgelineHud(
                 )
             }
             } // map LegibleGlassPanel
+            } // LHS column (timer + map)
 
             // --- RAIL (fixed ~298dp): the ORIGINAL speed/incline controls (no count-up). ---
             SpeedInclineControls(
@@ -611,6 +621,34 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPlayPauseGlyph(
         val x1 = (size.width - 2 * barW - gap) / 2
         drawRect(c, Offset(x1, size.height * 0.12f), Size(barW, size.height * 0.76f))
         drawRect(c, Offset(x1 + barW + gap, size.height * 0.12f), Size(barW, size.height * 0.76f))
+    }
+}
+
+/**
+ * Standalone session-timer panel above the map. A counting clock needs stable digit
+ * widths — but that's what tnum gives us in the display face: tabular DIGITS without
+ * the mono's full-cell colon (which set "0 : 00" with gaping gaps).
+ */
+@Composable
+private fun TimerPanel(elapsed: String, modifier: Modifier = Modifier) {
+    LegibleGlassPanel(
+        accents = listOf(RidgelineTheme.fg),
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            LegibleText(
+                text = elapsed,
+                color = RidgelineTheme.fg,
+                targetLc = 75.0,
+                style = TextStyle(
+                    fontFamily = RidgelineLabelFamily,
+                    fontSize = 38.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFeatureSettings = "tnum",
+                ),
+            )
+        }
     }
 }
 
