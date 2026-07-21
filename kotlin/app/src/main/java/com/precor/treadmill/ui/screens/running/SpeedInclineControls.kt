@@ -456,9 +456,11 @@ private fun ChevronFieldPanel(
                 }
             }
             // --- value overlay: floats over the FINE zone only; no pointer modifiers,
-            // so touches pass straight through to the zones underneath. ---
+            // so touches pass straight through to the zones underneath. Offset -10dp:
+            // the 56sp line box + hanging unit label made the centered ink block sag
+            // ~8px below the card midline (design review); this rebalances the gaps.
             Column(
-                modifier = Modifier.fillMaxHeight().fillMaxWidth(0.74f),
+                modifier = Modifier.fillMaxHeight().fillMaxWidth(0.74f).offset(y = (-10).dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
@@ -554,16 +556,24 @@ private fun FieldZone(
                     else -> false
                 }
             },
+        // ONE alignment system (design review): every glyph anchors to the card's
+        // top/bottom edge — the coarse pair's padding is chosen so its ink center
+        // registers on the fine glyph's ink center (a shared "up row" / "down row"
+        // datum across the seam), instead of centering in its half 39px off-row.
         contentAlignment = when {
-            isDouble -> Alignment.Center
             isUp -> Alignment.TopCenter
             else -> Alignment.BottomCenter
         },
     ) {
         if (isDouble) {
-            // coarse: double chevron at ~42% of rail width so it reads as the fine
-            // glyph's sibling (stroke family 12.5% of height, gap/amp = 0.4).
-            Canvas(modifier = Modifier.size(40.dp, 40.dp)) {
+            // coarse: 32dp box ≈ 0.6× the fine glyph (φ-ish subordinate, stroke family
+            // 12.5% of height, gap/amp = 0.4). Padding 30dp puts its ink center at
+            // ~46dp from the card edge — same row as the fine glyph's center.
+            Canvas(
+                modifier = Modifier
+                    .padding(top = if (isUp) 30.dp else 0.dp, bottom = if (isUp) 0.dp else 30.dp)
+                    .size(32.dp, 32.dp),
+            ) {
                 val w = size.width; val h = size.height
                 val sw = h * 0.125f
                 val stroke = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -578,12 +588,13 @@ private fun FieldZone(
                 drawPath(chev(topY + amp + gap), glyphColor, alpha = glyphAlpha, style = stroke)
             }
         } else {
-            // fine: glyph sized by HEIGHT (40% of the half) so wide cards don't blow it
+            // fine: glyph sized by HEIGHT (44% of the half) so wide cards don't blow it
             // up past the value; ~100° apex (rise/run ≈ 0.84); butt caps kill the dots.
+            // Edge padding 12dp backs the open side off the value (optical nudge).
             Canvas(
                 modifier = Modifier
-                    .padding(top = if (isUp) 10.dp else 0.dp, bottom = if (isUp) 0.dp else 10.dp)
-                    .fillMaxHeight(0.40f)
+                    .padding(top = if (isUp) 12.dp else 0.dp, bottom = if (isUp) 0.dp else 12.dp)
+                    .fillMaxHeight(0.44f)
                     .aspectRatio(150f / 72f, matchHeightConstraintsFirst = true),
             ) {
                 val w = size.width; val h = size.height
