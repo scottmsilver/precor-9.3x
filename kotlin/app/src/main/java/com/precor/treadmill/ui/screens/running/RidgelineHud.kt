@@ -1,5 +1,6 @@
 package com.precor.treadmill.ui.screens.running
 
+import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import androidx.compose.animation.AnimatedVisibility
@@ -100,6 +101,9 @@ import kotlin.math.max
  */
 private const val DOUBLE_TAP_MS = 300L
 
+/** Sync-diagnostics logcat tag: `adb logcat -s RidgelineSync` while a program runs. */
+private const val SYNC_TAG = "RidgelineSync"
+
 @Composable
 fun RidgelineHud(
     viewModel: TreadmillViewModel,
@@ -109,7 +113,9 @@ fun RidgelineHud(
     val pgm by viewModel.derivedProgram.collectAsState()
     val sess by viewModel.derivedSession.collectAsState()
 
-    // Build the route from real planned intervals.
+    // Build the route from real planned intervals. Route position = planned SECONDS:
+    // the layout follows program time, so interval boundaries are the program clock
+    // and the dot advances steadily regardless of belt speed.
     val intervals = pgm.program?.intervals ?: emptyList()
     val route = remember(intervals) {
         RidgelineRoute(
@@ -117,28 +123,27 @@ fun RidgelineHud(
                 RouteInterval(
                     grade = iv.incline,
                     speed = iv.speed,
-                    len = max(0.001, iv.duration * iv.speed / 3600.0),
+                    durSec = max(1.0, iv.duration.toDouble()),
                 )
             },
         )
     }
-    // Authoritative marker distance from the server: timelinePos fraction of total route.
-    val serverMd = route.total * (pgm.timelinePos / 100.0)
+    // Authoritative marker position from the server: the program clock itself
+    // (interval start + elapsed) — structurally in sync with incline changes.
+    val serverMd = if (pgm.completed) route.total
+        else route.posAtProgram(pgm.currentInterval, pgm.intervalElapsed)
 
     // The program advances the marker only while it is actually running (and not paused).
     val advancing = pgm.running && !pgm.paused
-    // Live belt speed (mph) drives the per-frame advance, matching the design's
-    // CTRL.md += curSpd * dt / 3600.
+    // Live belt speed (mph) — still shown in the metrics pill's power estimate.
     val curSpdMph = status.emuSpeed / 10.0
 
-    // Smooth, frame-driven marker distance. We advance it locally each frame by
-    // speed*dt and gently reconcile toward the server's authoritative position so it
-    // never drifts away from the real program. Re-keyed on the route so a new program
-    // resets the local clock.
+    // Smooth, frame-driven marker position. In the time domain the local advance is
+    // just the wall clock (+dt while running), gently reconciled toward the server's
+    // program clock so it never drifts. Re-keyed on the route so a new program resets.
     var animatedMd by remember(route) { mutableStateOf(serverMd) }
     // Latch live inputs so the long-lived frame loop always reads current values.
     val advancingState = rememberUpdatedState(advancing)
-    val curSpdState = rememberUpdatedState(curSpdMph)
     val serverMdState = rememberUpdatedState(serverMd)
     LaunchedEffect(route) {
         var last = withFrameNanos { it }
@@ -147,11 +152,12 @@ fun RidgelineHud(
             val dt = (now - last) / 1e9
             last = now
             // Local advance while the program is running (frozen when paused/stopped).
-            if (advancingState.value && dt > 0) animatedMd += curSpdState.value * dt / 3600.0
-            // Reconcile toward the server position. Snap on a large gap (seek / reset /
-            // big correction); otherwise ease so it glides. easeTo: cur + (tgt-cur)*(1-e^-rate*dt).
+            if (advancingState.value && dt > 0) animatedMd += dt
+            // Reconcile toward the server position. Snap on a large gap in seconds
+            // (skip / seek / reset); otherwise ease so it glides.
+            // easeTo: cur + (tgt-cur)*(1-e^-rate*dt).
             val gap = serverMdState.value - animatedMd
-            animatedMd = if (kotlin.math.abs(gap) > 0.05) {
+            animatedMd = if (kotlin.math.abs(gap) > 3.0) {
                 serverMdState.value
             } else {
                 animatedMd + gap * (1.0 - kotlin.math.exp(-0.9 * dt))
@@ -160,6 +166,37 @@ fun RidgelineHud(
         }
     }
     val markerDist = animatedMd
+
+    // --- Sync diagnostics (adb logcat -s RidgelineSync) ---
+    // Geometry once per route: what the map is being asked to draw (route position
+    // is planned seconds; miles/vert are the derived organic detail).
+    LaunchedEffect(route) {
+        val segs = (0 until route.count).joinToString(" | ") { i ->
+            "iv%d %.0f-%.0fs @%.1fmph g=%.1f%%".format(
+                i, route.startOf(i), route.endOf(i), route.speedIdx(i), route.gradeIdx(i),
+            )
+        }
+        Log.d(
+            SYNC_TAG,
+            "route: total=%.0fs dist=%.2fmi vert=%.1fft [%s]".format(
+                route.total, route.totalMi, route.vertAt(route.total), segs,
+            ),
+        )
+    }
+    // Position once per server tick: where the server says the user is vs where the
+    // marker is drawn. drawnIv is the segment the dot visually sits in — if it differs
+    // from the server's interval, the dot is off the bend and this line shows by how far.
+    LaunchedEffect(pgm.currentInterval, pgm.intervalElapsed.toInt(), pgm.running, pgm.paused) {
+        Log.d(
+            SYNC_TAG,
+            ("pos: server iv=%d t=%.0fs run=%b pause=%b -> serverPos=%.1fs | " +
+                "drawn pos=%.1fs (%.0f%% of route) drawnIv=%d vert=%.1fft").format(
+                pgm.currentInterval, pgm.intervalElapsed, pgm.running, pgm.paused, serverMd,
+                animatedMd, if (route.total > 0) animatedMd / route.total * 100.0 else 0.0,
+                route.idxAt(animatedMd), route.vertAt(animatedMd),
+            ),
+        )
+    }
 
     val density = LocalDensity.current
 
@@ -270,7 +307,7 @@ fun RidgelineHud(
 
                 RidgelineMap(
                     route = route,
-                    markerDistMiles = markerDist,
+                    markerPos = markerDist,
                     metricsPillRect = metricsRect,
                     nextPillRect = nextRect,
                     modifier = Modifier.fillMaxSize(),
@@ -603,7 +640,8 @@ private fun NextPill(route: RidgelineRoute, markerDist: Double, modifier: Modifi
     val niRaw = route.idxAt(markerDist) + 1
     val ng = if (single) route.gradeIdx(0) else route.gradeIdx(ni)
     val ns = if (single) route.speedIdx(0) else route.speedIdx(ni)
-    val nextAt = route.timeAtDist(route.startOf(niRaw))
+    // Route position IS planned seconds, so the boundary position is the "at" time.
+    val nextAt = route.startOf(niRaw)
     val gradeC = RidgelineTheme.gradeColor(ng)
     val speedC = RidgelineTheme.speedColor(ns)
 
