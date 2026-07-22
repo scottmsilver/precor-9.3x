@@ -496,7 +496,6 @@ private fun ChevronFieldPanel(
                         fontSize = 56.sp,
                         fontWeight = FontWeight.SemiBold,
                         textAlign = TextAlign.Center,
-                        fontFeatureSettings = "tnum",
                         shadow = androidx.compose.ui.graphics.Shadow(
                             color = Color.Black.copy(alpha = 0.55f),
                             blurRadius = 18f,
@@ -506,6 +505,9 @@ private fun ChevronFieldPanel(
                 LegibleText(
                     text = label,
                     color = LocalGlassParams.current.textColor,
+                    // Tuck the unit up under the value's baseline (the natural line
+                    // stack left a floating gap = the value's descent + unit ascent).
+                    modifier = Modifier.offset(y = (-7).dp),
                     style = TextStyle(fontSize = 13.sp, fontFamily = RidgelineLabelFamily),
                 )
             }

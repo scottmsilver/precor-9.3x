@@ -105,6 +105,10 @@ private const val DOUBLE_TAP_MS = 300L
 /** Sync-diagnostics logcat tag: `adb logcat -s RidgelineSync` while a program runs. */
 private const val SYNC_TAG = "RidgelineSync"
 
+// PROTOTYPE: see-through map — no full panel scrim; the photo shows through the map
+// area and scrims live only under the information (trail band, minimap strip).
+const val SEE_THROUGH_MAP = true
+
 @Composable
 fun RidgelineHud(
     viewModel: TreadmillViewModel,
@@ -254,12 +258,9 @@ fun RidgelineHud(
                 .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // --- MAP (now inside a glass panel like every other element) ---
-            LegibleGlassPanel(
-                accents = listOf(RidgelineTheme.accent),
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                shape = RoundedCornerShape(16.dp),
-            ) {
+            // --- MAP (glass panel normally; bare photo behind it in the
+            // see-through prototype, where only the trail/strip carry scrims) ---
+            val mapContent: @Composable () -> Unit = {
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
@@ -382,7 +383,18 @@ fun RidgelineHud(
                     },
                 )
             }
-            } // map LegibleGlassPanel
+            } // map content
+            if (SEE_THROUGH_MAP) {
+                Box(modifier = Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(16.dp))) {
+                    mapContent()
+                }
+            } else {
+                LegibleGlassPanel(
+                    accents = listOf(RidgelineTheme.accent),
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    shape = RoundedCornerShape(16.dp),
+                ) { mapContent() }
+            }
 
             // --- RAIL (fixed ~298dp): the ORIGINAL speed/incline controls (no count-up). ---
             SpeedInclineControls(
@@ -462,21 +474,25 @@ private fun MetricRow(label: String, value: String, unit: String, big: Boolean =
                 fontWeight = FontWeight.SemiBold,
             ),
         )
-        Row(verticalAlignment = Alignment.Bottom) {
+        Row {
             // tightNum() needs an AnnotatedString, which LegibleText can't take; solve the
             // color via legibleOn over the panel's effective background instead.
+            // alignByBaseline: the unit sits ON the number's baseline (bottom-alignment
+            // hung it below by its descent).
             Text( // legible-exempt: solved via legibleOn over the photo
                 text = tightNum(value),
                 color = RidgelineTheme.fg.legibleOn(bg, targetLc = 70.0),
                 fontFamily = RidgelineMonoFamily,
                 fontSize = if (big) 22.sp else 17.sp,
                 fontWeight = FontWeight.Medium,
-                style = TextStyle(fontFeatureSettings = "tnum"),
+                modifier = Modifier.alignByBaseline(),
             )
             LegibleText(
-                text = " $unit",
+                text = unit,
                 color = RidgelineTheme.dim,
-                modifier = Modifier.padding(bottom = 2.dp),
+                // Directly adjacent — the color shift (fg number, dim unit) is the
+                // separator; no gap needed.
+                modifier = Modifier.alignByBaseline(),
                 style = TextStyle(
                     fontFamily = RidgelineLabelFamily,
                     fontSize = 12.sp,

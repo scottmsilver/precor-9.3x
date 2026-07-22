@@ -12,11 +12,39 @@ import com.precor.treadmill.R
 import kotlin.math.max
 import kotlin.math.min
 
+// PROTOTYPE: Peloton-style neutral UI type — swap the HUD's characterful pair
+// (Space Grotesk + Azeret Mono) for Inter everywhere (Peloton's app/web face,
+// already vendored for the portrait timer). Numbers rely on tnum, not a mono.
+private const val PELOTON_TYPE = true
+
+private val InterUiFamily = FontFamily(
+    Font(
+        R.font.inter_variable,
+        weight = FontWeight.Bold,
+        variationSettings = FontVariation.Settings(FontVariation.Setting("wght", 700f)),
+    ),
+    Font(
+        R.font.inter_variable,
+        weight = FontWeight.SemiBold,
+        variationSettings = FontVariation.Settings(FontVariation.Setting("wght", 600f)),
+    ),
+    Font(
+        R.font.inter_variable,
+        weight = FontWeight.Medium,
+        variationSettings = FontVariation.Settings(FontVariation.Setting("wght", 500f)),
+    ),
+    Font(
+        R.font.inter_variable,
+        weight = FontWeight.Normal,
+        variationSettings = FontVariation.Settings(FontVariation.Setting("wght", 400f)),
+    ),
+)
+
 /**
  * Space Grotesk — UI/labels/eyebrows. Variable font (weight axis), vendored OFL
  * at res/font/space_grotesk.ttf (Google Fonts).
  */
-val RidgelineLabelFamily = FontFamily(
+private val SpaceGroteskFamily = FontFamily(
     Font(
         R.font.space_grotesk,
         weight = FontWeight.Bold,
@@ -44,7 +72,7 @@ val RidgelineLabelFamily = FontFamily(
  * font (weight axis), vendored OFL at res/font/azeret_mono.ttf (Google Fonts). Use with
  * `fontFeatureSettings = "tnum"` for tabular alignment.
  */
-val RidgelineMonoFamily = FontFamily(
+private val AzeretMonoFamily = FontFamily(
     Font(
         R.font.azeret_mono,
         weight = FontWeight.SemiBold,
@@ -61,6 +89,9 @@ val RidgelineMonoFamily = FontFamily(
         variationSettings = FontVariation.Settings(FontVariation.Setting("wght", 400f)),
     ),
 )
+
+val RidgelineLabelFamily = if (PELOTON_TYPE) InterUiFamily else SpaceGroteskFamily
+val RidgelineMonoFamily = if (PELOTON_TYPE) InterUiFamily else AzeretMonoFamily
 
 /**
  * Ridgeline HUD "Trail" theme tokens + steepness color ramp.
@@ -125,6 +156,20 @@ object RidgelineTheme {
         val t = (mph - SPD_EASY) / (SPD_HARD - SPD_EASY)
         return gradeColor(max(0.0, min(14.0, t * 14.0)))
     }
+
+    /**
+     * Softened grade/speed hues: the full ramp reads harsh (traffic-light red/green)
+     * against the quiet themed map, so info-bearing marks pull 45% toward the
+     * theme's dim tone — clay instead of red, sage instead of green — keeping the
+     * ordering readable without shouting.
+     */
+    fun mutedGradeColor(gradePct: Double): Color = mute(gradeColor(gradePct))
+    fun mutedSpeedColor(mph: Double): Color = mute(speedColor(mph))
+    private fun mute(c: Color): Color = Color(
+        red = c.red + (dim.red - c.red) * 0.45f,
+        green = c.green + (dim.green - c.green) * 0.45f,
+        blue = c.blue + (dim.blue - c.blue) * 0.45f,
+    )
 }
 
 /** Format seconds as M:SS or H:MM:SS (matches sim.jsx fmtTime). */
