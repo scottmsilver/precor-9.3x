@@ -815,17 +815,8 @@ private fun DrawScope.drawRidgeline(
                 style = Stroke(width = 1.5f),
             )
         }
-        // finish flag at top
-        val ftY = yOf(route.total)
-        drawLine(RidgelineTheme.fg, Offset(mx, ftY), Offset(mx, ftY - 17f), strokeWidth = 2f, cap = StrokeCap.Round)
-        val miniFlag = Path().apply {
-            moveTo(mx + 1f, ftY - 17f)
-            lineTo(mx + 12f, ftY - 13.5f)
-            lineTo(mx + 1f, ftY - 10f)
-            close()
-        }
-        drawPath(miniFlag, RidgelineTheme.elev)
-        drawCircle(RidgelineTheme.elev, radius = 4.5f, center = Offset(mx, ftY))
+        // (no finish flag on the strip — the strip's top edge IS the finish, and
+        // the main map already flies the flag)
         // --- last/next transition ticks (replaces the NEXT pill) ---
         // The boundary you just crossed (dim, time only) and the one coming up
         // (accent, time PLUS the incoming grade/speed — the actual change the tick
