@@ -476,12 +476,12 @@ private fun ChevronFieldPanel(
                 }
             }
             // --- value overlay: floats over the FINE zone only; no pointer modifiers,
-            // so touches pass straight through to the zones underneath. Offset -10dp:
-            // the 56sp line box + hanging unit label made the centered ink block sag
-            // ~8px below the card midline (design review); this rebalances the gaps.
+            // so touches pass straight through to the zones underneath. The number +
+            // unit are centered AS A GROUP: with the unit tucked -7dp the old -10dp
+            // sag correction overshot and the pair sat ~9dp high.
             Column(
                 modifier = Modifier.fillMaxHeight().fillMaxWidth(0.667f)
-                    .align(Alignment.CenterEnd).offset(y = (-10).dp),
+                    .align(Alignment.CenterEnd),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
