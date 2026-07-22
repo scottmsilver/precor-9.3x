@@ -42,6 +42,9 @@ fun NavRail(
     onSettingsToggle: () -> Unit,
     activeProfile: Profile? = null,
     guestMode: Boolean = false,
+    // Floating mode (see-through running HUD): no solid column — the buttons sit in
+    // a translucent glass pill over the full-bleed photo.
+    floating: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val isRunSelected = currentRoute.startsWith("running")
@@ -52,12 +55,23 @@ fun NavRail(
         val startSafe = WindowInsets.safeDrawing.asPaddingValues().calculateStartPadding(layoutDir)
         // Modifier order: bg covers safe area, padding offsets content, then fixed 56dp content width
         Column(
-            modifier = modifier
-                .fillMaxHeight()
-                .background(Color(0xFF121210))
-                .padding(start = startSafe)
-                .width(56.dp)
-                .padding(vertical = 8.dp),
+            modifier = if (floating) {
+                // glass pill wrapped around the buttons; photo visible around it
+                modifier
+                    .padding(start = startSafe + 10.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(28.dp))
+                    .background(Color(0xB30C1114))
+                    .border(1.dp, Color(0x1FFFFFFF), androidx.compose.foundation.shape.RoundedCornerShape(28.dp))
+                    .width(56.dp)
+                    .padding(vertical = 14.dp)
+            } else {
+                modifier
+                    .fillMaxHeight()
+                    .background(Color(0xFF121210))
+                    .padding(start = startSafe)
+                    .width(56.dp)
+                    .padding(vertical = 8.dp)
+            },
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {

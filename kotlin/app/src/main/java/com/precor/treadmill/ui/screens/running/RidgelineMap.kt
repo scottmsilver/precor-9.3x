@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
@@ -239,16 +240,24 @@ fun RidgelineMap(
         label = "camera-pan",
     )
 
-    // Effective background behind the Canvas (photo composited with the map scrim, provided by
-    // the running screen). Canvas free-text colors are solved against it via legibleOn so they
-    // stay legible over the now-visible photo.
-    val overlayBg = LocalOverlayBackground.current
+    // Effective background behind the Canvas for free-text contrast solving. With the
+    // full panel scrim (classic mode) that's the composited panel background from the
+    // running screen. In SEE_THROUGH mode there is no panel — every piece of canvas
+    // text sits on its own dark island (chip pills, the trail scrim, the strip
+    // backing), so solve against that island tone (codex review: the ambient local
+    // was a speed-region estimate, wrong for the map area).
+    val overlayBg = if (SEE_THROUGH_MAP) Color(0xFF11171B) else LocalOverlayBackground.current
+
 
     Canvas(modifier = modifier) {
-        drawRidgeline(
-            route, markerPos, pulseR, pulseA, elevLo.toDouble(),
-            measurer, metricsPillRect, overlayBg,
-        )
+        // Canvas does NOT clip children by default — contours draw past the panel
+        // edge (x in [-30, W+30]) and were bleeding onto neighboring UI.
+        clipRect(0f, 0f, size.width, size.height) {
+            drawRidgeline(
+                route, markerPos, pulseR, pulseA, elevLo.toDouble(),
+                measurer, metricsPillRect, overlayBg,
+            )
+        }
     }
 }
 
@@ -332,36 +341,38 @@ private fun DrawScope.drawRidgeline(
     // gradients are circular, so use 82% of W as the radius (the dominant axis).
     // OPAQUE themed canvas — matches the design previews (no photo bleed-through). The map panel
     // IS the theme: solid bg with a soft glow toward the top, the route/contours read crisp on it.
-    drawRect(color = RidgelineTheme.bg, size = Size(W, H)) // solid base — no photo shows through
-    drawRect(
-        brush = Brush.radialGradient(
-            colorStops = arrayOf(
-                0f to RidgelineTheme.glow,
-                0.64f to RidgelineTheme.bg,
-                1f to RidgelineTheme.bg,
-            ),
-            center = Offset(W * 0.60f, H * 0.08f),
-            radius = W * 0.82f,
-        ),
-        size = Size(W, H),
-    )
-
-    // --- amber summit radial (dPeak): warm glow top-right, behind the route ---
-    // Design: <radialGradient cx=0.59 cy=0.10 r=0.6> rgba(255,179,92,0.16)->transparent,
-    // painted over the top 360px of the map.
-    run {
-        val peakTop = min(H, 360f * dp)
+    if (!SEE_THROUGH_MAP) {
+        drawRect(color = RidgelineTheme.bg, size = Size(W, H)) // solid base — no photo shows through
         drawRect(
             brush = Brush.radialGradient(
                 colorStops = arrayOf(
-                    0f to RidgelineTheme.elev.copy(alpha = 0.16f),
-                    1f to RidgelineTheme.elev.copy(alpha = 0f),
+                    0f to RidgelineTheme.glow,
+                    0.64f to RidgelineTheme.bg,
+                    1f to RidgelineTheme.bg,
                 ),
-                center = Offset(W * 0.59f, H * 0.10f),
-                radius = W * 0.6f,
+                center = Offset(W * 0.60f, H * 0.08f),
+                radius = W * 0.82f,
             ),
-            size = Size(W, peakTop),
+            size = Size(W, H),
         )
+
+        // --- amber summit radial (dPeak): warm glow top-right, behind the route ---
+        // Design: <radialGradient cx=0.59 cy=0.10 r=0.6> rgba(255,179,92,0.16)->transparent,
+        // painted over the top 360px of the map.
+        run {
+            val peakTop = min(H, 360f * dp)
+            drawRect(
+                brush = Brush.radialGradient(
+                    colorStops = arrayOf(
+                        0f to RidgelineTheme.elev.copy(alpha = 0.16f),
+                        1f to RidgelineTheme.elev.copy(alpha = 0f),
+                    ),
+                    center = Offset(W * 0.59f, H * 0.10f),
+                    radius = W * 0.6f,
+                ),
+                size = Size(W, peakTop),
+            )
+        }
     }
 
     // --- contours (constant-elevation bands, mapped through the route's climb) ---
@@ -370,10 +381,8 @@ private fun DrawScope.drawRidgeline(
     val CFT = 38.0
     val vertLo = route.vertAt(camLo)
     val vertHi = route.vertAt(min(camHi, route.total))
-    var ce = kotlin.math.ceil(max(CFT, vertLo) / CFT) * CFT
-    while (ce <= vertHi + 1) {
-        val y = screenY(route.posAtElev(ce))
-        val major = kotlin.math.abs(ce % 190.0) < CFT / 2
+    fun contourWavePath(ceV: Double): Path {
+        val y = screenY(route.posAtElev(ceV))
         val path = Path()
         var first = true
         var x = -30f
@@ -381,18 +390,25 @@ private fun DrawScope.drawRidgeline(
             val xd = x.toDouble()
             val gx = ((x - centerX) / (mapW * 0.336f)).toDouble()
             val yy = (y - 46f * exp(-gx * gx).toFloat() +
-                7f * sin(xd * 0.006 + ce * 0.02).toFloat() +
-                3f * sin(xd * 0.018 + ce * 0.05).toFloat())
+                7f * sin(xd * 0.006 + ceV * 0.02).toFloat() +
+                3f * sin(xd * 0.018 + ceV * 0.05).toFloat())
             if (first) { path.moveTo(x, yy); first = false } else path.lineTo(x, yy)
             x += 26f
         }
-        drawPath(
-            path,
-            color = if (major) RidgelineTheme.contourMajor else RidgelineTheme.accentDim,
-            alpha = if (major) 0.46f else 0.24f,
-            style = Stroke(width = if (major) 1.4f else 1f),
-        )
-        ce += CFT
+        return path
+    }
+    if (SHOW_CONTOURS) {
+        var ce = kotlin.math.ceil(max(CFT, vertLo) / CFT) * CFT
+        while (ce <= vertHi + 1) {
+            val major = kotlin.math.abs(ce % 190.0) < CFT / 2
+            drawPath(
+                contourWavePath(ce),
+                color = if (major) RidgelineTheme.contourMajor else RidgelineTheme.accentDim,
+                alpha = if (major) 0.46f else 0.24f,
+                style = Stroke(width = if (major) 1.4f else 1f),
+            )
+            ce += CFT
+        }
     }
 
     // --- route: sample uniformly along the route POSITION visible in the window ---
@@ -423,9 +439,13 @@ private fun DrawScope.drawRidgeline(
     data class Seg(val key: String, val trav: Boolean, val g: Double, val pts: MutableList<Offset>)
     val segs = ArrayList<Seg>()
     var curS: Seg? = null
+    // Legacy color-ramp segments: only built when that renderer is active (they're
+    // per-frame allocations otherwise — codex review).
     for (d in samplePos) {
+        if (d in boundarySet) boundaryPathPts[d] = Offset(worldX(d), screenY(d))
+    }
+    if (!MONO_THREAD_ROUTE) for (d in samplePos) {
         val p = Offset(worldX(d), screenY(d))
-        if (d in boundarySet) boundaryPathPts[d] = p
         val trav = d <= md
         val g = route.gradeAt(d)
         val key = if (trav) "T" else "G" + Math.round(g)
@@ -436,7 +456,39 @@ private fun DrawScope.drawRidgeline(
             segs.add(ns); curS = ns
         } else s.pts.add(p)
     }
-    for (sg in segs) {
+    if (MONO_THREAD_ROUTE) {
+        // S1: the route is ONE elegant ivory thread — the terrain (hillshade +
+        // emphasized contours) says what's steep, the line just says where you go.
+        run {
+            val split = samplePos.indexOfFirst { it > md }
+            fun thread(from: Int, to: Int): Path {
+                val p = Path()
+                for (i in from..to) {
+                    val x = worldX(samplePos[i]); val y = screenY(samplePos[i])
+                    if (i == from) p.moveTo(x, y) else p.lineTo(x, y)
+                }
+                return p
+            }
+            val last = samplePos.size - 1
+            val sp = if (split < 0) last else split.coerceAtLeast(1)
+            if (SEE_THROUGH_MAP) {
+                // localized scrim: a soft blurred dark band under the trail is the
+                // ONLY thing dimming the photo along the route (Paint cached — the
+                // pulse animation redraws every frame; codex review)
+                drawIntoCanvas { c ->
+                    c.nativeCanvas.drawPath(thread(0, last).asAndroidPath(), trailScrimPaint(dp))
+                }
+            }
+            // soft shadow under the whole thread
+            drawPath(thread(0, last), Color.Black, alpha = 0.40f,
+                style = Stroke(width = 4.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            // travelled: dim; ahead: bright ivory
+            drawPath(thread(0, sp), RidgelineTheme.fg, alpha = 0.38f,
+                style = Stroke(width = 2.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            if (sp < last) drawPath(thread(sp, last), RidgelineTheme.fg, alpha = 0.95f,
+                style = Stroke(width = 2.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        }
+    } else for (sg in segs) {
         if (sg.pts.size < 2) continue
         val path = Path()
         path.moveTo(sg.pts[0].x, sg.pts[0].y)
@@ -521,7 +573,7 @@ private fun DrawScope.drawRidgeline(
             val pos = Offset(worldX(bs), screenY(bs))
             run {
                 val naturalSide = if (pos.x < centerX) -1 else 1
-                val color = RidgelineTheme.gradeColor(route.gradeIdx(i))
+                val color = RidgelineTheme.mutedGradeColor(route.gradeIdx(i))
                 // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
                 // shows BOTH values of the transition — incline and speed — each in its
                 // theme color, solved against the photo+scrim so it stays legible.
@@ -535,16 +587,14 @@ private fun DrawScope.drawRidgeline(
                         color = color.legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineLabelFamily,
                         fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                        fontFeatureSettings = "tnum",
                     ),
                 )
                 val spdTl = measurer.measure(
                     "%.1f".format(route.speedIdx(i)),
                     style = TextStyle(
-                        color = RidgelineTheme.speedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0),
+                        color = RidgelineTheme.mutedSpeedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineLabelFamily,
                         fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                        fontFeatureSettings = "tnum",
                     ),
                 )
                 // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
@@ -699,6 +749,13 @@ private fun DrawScope.drawRidgeline(
         val span = max(1.0, mEnd - mStart)
         fun yOf(pos: Double): Float = (mBot - ((pos - mStart) / span) * (mBot - mTop)).toFloat()
 
+        if (SEE_THROUGH_MAP) {
+            // localized scrim behind the whole strip (its own dark island on the photo)
+            drawRoundRectCompat(
+                mx - mW / 2f - 7f, mTop - 10f, mW + 14f, mBot - mTop + 20f, 9f,
+                Color(0xC9070B0E),
+            )
+        }
         // track background (rounded) + subtle 1px T.line border
         drawRoundRectCompat(
             mx - mW / 2f - 1f, mTop - 1f, mW + 2f, mBot - mTop + 2f, mW / 2f,
@@ -721,10 +778,10 @@ private fun DrawScope.drawRidgeline(
             val yTop = yOf(e1)
             val hh = max(1f, yOf(e0) - yOf(e1) + 0.6f)
             drawRect(
-                RidgelineTheme.gradeColor(g),
+                RidgelineTheme.mutedGradeColor(g),
                 topLeft = Offset(mx - mW / 2f, yTop),
                 size = Size(mW, hh),
-                alpha = if (trav) 0.26f else 0.95f,
+                alpha = if (trav) 0.24f else 0.80f,
             )
         }
         // viewport box highlighting the detailed slice (only meaningful when windowed)
@@ -805,7 +862,6 @@ private fun DrawScope.drawRidgeline(
                         fontFamily = RidgelineLabelFamily,
                         fontSize = if (isNext) 14.sp else 12.sp,
                         fontWeight = if (isNext) FontWeight.SemiBold else FontWeight.Normal,
-                        fontFeatureSettings = "tnum",
                     ),
                 )
                 if (!isNext) {
@@ -824,19 +880,17 @@ private fun DrawScope.drawRidgeline(
                 val gradeTl = measurer.measure(
                     "%.1f%%".format(ng),
                     style = TextStyle(
-                        color = RidgelineTheme.gradeColor(ng).legibleOn(overlayBg, targetLc = 60.0),
+                        color = RidgelineTheme.mutedGradeColor(ng).legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineLabelFamily,
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                        fontFeatureSettings = "tnum",
                     ),
                 )
                 val spdTl = measurer.measure(
                     "%.1f".format(ns),
                     style = TextStyle(
-                        color = RidgelineTheme.speedColor(ns).legibleOn(overlayBg, targetLc = 60.0),
+                        color = RidgelineTheme.mutedSpeedColor(ns).legibleOn(overlayBg, targetLc = 60.0),
                         fontFamily = RidgelineLabelFamily,
                         fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                        fontFeatureSettings = "tnum",
                     ),
                 )
                 // Two stacked lines straddling the tick: time above, "8% 3.0" below.
@@ -880,4 +934,39 @@ private fun DrawScope.drawRoundRectCompat(
         size = Size(w, h),
         cornerRadius = androidx.compose.ui.geometry.CornerRadius(radius, radius),
     )
+}
+
+// --- Route rendering mode flags -------------------------------------------
+// MONO_THREAD_ROUTE: the route is a single ivory thread (mono, themed); grade
+// information lives in the muted chips/strip markers. Flip false to restore the
+// classic grade-color-ramp route segments.
+private const val MONO_THREAD_ROUTE = true
+
+// Background contour texture: dropped from the mono look (the quiet thread +
+// muted markers carry the map alone); flip to bring the topo texture back.
+private const val SHOW_CONTOURS = false
+
+
+
+
+
+
+// Cached trail-scrim paint (see-through mode). Rebuilt only when density changes.
+private var trailScrimPaintCache: android.graphics.Paint? = null
+private var trailScrimPaintDp: Float = 0f
+private fun trailScrimPaint(dp: Float): android.graphics.Paint {
+    val cached = trailScrimPaintCache
+    if (cached != null && trailScrimPaintDp == dp) return cached
+    val p = android.graphics.Paint().apply {
+        isAntiAlias = true
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 26f * dp
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND
+        color = android.graphics.Color.argb(165, 5, 8, 10)
+        maskFilter = android.graphics.BlurMaskFilter(8f * dp, android.graphics.BlurMaskFilter.Blur.NORMAL)
+    }
+    trailScrimPaintCache = p
+    trailScrimPaintDp = dp
+    return p
 }

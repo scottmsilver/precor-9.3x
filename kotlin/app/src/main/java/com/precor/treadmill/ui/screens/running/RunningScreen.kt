@@ -11,6 +11,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -27,6 +28,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -139,7 +141,7 @@ private fun rememberRunReadability(): RunReadability {
     val containerH = with(density) { config.screenHeightDp.dp.toPx() }
     return remember(containerW, containerH) {
         val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
-        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.bg_lake, opts)
+        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.bg_ridge, opts)
         if (bmp == null) {
             // decodeResource can return null — fall back to the engine's neutral theme.
             val neutral = chooseTheme(emptyList(), AdvicePrior()).theme
@@ -291,7 +293,7 @@ fun RunningScreen(
     ) {
         // Background image (full-bleed; per-region scrim handles legibility)
         Image(
-            painter = painterResource(R.drawable.bg_lake),
+            painter = painterResource(R.drawable.bg_ridge),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -529,7 +531,7 @@ private fun RunningScreenLandscape(
 
         // Background image (full-bleed; per-region scrim handles legibility)
         Image(
-            painter = painterResource(R.drawable.bg_lake),
+            painter = painterResource(R.drawable.bg_ridge),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -563,7 +565,19 @@ private fun RunningScreenLandscape(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)),
         ) {
-            RidgelineHud(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+            // Clear the floating nav pill overlaid at the start edge: its span is
+            // startSafe + 10dp margin + 56dp pill (+2dp gap) — track the same safe
+            // inset the pill uses (codex review: a fixed 68dp overlapped when the
+            // display has a start cutout).
+            val railLayoutDir = LocalLayoutDirection.current
+            val railStartSafe =
+                WindowInsets.safeDrawing.asPaddingValues().calculateStartPadding(railLayoutDir)
+            RidgelineHud(
+                viewModel = viewModel,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = if (SEE_THROUGH_MAP) railStartSafe + 68.dp else 0.dp),
+            )
         }
         } // CompositionLocalProvider
     }
