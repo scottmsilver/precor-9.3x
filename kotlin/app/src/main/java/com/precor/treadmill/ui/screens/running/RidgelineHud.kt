@@ -421,11 +421,13 @@ fun RidgelineHud(
             }
 
             // --- RAIL (fixed ~298dp): the ORIGINAL speed/incline controls (no count-up). ---
+            // Top-aligned with the TIMER pill: it sits 16dp into the map, so the
+            // rail pads down the same 16dp — one shared top datum.
             SpeedInclineControls(
                 viewModel = viewModel,
                 vertical = true,
                 fillHeight = true,
-                modifier = Modifier.width(298.dp).fillMaxHeight(),
+                modifier = Modifier.width(298.dp).fillMaxHeight().padding(top = 16.dp),
             )
         }
 
@@ -715,6 +717,13 @@ private fun ExitHomeChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
             fontFamily = RidgelineLabelFamily,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
+            // Tight line box: the default font padding hung the text low, so the
+            // arrow's shaft didn't split "Home" — kill the extra leading and the
+            // Row's vertical centering lines the two up optically.
+            lineHeight = 13.sp,
+            style = androidx.compose.ui.text.TextStyle(
+                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+            ),
         )
     }
 }
