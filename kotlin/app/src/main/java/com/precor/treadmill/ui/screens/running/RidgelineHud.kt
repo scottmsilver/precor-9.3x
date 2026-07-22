@@ -1,6 +1,8 @@
 package com.precor.treadmill.ui.screens.running
 
 import android.util.Log
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import androidx.compose.animation.AnimatedVisibility
@@ -112,6 +114,7 @@ const val SEE_THROUGH_MAP = true
 @Composable
 fun RidgelineHud(
     viewModel: TreadmillViewModel,
+    onExitToHome: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val status by viewModel.status.collectAsState()
@@ -218,6 +221,14 @@ fun RidgelineHud(
     var lastTapSide by remember { mutableStateOf<String?>(null) }
     var singleTapJob by remember { mutableStateOf<Job?>(null) }
     val multiInterval = pgm.intervalCount > 1
+    // Exit-to-home chip (Peloton-style, top-left): persistent while the workout is
+    // stopped; while running it's hidden and a tap near the TOP of the map reveals
+    // it for a few seconds.
+    var exitRevealed by remember { mutableStateOf(false) }
+    LaunchedEffect(exitRevealed) {
+        if (exitRevealed) { delay(4000); exitRevealed = false }
+    }
+    val exitVisible = !pgm.running || exitRevealed
 
     // Auto-hide the overlay after 4s (kept open while paused); autoHideKey restarts it on skip.
     LaunchedEffect(overlayVisible, pgm.paused, autoHideKey) {
@@ -270,6 +281,10 @@ fun RidgelineHud(
                             if (overlayVisible) {
                                 // Tap on the dark backdrop (the buttons consume their own taps) hides it.
                                 overlayVisible = false
+                                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            } else if (offset.y < size.height * 0.22f) {
+                                // top strip: reveal the exit chip, not the skip overlay
+                                exitRevealed = true
                                 view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                             } else {
                                 val side = if (offset.x / size.width > 0.5f) "right" else "left"
@@ -329,6 +344,13 @@ fun RidgelineHud(
                         },
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    AnimatedVisibility(
+                        visible = exitVisible,
+                        enter = fadeIn() + scaleIn(initialScale = 0.9f),
+                        exit = fadeOut() + scaleOut(targetScale = 0.9f),
+                    ) {
+                        ExitHomeChip(onClick = onExitToHome, modifier = Modifier.fillMaxWidth())
+                    }
                     TimerPanel(elapsed = sess.elapsedDisplay, modifier = Modifier.fillMaxWidth())
                     MetricsPill(
                         modifier = Modifier.fillMaxWidth(),
@@ -649,6 +671,47 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPlayPauseGlyph(
  * in the display face: tabular DIGITS without the mono's full-cell colon (which
  * set "0 : 00" with gaping gaps).
  */
+/**
+ * Peloton-style exit affordance: a glass chip with a back arrow + "Home". Rendered
+ * in the map's top-left overlay stack; visibility is managed by the caller
+ * (persistent when stopped, tap-near-top reveal while running).
+ */
+@Composable
+private fun ExitHomeChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    LegibleGlassPanel(
+        accents = listOf(RidgelineTheme.fg),
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .clickable(onClick = onClick)
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 9.dp)
+                .semantics { contentDescription = "Exit to home" },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            androidx.compose.material3.Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = null,
+                tint = RidgelineTheme.fg,
+                modifier = Modifier.size(18.dp),
+            )
+            LegibleText(
+                text = "Home",
+                color = RidgelineTheme.fg,
+                modifier = Modifier.padding(start = 8.dp),
+                style = TextStyle(
+                    fontFamily = RidgelineLabelFamily,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+        }
+    }
+}
+
 @Composable
 private fun TimerPanel(elapsed: String, modifier: Modifier = Modifier) {
     LegibleGlassPanel(

@@ -214,15 +214,14 @@ fun AppNavigation(
         }
     }
 
-    // See-through running HUD: the rail floats as a glass pill over the full-bleed
-    // photo instead of occupying a solid column.
-    val railOverlay = isLandscape && currentRoute == Routes.RUNNING &&
+    // See-through running HUD: no rail at all — the HUD is full-bleed and exits
+    // via the top-left home chip (Peloton-style).
+    val hideRail = isLandscape && currentRoute == Routes.RUNNING &&
         com.precor.treadmill.ui.screens.running.SEE_THROUGH_MAP
 
     val navRail = @Composable {
         NavRail(
             currentRoute = currentRoute,
-            floating = railOverlay,
             voiceState = voiceState,
             onNavigate = navigateTo,
             onVoiceToggle = { handleVoiceToggle(null) },
@@ -271,6 +270,7 @@ fun AppNavigation(
                 RunningScreen(
                     viewModel = viewModel,
                     onVoiceToggle = handleVoiceToggle,
+                    onExitToHome = { navigateTo(Routes.LOBBY) },
                 )
             }
             composable(Routes.DEBUG) {
@@ -292,12 +292,9 @@ fun AppNavigation(
                     DisconnectBanner(connected = wsConnected)
                 }
                 Row(modifier = Modifier.weight(1f)) {
-                    if (showChrome && !railOverlay) navRail()
+                    if (showChrome && !hideRail) navRail()
                     Box(modifier = Modifier.weight(1f)) {
                         navHostContent()
-                        if (showChrome && railOverlay) {
-                            Box(modifier = Modifier.align(Alignment.CenterStart)) { navRail() }
-                        }
                     }
                 }
             }
