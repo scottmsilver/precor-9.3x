@@ -263,7 +263,9 @@ fun RidgelineHud(
         // Top bleed strip: a band of pure photo. The unobtrusive Home chip lives
         // here (left), so the timer's top edge stays level with the rail cards.
         Box(
-            modifier = Modifier.fillMaxWidth().height(36.dp).padding(start = 14.dp),
+            // start = gutter (14) + map inner padding (16): the chip's left edge
+            // aligns with the timer pill's; nudged down a touch within the strip.
+            modifier = Modifier.fillMaxWidth().height(40.dp).padding(start = 30.dp, top = 8.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
             AnimatedExitChip(visible = exitVisible, onClick = onExitToHome)
