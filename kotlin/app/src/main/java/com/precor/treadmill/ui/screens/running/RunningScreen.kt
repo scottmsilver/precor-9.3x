@@ -216,6 +216,7 @@ private fun rememberRunReadability(): RunReadability {
 fun RunningScreen(
     viewModel: TreadmillViewModel,
     onVoiceToggle: (String?) -> Unit,
+    onExitToHome: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val sess by viewModel.derivedSession.collectAsState()
@@ -260,6 +261,7 @@ fun RunningScreen(
     if (isLandscape) {
         // Landscape: side-by-side layout
         RunningScreenLandscape(
+            onExitToHome = onExitToHome,
             viewModel = viewModel,
             onVoiceToggle = onVoiceToggle,
             timerVisible = timerVisible,
@@ -508,6 +510,7 @@ fun RunningScreen(
 private fun RunningScreenLandscape(
     viewModel: TreadmillViewModel,
     onVoiceToggle: (String?) -> Unit,
+    onExitToHome: () -> Unit,
     timerVisible: MutableTransitionState<Boolean>,
     isManual: Boolean,
     durationEditOpen: Boolean,
@@ -565,18 +568,10 @@ private fun RunningScreenLandscape(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)),
         ) {
-            // Clear the floating nav pill overlaid at the start edge: its span is
-            // startSafe + 10dp margin + 56dp pill (+2dp gap) — track the same safe
-            // inset the pill uses (codex review: a fixed 68dp overlapped when the
-            // display has a start cutout).
-            val railLayoutDir = LocalLayoutDirection.current
-            val railStartSafe =
-                WindowInsets.safeDrawing.asPaddingValues().calculateStartPadding(railLayoutDir)
             RidgelineHud(
                 viewModel = viewModel,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = if (SEE_THROUGH_MAP) railStartSafe + 68.dp else 0.dp),
+                onExitToHome = onExitToHome,
+                modifier = Modifier.fillMaxSize(),
             )
         }
         } // CompositionLocalProvider
