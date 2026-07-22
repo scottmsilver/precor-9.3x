@@ -361,8 +361,7 @@ fun RidgelineHud(
                         dist = sess.distDisplay,
                         // null when no live reading — the pill drops the row entirely.
                         hr = if (status.hrmConnected && status.heartRate > 0) status.heartRate.toString() else null,
-                        // Estimated power (design sim formula): speed*16 + incline*9 + 40.
-                        watts = Math.round(curSpdMph * 16.0 + status.emuIncline * 9.0 + 40.0).toString(),
+                        cal = sess.caloriesDisplay,
                     )
                 }
 
@@ -463,7 +462,7 @@ private fun MetricsPill(
     vert: String,
     dist: String,
     hr: String?,
-    watts: String,
+    cal: String,
     modifier: Modifier = Modifier,
 ) {
     // Values are RidgelineTheme.fg; let the panel dim the photo behind it so they clear APCA.
@@ -480,7 +479,7 @@ private fun MetricsPill(
             MetricRow("DISTANCE", dist, "mi")
             // No HRM connected -> no HEART row at all (don't burn a row on "--").
             if (hr != null) MetricRow("HEART", hr, "bpm")
-            MetricRow("POWER", watts, "w")
+            MetricRow("CALORIES", cal, "cal")
         }
     }
 }
