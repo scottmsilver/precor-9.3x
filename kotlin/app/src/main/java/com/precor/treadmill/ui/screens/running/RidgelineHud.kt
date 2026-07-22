@@ -260,13 +260,21 @@ fun RidgelineHud(
     // through; the map area applies its own photo-derived dark scrim (see RidgelineMap) and the
     // panels dim adaptively, integrating the console with the APCA readability system.
     Column(modifier = modifier.fillMaxSize()) {
+        // Top bleed strip: a band of pure photo. The unobtrusive Home chip lives
+        // here (left), so the timer's top edge stays level with the rail cards.
+        Box(
+            modifier = Modifier.fillMaxWidth().height(36.dp).padding(start = 14.dp),
+            contentAlignment = Alignment.CenterStart,
+        ) {
+            AnimatedExitChip(visible = exitVisible, onClick = onExitToHome)
+        }
         // Top row: map PANEL (weight 1) + controls rail. Uniform padding + an 8dp gap so the
         // map, the controls, and (below) the action bar all read as aligned glass cards.
         Row(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                .padding(start = 8.dp, end = 8.dp, top = 0.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // --- MAP (glass panel normally; bare photo behind it in the
@@ -344,13 +352,6 @@ fun RidgelineHud(
                         },
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    AnimatedVisibility(
-                        visible = exitVisible,
-                        enter = fadeIn() + scaleIn(initialScale = 0.9f),
-                        exit = fadeOut() + scaleOut(targetScale = 0.9f),
-                    ) {
-                        ExitHomeChip(onClick = onExitToHome, modifier = Modifier.fillMaxWidth())
-                    }
                     TimerPanel(elapsed = sess.elapsedDisplay, modifier = Modifier.fillMaxWidth())
                     MetricsPill(
                         modifier = Modifier.fillMaxWidth(),
@@ -436,7 +437,7 @@ fun RidgelineHud(
             showControls = false,
             externalPadding = true,
             uniformHeight = true,
-            modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 12.dp),
         )
     }
 }
@@ -672,43 +673,48 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPlayPauseGlyph(
  * set "0 : 00" with gaping gaps).
  */
 /**
- * Peloton-style exit affordance: a glass chip with a back arrow + "Home". Rendered
- * in the map's top-left overlay stack; visibility is managed by the caller
- * (persistent when stopped, tap-near-top reveal while running).
+ * Unobtrusive Peloton-style exit affordance: a slim "← Home" chip that lives in the
+ * top bleed strip. Visibility is managed by the caller (persistent when stopped,
+ * tap-near-top reveal while running).
  */
 @Composable
-private fun ExitHomeChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    LegibleGlassPanel(
-        accents = listOf(RidgelineTheme.fg),
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
+private fun AnimatedExitChip(visible: Boolean, onClick: () -> Unit) {
+    // Standalone so the plain AnimatedVisibility overload binds (an enclosing
+    // Column/Row scope would shadow it — same gotcha as the skip overlay).
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + scaleIn(initialScale = 0.92f),
+        exit = fadeOut() + scaleOut(targetScale = 0.92f),
     ) {
-        Row(
-            modifier = Modifier
-                .clickable(onClick = onClick)
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 9.dp)
-                .semantics { contentDescription = "Exit to home" },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-        ) {
-            androidx.compose.material3.Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = null,
-                tint = RidgelineTheme.fg,
-                modifier = Modifier.size(18.dp),
-            )
-            LegibleText(
-                text = "Home",
-                color = RidgelineTheme.fg,
-                modifier = Modifier.padding(start = 8.dp),
-                style = TextStyle(
-                    fontFamily = RidgelineLabelFamily,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                ),
-            )
-        }
+        ExitHomeChip(onClick = onClick)
+    }
+}
+
+@Composable
+private fun ExitHomeChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(9.dp))
+            .background(Color(0x990A0F12))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 5.dp)
+            .semantics { contentDescription = "Exit to home" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = null,
+            tint = RidgelineTheme.fg.copy(alpha = 0.9f),
+            modifier = Modifier.size(15.dp),
+        )
+        Text( // legible-exempt: fixed ivory on the chip's own dark scrim
+            text = "Home",
+            color = RidgelineTheme.fg.copy(alpha = 0.9f),
+            modifier = Modifier.padding(start = 6.dp),
+            fontFamily = RidgelineLabelFamily,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }
 
