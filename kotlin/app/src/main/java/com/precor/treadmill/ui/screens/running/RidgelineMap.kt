@@ -182,11 +182,11 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     }
 }
 
-// Route-position (planned seconds) shown at once. 15 minutes per screen: programs
-// beyond ~17min WINDOW — the camera pans as you progress and the minimap's viewport
+// Route-position (planned seconds) shown at once. 10 minutes per screen: programs
+// beyond ~11min WINDOW — the camera pans as you progress and the minimap's viewport
 // box + leader lines activate — while shorter programs fit whole and always FILL the
-// panel. (Was 25min; the switchbacks read squashed with that much trail in view.)
-private const val POS_WINDOW = 900.0
+// panel. (Was 25min, then 15; the switchbacks read squashed with more in view.)
+private const val POS_WINDOW = 600.0
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
@@ -526,14 +526,23 @@ private fun DrawScope.drawRidgeline(
     // --- auto-extend dashed ghost line: cue that the route continues above the window ---
     if (camHi < route.total - 0.5) {
         val tx = worldX(camHi)
+        // Bend toward the map's horizontal center (a fixed leftward hook parked the
+        // dashes under the Home chip / timer stack).
         val ghost = Path().apply {
             moveTo(tx, topY)
-            lineTo(tx - 34f * dp, topY - 22f * dp)
-            lineTo(tx - 92f * dp, topY - 40f * dp)
+            lineTo(tx + (centerX - tx) * 0.45f, topY - 22f * dp)
+            lineTo(tx + (centerX - tx) * 0.9f, topY - 40f * dp)
+        }
+        if (SEE_THROUGH_MAP) {
+            // same localized scrim as the trail — without it the dashes vanished
+            // into bright sky and the "path continues" cue was unreadable
+            drawIntoCanvas { c ->
+                c.nativeCanvas.drawPath(ghost.asAndroidPath(), trailScrimPaint(dp))
+            }
         }
         drawPath(
             ghost,
-            color = RidgelineTheme.dim2,
+            color = if (SEE_THROUGH_MAP) RidgelineTheme.fg.copy(alpha = 0.6f) else RidgelineTheme.dim2,
             style = Stroke(
                 width = 3f * dp,
                 cap = StrokeCap.Round,
