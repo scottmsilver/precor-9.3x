@@ -274,7 +274,7 @@ fun RidgelineHud(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
-                .padding(start = 8.dp, end = 8.dp, top = 0.dp, bottom = 8.dp),
+                .padding(start = 14.dp, end = 14.dp, top = 0.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // --- MAP (glass panel normally; bare photo behind it in the
@@ -437,7 +437,7 @@ fun RidgelineHud(
             showControls = false,
             externalPadding = true,
             uniformHeight = true,
-            modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 12.dp),
+            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
         )
     }
 }
