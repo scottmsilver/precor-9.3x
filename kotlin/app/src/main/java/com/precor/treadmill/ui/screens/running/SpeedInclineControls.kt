@@ -487,7 +487,9 @@ private fun ChevronFieldPanel(
             ) {
                 LegibleText(
                     text = value,
-                    color = accentColor,
+                    // Neutral ivory, not the metric accent — the mono instrument keeps
+                    // color for live/press states only.
+                    color = RidgelineTheme.fg,
                     targetLc = 70.0,
                     style = TextStyle(
                         // Display face, not the mono — the mono's full-cell decimal reads
