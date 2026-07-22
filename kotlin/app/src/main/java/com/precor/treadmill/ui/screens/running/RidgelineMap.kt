@@ -182,12 +182,11 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     }
 }
 
-// Route-position (planned seconds) shown at once. 25 minutes per screen: a typical
-// 45-60min program exceeds the window and therefore WINDOWS — the camera pans as you
-// progress and the minimap's viewport box + leader lines activate — while shorter
-// programs fit whole and always FILL the panel (no more collapsing a short/flat
-// route into a stub against a fixed feet-of-climb window).
-private const val POS_WINDOW = 1500.0
+// Route-position (planned seconds) shown at once. 15 minutes per screen: programs
+// beyond ~17min WINDOW — the camera pans as you progress and the minimap's viewport
+// box + leader lines activate — while shorter programs fit whole and always FILL the
+// panel. (Was 25min; the switchbacks read squashed with that much trail in view.)
+private const val POS_WINDOW = 900.0
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
