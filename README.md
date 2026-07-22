@@ -4,11 +4,15 @@
 
 A Raspberry Pi sits between the console and motor controller of a Precor 9.31 treadmill, intercepting the serial bus. It runs an AI coach (Gemini), voice control, a tablet UI, and a Bluetooth daemon that makes Zwift think it's a modern smart treadmill.
 
+<img src="docs/screenshots/ridgeline-hud.jpg" width="820" alt="The Ridgeline HUD: the workout's route switchbacks up a real mountain photo, with floating glass instruments">
+
+*The Ridgeline HUD — your workout drawn as a trail up a real mountain. The route's switchbacks tighten with the grade, the strip on the right shows what's coming and when, and every panel is adaptive glass floating on the photo.*
+
 ---
 
 ## Voice + AI Coach
 
-<img src="docs/screenshots/android-running.png" width="700" alt="Running screen on Android tablet">
+<img src="docs/screenshots/ridgeline-trail-detail.jpg" width="700" alt="Detail: the interval route climbing the ridgeline, with grade/speed chips at each transition">
 
 - "Set speed to 5" or "give me a 20-minute hill workout" — Gemini controls the belt directly
 - Voice works mid-run via Gemini Live (real-time, no wake word)
