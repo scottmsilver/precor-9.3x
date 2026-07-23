@@ -1,3 +1,0 @@
-caddy: caddy run --config Caddyfile.dev --adapter caddyfile
-server: python3 python/server.py
-vite: cd web && npx vite --port $VITE_SERVER_PORT

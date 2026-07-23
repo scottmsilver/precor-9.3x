@@ -90,6 +90,16 @@ def test_app(mock_client):
     server._guest_mode = orig_guest_mode
 
 
+class TestRootBanner:
+    def test_root_returns_json_banner(self, test_app):
+        """GET / returns the API banner (no web UI is served; also proves
+        `import server` works with no static/ directory on disk)."""
+        client, _, _ = test_app
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert resp.json() == {"service": "precor-treadmill", "api": "/api", "ws": "/ws"}
+
+
 class TestStatusEndpoint:
     def test_get_status(self, test_app):
         client, server, _ = test_app

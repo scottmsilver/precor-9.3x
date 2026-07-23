@@ -68,25 +68,23 @@ python3 python/tools/listen.py              # Simple KV listener (--changes, --u
 
 ## Local Development
 
-The local dev stack uses Caddy as a reverse proxy in front of Vite (HMR) and server.py. **Always browse via the Caddy URL** — never access Vite directly.
+Local dev runs `python/server.py` directly — it is the API + WebSocket backend (no web UI is served).
 
 ```bash
 # First time (or per worktree): allocate unique ports
 scripts/setup-worktree.sh        # creates worktree.env with random free ports
 
-# Launch full dev stack (Caddy + server.py + Vite)
+# Launch the dev server
 ./scripts/dev.sh                 # connects to real Pi
 TREADMILL_MOCK=1 ./scripts/dev.sh  # mock mode, no Pi needed
 
-# The Caddy entry-point URL is printed on startup — use that URL in the browser.
+# The server URL is printed on startup.
 # Ports are dynamic (from worktree.env). Do NOT hardcode port numbers.
 ```
 
-**Key files:** `Caddyfile.dev` (routing rules), `scripts/dev.sh` (launcher), `scripts/worktree-env.sh` (port sourcing), `scripts/setup-worktree.sh` (port allocation).
+**Key files:** `scripts/dev.sh` (launcher), `scripts/worktree-env.sh` (port sourcing), `scripts/setup-worktree.sh` (port allocation).
 
-**Routing:** Caddy proxies `/api/*` and `/ws` to server.py, everything else to Vite. This mirrors the production setup where server.py serves both API and static files.
-
-**Verifying UI changes:** After editing web UI code, launch the dev stack and open the Caddy URL in a browser. Vite provides HMR so changes appear instantly. For production builds, run `cd web && npx vite build` then `deploy/deploy.sh ui`.
+**Verifying UI changes:** The UI is the Android app (`kotlin/`). Build and install it on the emulator or tablet (see Kotlin/Android notes) and point it at the dev server or the Pi.
 
 ## Dependencies
 
@@ -107,9 +105,8 @@ The Pi advertises one DNS-SD service via a static Avahi file
 `_treadmill._tcp`, port 8000, TXT `scheme=https`, `path=/`. Native apps
 (Android `NsdManager`, iOS `NWBrowser`) discover it and either auto-connect
 (single result) or show a picker (multiple), with manual entry as the
-zero-result fallback. The web UI is exempt (same-origin). The `scheme=https`
-contract depends on the per-device self-signed cert work
-(`precor-9_3x-41a`).
+zero-result fallback. The `scheme=https` contract depends on the
+per-device self-signed cert work (`precor-9_3x-41a`).
 
 ## Architecture
 
@@ -184,18 +181,18 @@ A Rust daemon (`rust/hrm/`) that acts as a BLE GATT client, scanning for and con
 - **Graceful degradation**: If hrm-daemon isn't running, server.py continues without HR. Auto-reconnects when daemon becomes available
 - Runs as a systemd service (`hrm.service`), depends on `bluetooth.target`
 
-### Web UI
+### Server (API + WebSocket)
 
-`python/server.py` serves a React + TypeScript SPA (source in `web/`, builds to `static/`) with WebSocket for real-time KV data streaming and REST endpoints for speed/incline/mode control. Runs as a systemd service (`treadmill-server.service`).
+`python/server.py` is an API + WebSocket backend only — there is no web UI. `GET /` returns a small JSON banner (`{"service": "precor-treadmill", "api": "/api", "ws": "/ws"}`); clients (Android app, iOS app) discover the server via mDNS and talk to `/api/*` and `/ws`. Runs as a systemd service (`treadmill-server.service`).
 
 ### Adaptive Text Readability (on-photo legibility)
 
 The running screen draws a full-bleed background photo; all text/widgets over it are made legible by an adaptive system rather than hand-tuned opacities. Design: [`docs/superpowers/specs/2026-06-03-adaptive-text-readability-design.md`](docs/superpowers/specs/2026-06-03-adaptive-text-readability-design.md).
 
-- **Pure engine** — APCA Lc contrast + a minimized "beauty cost" pick one coherent screen `Theme` (photo-derived tint + ivory/charcoal text + blur) plus per-region scrim. Implemented **twice** and kept numerically identical: `web/src/bglab/` (TS) and `kotlin/.../ui/theme/readability/` (Kotlin), both asserting against `docs/bg-lab/golden.json` golden vectors. APCA is the on-device guarantee.
+- **Pure engine** — APCA Lc contrast + a minimized "beauty cost" pick one coherent screen `Theme` (photo-derived tint + ivory/charcoal text + blur) plus per-region scrim. The single implementation is `kotlin/.../ui/theme/readability/` (Kotlin), asserting against the canonical spec vectors in `docs/bg-lab/golden.json` (**load-bearing**: `GoldenSyncTest` hard-codes that path and fails the Kotlin build if it drifts — do not move or delete it). APCA is the on-device guarantee. (A TS twin in `web/src/bglab/` and its `/bg-lab` tuning bench were retired with the web UI.)
 - **Compose bridge** (`kotlin/.../ui/theme/GlassTheme.kt`) — `LegibleGlassPanel` darkens each panel just enough for its accents to clear APCA over the real pixels behind it (`PhotoSampler`); `LegibleText` solves text color (photo-aware: passthrough off-photo, e.g. the Lobby); buttons solve their brand-color opacity *as a scrim* with the same math (`OpacityGroup` keeps a row uniform); the hero timer solves its own polarity (`solveFreeText`) and sits below a display cutout.
 - **Structural guard** — `OverlayLegibilityGuardTest` scans `screens/running/` and **fails the build** on raw `Text(`/`BasicText(`/`ClickableText(`/`drawText(` not routed through the system (or marked `// legible-exempt: why`), so on-photo text can't be added without the guarantee.
-- **Server advisor** — `POST /api/background/advise` returns a cached Gemini "prior" (palette hue / polarity / mood) that only *nudges* the engine; it is **non-authoritative** (APCA still decides). Tuning bench: web `/bg-lab` route (dev-only, not shipped to the treadmill).
+- **Server advisor** — `POST /api/background/advise` returns a cached Gemini "prior" (palette hue / polarity / mood) that only *nudges* the engine; it is **non-authoritative** (APCA still decides).
 
 ### AI Coach — Gemini Integration
 
@@ -216,7 +213,7 @@ Completed and in-progress sessions are persisted to `run_history.json` (max 200 
 
 ### Saved Workouts
 
-Users can save favorite programs from history to `saved_workouts.json` for permanent access. Saved workouts persist independently of the rolling history window and track usage stats (times used, last used). Accessible via REST API and shown in a "My Workouts" section in both web and Kotlin/Android UIs.
+Users can save favorite programs from history to `saved_workouts.json` for permanent access. Saved workouts persist independently of the rolling history window and track usage stats (times used, last used). Accessible via REST API and shown in a "My Workouts" section in the Kotlin/Android UI.
 
 ### Auto Proxy/Emulate Mode
 
@@ -336,11 +333,11 @@ When reviewing or writing code in this project, enforce these principles:
 ### Postel's Law (Robustness Principle)
 **Be conservative in what you send, be liberal in what you accept.**
 
-Clients (Android, web) must tolerate unexpected data from the server: unknown fields, null where a value was expected, missing optional fields, extra fields added later. The server evolves faster than clients update, so clients that crash on unfamiliar input are bugs.
+Clients (Android, iOS) must tolerate unexpected data from the server: unknown fields, null where a value was expected, missing optional fields, extra fields added later. The server evolves faster than clients update, so clients that crash on unfamiliar input are bugs.
 
 In practice:
 - **Kotlin**: kotlinx.serialization uses `ignoreUnknownKeys`, `coerceInputValues` (null → default), `isLenient`, `explicitNulls = false`. All model fields that could ever be null from the server must be nullable with a default. See `AppModule.kt` Json config.
-- **TypeScript**: Don't assert response shapes. Use optional chaining and defaults. If a field might not exist, handle it.
+- **Swift (iOS)**: Don't assert response shapes. Optional properties with defaults; decode leniently. If a field might not exist, handle it.
 - **Python (server)**: Validate at system boundaries (user input, API requests). Trust internal data structures. Send clean, well-typed JSON.
 
 ### Docs Stay Current
@@ -411,17 +408,16 @@ All C++ code in `cpp/` must follow these rules. The environment is resource-cons
 - State management (speed, incline, mode, program)
 - Endpoint validation and clamping
 - Coordinating between program engine and treadmill client
-- Multiple clients (web UI, FTMS daemon, future CLI, future watch app) all connect through the same socket — logic must not leak into any single client.
+- Multiple clients (Android app, FTMS daemon, future CLI, future watch app) all connect through the same socket — logic must not leak into any single client.
 
-**UI** (`web/` → `static/`): Display layer only. Principles:
+**UI** (`kotlin/` — Android is the primary UI; `ios/` Treddy exists but is secondary): Display layer only. Principles:
 - **No business logic.** All decisions happen server-side. The UI calls API endpoints and renders what comes back.
 - **Safety first.** Stop button always visible when belt is moving. Emergency stop is one tap.
 - **Minimal by default.** Show only what's needed right now. Debug info (mode badge, raw state) hidden behind triple-tap.
 - **Beautiful and peaceful.** Warm muted palette, subtle texture, organic curves. No neon, no visual noise.
 - **Progressive disclosure.** Essential info (speed, time, current interval) is prominent. Settings, history, and debug are tucked away but accessible.
 - **Mobile/tablet first.** Touch targets 44px+, no hover-dependent interactions, responsive layout, haptic feedback.
-- **Dual-platform requirement.** All UI changes must be made in BOTH the web UI (`web/`) and Kotlin app (`kotlin/`) unless explicitly told otherwise.
-- **No external CDN dependencies.** The app runs on a treadmill that may not have internet. All assets (fonts, scripts, styles) must be self-hosted. Never load from Google Fonts, cdnjs, unpkg, or any external CDN. Fonts live in `web/public/fonts/` (copied to `static/fonts/` on build).
+- **No external CDN dependencies.** The app runs on a treadmill that may not have internet. All assets (fonts, scripts, styles) must be bundled with the app. Fonts live in `kotlin/app/src/main/res/font/` (Android) and the Xcode asset bundle (iOS).
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->

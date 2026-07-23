@@ -13,9 +13,7 @@ if [ -f "$PROJECT_ROOT/worktree.env" ]; then
     source "$PROJECT_ROOT/worktree.env"
 else
     # Legacy defaults for main repo (no worktree.env)
-    export CADDY_PORT=9000
     export TREADMILL_SERVER_PORT=8000
-    export VITE_SERVER_PORT=5173
     export EMU_DISPLAY=:98
     export EMU_ADB_PORT=5554
     export EMU_VNC_PORT=5900

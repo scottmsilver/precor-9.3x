@@ -23,17 +23,13 @@ render_service() {
 
 stage() {
   echo "=== Staging build/ (from manifest) ==="
-  mkdir -p build/services build/static build/python
+  mkdir -p build/services build/python
   cp python/server.py python/workout_session.py python/program_engine.py \
      python/treadmill_client.py python/hrm_client.py python/workout_db.py \
      python/db.py build/python/
   cp gpio.json pyproject.toml build/
   cp deploy/setup.sh deploy/lib-artifacts.sh deploy/manifest.txt deploy/treadmill.avahi-service build/
   chmod +x build/setup.sh
-  echo "Building UI..."
-  rm -rf static/assets && mkdir -p static/assets
-  (cd web && npx vite build)
-  cp -r static/index.html static/assets build/static/
   for tmpl in deploy/*.service.in; do
     name=$(basename "$tmpl" .in)
     render_service "$tmpl" > "build/services/$name"
@@ -106,17 +102,7 @@ deploy_full() {
     build/ "$PI_HOST":~/"$PI_DIR"/
   echo "Running setup (manifest install + ordered atomic restart)..."
   ssh "$PI_HOST" "cd ~/$PI_DIR && bash setup.sh"
-  echo "Done!  UI: https://$PI_HOST:$SERVER_PORT"
-}
-
-deploy_ui() {
-  echo "=== Deploying UI to $PI_HOST ==="
-  rm -rf static/assets && mkdir -p static/assets build/static
-  (cd web && npx vite build)
-  cp -r static/index.html static/assets build/static/
-  ssh "$PI_HOST" "rm -rf ~/$PI_DIR/static/assets && mkdir -p ~/$PI_DIR/static/assets"
-  rsync -az build/static/ "$PI_HOST":~/"$PI_DIR"/static/
-  echo "Done! UI deployed."
+  echo "Done!  API: https://$PI_HOST:$SERVER_PORT/api/status"
 }
 
 # The Gemini API key is a per-device secret: gitignored, and deliberately
@@ -141,7 +127,6 @@ deploy_key() {
 case "${1:-}" in
   --dry-run)    print_plan ;;
   --stage-only) stage ;;
-  ui)           deploy_ui ;;
   key)          deploy_key ;;
   *)            deploy_full ;;
 esac

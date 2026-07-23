@@ -69,14 +69,8 @@ analysis/
 screenshots/
 !docs/screenshots/
 
-# Three.js (vendored, large)
-static/three.module.js
-
 # Node modules
 node_modules/
-
-# Vite build output (whole dir is regenerated — deploy.sh wipes it)
-static/assets/
 
 # Android / Kotlin
 kotlin/.gradle/

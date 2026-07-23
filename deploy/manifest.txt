@@ -14,7 +14,6 @@ bin   build/hrm-daemon                /usr/local/bin/hrm-daemon            0755 
 tree  build/python/                   ~/treadmill/python/                  0644 @USER@
 file  build/gpio.json                 ~/treadmill/gpio.json                0644 @USER@
 file  build/pyproject.toml            ~/treadmill/pyproject.toml           0644 @USER@
-tree  build/static/                   ~/treadmill/static/                  0644 @USER@
 unit  build/services/treadmill-io.service      /etc/systemd/system/        0644 root
 unit  build/services/treadmill-server.service  /etc/systemd/system/        0644 root
 unit  build/services/ftms.service              /etc/systemd/system/        0644 root
