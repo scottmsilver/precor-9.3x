@@ -96,7 +96,13 @@ Go to jlcpcb.com → **Order Now** (PCB), then add assembly.
 
 **B. PCB options**
 2. **Base Material:** FR-4. **Layers:** `2`.
-3. **Dimensions:** auto-detected `100 mm × 55 mm` — confirm it reads that.
+3. **Dimensions:** auto-detected `100 mm × 55 mm` — confirm it reads that. **Note on
+   panelization:** the *usable/delivered* board is 100 × 55 mm (the `Edge.Cuts` outline).
+   If Standard PCBA offers/forces breakaway edge rails, they are a fab aid that **ships
+   attached** — you snap/dress them off, and the finished board is still 100 × 55 mm, which
+   is what the enclosure interior is sized for. Do not treat any "board + rails" panel figure
+   (e.g. 100 × 71 mm) as the as-delivered board. Check the panelization/rail step explicitly
+   in the saved cart. (No such panel dimension appears anywhere in this repo.)
 4. **PCB Qty:** `5`.
 5. **Thickness:** `1.6 mm`. **Surface finish:** HASL (lead-free fine) or ENIG — HASL is fine.
 6. **Via covering:** leave default. **Min via drill:** board uses **0.3 mm** (2-layer
