@@ -19,32 +19,50 @@ The board *top* edge (Y=0) is the antenna end. Enclosure interior origin
 offsets: board corner sits at interior (2.0, 9.3); interior Z of board
 underside = 5.2 (2.2 floor + 3.0 standoffs).
 
+> ✅ **FIXED 2026-07-23 (was: RJ45 wall cutouts misplaced 8.695 mm in Y).**
+> The `.scad` now uses the measured jack centerlines `j1_yc = 3.555` / `j2_yc = 32.555`;
+> previously `j1_yc = 12.25` / `j2_yc = 41.25` in
+> `esp32tap_case.scad` were set to pin-1 `at`.Y **+ 4.25**, but the jack centerline is
+> pin-1.Y **− 4.445**. Real jack centerlines are board-rel **Y 3.555 (J1)** and **Y 32.555
+> (J2)** opened ~half over solid wall so a plug could not seat. Now `at.Y − 4.445`;
+> re-rendered, re-quoted on JLC3DP (base flag cleared; lid warp-risk accepted). Re-run the
+> fit check before ordering any STL.** Every other feature in this file matches the PCB to
+> 0.000 mm; only the two RJ45 y-centers are wrong. No STL has been printed, so this is free
+> to fix now.
+
+> **Delivered board vs. assembly panel.** The board that seats in this enclosure is the
+> KiCad `Edge.Cuts` outline = **100.0 × 55.0 mm** (verified X 100→200, Y 100→155). If
+> JLC's Standard PCBA service panelizes the board with breakaway edge rails as a fab aid,
+> those rails **ship attached** and must be snapped/dressed off first — after depanel the
+> usable board is 100 × 55 mm, which is what the cavity below is sized for. No 100 × 71 mm
+> ("board + rails") panel dimension is a delivered-product dimension.
+
 ## Overall
 
 | Item | Value |
 |---|---|
-| Board | 100.0 × 55.0 × 1.6 mm |
+| Board (usable, post-depanel) | 100.0 × 55.0 × 1.6 mm |
 | Interior cavity | 104.0 × 73.3 × 21.1 mm |
-| Outer shell | 108.4 × 77.7 mm; base height 23.3, lid 2.2 (+1.6 lip ring) |
-| Wall / floor / lid | 2.2 mm |
+| Outer shell | 109.0 × 78.3 mm; base height 23.6, lid 3.0 (+1.2 lip ring) |
+| Wall / floor | 2.5 mm; lid 3.0 mm (thickened for JLC3DP resin thin-wall/warp margin) |
 | Under-board clearance | 3.0 mm (THT RJ45 pins ~2 mm) |
-| Above-board headroom | 16.5 mm (tallest part: RJ45 13.4 mm → 1.5 mm clear even under the 1.6 mm lid lip ring) |
+| Above-board headroom | 16.5 mm (tallest part: RJ45 13.4 mm → 1.5 mm clear even under the 1.2 mm lid lip ring) |
 | Bottom-edge clearance | 9.0 mm (board bottom edge to interior wall) so the two Ø7 bottom lid screw posts clear the PCB corners by 2.0 mm |
-| Antenna end | module overhangs board edge 6.3 mm; enclosure leaves a further 3.0 mm air gap; lid thinned to 1.4 mm over the antenna span (X 52–72, matching `ant_x0`/`ant_x1` in the .scad; the module body actually spans X 52.95–71.05). Plastic only — no conductive finish, antenna end away from the treadmill frame |
+| Antenna end | module overhangs board edge 6.3 mm; enclosure leaves a further 3.0 mm air gap. Lid stays FULL thickness over the antenna (the old 1.4 mm thinning was removed — it tripped the resin thin-wall DFM and served no purpose: resin is RF-transparent at 2.4 GHz and the air gap is set by the standoff, not the lid). Plastic only — no conductive finish, antenna end away from the treadmill frame |
 
 ## Wall cutouts (board coordinates)
 
 | Cutout | Wall | Center | Aperture (W × H) | Bottom of aperture |
 |---|---|---|---|---|
-| J1 RJ45 (CONSOLE) | X = 0 (left) | Y = 12.25 | 17.7 × 14.4 | board top surface −0.3 |
-| J2 RJ45 (MOTOR) | X = 0 (left) | Y = 41.25 | 17.7 × 14.4 | board top surface −0.3 |
+| J1 RJ45 (CONSOLE) | X = 0 (left) | Y = 3.555 | 17.7 × 14.4 | board top surface −0.3 |
+| J2 RJ45 (MOTOR) | X = 0 (left) | Y = 32.555 | 17.7 × 14.4 | board top surface −0.3 |
 | J3 USB-C | X = 100 (right) | Y = 36.5 | 13.0 × 8.0 (overmold-sized) | connector mid-height − 4.0 |
 | Side vents | both long walls | X = 30…66, five 4 mm slots at 9 mm pitch | 4 × 6 | 8 mm below base rim |
 
 RJ45 jack faces sit ~1.5 mm proud of the board edge (F.Fab-measured 1.53 mm
 — the ~2 mm the walls were sized for was slightly optimistic), so the mating
 face ends up ~0.5 mm inboard of the interior wall face and ~2.7 mm behind
-the exterior face. The apertures are through the 2.2 mm wall plus the
+the exterior face. The apertures are through the 2.5 mm wall plus the
 2.0 mm interior clearance, and an 8P8C plug body is far longer than 2.7 mm,
 so cables still plug straight in; the snug aperture doubles as strain
 relief, and the two
@@ -64,7 +82,7 @@ enters the wall and the shell reaches the receptacle at the board edge.
 | BOOT tool hole (SW2) | (78.0, 17.4) | Ø2.5 |
 | Lid vents | (40…65, 48) | four 4 × 3 slots |
 | Lid screws | 4 corners, (3.5, 3.5) in from each **interior cavity** corner = (5.7, 5.7) from the exterior shell corner | M3 self-tap, Ø3.4 clearance + countersink, into Ø7 posts with Ø2.5 pilot |
-| Registration lip | perimeter ring, 2.0 mm wide × 1.6 mm deep | ring only — interior open (clears the 13.4 mm RJ45s by 1.5 mm); Ø7.6 cutouts where the ring meets the four screw posts |
+| Registration lip | perimeter ring, 4.0 mm wide × 1.2 mm deep | widened/shortened from 2.0×1.6 so it is no longer a thin standing ring; interior open (clears the 13.4 mm RJ45s); Ø7.6 cutouts where the ring meets the four screw posts |
 
 ## Board mounting (base)
 
@@ -87,6 +105,6 @@ wall (site-survey the BLE RSSI before final placement — see
 ## JLC3DP ordering
 
 Upload both STLs; material **LEDO 6060 resin** (or 8001; PA12 MJF if you
-want more toughness), no post-finish. Estimated $6–14 for the pair at 2026
+want more toughness — nylon also eliminates the lid warp risk), no post-finish. JLC3DP live quote 2026-07-23: base $3.90 (clean) + lid $2.42 (thin-wall/warp risk accepted) = $6.32 + ~$3.30 shipping. Estimated $6–14 for the pair at 2026
 prices; combine shipping with the PCBA order (JLC3DP supports combined
 parcels — the parcel ships when the slowest item finishes).

@@ -22,8 +22,13 @@ ant_x0       = 52.0;    // antenna span in X
 ant_x1       = 72.0;
 ant_air_gap  = 3.0;     // required air to any wall at the antenna end
 
-// RJ45 jacks on the X=0 wall (Y centers, body width 16.7, height 13.4)
-j1_yc = 12.25;  j2_yc = 41.25;
+// RJ45 jacks on the X=0 wall (Y centers, body width 16.7, height 13.4).
+// Values are the board-relative jack body centerlines measured from the PCB
+// F.CrtYd/F.Fab (parse of Esp32Tap.kicad_pcb): J1=3.555, J2=32.555.  The
+// earlier 12.25/41.25 were a sign-flipped anchor→body offset (pin1.Y+4.25
+// instead of −4.445), putting both apertures 8.695 mm off in Y so plugs
+// could not seat — fixed here.
+j1_yc = 3.555;  j2_yc = 32.555;
 rj45_w = 16.7;  rj45_h = 13.4;
 
 // USB-C on the X=board_l wall.  The receptacle face sits at the board edge,
@@ -44,7 +49,9 @@ sw1  = [36.0, 5.0];     // EN / reset
 sw2  = [78.0, 17.4];    // BOOT
 
 /* ------------------------- enclosure parameters ---------------------- */
-wall      = 2.2;
+wall      = 2.5;                     // 2.2→2.5: clears JLC3DP resin thin-wall
+                                     // DFM margin (min ~1.2, but flagged near
+                                     // thin features; 2.5 is comfortably above)
 clr       = 2.0;                     // side clearance board->wall (X=0 side
                                      // effectively used by jack overhang)
 bot_clr   = 9.0;                     // bottom-edge (Y=board_w side) clearance:
@@ -55,9 +62,14 @@ standoff  = 3.0;                     // under-board space (THT pins ~2 mm)
 headroom  = 16.5;                    // above-board space; RJ45 = 13.4 tall,
                                      // leaves 1.5 mm above the jacks even
                                      // under the 1.6 mm lid lip ring
-lid_t     = 2.2;
-lip       = 1.6;                     // lid registration lip (perimeter ring)
-lip_w     = 2.0;                     // width of the registration ring band
+lid_t     = 3.0;                     // 2.2→3.0: the lid is a large flat plate;
+                                     // 3.0 resists SLA-resin warp (JLC flagged
+                                     // 2.5 as thin/deformation-risk)
+lip       = 1.2;                     // 1.8→1.2: shorter lip = less of a thin
+                                     // standing ring (JLC flagged the tall ring
+                                     // as thin-wall); still registers the lid
+lip_w     = 4.0;                     // 2.0→4.0: much wider band, no longer a
+                                     // thin freestanding wall
 
 int_l = board_l + 2*clr;                              // interior X
 int_w = board_w + bot_clr + ant_overhang + ant_air_gap; // interior Y
@@ -140,8 +152,8 @@ module base() {
 
 module ear() {
   difference() {
-    cube([6, 12, 4]);
-    translate([1.5, 3.5, -1]) cube([3, 5, 6]);   // zip-tie / #6 screw slot
+    cube([8, 12, 4]);                             // 6→8 wide: 2.5 mm walls
+    translate([2.5, 3.5, -1]) cube([3, 5, 6]);    // zip-tie / #6 screw slot
   }
 }
 
@@ -181,10 +193,10 @@ module lid() {
     for (i = [0:3])
       translate([wall + bx0 + 40 + i*7, wall + by0 + 48, -1])
         cube([4, 3, lid_t + lip + 2]);
-    // antenna void: thin the lid over the antenna region (no metal anyway,
-    // resin is RF-transparent; this just guarantees the air gap)
-    translate([wall + bx0 + ant_x0 - 1, wall + 0.5, lid_t - 0.8])
-      cube([ant_x1 - ant_x0 + 2, by0, lip + 1]);
+    // (Antenna lid-thinning removed: it left a 1.4 mm-thin patch that tripped
+    // JLC3DP's thin-wall DFM, and it served no purpose — resin is already
+    // RF-transparent at 2.4 GHz and the 3 mm air gap is set by by0, not the
+    // lid thickness.  The lid stays full thickness over the antenna.)
   }
 }
 

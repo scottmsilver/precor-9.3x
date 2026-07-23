@@ -1,5 +1,64 @@
 # Esp32Tap — ORDER-READY
 
+## Live JLC quote — browser-captured 2026-07-23, ALL 33 PARTS RESOLVED (authoritative)
+
+Driven end-to-end through JLCPCB's real quote flow (gerbers + BOM + CPL uploaded
+to `cart.jlcpcb.com`, logged into the owner's account, all parts assigned). The
+cart is **auto-saved under the owner's account**, staged at the SAVE-TO-CART step
+(no order placed, nothing paid).
+
+### The big finding: the ESP32 module forces **Standard PCBA** (not Economic)
+
+Selecting U1 (ESP32-S3-WROOM-1-N8, C2913198 — in stock, 6129 units) triggered a
+hard JLC gate: *"this part is only available for Standard PCBA service."* The
+entire prior cost model assumed **Economic** PCBA. Switching to Standard (owner-
+approved) added a **$25.56 setup fee** and, the real cost driver, a **$45.90
+Feeders Loading fee** (Standard charges per unique component to load feeders;
+Economic does not). This ~$71 of Standard-only fees is why the real total lands
+far above the earlier ~$77–107 Economic estimate.
+
+### Real charge breakdown (5 boards, all 5 assembled, before shipping)
+
+| Line | Cost |
+|---|---|
+| PCB (5 pcs, 2-layer 55×100, special offer) | $2.00 |
+| Standard PCBA — Setup fee | $25.56 |
+| Standard PCBA — Stencil | $8.21 |
+| Components (31 line items) | $67.18 |
+| **Feeders loading fee** (Standard-only, per unique part) | **$45.90** |
+| SMT assembly | $2.10 |
+| Hand-soldering labor (THT RJ45s) | $3.58 |
+| Manual assembly | $1.31 |
+| Packaging | $0.49 |
+| **Total before shipping** | **$156.33** (weight 880 g) |
+
++ shipping: **$27.87** DHL Express DDP, or ~$10–15 Global Standard (dropdown).
+→ **all-in ≈ $170–185 for 5 fully-assembled boards.** Still under $200 but the
+respin reserve is now thin.
+
+### Lever: assemble 2 of 5 (per the original plan) instead of 5
+
+PCBA qty is currently **5**. Dropping it to **2** cuts the Components line from
+~$67 to ~$27 (the module alone is $5.32 ea) while setup/stencil/feeders stay —
+**all-in ≈ $125–140**. That restores real respin headroom. Set PCBA Qty = 2 on
+the Bill-of-Materials tab before checkout.
+
+### Parts: all 33 matched (was 30/33)
+
+JLC's matcher auto-matched 30, confirming our validation substitutes (ESD
+**C316020**, LED **C965804**, 330 Ω **C23138**). The 3 it left unmatched were
+assigned by hand to their intended in-stock parts: **U1** C2913198, **C1**
+C72477 (100 µF/25 V — note: several *other* 100 µF/25 V options showed
+"inventory shortage"; C72477 was in stock), **D4** C2128. J1/J2 and SW1/SW2
+carried a benign *"multiple lines matched to the same part"* advisory (correct —
+two identical RJ45s, two identical switches) and are now included.
+
+**To finish:** open the saved cart, set PCBA Qty = 2, pick shipping, pay. This
+closes the "un-run BOM-tool check" — the last open item in the package — with a
+real JLC quote in hand.
+
+---
+
 ## VERDICT: ✅ GO
 
 The Esp32Tap fab package is order-ready. Round-2 validation (board-level SPICE +
@@ -37,7 +96,13 @@ Go to jlcpcb.com → **Order Now** (PCB), then add assembly.
 
 **B. PCB options**
 2. **Base Material:** FR-4. **Layers:** `2`.
-3. **Dimensions:** auto-detected `100 mm × 55 mm` — confirm it reads that.
+3. **Dimensions:** auto-detected `100 mm × 55 mm` — confirm it reads that. **Note on
+   panelization:** the *usable/delivered* board is 100 × 55 mm (the `Edge.Cuts` outline).
+   If Standard PCBA offers/forces breakaway edge rails, they are a fab aid that **ships
+   attached** — you snap/dress them off, and the finished board is still 100 × 55 mm, which
+   is what the enclosure interior is sized for. Do not treat any "board + rails" panel figure
+   (e.g. 100 × 71 mm) as the as-delivered board. Check the panelization/rail step explicitly
+   in the saved cart. (No such panel dimension appears anywhere in this repo.)
 4. **PCB Qty:** `5`.
 5. **Thickness:** `1.6 mm`. **Surface finish:** HASL (lead-free fine) or ENIG — HASL is fine.
 6. **Via covering:** leave default. **Min via drill:** board uses **0.3 mm** (2-layer

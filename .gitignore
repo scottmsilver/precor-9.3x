@@ -115,3 +115,10 @@ provisioning/dietpi/dietpi-wifi.txt*
 .dolt/
 *.db
 .beads-credential-key
+
+# JLCPCB API credentials (per-device secret — never commit)
+.jlc_key
+**/.jlc_key
+
+# JLCPCB session cookies (secret — never commit)
+.jlc_cookies*.json
