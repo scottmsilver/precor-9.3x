@@ -8,8 +8,8 @@ fabricated. All artifacts live in `hardware/Esp32Tap/`.
 | | |
 |---|---|
 | Board | 100 × 55 mm, 2-layer, ESP32-S3-WROOM-1-N8 |
-| Parts cost per board | **$7.34** — sub-$20 verdict: **PASS** (see BOM) |
-| Full order, all-in | **~$65–95** (5 PCBs / 2 assembled + enclosure + shipping) |
+| Parts cost per board | **$7.21** — sub-$20 verdict: **PASS** (see BOM) |
+| Full order, all-in | **~$77–107** (5 PCBs / 2 assembled + enclosure + shipping; see ORDERING.md ledger) |
 | $200 budget | Fits, with **~$105–135 reserve** = exactly one respin |
 | Owner assembly | **None.** 100% JLC fab assembly — plug in, flash over USB-C |
 | Adversarial review | 4/4 lenses initially **FAILED**; all findings fixed, re-verified |
@@ -103,9 +103,9 @@ original lines.
 | R4, R5 | 5.1k USB-C CC pull-downs | 0603 | C23186 | Basic | 2 | 0.002 | 0.004 |
 | R6 | 100R motor-pin6 TX series | 0603 | C22775 | Basic | 1 | 0.002 | 0.002 |
 | R7, R8 | 4.7k RX tap series (0.3 mA unpowered back-feed cap) | 0603 | C23162 | Basic | 2 | 0.002 | 0.004 |
-| R9, R11 | 1k (relay base; status LED) | 0603 | C21190 | Basic | 2 | 0.002 | 0.004 |
+| R9, R12 | 1k (relay base; power LED — R12 1k for a clearly visible light) | 0603 | C21190 | Basic | 2 | 0.002 | 0.004 |
 | R10, R13 | 10k (relay base pull-down; EN pull-up) | 0603 | C25804 | Basic | 2 | 0.002 | 0.004 |
-| R12 | 2k power-LED resistor | 0603 | C22975 | Basic | 1 | 0.002 | 0.002 |
+| R11 | 330R status-LED resistor (validation fix F1: 1.51 mA typ; 1k gave sub-visible 0.6 mA) | 0603 | C23138 | Basic | 1 | 0.002 | 0.002 |
 | C1 | 100 µF/25 V electrolytic (ROQANG RVT1E101M0607, 6.3×7.7) | CP_Elec_6.3x7.7 | C72477 | Extended | 1 | 0.100 | 0.100 |
 | C2, C3 | 4.7 µF/50 V X7R input/buck-VIN ceramic | 1206 | C29823 | Basic | 2 | 0.040 | 0.080 |
 | C4, C5, C9 | 100 nF (buck VIN HF, BOOT cap, 3V3 HF) | 0603 | C14663 | Basic | 3 | 0.004 | 0.012 |
@@ -114,7 +114,7 @@ original lines.
 | C10, C11 | 1 µF (EN reset RC; VBUS bypass) | 0603 | C15849 | Basic | 2 | 0.006 | 0.012 |
 | TP1–TP4, MH1–MH3 | Test pads + mounting holes | — | — | none | — | — | — |
 
-**Parts total per board: $7.34.** The sub-$20 target is met with 63% margin —
+**Parts total per board: $7.21.** The sub-$20 target is met with 63% margin —
 **PASS** — and holds even if a few commodity lines get substituted at slightly
 worse prices in the JLC BOM tool. (The single biggest lever is U1 at $3.20; the
 relay is second at $1.50.)
@@ -159,15 +159,15 @@ the cart before paying.
 | Economic PCBA setup | $8.00 |
 | Stencil | $1.50 |
 | SMT joints (~185 × 2 boards × $0.0017) | ~$0.65 |
-| Parts, 2 × $7.34 | ~$14.70 |
-| Extended-part loading fees ($3 × up to 9 realistically-Extended lines: U1, K1, J1/J2, U2, D3, D5–D7, SW1/SW2, F1, C1, +L1 hedge; some may land Basic/Preferred = waived) | $18–27 |
+| Parts, 2 × $7.21 | ~$14.42 |
+| Extended-part loading fees ($3 × 13 live-confirmed Extended lines 2026-07-23: U1, K1, J1/J2, J3, U2, U3, D3, D5–D7, LED1, SW1/SW2, F1, C1, L1; some may flip Basic/Preferred by order time = waived) | $30–39 |
 | THT hand-solder service flat fee (RJ45 × 2) | $3.50 |
 | THT joints (≈20 × ~$0.017 × 2 boards) | ~$0.70 |
 | **JLCPCB subtotal** | **~$52–64** |
 | Shipping (economy) | $8–15 |
 | JLC3DP enclosure (resin base + lid) | $6–14 |
 | Combined-shipment saving | −$5–10 |
-| **All-in total** | **~$65–95** |
+| **All-in total** | **~$77–107** |
 | **$200 budget remaining** | **~$105–135 → exactly one respin** |
 
 Budget policy from the design review: treat the first order as the verification
@@ -232,7 +232,7 @@ All replacements verified against **live LCSC product pages** (July 2026).
 
 - **Extended-fee line recomputed**: $3 × up to **9** unique realistically-Extended
   lines = $18–27 (old estimate assumed 2–3 lines). Subtotal restated ~$52–64,
-  all-in ~$65–95, with an explicit note that the respin reserve is thinner.
+  all-in ~$77–107 (13 Extended lines live-confirmed), with a thinner but still-sufficient respin reserve inside $200.
 - **Trailing "TOTAL" row removed from BOM.csv** (it breaks the JLC BOM-tool
   upload); fixed in `gen_docs.py` so it stays removed on regeneration. The total
   lives in ORDERING.md's cost table.

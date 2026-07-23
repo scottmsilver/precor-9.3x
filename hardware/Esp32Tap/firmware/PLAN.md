@@ -79,6 +79,14 @@ at the driver base).
   relay releases — the IDF default only logs a warning; see the supervision
   section above). Residual core-0 ISRs are accepted; the 128-byte UART
   FIFOs (~133 ms of RX buffering at 9600) absorb scheduler jitter.
+* **Task stack sizing (QEMU-validated constraint)**: `KvPair` is 128 bytes,
+  so a single on-stack `KvPair[16]` array is 2 KB — two of them overflow
+  the IDF default 3.5 KB main-task stack and hard crash-loop (observed:
+  ~340 consecutive stack-overflow reboots in the esp32s3 QEMU PoC before
+  the buffers were made static). Any task that owns parser buffers must
+  either keep them static/heap-allocated or get an explicitly sized stack
+  (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` / `xTaskCreate` depth ≥ buffers +
+  8 KB headroom).
 
 ## Watchdog / mode state machine (complete matrix — M3 entry gate)
 

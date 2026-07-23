@@ -30,7 +30,7 @@ underside = 5.2 (2.2 floor + 3.0 standoffs).
 | Under-board clearance | 3.0 mm (THT RJ45 pins ~2 mm) |
 | Above-board headroom | 16.5 mm (tallest part: RJ45 13.4 mm → 1.5 mm clear even under the 1.6 mm lid lip ring) |
 | Bottom-edge clearance | 9.0 mm (board bottom edge to interior wall) so the two Ø7 bottom lid screw posts clear the PCB corners by 2.0 mm |
-| Antenna end | module overhangs board edge 6.3 mm; enclosure leaves a further 3.0 mm air gap; lid thinned to 1.4 mm over the antenna span (X 51–73). Plastic only — no conductive finish, antenna end away from the treadmill frame |
+| Antenna end | module overhangs board edge 6.3 mm; enclosure leaves a further 3.0 mm air gap; lid thinned to 1.4 mm over the antenna span (X 52–72, matching `ant_x0`/`ant_x1` in the .scad; the module body actually spans X 52.95–71.05). Plastic only — no conductive finish, antenna end away from the treadmill frame |
 
 ## Wall cutouts (board coordinates)
 
@@ -41,9 +41,13 @@ underside = 5.2 (2.2 floor + 3.0 standoffs).
 | J3 USB-C | X = 100 (right) | Y = 36.5 | 13.0 × 8.0 (overmold-sized) | connector mid-height − 4.0 |
 | Side vents | both long walls | X = 30…66, five 4 mm slots at 9 mm pitch | 4 × 6 | 8 mm below base rim |
 
-RJ45 jack faces sit ~2 mm proud of the board edge, so those apertures are
-through the 2.2 mm wall plus the 2.0 mm interior clearance — cables plug
-straight in; the snug aperture doubles as strain relief, and the two
+RJ45 jack faces sit ~1.5 mm proud of the board edge (F.Fab-measured 1.53 mm
+— the ~2 mm the walls were sized for was slightly optimistic), so the mating
+face ends up ~0.5 mm inboard of the interior wall face and ~2.7 mm behind
+the exterior face. The apertures are through the 2.2 mm wall plus the
+2.0 mm interior clearance, and an 8P8C plug body is far longer than 2.7 mm,
+so cables still plug straight in; the snug aperture doubles as strain
+relief, and the two
 exterior ears beside each wall accept a cable zip-tie for additional strain
 relief. The **USB-C receptacle does NOT overhang** — its face is recessed
 ~4.2 mm behind the exterior wall face, so its aperture is sized for the
@@ -59,7 +63,7 @@ enters the wall and the shell reaches the receptacle at the board edge.
 | EN/reset tool hole (SW1) | (36.0, 5.0) | Ø2.5 |
 | BOOT tool hole (SW2) | (78.0, 17.4) | Ø2.5 |
 | Lid vents | (40…65, 48) | four 4 × 3 slots |
-| Lid screws | 4 corners, (3.5, 3.5) from each outer corner | M3 self-tap, Ø3.4 clearance + countersink, into Ø7 posts with Ø2.5 pilot |
+| Lid screws | 4 corners, (3.5, 3.5) in from each **interior cavity** corner = (5.7, 5.7) from the exterior shell corner | M3 self-tap, Ø3.4 clearance + countersink, into Ø7 posts with Ø2.5 pilot |
 | Registration lip | perimeter ring, 2.0 mm wide × 1.6 mm deep | ring only — interior open (clears the 13.4 mm RJ45s by 1.5 mm); Ø7.6 cutouts where the ring meets the four screw posts |
 
 ## Board mounting (base)
