@@ -92,8 +92,8 @@ original lines.
 | D1, D2 | SS34 Schottky (VIN ORing: 8 V leg + USB leg) | SMA | C8678 | Basic | 2 | 0.050 | 0.100 |
 | D3 | Littelfuse SMBJ12A TVS (unidirectional, 12 V standoff) | SMB | C151251 | Extended | 1 | 0.050 | 0.050 |
 | D4 | 1N4148WS flyback (JSCJ, genuine SOD-323) | SOD-323 | C2128 | Basic | 1 | 0.010 | 0.010 |
-| D5–D7 | Nexperia PESD3V3L1BA (GND-referenced, inert unpowered) | SOD-323 | C51450 | Extended | 3 | 0.100 | 0.300 |
-| LED1, LED2 | Green status (GPIO38) + red power 0603 | 0603 | C72043 / C2286 | Basic | 2 | 0.020 | 0.040 |
+| D5–D7 | BORN PESD3V3L1BA-N (GND-referenced, inert unpowered) | SOD-323 | C316020 | Extended | 3 | 0.061 | 0.183 |
+| LED1, LED2 | Green status (GPIO38) + red power 0603 | 0603 | C965804 / C2286 | Extended/Basic | 2 | 0.005 | 0.012 |
 | SW1, SW2 | C&K KMR2 tactile (EN + BOOT) | KMR2 | C72443 | Extended | 2 | 0.100 | 0.200 |
 | F1 | Littelfuse 1206L075/16WR polyfuse 0.75 A hold / 16 V | 1206 | C371166 | Extended | 1 | 0.100 | 0.100 |
 | L1 | Sunlord SWPA4030S100MT 10 µH shielded, Isat 2.4 A | 4030 | C38117 | Basic | 1 | 0.070 | 0.070 |
@@ -205,7 +205,7 @@ Drill census after fixes: 76× 0.3 mm vias, nothing below 0.3 mm.
 - **U2**: C60063 → **C191884** — the previously listed number *was not the TPS54202*.
 - **D3**: C113996 (a 26 V bidirectional SMBJ26CA) → **C151251** Littelfuse SMBJ12A,
   verified unidirectional 12 V standoff / 13.3 V breakdown.
-- **D5–D7**: C456028 (404) → **C51450** Nexperia PESD3V3L1BA (3.3 V bidirectional
+- **D5–D7**: C456028 (404) → C51450 → **C316020** BORN PESD3V3L1BA-N (3.3 V bidirectional
   GND-referenced, SOD-323, in stock).
 - **L1**: C38891 (404) → **C38117** Sunlord SWPA4030S100MT (Isat 2.4 A ≥ 1.6 A req).
 - **D4**: C466653 (package mismatch) → **C2128** JSCJ 1N4148WS, genuine SOD-323.
@@ -326,7 +326,20 @@ assembly**, ever. The board arrives fully assembled.
 6. **Never connect the treadmill** until the treadmill-contact gate checklist in
    `firmware/PLAN.md` is fully checked.
 
-## 8. Honest open risks
+## 8. Live-catalog validation (2026-07-23, post-review)
+
+All 31 unique C-numbers were re-verified against JLCPCB's live component
+catalog with `@jlcpcb/cli` (`jlc search <C#> --json`, anonymous read-only).
+Every part resolved; two order-blockers were found and fixed in this tree:
+D5–D7 ESD clamp C51450 showed **0 stock** (replaced with the
+footprint-identical C316020) and green LED C72043 showed stock=6 (replaced
+with C965804, 5.2M stock). Four lines were live-reclassified
+Basic→Extended (J3, U3, L1, LED1) and the ORDERING.md fee ledger was
+recomputed (+~$12; all-in now ~$77–107). This closes the "un-run BOM-tool
+check" risk at the catalog level; the JLC **BOM-tool upload** check before
+payment still stands, since assembly stock and classification churn daily.
+
+## 9. Honest open risks
 
 - **The JLC BOM-tool check has not been run.** C-numbers were verified on live LCSC
   product pages only; LCSC stock ≠ JLC assembly stock, and Basic/Extended classes
