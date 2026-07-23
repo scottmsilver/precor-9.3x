@@ -86,6 +86,7 @@ import com.precor.treadmill.ui.theme.legibleOn
 import com.precor.treadmill.ui.util.fmtDur
 import com.precor.treadmill.ui.util.haptic
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
+import com.precor.treadmill.ui.viewmodel.VoiceState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -116,6 +117,9 @@ const val SEE_THROUGH_MAP = true
 fun RidgelineHud(
     viewModel: TreadmillViewModel,
     onExitToHome: () -> Unit = {},
+    // Permission-safe voice toggle lifted from AppNavigation (see BottomBar's mic button).
+    onVoiceToggle: (() -> Unit)? = null,
+    voiceState: VoiceState = VoiceState.IDLE,
     modifier: Modifier = Modifier,
 ) {
     val status by viewModel.status.collectAsState()
@@ -452,6 +456,8 @@ fun RidgelineHud(
             showControls = false,
             externalPadding = true,
             uniformHeight = true,
+            onVoiceToggle = onVoiceToggle,
+            voiceState = voiceState,
             modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
         )
     }

@@ -1,18 +1,33 @@
 package com.precor.treadmill.ui.screens.running
 
+import androidx.compose.animation.core.EaseInOut
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.max
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.TextUnit
@@ -26,6 +41,7 @@ import com.precor.treadmill.ui.theme.touchFingerPad
 import com.precor.treadmill.ui.theme.touchThumbPad
 import com.precor.treadmill.ui.util.haptic
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
+import com.precor.treadmill.ui.viewmodel.VoiceState
 
 @Composable
 fun BottomBar(
@@ -33,6 +49,11 @@ fun BottomBar(
     showControls: Boolean = true,
     externalPadding: Boolean = false,
     uniformHeight: Boolean = false,
+    // Optional voice affordance: when non-null, a square mic glass button sits at the RIGHT of
+    // the action row (both running and paused states). The lambda must be the permission-safe
+    // handleVoiceToggle path lifted from AppNavigation — never a raw VoiceViewModel.toggle().
+    onVoiceToggle: (() -> Unit)? = null,
+    voiceState: VoiceState = VoiceState.IDLE,
     modifier: Modifier = Modifier,
 ) {
     val status by viewModel.status.collectAsState()
@@ -103,7 +124,87 @@ fun BottomBar(
                     modifier = Modifier.weight(1f).height(stopHeight),
                 )
             }
+            // Square mic at the row's right — fixed width equal to its height, so Stop (or
+            // Resume/Reset) keeps its dominant weighted width. Same glass + opacity group as
+            // the other buttons; active/listening state pulses like the NavRail mic.
+            if (onVoiceToggle != null) {
+                val micSize = if (pgm.paused) defaultHeight else stopHeight
+                VoiceButton(
+                    voiceState = voiceState,
+                    onClick = { haptic(context, 20); onVoiceToggle() },
+                    modifier = Modifier.size(micSize),
+                )
+            }
         }
+        }
+    }
+}
+
+/**
+ * Square mic glass button: same [LegibleGlassPanel] adaptive-scrim language as [ActionButton]
+ * (neutral glass surface, icon color solved as the panel accent). While the voice session is
+ * active the mic tints to the session color and pulses — mirroring NavRail's VoiceTabItem.
+ */
+@Composable
+private fun VoiceButton(
+    voiceState: VoiceState,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val active = voiceState != VoiceState.IDLE
+    val shouldPulse = voiceState == VoiceState.CONNECTING || voiceState == VoiceState.LISTENING
+    // Same session palette as NavRail's mic: gold=connecting, green=listening, violet=speaking.
+    val tint = when (voiceState) {
+        VoiceState.CONNECTING -> Color(0xFFB8A87A)
+        VoiceState.LISTENING -> Color(0xFF6BC89B)
+        VoiceState.SPEAKING -> Color(0xFF8B7FA0)
+        VoiceState.IDLE -> Color.White
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "micGlow")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = if (voiceState == VoiceState.LISTENING) 0.15f else 0.4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(if (voiceState == VoiceState.LISTENING) 1000 else 1600, easing = EaseInOut),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "micPulseAlpha",
+    )
+
+    LegibleGlassPanel(
+        accents = listOf(tint),
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        targetLc = 60.0,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick,
+                )
+                .semantics { contentDescription = "Voice control" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Mic,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier
+                    .size(24.dp)
+                    .drawBehind {
+                        if (active) {
+                            val alpha = if (shouldPulse) pulseAlpha else 0.5f
+                            drawCircle(
+                                color = tint.copy(alpha = alpha),
+                                radius = size.minDimension * 0.9f,
+                            )
+                        }
+                    },
+            )
         }
     }
 }

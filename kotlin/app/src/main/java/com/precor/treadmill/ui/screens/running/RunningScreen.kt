@@ -76,6 +76,7 @@ import com.precor.treadmill.ui.util.glowText
 import com.precor.treadmill.ui.util.timerText
 import com.precor.treadmill.ui.util.haptic
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
+import com.precor.treadmill.ui.viewmodel.VoiceState
 import kotlinx.coroutines.delay
 
 /** Symmetric edge padding for top (via timer trim) and bottom (via Column padding) */
@@ -219,6 +220,7 @@ private fun rememberRunReadability(bgRes: Int): RunReadability {
 fun RunningScreen(
     viewModel: TreadmillViewModel,
     onVoiceToggle: (String?) -> Unit,
+    voiceState: VoiceState = VoiceState.IDLE,
     onExitToHome: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -267,6 +269,7 @@ fun RunningScreen(
             onExitToHome = onExitToHome,
             viewModel = viewModel,
             onVoiceToggle = onVoiceToggle,
+            voiceState = voiceState,
             timerVisible = timerVisible,
             isManual = isManual,
             durationEditOpen = durationEditOpen,
@@ -505,8 +508,13 @@ fun RunningScreen(
             }
         }
 
-        // ROW 3: Bottom bar (wraps content, no internal padding)
-        BottomBar(viewModel = viewModel, externalPadding = true)
+        // ROW 3: Bottom bar (wraps content, no internal padding) — mic at the row's right
+        BottomBar(
+            viewModel = viewModel,
+            externalPadding = true,
+            onVoiceToggle = { onVoiceToggle(null) },
+            voiceState = voiceState,
+        )
     }
         } // CompositionLocalProvider
     } // Box
@@ -516,6 +524,7 @@ fun RunningScreen(
 private fun RunningScreenLandscape(
     viewModel: TreadmillViewModel,
     onVoiceToggle: (String?) -> Unit,
+    voiceState: VoiceState,
     onExitToHome: () -> Unit,
     timerVisible: MutableTransitionState<Boolean>,
     isManual: Boolean,
@@ -580,6 +589,8 @@ private fun RunningScreenLandscape(
             RidgelineHud(
                 viewModel = viewModel,
                 onExitToHome = onExitToHome,
+                onVoiceToggle = { onVoiceToggle(null) },
+                voiceState = voiceState,
                 modifier = Modifier.fillMaxSize(),
             )
         }
