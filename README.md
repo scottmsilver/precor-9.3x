@@ -23,7 +23,6 @@ A Raspberry Pi sits between the console and motor controller of a Precor 9.31 tr
 <img src="docs/screenshots/android-lobby.png" width="700" alt="Lobby screen on Android tablet">
 
 - **Android** (Kotlin + Compose): runs on a tablet mounted on the treadmill console
-- **Web** (React + TypeScript): same features, any browser
 - Workout library, run history, live elevation profile, calorie tracking
 
 ## Bluetooth
@@ -41,9 +40,9 @@ A Raspberry Pi sits between the console and motor controller of a Precor 9.31 tr
 ## Architecture
 
 ```
-┌───────────────────────────┬───────────────────────────┐
-│  Web UI (React + Vite)    │  Android (Kotlin+Compose) │
-├───────────────────────────┴───────────────────────────┤
+┌───────────────────────────────────────────────────────┐
+│  Android (Kotlin + Compose)                           │
+├───────────────────────────────────────────────────────┤
 │  REST / WebSocket / Gemini Live (voice)               │
 ├───────────────────────────────────────────────────────┤
 │  server.py (FastAPI)                                  │
@@ -62,7 +61,7 @@ A Raspberry Pi sits between the console and motor controller of a Precor 9.31 tr
 - **Python server** — FastAPI. All the logic: Gemini AI, workouts, sessions, run history
 - **FTMS daemon** — Rust. Bluetooth for fitness apps
 - **HRM daemon** — Rust. Connects to heart rate straps
-- **Web + Android** — display layers. All decisions happen server-side.
+- **Android** — display layer. All decisions happen server-side.
 
 Details: [CLAUDE.md](CLAUDE.md)
 
@@ -110,7 +109,7 @@ make image         # OR: bake a flashable .img with everything pre-installed
 
 **Local dev (no Pi needed):**
 ```bash
-TREADMILL_MOCK=1 ./scripts/dev.sh    # Caddy + server + Vite HMR
+TREADMILL_MOCK=1 ./scripts/dev.sh    # server.py in mock mode
 ```
 
 API reference, deploy details, tests: [CLAUDE.md](CLAUDE.md)

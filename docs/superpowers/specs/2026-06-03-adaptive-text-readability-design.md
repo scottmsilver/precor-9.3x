@@ -1,5 +1,7 @@
 # Adaptive Text Readability on Background Images — Design
 
+> **Status update (2026-07-23):** the web UI was removed from the repo; the TS twin (`web/src/bglab/`) and the `/bg-lab` tuning bench were retired with it. The Kotlin engine (`kotlin/.../ui/theme/readability/`) plus `docs/bg-lab/golden.json` (pinned by `GoldenSyncTest`) are now the single authoritative implementation and spec vectors.
+
 **Date:** 2026-06-03
 **Status:** Approved design, pending implementation plan
 **Surfaces:** Android Running screen (runtime), web `/bg-lab` (tuning preview), server.py (Gemini advisor)

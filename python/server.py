@@ -28,8 +28,7 @@ import uvicorn
 from db import DEFAULT_WEIGHT_LBS, GUEST_PROFILE_ID, TreadmillDB  # noqa: F401
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from google import genai
 from hrm_client import HrmClient
 from program_engine import (
@@ -298,7 +297,8 @@ async def lifespan(application):
 
 app = FastAPI(title="Treadmill Controller", lifespan=lifespan)
 
-# CORS — wide open in mock mode (Caddy handles same-origin), restricted otherwise
+# CORS — wide open in mock mode, restricted otherwise (browser-only concern;
+# native apps ignore CORS — the allowlist is a legacy web-dev leftover)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if os.environ.get("TREADMILL_MOCK") else ["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -2215,24 +2215,11 @@ async def websocket_endpoint(ws: WebSocket):
         manager.disconnect(ws)
 
 
-# Mount static files AFTER api routes, then SPA catch-all
-app.mount("/assets", StaticFiles(directory="static/assets"), name="static-assets")
-
-
-@app.get("/{full_path:path}")
-async def spa_catch_all(request: Request, full_path: str):
-    """Serve static files or fall back to index.html for SPA routing."""
-    static_dir = os.path.realpath("static")
-    file_path = os.path.realpath(os.path.join(static_dir, full_path))
-    # Prevent path traversal — file must be inside static_dir
-    if not file_path.startswith(static_dir + os.sep) and file_path != static_dir:
-        return JSONResponse({"error": "not found"}, status_code=404)
-    if full_path and os.path.isfile(file_path):
-        return FileResponse(file_path)
-    index_path = os.path.join(static_dir, "index.html")
-    if os.path.isfile(index_path):
-        return FileResponse(index_path, headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-    return JSONResponse({"error": "not found"}, status_code=404)
+# No web UI is served — this server is API + WebSocket only.
+@app.get("/")
+async def root_banner():
+    """Tiny JSON banner so a browser hitting the root sees what this is."""
+    return JSONResponse({"service": "precor-treadmill", "api": "/api", "ws": "/ws"})
 
 
 if __name__ == "__main__":

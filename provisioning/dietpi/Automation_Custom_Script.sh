@@ -105,7 +105,7 @@ if [ ! -f /boot/fastboot/.family.applied ] && [ -n "$FW" ] && [ -f "$FW/family.t
   # the fold-back which only copies a fixed allowlist): the listed-name guard
   # rejects absolute/.. names; additionally refuse ANY symlink member so a
   # clean-named symlink cannot redirect the cp/exec to outside $ftx. The real
-  # payload (binaries, *.py, static, *.service, deploy/*) has no symlinks.
+  # payload (binaries, *.py, *.service, deploy/*) has no symlinks.
   if [ "$fok" = 1 ] && find "$ftx" -type l 2>/dev/null | grep -q .; then
     logger -t fastboot "family: refusing family.tgz with symlink members"; fok=0
   fi

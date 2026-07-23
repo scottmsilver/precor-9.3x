@@ -50,7 +50,7 @@ fi
 # 'cp -r build/.' -> ~/treadmill/). Manifest 'src' is repo-relative
 # (build/<X>), so strip the staging-root prefix to resolve it here. Rows
 # whose final dest IS the payload location (the ~/treadmill app tree:
-# python/, static/, gpio.json, pyproject.toml) are already in place from
+# python/, gpio.json, pyproject.toml) are already in place from
 # that flatten — detected as an identity path and skipped. The rows that do
 # real work are the binaries (-> /usr/local/bin) and unit files
 # (-> /etc/systemd/system). A manifest src missing from the payload is a

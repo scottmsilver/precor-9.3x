@@ -1,9 +1,0 @@
-{
-	admin off
-}
-
-:{$CADDY_PORT} {
-	reverse_proxy /api/* localhost:{$TREADMILL_SERVER_PORT}
-	reverse_proxy /ws localhost:{$TREADMILL_SERVER_PORT}
-	reverse_proxy /* localhost:{$VITE_SERVER_PORT}
-}
