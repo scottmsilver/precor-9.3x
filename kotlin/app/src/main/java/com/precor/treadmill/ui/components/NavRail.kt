@@ -125,7 +125,9 @@ fun NavRail(
                 selected = isRunSelected,
                 onClick = { onNavigate("running") },
             )
-            VoiceTabItem(
+            // On the running screen the BottomBar carries its own mic — a second
+            // one in the tab bar right below it was redundant.
+            if (!isRunSelected) VoiceTabItem(
                 voiceState = voiceState,
                 onClick = onVoiceToggle,
             )

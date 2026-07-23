@@ -270,6 +270,7 @@ fun AppNavigation(
                 RunningScreen(
                     viewModel = viewModel,
                     onVoiceToggle = handleVoiceToggle,
+                    voiceState = voiceStateEnum,
                     onExitToHome = { navigateTo(Routes.LOBBY) },
                 )
             }
