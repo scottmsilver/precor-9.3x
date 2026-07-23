@@ -345,6 +345,10 @@ In practice:
 
 ### Docs Stay Current
 - **CLAUDE.md must reflect reality.** If you add a feature, endpoint, mode, or dependency, update this file. Stale docs are a bug.
+- **README screenshots must reflect main.** When a change that alters UI shown in
+  `docs/screenshots/` lands on main, recapture those screenshots (prefer the real
+  tablet) and land the refreshed images too. A landing isn't complete while the
+  README shows the old UI.
 - Inline comments only where the "why" isn't obvious. Don't comment the "what."
 
 ### Tests Are Real
