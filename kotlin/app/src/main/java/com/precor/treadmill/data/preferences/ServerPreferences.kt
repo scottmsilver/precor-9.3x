@@ -17,6 +17,7 @@ class ServerPreferences(private val context: Context) {
     companion object {
         private val KEY_SERVER_URL = stringPreferencesKey("server_url")
         private val KEY_SMARTASS_MODE = booleanPreferencesKey("smartass_mode")
+        private val KEY_BACKGROUND = stringPreferencesKey("background_image")
     }
 
     val serverUrl: Flow<String> = context.dataStore.data.map { prefs ->
@@ -25,6 +26,17 @@ class ServerPreferences(private val context: Context) {
 
     val smartassMode: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[KEY_SMARTASS_MODE] ?: false
+    }
+
+    /** Running-screen background photo key (see Backgrounds registry). */
+    val backgroundImage: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[KEY_BACKGROUND] ?: "ridge"
+    }
+
+    suspend fun setBackgroundImage(key: String) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_BACKGROUND] = key
+        }
     }
 
     suspend fun setServerUrl(url: String) {

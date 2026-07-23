@@ -41,6 +41,9 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import com.precor.treadmill.R
+import com.precor.treadmill.data.preferences.ServerPreferences
+import com.precor.treadmill.ui.theme.Backgrounds
+import org.koin.compose.koinInject
 import com.precor.treadmill.ui.components.ProgramBrowser
 import com.precor.treadmill.ui.theme.GlassParams
 import com.precor.treadmill.ui.theme.LocalGlassParams
@@ -131,7 +134,7 @@ private data class RunReadability(
  * legible-by-construction result via APCA.
  */
 @Composable
-private fun rememberRunReadability(): RunReadability {
+private fun rememberRunReadability(bgRes: Int): RunReadability {
     val context = LocalContext.current
     // The background is drawn full-screen with ContentScale.Crop, so sample the
     // pixels the user actually sees by mapping each block through the same crop.
@@ -139,9 +142,9 @@ private fun rememberRunReadability(): RunReadability {
     val density = LocalDensity.current
     val containerW = with(density) { config.screenWidthDp.dp.toPx() }
     val containerH = with(density) { config.screenHeightDp.dp.toPx() }
-    return remember(containerW, containerH) {
+    return remember(containerW, containerH, bgRes) {
         val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
-        val bmp = BitmapFactory.decodeResource(context.resources, R.drawable.bg_ridge, opts)
+        val bmp = BitmapFactory.decodeResource(context.resources, bgRes, opts)
         if (bmp == null) {
             // decodeResource can return null — fall back to the engine's neutral theme.
             val neutral = chooseTheme(emptyList(), AdvicePrior()).theme
@@ -280,7 +283,10 @@ fun RunningScreen(
         (glyphAbove + glyphBelow + 2 * edgePadPx).toDp()
     }
 
-    val readability = rememberRunReadability()
+    val bgPrefs: ServerPreferences = koinInject()
+    val bgKey by bgPrefs.backgroundImage.collectAsState(initial = "ridge")
+    val bgRes = Backgrounds.resFor(bgKey)
+    val readability = rememberRunReadability(bgRes)
     val theme = readability.theme
     // The free-floating hero timer carries no panel, so paint the engine's computed
     // per-region scrim behind it as a soft radial tint (the "gradient scrim" lever) —
@@ -295,7 +301,7 @@ fun RunningScreen(
     ) {
         // Background image (full-bleed; per-region scrim handles legibility)
         Image(
-            painter = painterResource(R.drawable.bg_ridge),
+            painter = painterResource(bgRes),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -528,13 +534,16 @@ private fun RunningScreenLandscape(
             .fillMaxSize()
             .background(Color.Black),
     ) {
-        val readability = rememberRunReadability()
+        val bgPrefs: ServerPreferences = koinInject()
+        val bgKey by bgPrefs.backgroundImage.collectAsState(initial = "ridge")
+        val bgRes = Backgrounds.resFor(bgKey)
+        val readability = rememberRunReadability(bgRes)
         val theme = readability.theme
         val timerScrimColor = theme.composeTintColor().copy(alpha = readability.freeScrimAlpha.toFloat())
 
         // Background image (full-bleed; per-region scrim handles legibility)
         Image(
-            painter = painterResource(R.drawable.bg_ridge),
+            painter = painterResource(bgRes),
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
