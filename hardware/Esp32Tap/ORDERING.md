@@ -50,14 +50,14 @@ assembly stock; treat any "Extended" fee estimate below as provisional.
 | Stencil | $1.50 |
 | SMT joints (~185 joints × 2 boards × $0.0017) | ~$0.65 |
 | Parts, 2 × ~$7.35 (see `bom/BOM.csv`) | ~$14.70 |
-| Extended-part loading fees, $3 per unique line. Realistically-Extended lines: U1 module, K1 relay, J1/J2 RJ45 (Extended-THT), U2 TPS54202, D3 TVS, D5–D7 PESD, SW1/SW2 KMR2, F1 polyfuse, C1 electrolytic = up to 9 lines (+L1 if it flips); some may land Basic/Preferred (fee waived) | $18–27 |
+| Extended-part loading fees, $3 per unique line. Live-catalog-validated 2026-07-23 (`jlc search --json` per line): Extended = U1 module, K1 relay, J1/J2 RJ45 (Extended-THT), J3 USB-C, U2 TPS54202, U3 USBLC6, D3 TVS, D5–D7 PESD (C316020), LED1, SW1/SW2 KMR2, F1 polyfuse, C1 electrolytic, L1 inductor = 13 lines; some may flip to Basic/Preferred by order time (fee waived per line that does) | $30–39 |
 | THT hand-solder service (RJ45 × 2): flat fee | $3.50 |
 | THT joints (16 pins + 4 locks ≈ 20 × ~$0.017 × 2 boards) | ~$0.70 |
-| **JLCPCB subtotal** | **~$52–64** |
+| **JLCPCB subtotal** | **~$64–76** |
 | Shipping (economy line, ~8–15 days) | $8–15 |
 | Enclosure, JLC3DP resin two-part shell (`enclosure/`) | $6–14 |
 | Combined-shipment saving if enclosure rides along | −$5–10 |
-| **All-in total** | **~$65–95** |
+| **All-in total** | **~$77–107** |
 
 Still inside the $200 budget, but the respin reserve is thinner than the
 earlier estimate — the old numbers assumed only 2–3 Extended lines and
@@ -87,13 +87,15 @@ JLC BOM-tool upload); this table is where it lives.
   serial — do not substitute one). Any pin-compatible 54602 clone is fine;
   the footprint is the proven PiZeroHat one. These two THT lines also incur
   the Extended loading fee (counted in the fee row above).
-* **J3 HRO TYPE-C-31-M-12 (C165948)** — Basic; the KiCad footprint is for
-  this exact part.
+* **J3 HRO TYPE-C-31-M-12 (C165948)** — Extended per the 2026-07-23 live
+  check (was Basic; JLC reclassified); the KiCad footprint is for this exact part.
 * **D3 Littelfuse SMBJ12A (C151251)** — must be **unidirectional, 12 V
   standoff** (the previously listed C113996 was a 26 V bidirectional
   SMBJ26CA — do not resurrect it).
-* **D5–D7 Nexperia PESD3V3L1BA,115 (C51450)** — 3.3 V bidirectional
-  GND-referenced clamp, SOD-323.
+* **D5–D7 BORN PESD3V3L1BA-N (C316020)** — 3.3 V bidirectional GND-referenced
+  clamp, SOD-323. Drop-in second source for the Nexperia C51450, which showed
+  **0 JLC stock** at the 2026-07-23 live check; if Nexperia stock returns
+  either is fine.
 * **D4 JSCJ 1N4148WS (C2128)** — SOD-323, matches the D_SOD-323 footprint.
 * **L1 Sunlord SWPA4030S100MT (C38117)** — 10 µH 4030 shielded, Isat 2.4 A.
 * **C1 ROQANG RVT1E101M0607 (C72477)** — 100 µF **25 V**, 6.3×7.7 mm SMD

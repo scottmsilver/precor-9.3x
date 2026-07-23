@@ -13,8 +13,10 @@ venv/
 *.log
 
 # CSVs except logic-analyzer captures (cpp/captures/ — tracked for analysis)
+# and fab order files (BOM/CPL are the deliverable, not data exhaust)
 *.csv
 !cpp/captures/*.csv
+!hardware/Esp32Tap/bom/*.csv
 
 # Editor backups
 *~

@@ -22,10 +22,10 @@ design, edit `tools/design.py` and regenerate everything.
 | D2 | SS34 | Diode_SMD:D_SMA | C8678 | Basic | Schottky, USB-VBUS leg of VIN ORing (bench flashing without 8V) |
 | D3 | SMBJ12A | Diode_SMD:D_SMB | C151251 | Extended | TVS, Littelfuse SMBJ12A — unidirectional, 12V standoff / 13.3V breakdown — input transient clamp on the noisy 8V rail |
 | D4 | 1N4148WS | Diode_SMD:D_SOD-323 | C2128 | Basic | Relay coil flyback diode (JSCJ 1N4148WS, SOD-323 — matches footprint) |
-| D5 | PESD3V3L1BA | Diode_SMD:D_SOD-323 | C51450 | Extended | Bidirectional ESD clamp to GND (NOT rail-referenced — stays inert when the board is unpowered), console pin-6 line (Nexperia PESD3V3L1BA,115) |
-| D6 | PESD3V3L1BA | Diode_SMD:D_SOD-323 | C51450 | Extended | Bidirectional ESD clamp, motor pin-6 line |
-| D7 | PESD3V3L1BA | Diode_SMD:D_SOD-323 | C51450 | Extended | Bidirectional ESD clamp, pin-3 tap line |
-| LED1 | GREEN-0603 | LED_SMD:LED_0603_1608Metric | C72043 | Basic | Status LED (GPIO38) |
+| D5 | PESD3V3L1BA-N | Diode_SMD:D_SOD-323 | C316020 | Extended | Bidirectional ESD clamp to GND (NOT rail-referenced — stays inert when the board is unpowered), console pin-6 line (BORN PESD3V3L1BA-N; drop-in for Nexperia C51450, 0 JLC stock 2026-07-23) |
+| D6 | PESD3V3L1BA-N | Diode_SMD:D_SOD-323 | C316020 | Extended | Bidirectional ESD clamp, motor pin-6 line |
+| D7 | PESD3V3L1BA-N | Diode_SMD:D_SOD-323 | C316020 | Extended | Bidirectional ESD clamp, pin-3 tap line |
+| LED1 | XL-1608UGC-04 | LED_SMD:LED_0603_1608Metric | C965804 | Extended | Status LED green (GPIO38; replaces C72043, stock=6 at 2026-07-23 check) |
 | LED2 | RED-0603 | LED_SMD:LED_0603_1608Metric | C2286 | Basic | 3V3 power LED |
 | SW1 | KMR2-EN | Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2 | C72443 | Extended | Reset (EN) tactile switch |
 | SW2 | KMR2-BOOT | Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2 | C72443 | Extended | Boot (IO0) tactile switch |
