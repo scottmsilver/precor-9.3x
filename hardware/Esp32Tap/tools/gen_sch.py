@@ -83,8 +83,11 @@ col_x = 40.0
 y_cursor = 30.0
 COL_W = 75.0
 SHEET_H = 400.0
+
+
 def snap(v, g=2.54):
     return round(v / g) * g
+
 
 for ref in order:
     pins = design.COMPONENTS[ref][7]
@@ -92,7 +95,7 @@ for ref in order:
     if y_cursor + h + 20 > SHEET_H:
         col_x += COL_W
         y_cursor = 30.0
-    top = snap(y_cursor)          # pin i sits at top + (i+1)*2.54  (on grid)
+    top = snap(y_cursor)  # pin i sits at top + (i+1)*2.54  (on grid)
     placements[ref] = (snap(col_x), top)
     y_cursor = top + h + 22.0
 
@@ -172,25 +175,30 @@ sch.extend(body)
 sch.append('  (sheet_instances (path "/" (page "1")))')
 sch.append(")")
 
-kdir = "/home/ssilver/development/precor-9.3x/.claude/worktrees/wf_4b2fe7a1-b29-6/hardware/Esp32Tap/kicad"
+import os
+
+kdir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "kicad"))
 lib = ['(kicad_symbol_lib (version 20231120) (generator "esp32tap_gen")']
 for s in lib_syms:
     lib.append(s.replace('(symbol "esp32tap:', '(symbol "'))
-lib.append(')')
+lib.append(")")
 with open(kdir + "/esp32tap.kicad_sym", "w") as f:
     f.write("\n".join(lib) + "\n")
 with open(kdir + "/sym-lib-table", "w") as f:
-    f.write('(sym_lib_table\n  (version 7)\n'
-            '  (lib (name "esp32tap")(type "KiCad")'
-            '(uri "${KIPRJMOD}/esp32tap.kicad_sym")(options "")(descr "generated"))\n)\n')
-import json, os
+    f.write(
+        "(sym_lib_table\n  (version 7)\n"
+        '  (lib (name "esp32tap")(type "KiCad")'
+        '(uri "${KIPRJMOD}/esp32tap.kicad_sym")(options "")(descr "generated"))\n)\n'
+    )
+import json
+import os
+
 pro = kdir + "/Esp32Tap.kicad_pro"
 if not os.path.exists(pro):
     with open(pro, "w") as f:
-        json.dump({"meta": {"filename": "Esp32Tap.kicad_pro", "version": 3},
-                   "sheets": [], "boards": []}, f, indent=2)
+        json.dump({"meta": {"filename": "Esp32Tap.kicad_pro", "version": 3}, "sheets": [], "boards": []}, f, indent=2)
 
-out = "/home/ssilver/development/precor-9.3x/.claude/worktrees/wf_4b2fe7a1-b29-6/hardware/Esp32Tap/kicad/Esp32Tap.kicad_sch"
+out = kdir + "/Esp32Tap.kicad_sch"
 with open(out, "w") as f:
     f.write("\n".join(sch) + "\n")
 print("wrote", out)

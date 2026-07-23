@@ -23,9 +23,9 @@ PolyFuse 0.75A/16V 1206L075/16WR,F1,Fuse_1206_3216Metric,C371166,Extended,1,0.10
 5.1k,"R4,R5",R_0603_1608Metric,C23186,Basic,2,0.002,0.004,USB-C CC1 sink resistor
 100R,R6,R_0603_1608Metric,C22775,Basic,1,0.002,0.002,"Motor-pin6 TX series resistor (drive path; isolated by relay when unpowered, so 100R is safe here)"
 4.7k,"R7,R8",R_0603_1608Metric,C23162,Basic,2,0.002,0.004,Console-pin6 RX tap series resistor — 4.7k limits unpowered GPIO-clamp back-feed to ~0.3mA (gate fix)
-1k,"R9,R11",R_0603_1608Metric,C21190,Basic,2,0.002,0.004,Relay driver base resistor
+1k,"R9,R12",R_0603_1608Metric,C21190,Basic,2,0.002,0.004,Relay driver base resistor
 10k,"R10,R13",R_0603_1608Metric,C25804,Basic,2,0.002,0.004,Relay driver base pull-down (relay stays off during boot/reset)
-2k,R12,R_0603_1608Metric,C22975,Basic,1,0.002,0.002,Power LED resistor
+330R,R11,R_0603_1608Metric,C23138,Basic,1,0.002,0.002,Status LED resistor (330R: 1.51mA typ through LED1 — validation fix F1; 1k gave a sub-visible 0.6mA)
 100uF/25V,C1,CP_Elec_6.3x7.7,C72477,Extended,1,0.100,0.100,"Input bulk electrolytic, 100uF 25V, 6.3x7.7mm (ROQANG RVT1E101M0607 — matches the CP_Elec_6.3x7.7 footprint)"
 4.7uF/50V X7R 1206,"C2,C3",C_1206_3216Metric,C29823,Basic,2,0.040,0.080,Input ceramic
 100nF,"C4,C5,C9",C_0603_1608Metric,C14663,Basic,3,0.004,0.012,Buck VIN HF bypass

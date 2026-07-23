@@ -12,25 +12,25 @@ design, edit `tools/design.py` and regenerate everything.
 |-----|-------|-----------|------|-----------|-------------|
 | J1 | RJ45_Console_54602-908LF | Connector_RJ:RJ45_Amphenol_54602-x08_Horizontal | C2847314 | Extended-THT | RJ45 jack, unshielded, THT — console-side cable (same jack family as PiZeroHat) |
 | J2 | RJ45_Motor_54602-908LF | Connector_RJ:RJ45_Amphenol_54602-x08_Horizontal | C2847314 | Extended-THT | RJ45 jack, unshielded, THT — motor-side cable |
-| J3 | USB-C_HRO_TYPE-C-31-M-12 | Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12 | C165948 | Basic | USB-C receptacle, 16-pin, USB2.0 — native USB flash/JTAG/console |
+| J3 | USB-C_HRO_TYPE-C-31-M-12 | Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12 | C165948 | Extended | USB-C receptacle, 16-pin, USB2.0 — native USB flash/JTAG/console |
 | U1 | ESP32-S3-WROOM-1-N8 | RF_Module:ESP32-S3-WROOM-1 | C2913198 | Extended | ESP32-S3 module, 8MB flash, PCB antenna (N8R2 C2913204 is a drop-in PSRAM upgrade — same footprint; re-quote at order time) |
 | U2 | TPS54202DDCR | Package_TO_SOT_SMD:SOT-23-6 | C191884 | Extended | Buck converter 4.5-28V in, 2A, 500kHz — 8V rail to 3.3V |
-| U3 | USBLC6-2SC6 | Package_TO_SOT_SMD:SOT-23-6 | C7519 | Basic | USB ESD protection array |
+| U3 | USBLC6-2SC6 | Package_TO_SOT_SMD:SOT-23-6 | C7519 | Extended | USB ESD protection array |
 | K1 | G6K-2F-Y-TR DC3 | Relay_SMD:Relay_DPDT_Omron_G6K-2F-Y | C2153097 | Extended | DPDT signal relay, 3VDC coil (~45mA), SMD — normally-closed pin-6 fail-safe bypass. Coil 1(+)/8(-); pole A COM=3 NC=2 NO=4; pole B COM=6 NC=7 NO=5 (Omron G6K datasheet, terminal arrangement) |
 | Q1 | S8050 | Package_TO_SOT_SMD:SOT-23 | C2146 | Basic | NPN relay coil driver |
 | D1 | SS34 | Diode_SMD:D_SMA | C8678 | Basic | Schottky, 8V-rail leg of VIN ORing |
 | D2 | SS34 | Diode_SMD:D_SMA | C8678 | Basic | Schottky, USB-VBUS leg of VIN ORing (bench flashing without 8V) |
 | D3 | SMBJ12A | Diode_SMD:D_SMB | C151251 | Extended | TVS, Littelfuse SMBJ12A — unidirectional, 12V standoff / 13.3V breakdown — input transient clamp on the noisy 8V rail |
 | D4 | 1N4148WS | Diode_SMD:D_SOD-323 | C2128 | Basic | Relay coil flyback diode (JSCJ 1N4148WS, SOD-323 — matches footprint) |
-| D5 | PESD3V3L1BA-N | Diode_SMD:D_SOD-323 | C316020 | Extended | Bidirectional ESD clamp to GND (NOT rail-referenced — stays inert when the board is unpowered), console pin-6 line (BORN PESD3V3L1BA-N; drop-in for Nexperia C51450, 0 JLC stock 2026-07-23) |
+| D5 | PESD3V3L1BA-N | Diode_SMD:D_SOD-323 | C316020 | Extended | Bidirectional ESD clamp to GND (NOT rail-referenced — stays inert when the board is unpowered), console pin-6 line (BORN PESD3V3L1BA-N; drop-in for Nexperia C51450 which showed 0 stock at validation 2026-07-23) |
 | D6 | PESD3V3L1BA-N | Diode_SMD:D_SOD-323 | C316020 | Extended | Bidirectional ESD clamp, motor pin-6 line |
 | D7 | PESD3V3L1BA-N | Diode_SMD:D_SOD-323 | C316020 | Extended | Bidirectional ESD clamp, pin-3 tap line |
-| LED1 | XL-1608UGC-04 | LED_SMD:LED_0603_1608Metric | C965804 | Extended | Status LED green (GPIO38; replaces C72043, stock=6 at 2026-07-23 check) |
+| LED1 | XL-1608UGC-04 | LED_SMD:LED_0603_1608Metric | C965804 | Extended | Status LED green (GPIO38; XL-1608UGC-04, 5.2M stock at validation 2026-07-23; replaces C72043 stock=6) |
 | LED2 | RED-0603 | LED_SMD:LED_0603_1608Metric | C2286 | Basic | 3V3 power LED |
 | SW1 | KMR2-EN | Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2 | C72443 | Extended | Reset (EN) tactile switch |
 | SW2 | KMR2-BOOT | Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2 | C72443 | Extended | Boot (IO0) tactile switch |
 | F1 | PolyFuse 0.75A/16V 1206L075/16WR | Fuse:Fuse_1206_3216Metric | C371166 | Extended | Resettable fuse on the 8V input (Littelfuse 1206L075/16WR, 0.75A hold, 16V max — meets the >=16V rating rule; load is ~0.25A at 8V) |
-| L1 | 10uH SWPA4030S100MT | Inductor_SMD:L_Sunlord_SWPA4030S | C38117 | Basic | Buck inductor, 4x4mm shielded, Isat 2.4A (sized for ~0.6A peaks) |
+| L1 | 10uH SWPA4030S100MT | Inductor_SMD:L_Sunlord_SWPA4030S | C38117 | Extended | Buck inductor, 4x4mm shielded, Isat 2.4A (sized for ~0.6A peaks) |
 | R1 | 100k | Resistor_SMD:R_0603_1608Metric | C25803 | Basic | Buck FB divider top (VFB 0.596V -> 3.30V with 22k) |
 | R2 | 22k | Resistor_SMD:R_0603_1608Metric | C31850 | Basic | Buck FB divider bottom |
 | R3 | 100k | Resistor_SMD:R_0603_1608Metric | C25803 | Basic | Buck EN divider top from VIN (with R14 47k bottom: EN ~2.6V at 7.6V VIN, ~1.6V at 4.7V USB — above the ~1.21V enable threshold, below the TPS54202 7V EN abs-max; verify thresholds against the exact datasheet at order time) |
@@ -42,8 +42,8 @@ design, edit `tools/design.py` and regenerate everything.
 | R8 | 4.7k | Resistor_SMD:R_0603_1608Metric | C23162 | Basic | Pin-3 tap series resistor (same 0.3mA unpowered back-feed cap) |
 | R9 | 1k | Resistor_SMD:R_0603_1608Metric | C21190 | Basic | Relay driver base resistor |
 | R10 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | Relay driver base pull-down (relay stays off during boot/reset) |
-| R11 | 1k | Resistor_SMD:R_0603_1608Metric | C21190 | Basic | Status LED resistor |
-| R12 | 2k | Resistor_SMD:R_0603_1608Metric | C22975 | Basic | Power LED resistor |
+| R11 | 330R | Resistor_SMD:R_0603_1608Metric | C23138 | Basic | Status LED resistor (330R: 1.51mA typ through LED1 — validation fix F1; 1k gave a sub-visible 0.6mA) |
+| R12 | 1k | Resistor_SMD:R_0603_1608Metric | C21190 | Basic | Power LED resistor (1k for a clearly visible power light; was 2k at 0.78mA) |
 | R13 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | EN (reset) pull-up |
 | C1 | 100uF/25V | Capacitor_SMD:CP_Elec_6.3x7.7 | C72477 | Extended | Input bulk electrolytic, 100uF 25V, 6.3x7.7mm (ROQANG RVT1E101M0607 — matches the CP_Elec_6.3x7.7 footprint) |
 | C2 | 4.7uF/50V X7R 1206 | Capacitor_SMD:C_1206_3216Metric | C29823 | Basic | Input ceramic |

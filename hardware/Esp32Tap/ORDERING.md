@@ -49,7 +49,7 @@ assembly stock; treat any "Extended" fee estimate below as provisional.
 | Economic PCBA setup | $8.00 |
 | Stencil | $1.50 |
 | SMT joints (~185 joints × 2 boards × $0.0017) | ~$0.65 |
-| Parts, 2 × ~$7.35 (see `bom/BOM.csv`) | ~$14.70 |
+| Parts, 2 × ~$7.21 (see `bom/BOM.csv`) | ~$14.42 |
 | Extended-part loading fees, $3 per unique line. Live-catalog-validated 2026-07-23 (`jlc search --json` per line): Extended = U1 module, K1 relay, J1/J2 RJ45 (Extended-THT), J3 USB-C, U2 TPS54202, U3 USBLC6, D3 TVS, D5–D7 PESD (C316020), LED1, SW1/SW2 KMR2, F1 polyfuse, C1 electrolytic, L1 inductor = 13 lines; some may flip to Basic/Preferred by order time (fee waived per line that does) | $30–39 |
 | THT hand-solder service (RJ45 × 2): flat fee | $3.50 |
 | THT joints (16 pins + 4 locks ≈ 20 × ~$0.017 × 2 boards) | ~$0.70 |
@@ -61,7 +61,7 @@ assembly stock; treat any "Extended" fee estimate below as provisional.
 
 Still inside the $200 budget, but the respin reserve is thinner than the
 earlier estimate — the old numbers assumed only 2–3 Extended lines and
-undercounted the loading fees. The per-board parts total (~$7.35) is
+undercounted the loading fees. The per-board parts total (~$7.21) is
 deliberately NOT a row in `bom/BOM.csv` (a trailing total row breaks the
 JLC BOM-tool upload); this table is where it lives.
 
