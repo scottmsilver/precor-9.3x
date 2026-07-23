@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -470,22 +471,34 @@ private fun DrawScope.drawRidgeline(
             }
             val last = samplePos.size - 1
             val sp = if (split < 0) last else split.coerceAtLeast(1)
+            // Organic top edge: when the window cuts the route, the thread (and its
+            // scrim) dissolves over a short ~44dp run-out right at the cut instead of
+            // stopping at a straight line. When the whole route fits, the real
+            // endpoint stays crisp.
+            val cutTop = camHi < route.total - 0.5
+            val fade = 44f * dp
+            fun fadeBrush(c: Color): Brush = if (!cutTop) SolidColor(c) else Brush.verticalGradient(
+                0f to c.copy(alpha = 0f), 1f to c,
+                startY = topY, endY = topY + fade,
+            )
             if (SEE_THROUGH_MAP) {
                 // localized scrim: a soft blurred dark band under the trail is the
                 // ONLY thing dimming the photo along the route (Paint cached — the
                 // pulse animation redraws every frame; codex review)
                 drawIntoCanvas { c ->
-                    c.nativeCanvas.drawPath(thread(0, last).asAndroidPath(), trailScrimPaint(dp))
+                    val paint = if (cutTop) trailScrimSlot.get(dp, topY, topY + fade, 165)
+                    else trailScrimSlot.get(dp, Float.NaN, Float.NaN, 165)
+                    c.nativeCanvas.drawPath(thread(0, last).asAndroidPath(), paint)
                 }
             }
             // soft shadow under the whole thread
-            drawPath(thread(0, last), Color.Black, alpha = 0.40f,
-                style = Stroke(width = 4.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(thread(0, last), fadeBrush(Color.Black), alpha = 0.40f,
+                style = Stroke(width = 6.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
             // travelled: dim; ahead: bright ivory
-            drawPath(thread(0, sp), RidgelineTheme.fg, alpha = 0.38f,
-                style = Stroke(width = 2.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            if (sp < last) drawPath(thread(sp, last), RidgelineTheme.fg, alpha = 0.95f,
-                style = Stroke(width = 2.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(thread(0, sp), fadeBrush(RidgelineTheme.fg), alpha = 0.38f,
+                style = Stroke(width = 3.4f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            if (sp < last) drawPath(thread(sp, last), fadeBrush(RidgelineTheme.fg), alpha = 0.95f,
+                style = Stroke(width = 3.4f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
     } else for (sg in segs) {
         if (sg.pts.size < 2) continue
@@ -528,21 +541,31 @@ private fun DrawScope.drawRidgeline(
         val tx = worldX(camHi)
         // Bend toward the map's horizontal center (a fixed leftward hook parked the
         // dashes under the Home chip / timer stack).
+        val tipY = topY - 40f * dp
         val ghost = Path().apply {
             moveTo(tx, topY)
             lineTo(tx + (centerX - tx) * 0.45f, topY - 22f * dp)
-            lineTo(tx + (centerX - tx) * 0.9f, topY - 40f * dp)
+            lineTo(tx + (centerX - tx) * 0.9f, tipY)
         }
+        // The dashes (and their scrim) dissolve toward the tip — a hard dash-end
+        // with a dark backing read as a squared-off object floating in the sky.
         if (SEE_THROUGH_MAP) {
             // same localized scrim as the trail — without it the dashes vanished
             // into bright sky and the "path continues" cue was unreadable
             drawIntoCanvas { c ->
-                c.nativeCanvas.drawPath(ghost.asAndroidPath(), trailScrimPaint(dp))
+                c.nativeCanvas.drawPath(
+                    ghost.asAndroidPath(),
+                    ghostScrimSlot.get(dp, tipY - 10f * dp, topY + 14f * dp, 120),
+                )
             }
         }
+        val ghostColor = if (SEE_THROUGH_MAP) RidgelineTheme.fg.copy(alpha = 0.55f) else RidgelineTheme.dim2
         drawPath(
             ghost,
-            color = if (SEE_THROUGH_MAP) RidgelineTheme.fg.copy(alpha = 0.6f) else RidgelineTheme.dim2,
+            brush = Brush.verticalGradient(
+                0f to ghostColor.copy(alpha = 0f), 1f to ghostColor,
+                startY = tipY - 10f * dp, endY = topY + 14f * dp,
+            ),
             style = Stroke(
                 width = 3f * dp,
                 cap = StrokeCap.Round,
@@ -864,9 +887,17 @@ private fun DrawScope.drawRidgeline(
                     ),
                 )
                 if (!isNext) {
+                    val tlY = clampY(y - timeTl.size.height / 2f, timeTl.size.height)
+                    // Its own little island — the label sits on bare photo left of the
+                    // strip and washed out over bright water/sky without one.
+                    if (SEE_THROUGH_MAP) drawRoundRectCompat(
+                        labelRight - timeTl.size.width - 5f, tlY - 2f,
+                        timeTl.size.width + 10f, timeTl.size.height + 4f,
+                        6f, Color(0xC9070B0E),
+                    )
                     drawText( // legible-exempt: solved via legibleOn over the photo
                         timeTl,
-                        topLeft = Offset(labelRight - timeTl.size.width, clampY(y - timeTl.size.height / 2f, timeTl.size.height)),
+                        topLeft = Offset(labelRight - timeTl.size.width, tlY),
                     )
                     return
                 }
@@ -894,11 +925,21 @@ private fun DrawScope.drawRidgeline(
                 )
                 // Two stacked lines straddling the tick: time above, "8% 3.0" below.
                 val timeY = clampY(y - timeTl.size.height - 1f, timeTl.size.height)
+                val rowY = clampY(y + 2f, gradeTl.size.height)
+                // One island behind the whole two-line block (same washout fix as above).
+                if (SEE_THROUGH_MAP) {
+                    val rowW = spdTl.size.width + 6f + gradeTl.size.width
+                    val blockW = max(timeTl.size.width.toFloat(), rowW)
+                    drawRoundRectCompat(
+                        labelRight - blockW - 6f, timeY - 3f,
+                        blockW + 11f, (rowY + gradeTl.size.height + 3f) - (timeY - 3f),
+                        7f, Color(0xC9070B0E),
+                    )
+                }
                 drawText( // legible-exempt: solved via legibleOn over the photo
                     timeTl,
                     topLeft = Offset(labelRight - timeTl.size.width, timeY),
                 )
-                val rowY = clampY(y + 2f, gradeTl.size.height)
                 drawText( // legible-exempt: solved via legibleOn over the photo
                     spdTl,
                     topLeft = Offset(labelRight - spdTl.size.width, rowY),
@@ -950,22 +991,46 @@ private const val SHOW_CONTOURS = false
 
 
 
-// Cached trail-scrim paint (see-through mode). Rebuilt only when density changes.
-private var trailScrimPaintCache: android.graphics.Paint? = null
-private var trailScrimPaintDp: Float = 0f
-private fun trailScrimPaint(dp: Float): android.graphics.Paint {
-    val cached = trailScrimPaintCache
-    if (cached != null && trailScrimPaintDp == dp) return cached
-    val p = android.graphics.Paint().apply {
-        isAntiAlias = true
-        style = android.graphics.Paint.Style.STROKE
-        strokeWidth = 26f * dp
-        strokeCap = android.graphics.Paint.Cap.ROUND
-        strokeJoin = android.graphics.Paint.Join.ROUND
-        color = android.graphics.Color.argb(165, 5, 8, 10)
-        maskFilter = android.graphics.BlurMaskFilter(8f * dp, android.graphics.BlurMaskFilter.Blur.NORMAL)
+// Cached scrim paints (see-through mode), one slot per drawing (trail, ghost) so
+// the two callers don't thrash each other's cache every frame. Rebuilt only when
+// density or the fade anchors change. The vertical shader fades the scrim from
+// transparent at `fadeTopY` to `baseAlpha` at `fadeBotY` (pass NaN for no fade).
+private class ScrimPaintSlot {
+    private var paint: android.graphics.Paint? = null
+    private var dp = 0f
+    private var fadeTopY = 0f
+    private var fadeBotY = 0f
+
+    fun get(dp: Float, fadeTopY: Float, fadeBotY: Float, baseAlpha: Int): android.graphics.Paint {
+        val cached = paint
+        if (cached != null && this.dp == dp &&
+            this.fadeTopY.toRawBits() == fadeTopY.toRawBits() &&
+            this.fadeBotY.toRawBits() == fadeBotY.toRawBits()
+        ) return cached
+        val p = android.graphics.Paint().apply {
+            isAntiAlias = true
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 26f * dp
+            strokeCap = android.graphics.Paint.Cap.ROUND
+            strokeJoin = android.graphics.Paint.Join.ROUND
+            color = android.graphics.Color.argb(baseAlpha, 5, 8, 10)
+            maskFilter = android.graphics.BlurMaskFilter(8f * dp, android.graphics.BlurMaskFilter.Blur.NORMAL)
+            if (!fadeTopY.isNaN()) {
+                shader = android.graphics.LinearGradient(
+                    0f, fadeTopY, 0f, fadeBotY,
+                    android.graphics.Color.argb(0, 5, 8, 10),
+                    android.graphics.Color.argb(baseAlpha, 5, 8, 10),
+                    android.graphics.Shader.TileMode.CLAMP,
+                )
+            }
+        }
+        paint = p
+        this.dp = dp
+        this.fadeTopY = fadeTopY
+        this.fadeBotY = fadeBotY
+        return p
     }
-    trailScrimPaintCache = p
-    trailScrimPaintDp = dp
-    return p
 }
+
+private val trailScrimSlot = ScrimPaintSlot()
+private val ghostScrimSlot = ScrimPaintSlot()

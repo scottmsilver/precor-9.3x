@@ -8,6 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.res.painterResource
+import com.precor.treadmill.ui.theme.Backgrounds
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -182,6 +184,48 @@ fun SettingsSheet(
                         uncheckedThumbColor = colors.text3,
                     ),
                 )
+            }
+
+            // Running-screen background photo
+            val bgKey by serverPreferences.backgroundImage.collectAsState(initial = "ridge")
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
+                Text(
+                    text = "Background",
+                    color = colors.text,
+                    fontSize = 15.sp,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Backgrounds.all.forEach { bg ->
+                        val selected = bg.key == bgKey
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Image(
+                                painter = painterResource(bg.res),
+                                contentDescription = bg.label,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(width = 92.dp, height = 56.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .then(
+                                        if (selected) Modifier.border(2.dp, colors.purple, RoundedCornerShape(8.dp))
+                                        else Modifier.border(1.dp, colors.fill, RoundedCornerShape(8.dp))
+                                    )
+                                    .clickable {
+                                        scope.launch { serverPreferences.setBackgroundImage(bg.key) }
+                                        haptic(context, 25)
+                                    },
+                            )
+                            Text(
+                                text = bg.label,
+                                color = if (selected) colors.text else colors.text3,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(top = 3.dp),
+                            )
+                        }
+                    }
+                }
             }
 
             // Weight

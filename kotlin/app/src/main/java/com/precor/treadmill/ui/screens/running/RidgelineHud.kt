@@ -83,6 +83,7 @@ import com.precor.treadmill.ui.theme.LocalOpacityGroup
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
 import com.precor.treadmill.ui.theme.OpacityGroup
 import com.precor.treadmill.ui.theme.legibleOn
+import com.precor.treadmill.ui.util.fmtDur
 import com.precor.treadmill.ui.util.haptic
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import kotlinx.coroutines.Job
@@ -362,6 +363,17 @@ fun RidgelineHud(
                         // null when no live reading — the pill drops the row entirely.
                         hr = if (status.hrmConnected && status.heartRate > 0) status.heartRate.toString() else null,
                         cal = sess.caloriesDisplay,
+                        // Countdown to the next transition (the finish, on the last
+                        // interval) — only meaningful while the program runs. The interval
+                        // index comes from the server, so bounds-check it (Postel) and drop
+                        // the row once completed (running can linger true with 0:00 left).
+                        next = if (pgm.running && !pgm.completed &&
+                            pgm.currentInterval in 0 until route.count
+                        ) fmtDur(
+                            (route.endOf(pgm.currentInterval) -
+                                route.posAtProgram(pgm.currentInterval, pgm.intervalElapsed))
+                                .coerceAtLeast(0.0),
+                        ) else null,
                     )
                 }
 
@@ -446,12 +458,12 @@ fun RidgelineHud(
 }
 
 /**
- * Tighten the wide cells monospace gives ',' and '.' without breaking digit columns.
+ * Tighten the wide cells monospace gives ',', '.' and ':' without breaking digit columns.
  * Ported from DirectionD.jsx tightNum(): kern punctuation by -0.1em.
  */
 private fun tightNum(s: String): AnnotatedString = buildAnnotatedString {
     for (ch in s) {
-        if (ch == ',' || ch == '.') {
+        if (ch == ',' || ch == '.' || ch == ':') {
             withStyle(SpanStyle(letterSpacing = (-0.1).em)) { append(ch) }
         } else {
             append(ch)
@@ -465,6 +477,7 @@ private fun MetricsPill(
     dist: String,
     hr: String?,
     cal: String,
+    next: String?,
     modifier: Modifier = Modifier,
 ) {
     // Values are RidgelineTheme.fg; let the panel dim the photo behind it so they clear APCA.
@@ -482,6 +495,8 @@ private fun MetricsPill(
             // No HRM connected -> no HEART row at all (don't burn a row on "--").
             if (hr != null) MetricRow("HEART", hr, "bpm")
             MetricRow("CALORIES", cal, "cal")
+            // Not running -> no NEXT row (nothing is coming).
+            if (next != null) MetricRow("NEXT IN", next, "")
         }
     }
 }

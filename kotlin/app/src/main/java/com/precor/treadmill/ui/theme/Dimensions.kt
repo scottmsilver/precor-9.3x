@@ -10,16 +10,32 @@ object Touch {
     const val FINGER_PAD_MM = 16f
     const val THUMB_PAD_MM = 20f
 
+    /**
+     * xdpi/ydpi is the panel's self-reported physical dpi and is not always sane:
+     * emulators keep reporting the hardware dpi after a `wm density` override, and
+     * some panels report nonsense. Trust it only within 0.5×–2× of the density
+     * bucket; otherwise fall back to the bucket (which collapses mm→dp to the
+     * standard 160dp/inch rule instead of inflating a 20mm target to ~500dp).
+     */
+    fun sanitizedDpi(reported: Float, densityDpi: Float): Float {
+        // A broken baseline (zero/negative/non-finite densityDpi) would turn the
+        // fallback itself into garbage — bottom out at the mdpi reference instead.
+        val base = if (densityDpi.isFinite() && densityDpi > 0f) densityDpi else 160f
+        return if (reported in base / 2f..base * 2f) reported else base
+    }
+
     @Composable
     fun mmToHorizontalDp(mm: Float): Dp {
         val metrics = LocalContext.current.resources.displayMetrics
-        return ((mm / 25.4f) * metrics.xdpi / metrics.density).dp
+        val dpi = sanitizedDpi(metrics.xdpi, metrics.densityDpi.toFloat())
+        return ((mm / 25.4f) * dpi / metrics.density).dp
     }
 
     @Composable
     fun mmToVerticalDp(mm: Float): Dp {
         val metrics = LocalContext.current.resources.displayMetrics
-        return ((mm / 25.4f) * metrics.ydpi / metrics.density).dp
+        val dpi = sanitizedDpi(metrics.ydpi, metrics.densityDpi.toFloat())
+        return ((mm / 25.4f) * dpi / metrics.density).dp
     }
 }
 
