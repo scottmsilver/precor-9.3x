@@ -84,6 +84,20 @@ PLANNED_U6_ESCAPES = {
     "7": ((52.0, 21.6), "RELAY_GATE"),
     "8": ((51.2, 20.8), "+3V3"),
 }
+# JLC DFM reports same-net pad/via proximity and mask-opening artefacts even
+# when KiCad's electrical DRC accepts them.  Lock only the reported endpoint
+# escapes so the manufacturing geometry stays deterministic without moving
+# the intentional plated-pad/via geometry at J1.
+LOCKED_DFM_ESCAPES = {
+    ("R13", "2"): (61.2, 11.2),
+    ("C9", "2"): (65.2, 1.2),
+    ("R12", "2"): (75.2, 48.8),
+    ("R22", "1"): (43.6, 40.8),
+    ("R8", "2"): (64.4, 9.2),
+    ("L1", "2"): (67.2, 51.2),
+    ("R30", "2"): (81.6, 44.0),
+    ("R26", "2"): (32.4, 31.2),
+}
 
 
 # Coordinates are board-local millimetres.  The groups deliberately preserve
@@ -889,6 +903,32 @@ class Generator:
     ) -> tuple[tuple[float, float], list[tuple[float, float]]]:
         point = local(pad.GetPosition())
         escape_width = min(WIDTHS.get(net, 0.20), 0.25)
+        locked = LOCKED_DFM_ESCAPES.get((ref, str(pad.GetNumber())))
+        if locked is not None:
+            node = (grid_index(locked[0]), grid_index(locked[1]))
+            target = grid_point(node)
+            if target != locked:
+                raise RuntimeError(
+                    f"locked escape for {ref}.{pad.GetNumber()} is off-grid"
+                )
+            checks = {
+                "inside": self.node_inside(node),
+                "in2": self.cell_allowed(node, IN2, net),
+                "bottom": self.cell_allowed(node, B, net),
+                "via": self.via_allowed(target, net),
+                "front": self.front_segment_allowed(
+                    point,
+                    target,
+                    net,
+                    escape_width,
+                ),
+            }
+            if not all(checks.values()):
+                raise RuntimeError(
+                    f"locked escape unavailable for "
+                    f"{ref}.{pad.GetNumber()} {net} at {target}: {checks}"
+                )
+            return target, [point, target]
         if ref == "U6":
             desired = PLANNED_U6_ESCAPES[str(pad.GetNumber())][0]
         elif ref.startswith("TP") and 5 <= int(ref[2:]) <= 13:
@@ -1438,10 +1478,10 @@ class Generator:
         text(30.0, 13.0, "NC", 1.0)
         text(28.0, 35.0, "EMULATE", 1.0)
         text(34.0, 35.0, "NO", 1.0)
-        text(91.5, 47.5, "USB DATA ONLY", 0.9)
-        text(7.5, 3.0, "PIN 1", 0.9)
-        text(26.0, 48.0, "D1 K", 0.9)
-        text(35.0, 48.0, "D3 K", 0.9)
+        text(91.5, 47.5, "USB DATA ONLY", 1.0)
+        text(7.5, 3.0, "PIN 1", 1.0)
+        text(26.0, 48.0, "D1 K", 1.0)
+        text(35.0, 48.0, "D3 K", 1.0)
 
     def fill_and_save(self) -> None:
         filler = pcbnew.ZONE_FILLER(self.board)

@@ -318,11 +318,19 @@ def _assert_rule_area_schema(area: Any) -> None:
 
 def _assert_text_schema(text: Any) -> None:
     assert isinstance(text, dict)
-    assert {"text", "layer", "stroke_width_mm", "at"} <= text.keys()
+    assert {
+        "text",
+        "layer",
+        "stroke_width_mm",
+        "height_mm",
+        "at",
+    } <= text.keys()
     assert isinstance(text["text"], str)
     assert isinstance(text["layer"], str) and text["layer"]
     assert _is_number(text["stroke_width_mm"])
     assert text["stroke_width_mm"] > 0
+    assert _is_number(text["height_mm"])
+    assert text["height_mm"] > 0
     _assert_xy(text["at"], "text.at")
 
 
@@ -561,6 +569,7 @@ def _minimal_inspector_report() -> dict[str, Any]:
                     "text": "Schema fixture",
                     "layer": "F.SilkS",
                     "stroke_width_mm": 0.15,
+                    "height_mm": 1.0,
                     "at": [0.0, 0.0],
                 }
             ],
@@ -1459,6 +1468,148 @@ def test_every_decoupler_has_an_adjacent_ground_via(
         assert min(_distance(ground_pad, via["at"]) for via in ground_vias) <= 1.5
 
 
+def _circle_to_axis_aligned_pad_clearance(
+    center: list[float],
+    radius: float,
+    pad_center: list[float],
+    half_width: float,
+    half_height: float,
+) -> float:
+    dx = max(abs(center[0] - pad_center[0]) - half_width, 0.0)
+    dy = max(abs(center[1] - pad_center[1]) - half_height, 0.0)
+    return math.hypot(dx, dy) - radius
+
+
+def _front_escape_vias(
+    board: dict[str, Any],
+    pad: dict[str, Any],
+) -> list[dict[str, Any]]:
+    tracks = [
+        track
+        for track in board["tracks"]
+        if track["net"] == pad["net"] and track["layer"] == "F.Cu"
+    ]
+    vias = [via for via in board["vias"] if via["net"] == pad["net"]]
+    queue = [pad["at"]]
+    visited_points: list[list[float]] = []
+    visited_tracks: set[str] = set()
+    found: dict[str, dict[str, Any]] = {}
+    while queue:
+        point = queue.pop(0)
+        if any(_distance(point, seen) <= 0.002 for seen in visited_points):
+            continue
+        visited_points.append(point)
+        point_vias = [
+            via for via in vias if _distance(via["at"], point) <= 0.002
+        ]
+        if point_vias and _distance(point, pad["at"]) > 0.002:
+            found.update({via["id"]: via for via in point_vias})
+            continue
+        for track in tracks:
+            if track["id"] in visited_tracks:
+                continue
+            if _distance(track["start"], point) <= 0.002:
+                visited_tracks.add(track["id"])
+                queue.append(track["end"])
+            elif _distance(track["end"], point) <= 0.002:
+                visited_tracks.add(track["id"])
+                queue.append(track["start"])
+    return list(found.values())
+
+
+@pytest.mark.parametrize(
+    (
+        "escape_ref",
+        "escape_pad_number",
+        "clearance_ref",
+        "clearance_pad_number",
+        "half_width",
+        "half_height",
+    ),
+    [
+        ("R13", "2", "R13", "2", 0.475, 0.400),
+        ("C9", "2", "C9", "2", 0.475, 0.450),
+        ("R12", "2", "R12", "2", 0.400, 0.475),
+        ("R22", "1", "R22", "1", 0.400, 0.475),
+        ("R8", "2", "R8", "2", 0.400, 0.475),
+        ("L1", "2", "C6", "1", 0.575, 1.350),
+    ],
+)
+def test_jlc_flagged_smd_pads_keep_clear_of_same_net_vias(
+    kicad_report: dict[str, Any],
+    escape_ref: str,
+    escape_pad_number: str,
+    clearance_ref: str,
+    clearance_pad_number: str,
+    half_width: float,
+    half_height: float,
+) -> None:
+    board = _board(kicad_report)
+    escape_pad = board["footprints"][escape_ref]["pads"][escape_pad_number]
+    clearance_pad = board["footprints"][clearance_ref]["pads"][
+        clearance_pad_number
+    ]
+    escape_vias = _front_escape_vias(board, escape_pad)
+    assert escape_vias, (
+        f"{escape_ref}.{escape_pad_number} lacks a front escape via"
+    )
+    for via in escape_vias:
+        clearance = _circle_to_axis_aligned_pad_clearance(
+            via["at"],
+            via["size_mm"] / 2,
+            clearance_pad["at"],
+            half_width,
+            half_height,
+        )
+        assert clearance >= 0.15 - 0.002, (
+            f"{via['id']} is only {clearance:.3f} mm from "
+            f"{clearance_ref}.{clearance_pad_number}"
+        )
+
+
+@pytest.mark.parametrize(
+    ("ref", "pad_number", "axis", "direction", "pad_half_span"),
+    [
+        ("R30", "2", 0, 1, 0.400),
+        ("R26", "2", 1, -1, 0.400),
+    ],
+)
+def test_jlc_flagged_pad_escapes_do_not_turn_inside_mask_opening(
+    kicad_report: dict[str, Any],
+    ref: str,
+    pad_number: str,
+    axis: int,
+    direction: int,
+    pad_half_span: float,
+) -> None:
+    board = _board(kicad_report)
+    pad = board["footprints"][ref]["pads"][pad_number]
+    incident = [
+        track
+        for track in board["tracks"]
+        if track["net"] == pad["net"]
+        and track["layer"] == "F.Cu"
+        and (
+            _distance(track["start"], pad["at"]) <= 0.002
+            or _distance(track["end"], pad["at"]) <= 0.002
+        )
+    ]
+    assert len(incident) == 1
+    track = incident[0]
+    other = (
+        track["end"]
+        if _distance(track["start"], pad["at"]) <= 0.002
+        else track["start"]
+    )
+    outward_span = direction * (other[axis] - pad["at"][axis])
+    assert outward_span >= pad_half_span + 0.15
+    assert any(
+        via["net"] == pad["net"]
+        and _distance(via["at"], other) <= 0.002
+        for via in board["vias"]
+    ), f"{ref}.{pad_number} escape must run directly to its via"
+
+
 def test_fixture_test_pads_have_bottom_no_copper_access(
     kicad_report: dict[str, Any],
 ) -> None:
@@ -1508,6 +1659,22 @@ def test_silkscreen_minimums_and_required_markings(
         "D1 K",
     ):
         assert required in rendered
+    critical_labels = {
+        text["text"].upper(): text
+        for text in front
+        if text["text"].upper()
+        in {"USB DATA ONLY", "PIN 1", "D1 K", "D3 K"}
+    }
+    assert set(critical_labels) == {
+        "USB DATA ONLY",
+        "PIN 1",
+        "D1 K",
+        "D3 K",
+    }
+    assert all(
+        text.get("height_mm", 0.0) >= 1.0
+        for text in critical_labels.values()
+    )
 
 
 def test_project_and_dru_lock_named_usb_geometry(

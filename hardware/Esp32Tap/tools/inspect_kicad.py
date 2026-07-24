@@ -514,6 +514,7 @@ def inspect(path: Path) -> dict[str, Any]:
                     "text": drawing.GetText(),
                     "layer": board.GetLayerName(drawing.GetLayer()),
                     "stroke_width_mm": mm(drawing.GetTextThickness()),
+                    "height_mm": mm(drawing.GetTextSize().y),
                     "at": xy(drawing.GetPosition()),
                 }
             )
