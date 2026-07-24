@@ -19,9 +19,16 @@ The finished device must be as small as practical without weakening Rev B's
 electrical safety behavior, assembly yield, RF performance, or serviceability.
 The board outline and existing connector locations are not constraints.
 
-The owner will only plug factory-made harnesses into the assembled board and
-connect USB and treadmill cables. Harness manufacture may be a separate line
-item from JLCPCB assembly, but it must not require owner fabrication.
+The owner will only plug factory-made harnesses into the assembled board,
+place the complete PCBA into a supplied tool-less or screw-fastened enclosure,
+close that enclosure with supplied hardware, and connect USB and treadmill
+cables. Harness manufacture may be a separate line item from JLCPCB assembly,
+but it must not require owner fabrication. No permitted owner step includes
+soldering, crimping, adhesive, wire dressing, component installation, or
+special tooling.
+The Rev C verification package must include the finished harnesses and
+enclosures; drawings without delivered or exactly orderable parts are not a
+turnkey result.
 
 No fabrication order, cart submission, or payment is authorized by this
 design. A quote may be prepared and saved for owner review, but the owner
@@ -65,6 +72,16 @@ positions, is acceptable when it provides robust keying without a material
 size penalty. Color and labels are supplemental and are not the only defense
 against swapping Console and Motor.
 
+Board-side keying alone is insufficient. The complete installed connection,
+including both ordinary RJ45 treadmill plugs, must prevent Console/Motor
+reversal mechanically. Acceptable implementations include installation-specific
+harness lengths and captive routing that make the wrong endpoint unreachable,
+or keyed RJ45 shrouds/sleeves and enclosure apertures that reject the wrong
+plug. The selected scheme must be demonstrated on the actual installation.
+Verification deliberately attempts every wrong board-side and treadmill-side
+connection; none may mate or reach far enough to latch. Labels and color do
+not satisfy this test.
+
 The connectors must not depend on hand-applied adhesive, staking, selective
 solder, or a wave-solder pallet.
 
@@ -85,6 +102,13 @@ drawing specifies:
 
 No flying lead may be soldered directly to the PCB. Harnesses are replaceable
 and plug into the finished board without tools.
+
+Each assembled verification unit is supplied with two finished, tested,
+strain-relieved harnesses. Before release, the repository records either an
+exact orderable cable-assembly part number or a firm supplier quote covering
+quantity, tooling/NRE, electrical testing, lead time, and delivery. The
+project owner purchases the finished assemblies but does not arrange crimping
+instructions with an operator or perform any harness fabrication.
 
 ## Electrical behavior
 
@@ -107,6 +131,45 @@ Connector and harness current ratings must be based on a documented maximum
 continuous and transient pass-through current. Until treadmill measurements
 close that gate, select contacts conservatively and retain both parallel power
 and both parallel ground paths.
+
+No connector or harness is released until the actual treadmill current envelope
+is measured. The selected interconnect then satisfies all of these numeric
+acceptance limits:
+
+- each individual +8 V and ground contact is rated, after manufacturer
+  temperature and circuit-count derating, for at least 2× the measured
+  worst-case continuous current assigned to that conductor;
+- the design remains within ratings if one of the two nominally parallel +8 V
+  contacts or one ground contact is open or has twice its allowed production
+  resistance; equal current sharing is not assumed;
+- every production harness power or ground conductor measures at most 100 mΩ
+  end-to-end, including both terminations;
+- the complete delivered Rev C pass-through—both production harnesses, every
+  RJ45 interface, both board connectors, and all PCB pads, traces, and vias
+  installed in the closed production enclosure—adds at most 250 mV
+  supply-plus-return drop at measured worst-case continuous load;
+- installed treadmill measurements establish maximum motor-hood ambient,
+  airflow, conductor bundling, and duty cycle; a one-hour worst-case-current
+  test reproduces that complete worst-case configuration, or a documented
+  hotter equivalent chamber condition, and retains at least 20 °C margin to
+  every derated connector, wire, solder joint, copper, and enclosure limit;
+- measured transient current and duration remain within the manufacturer's
+  published pulse envelope with at least 25% current margin;
+- pads, traces, neck-downs, and vias are checked to the same continuous,
+  single-degraded-contact, transient, voltage-drop, and temperature limits.
+
+If a connector manufacturer publishes no transient-current envelope, release
+requires either written manufacturer approval for the measured waveform or
+empirical qualification of production-equivalent samples at 1.25× measured
+peak current and duration for 1,000 cycles with no damage, latch degradation,
+resistance increase over 10 mΩ, or thermal-limit violation.
+
+Repeat the complete-path drop, temperature, and single-degraded-contact tests
+with USB attached. A degraded or open treadmill ground contact must not divert
+treadmill load current through the USB shield, cable, or host ground.
+
+If the treadmill source or load cannot satisfy these limits with a compact
+wire-to-board connector, size increases rather than weakening the limits.
 
 ## Other assembly substitutions
 
@@ -140,6 +203,22 @@ the delivered PCB and provide its complete manufacturer antenna keepout. Rev C
 must not require an antenna-overhang carrier, automatic placement correction,
 or a special depanelization notch.
 
+The module comparison identifies an exact MPN and pad map and audits every
+GPIO for fixed USB pins, strapping/reserved pins, reset and ROM-download
+defaults, external pulls, ADC suitability, drive capability, RF coexistence,
+flash capacity, decoupling, and safe output state through power-up, reset,
+brownout, and ROM download. Migration requires regenerated package/pin audits,
+a production firmware build, flash/boot tests, and the complete Rev B safety
+matrix. A generic “S3-MINI compatible” claim is not sufficient.
+
+The selected module uses its manufacturer's exact antenna keepout on every
+layer and in the enclosure and preserves Rev B's minimum 15 mm axial
+plastic/air clearance. Rev C does not trade that clearance for smaller volume.
+The final panel drawing contains no antenna overhang, metal, tooling, carrier,
+tab, or automatic realignment inside that volume. Installed RF testing under
+the motor hood remains a physical gate, but it cannot be used to waive the
+15 mm minimum in this revision.
+
 Relayout from the safety-critical power and signal topology outward. The board
 may change aspect ratio and mounting arrangement. Minimize the final enclosure
 volume only after satisfying:
@@ -154,10 +233,24 @@ volume only after satisfying:
 - assembly courtyard, fiducial, tooling, and depanelization rules;
 - accessible programming and diagnostic test points.
 
+Retain Rev B's four-layer `JLC04161H-7628` stack, 1 oz outer and 0.5 oz inner
+copper, and its controlled-impedance contract. Any stack change requires a
+separately approved design revision and repetition of controlled-impedance,
+USB return-plane, converter-loop, relay/current-path, EMI, RF, DFM, and
+fabrication validation against the exact newly quoted stack.
+
 The enclosure is regenerated around the resulting PCB and plug-in connectors.
 It provides keyed harness openings, cable strain relief, USB access, switch
 access, RF clearance, and no opportunity to force the wrong harness into an
 interface.
+
+Compaction records at least three viable wire-to-board connector families, an
+SMT-RJ45 baseline, and both qualified ESP module choices. For each candidate,
+record PCB width, length, height, antenna volume, enclosure dimensions, cable
+bend radius, service clearance, assembly support, and rejected constraints.
+The final report states the PCB and installed enclosure bounding dimensions
+and shows that each remaining size driver comes from an electrical, RF,
+assembly, cable, or mechanical requirement.
 
 ## Manufacturing acceptance
 
@@ -166,6 +259,11 @@ Rev C is order-reviewable only when all of the following are true:
 - all populated board parts use automated SMT assembly;
 - the live JLCPCB BOM resolves every exact manufacturer/JLC part;
 - the live placement list includes every populated designator;
+- a saved, archive-bound PCBA preview records every populated designator's
+  exact MPN/JLC code, quantity, side, rotation, and placement charge;
+- JLCPCB explicitly accepts the exact side-entry connector footprint, body
+  clearance, edge spacing, panelization, and depanelization without
+  customer-supplied parts or manual handling;
 - the quote contains no unpriced manual, wave, fixture, or post-assembly work;
 - the production preview preserves all coordinates, rotations, polarity, and
   the ESP antenna position without automatic realignment;
@@ -173,10 +271,23 @@ Rev C is order-reviewable only when all of the following are true:
   exact deterministic Gerber archive;
 - the quote clearly covers the requested PCB quantity and number of fully
   assembled units;
-- both factory harnesses have buildable drawings and a supplier quote or
-  purchasable exact part;
+- two finished harnesses per assembled unit have exact orderable assembly part
+  numbers or a firm supplier quote and delivery path;
 - the saved review state stops before cart submission or payment unless the
   owner separately authorizes those actions.
+
+The consolidated turnkey delivered-cost package uses five fabricated PCBs,
+two fully assembled PCBAs, four finished harnesses, and two finished
+enclosures. It
+itemizes bare fabrication, every component, setup, feeder, stencil, panel,
+controlled-impedance, extended-part and placement charge, harness tooling/NRE
+and unit cost, enclosure manufacturing, shipping, and applicable tax. Any
+price unavailable before checkout is labeled as an omission; the record may
+not call itself a complete delivered cost while a required item or operation
+is unpriced. It contains separate archive-bound JLCPCB PCBA, harness-supplier,
+and enclosure-supplier quotes; a JLCPCB-only subtotal is never described as
+the complete turnkey cost. Owner-performed plug-in and screw/tool-less
+enclosure closure is not a quoted manufacturing operation.
 
 ## Verification
 
@@ -188,11 +299,15 @@ derived KiCad or manufacturing artifacts. Verification includes:
 - exact BOM, footprint, designator, position, side, and rotation parity;
 - connector pinout and harness continuity tests in both directions;
 - current-density, connector derating, voltage-drop, and thermal calculations;
+- deliberate wrong-connection tests at both board and RJ45 ends;
 - native-USB geometry and ground-return checks;
 - ESP antenna keepout, enclosure clearance, and installed cable-bend checks;
 - all existing ngspice safety, power, relay, and signal assertions on host and
   pinned Docker engines, updated only when the electrical design changes;
 - new modeled harness contact resistance and supply-drop corners;
+- production-length harness tests for serial edge integrity, capacitance,
+  inductance, ESD exposure, ground behavior, and powered/dead-board leakage,
+  compared with real treadmill captures;
 - final JLCDFM review bound to the deterministic fabrication archive;
 - a live JLCPCB BOM/CPL preview showing no unselected populated parts;
 - bench continuity and current-limited power-up before any treadmill contact.
@@ -200,6 +315,20 @@ derived KiCad or manufacturing artifacts. Verification includes:
 Simulation remains behavioral evidence. It does not replace switching-loop,
 EMI, RF, relay timing, harness temperature-rise, USB eye, or treadmill bench
 measurements.
+
+Rev B's physical safety gates remain explicit:
+
+- USB and treadmill ground are not isolated; measure host-to-treadmill ground
+  potential and connection current and approve the bonding/isolation plan
+  before simultaneous attachment;
+- first treadmill contact is Proxy-only with relay energization compiled out;
+- an Emulate-capable first article is not connected to the treadmill;
+- later Emulate testing requires the belt clear, the physical safety key
+  immediately accessible, and completion of the staged bench safety matrix.
+
+An assembled Rev C remains **HOLD — READY FOR VENDOR AND BENCH GATES**, not
+treadmill-ready, until those gates and Rev B's remaining physical evidence are
+closed.
 
 ## Deliverables
 
@@ -211,5 +340,6 @@ Rev C produces:
 - updated enclosure source and fit-validation artifacts;
 - updated validation and AI handoff documents;
 - reproducible ngspice and repository quality-gate output;
-- a complete turnkey JLCPCB quote saved for owner review without purchase.
-
+- a consolidated turnkey delivered-cost package, including the archive-bound
+  JLCPCB PCBA quote and firm harness/enclosure costs, saved for owner review
+  without purchase.
