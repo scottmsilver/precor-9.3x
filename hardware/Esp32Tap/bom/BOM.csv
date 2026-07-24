@@ -1,6 +1,6 @@
 Comment,Designator,Footprint,LCSC Part #,JLC class,Qty,Unit cost (USD),Ext cost (USD),Description
-RJ45_Console_54602-908LF,J1,RJ45_Amphenol_54602-x08_Horizontal,C2847314,Extended-THT,1,0.380,0.380,"RJ45 jack, unshielded, THT — console-side cable (same jack family as PiZeroHat)"
-RJ45_Motor_54602-908LF,J2,RJ45_Amphenol_54602-x08_Horizontal,C2847314,Extended-THT,1,0.380,0.380,"RJ45 jack, unshielded, THT — motor-side cable"
+430450809,J1,Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal,C240838,Extended,1,2.140,2.140,Molex Micro-Fit 3.0 8-circuit right-angle SMT header — console interface; mates only with 430250800 housing using 430300001 terminals; PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF
+430451010,J2,Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal,C563827,Extended,1,2.580,2.580,Molex Micro-Fit 3.0 10-circuit right-angle SMT header — motor interface; mates only with 430251000 housing using 430300001 terminals; pads 9/10 NC; PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF
 USB-C_HRO_TYPE-C-31-M-12,J3,USB_C_Receptacle_HRO_TYPE-C-31-M-12,C165948,Extended,1,0.160,0.160,"USB-C receptacle, 16-pin, USB2.0 — native USB flash/JTAG/console"
 ESP32-S3-WROOM-1-N8,U1,ESP32-S3-WROOM-1,C2913198,Extended,1,3.200,3.200,"ESP32-S3 module, 8MB flash, PCB antenna (N8R2 C2913204 is a drop-in PSRAM upgrade — same footprint; re-quote at order time)"
 TPS54202DDCR,U2,SOT-23-6,C191884,Extended,1,0.350,0.350,"Buck converter 4.5-28V in, 2A, 500kHz — 8V rail to 3.3V"
@@ -20,8 +20,8 @@ PESD3V3L1BA-N,D6,D_SOD-323,C316020,Extended,1,0.061,0.061,"Bidirectional ESD cla
 PESD3V3L1BA-N,D7,D_SOD-323,C316020,Extended,1,0.061,0.061,"Bidirectional ESD clamp, pin-3 tap line"
 XL-1608UGC-04,LED1,LED_0603_1608Metric,C965804,Extended,1,0.005,0.005,"Status LED green (GPIO38; XL-1608UGC-04, 5.2M stock at validation 2026-07-23; replaces C72043 stock=6)"
 RED-0603,LED2,LED_0603_1608Metric,C2286,Basic,1,0.020,0.020,3V3 power LED
-KMR2-EN,SW1,SW_Push_1P1T_NO_CK_KMR2,C72443,Extended,1,0.100,0.100,Reset (EN) tactile switch
-KMR2-BOOT,SW2,SW_Push_1P1T_NO_CK_KMR2,C72443,Extended,1,0.100,0.100,Boot (IO0) tactile switch
+SKRPACE010,SW1,SW_SPST_SKRPACE010,C139797,Extended,1,0.060,0.060,ALPSALPINE SKRPACE010 reel SMD tactile switch — reset (EN); PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF
+SKRPACE010,SW2,SW_SPST_SKRPACE010,C139797,Extended,1,0.060,0.060,ALPSALPINE SKRPACE010 reel SMD tactile switch — boot (IO0); PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF
 1812L075/24DR,F1,Fuse_1812_4532Metric,C207065,Extended,1,0.100,0.100,"Resettable fuse on the local 8V branch, 0.75A hold, 24V maximum"
 10uH SWPA4030S100MT,L1,L_Sunlord_SWPA4030S,C38117,Extended,1,0.070,0.070,"Buck inductor, 4x4mm shielded, Isat 2.4A (sized for ~0.6A peaks)"
 100k,R1,R_0603_1608Metric,C25803,Basic,1,0.002,0.002,Buck FB divider top (VFB 0.596V -> 3.30V with 22k)

@@ -76,7 +76,7 @@ JOB_POLARITIES = {
     for filename in JOB_FUNCTIONS
 }
 GENERAL_SPECS = {
-    "Size": {"X": 100.1, "Y": 55.1},
+    "Size": {"X": 95.1, "Y": 55.1},
     "LayerNumber": 4,
     "BoardThickness": 1.59,
     "Finish": "ENIG",
@@ -115,12 +115,12 @@ def _write_valid_stage(directory: Path) -> None:
                 "%ADD10C,0.100000*%",
                 "D10*",
                 "X100000000Y-100000000D02*",
-                "X200000000Y-100000000D01*",
+                "X195000000Y-100000000D01*",
                 "X100000000Y-155000000D02*",
                 "X100000000Y-100000000D01*",
-                "X200000000Y-100000000D02*",
-                "X200000000Y-155000000D01*",
-                "X200000000Y-155000000D02*",
+                "X195000000Y-100000000D02*",
+                "X195000000Y-155000000D01*",
+                "X195000000Y-155000000D02*",
                 "X100000000Y-155000000D01*",
             ]
         elif filename == "Esp32Tap-F_Silkscreen.gto":

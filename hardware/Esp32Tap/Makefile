@@ -4,6 +4,7 @@ test:
 	python3 -m pytest -q tests
 
 generate:
+	python3 tools/gen_footprints.py
 	python3 tools/gen_sch.py
 	/usr/bin/python3 tools/gen_pcb.py
 	/usr/bin/python3 tools/gen_docs.py

@@ -389,6 +389,27 @@ def inspect(path: Path) -> dict[str, Any]:
                 "min": [mm(body_bounds[0]), mm(body_bounds[1])],
                 "max": [mm(body_bounds[2]), mm(body_bounds[3])],
             }
+        courtyard_shapes = [
+            graphic
+            for graphic in footprint.GraphicalItems()
+            if graphic.GetLayer() in (pcbnew.F_CrtYd, pcbnew.B_CrtYd)
+        ]
+        courtyard_bbox: dict[str, list[float]] | None = None
+        if courtyard_shapes:
+            boxes = [
+                graphic.GetBoundingBox()
+                for graphic in courtyard_shapes
+            ]
+            courtyard_bbox = {
+                "min": [
+                    mm(min(box.GetLeft() for box in boxes)),
+                    mm(min(box.GetTop() for box in boxes)),
+                ],
+                "max": [
+                    mm(max(box.GetRight() for box in boxes)),
+                    mm(max(box.GetBottom() for box in boxes)),
+                ],
+            }
         pads: dict[str, Any] = {}
         for pad in sorted(
             footprint.Pads(),
@@ -420,6 +441,7 @@ def inspect(path: Path) -> dict[str, Any]:
             "excluded_from_bom": footprint.IsExcludedFromBOM(),
             "board_only": footprint.IsBoardOnly(),
             "bbox": bbox_dict(footprint.GetBoundingBox()),
+            "courtyard_bbox": courtyard_bbox,
             "fabrication_body_bbox": fabrication_body_bbox,
             "pads": pads,
         }
@@ -734,6 +756,7 @@ def inspect(path: Path) -> dict[str, Any]:
                 "max": [max_x, max_y],
                 "width_mm": round(max_x - min_x, 6),
                 "height_mm": round(max_y - min_y, 6),
+                "area_mm2": round((max_x - min_x) * (max_y - min_y), 6),
             },
             "footprints": footprints,
             "footprint_silkscreen_graphic_count": (

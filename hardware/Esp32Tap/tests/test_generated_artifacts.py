@@ -42,6 +42,16 @@ EXPECTED_USB_NET_PADS = {
     "USB_DP_R": {("R16", "2"), ("C14", "1"), ("U1", "14")},
 }
 EXPECTED_FOOTPRINTS = {
+    "J1": (
+        "Connector_Molex:"
+        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal"
+    ),
+    "J2": (
+        "Connector_Molex:"
+        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal"
+    ),
+    "SW1": "Button_Switch_SMD:SW_SPST_SKRPACE010",
+    "SW2": "Button_Switch_SMD:SW_SPST_SKRPACE010",
     "F1": "Fuse:Fuse_1812_4532Metric",
     "D3": "Diode_SMD:D_SMB",
     "D4": "Diode_SMD:D_SMA",
@@ -148,11 +158,18 @@ def _assert_report_schema(report: Any) -> None:
         assert _is_number(layer["thickness_mm"])
         assert layer["epsilon_r"] is None or _is_number(layer["epsilon_r"])
     assert isinstance(board["outline"], dict)
-    assert {"min", "max", "width_mm", "height_mm"} <= board["outline"].keys()
+    assert {
+        "min",
+        "max",
+        "width_mm",
+        "height_mm",
+        "area_mm2",
+    } <= board["outline"].keys()
     _assert_xy(board["outline"]["min"], "outline.min")
     _assert_xy(board["outline"]["max"], "outline.max")
     assert _is_number(board["outline"]["width_mm"])
     assert _is_number(board["outline"]["height_mm"])
+    assert _is_number(board["outline"]["area_mm2"])
     assert isinstance(board["footprints"], dict)
     assert all(
         isinstance(reference, str) and reference
@@ -222,6 +239,7 @@ def _assert_footprint_schema(footprint: Any) -> None:
         "excluded_from_bom",
         "board_only",
         "bbox",
+        "courtyard_bbox",
         "pads",
     } <= footprint.keys()
     assert isinstance(footprint["footprint"], str) and footprint["footprint"]
@@ -235,6 +253,11 @@ def _assert_footprint_schema(footprint: Any) -> None:
     assert isinstance(footprint["bbox"], dict)
     _assert_xy(footprint["bbox"]["min"], "footprint.bbox.min")
     _assert_xy(footprint["bbox"]["max"], "footprint.bbox.max")
+    courtyard = footprint["courtyard_bbox"]
+    assert courtyard is None or isinstance(courtyard, dict)
+    if courtyard is not None:
+        _assert_xy(courtyard["min"], "footprint.courtyard_bbox.min")
+        _assert_xy(courtyard["max"], "footprint.courtyard_bbox.max")
     assert isinstance(footprint["pads"], dict)
     for number, pad in footprint["pads"].items():
         assert isinstance(number, str) and number
@@ -507,6 +530,7 @@ def _minimal_inspector_report() -> dict[str, Any]:
                 "max": [1.0, 1.0],
                 "width_mm": 1.0,
                 "height_mm": 1.0,
+                "area_mm2": 1.0,
             },
             "footprints": {
                 "X1": {
@@ -518,6 +542,10 @@ def _minimal_inspector_report() -> dict[str, Any]:
                     "excluded_from_bom": False,
                     "board_only": False,
                     "bbox": {"min": [0.0, 0.0], "max": [1.0, 1.0]},
+                    "courtyard_bbox": {
+                        "min": [0.0, 0.0],
+                        "max": [1.0, 1.0],
+                    },
                     "pads": {
                         "1": {
                             "net": "N",
@@ -621,6 +649,10 @@ def _usb_connectivity_report() -> dict[str, Any]:
                     "excluded_from_bom": False,
                     "board_only": False,
                     "bbox": {"min": [0.0, 0.0], "max": [1.0, 1.0]},
+                    "courtyard_bbox": {
+                        "min": [0.0, 0.0],
+                        "max": [1.0, 1.0],
+                    },
                     "pads": {},
                 },
             )
@@ -775,7 +807,67 @@ def test_pcb_generator_is_byte_reproducible_and_leaves_no_sidecars(
     }
 
 
-def test_checked_in_sources_identify_a_four_layer_rev_b_board(
+def test_compaction_locks_explicit_coupled_groups_and_neighbors(
+    esp32tap_dir: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            str(SYSTEM_PYTHON),
+            "-c",
+            (
+                "import json, sys; "
+                "sys.path.insert(0, 'tools'); "
+                "import gen_pcb; "
+                "print(json.dumps({'positions': {ref: gen_pcb.PLACE[ref] "
+                "for ref in ('J3', 'U3', 'Q2', 'R29', 'SW2', 'LED1', "
+                "'R4', 'R5', 'R11', 'R31', 'C11', 'TP5', 'TP13', "
+                "'J1', 'J2', 'K1', 'D4', 'D5', 'D6', 'D7')}, "
+                "'deltas': gen_pcb.COMPACT_X_DELTAS, "
+                "'edge_route_x': gen_pcb.usb_edge_x(93.4)}))"
+            ),
+        ],
+        cwd=esp32tap_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    compact = json.loads(completed.stdout)
+    positions = compact["positions"]
+    assert positions == {
+        "J3": [91.2, 36.5, 90],
+        "U3": [82.0, 35.0, 180],
+        "Q2": [84.0, 46.5, 0],
+        "R29": [80.0, 48.0, 0],
+        "SW2": [91.0, 17.0, 0],
+        "LED1": [93.0, 10.0, 180],
+        "R4": [94.0, 43.5, 270],
+        "R5": [94.0, 29.0, 90],
+        "R11": [90.0, 10.0, 0],
+        "R31": [90.0, 13.0, 90],
+        "C11": [87.0, 43.0, 0],
+        "TP5": [49.0, 36.0, 0],
+        "TP13": [74.6, 36.0, 0],
+        "J1": [12.5, 11.0, 270],
+        "J2": [12.5, 37.0, 270],
+        "K1": [30.2, 23.0, 0],
+        "D4": [30.0, 11.5, 0],
+        "D5": [27.0, 15.0, 270],
+        "D6": [29.0, 47.0, 270],
+        "D7": [38.0, 38.0, 270],
+    }
+    assert compact["deltas"] == {
+        "J3": -5.0,
+        "U3": -5.0,
+        "SW2": -3.0,
+        **{f"TP{number}": -5.0 for number in range(5, 14)},
+    }
+    assert _distance(positions["Q2"], positions["R29"]) >= 4.0
+    assert compact["edge_route_x"] == pytest.approx(88.4)
+
+
+def test_checked_in_sources_identify_a_four_layer_rev_c_board(
     esp32tap_dir: Path,
 ) -> None:
     pcb = (
@@ -786,8 +878,8 @@ def test_checked_in_sources_identify_a_four_layer_rev_b_board(
     ).read_text(encoding="utf-8")
 
     assert all(f'"{layer}"' in pcb for layer in EXPECTED_LAYERS)
-    assert re.search(r'\(rev\s+"B"\)', schematic)
-    assert re.search(r'Esp32Tap\s+rev\s+B', pcb, re.IGNORECASE)
+    assert re.search(r'\(rev\s+"C"\)', schematic)
+    assert re.search(r'Esp32Tap\s+rev\s+C', pcb, re.IGNORECASE)
     for marking in ("BYPASS", "EMULATE"):
         assert f'"{marking}"' in pcb
 
@@ -807,7 +899,7 @@ def test_fabrication_package_contains_both_inner_copper_gerbers(
     assert any("In2_Cu" in name for name in archived_names)
 
 
-def test_checked_in_board_contains_exact_rev_b_footprints(
+def test_checked_in_board_contains_exact_rev_c_footprints(
     esp32tap_dir: Path,
 ) -> None:
     pcb = (
@@ -820,6 +912,22 @@ def test_checked_in_board_contains_exact_rev_b_footprints(
         if f'(footprint "{footprint}"' not in pcb
     }
     assert not missing
+
+
+@pytest.mark.parametrize("ref", ["SW1", "SW2"])
+def test_skrpace010_footprint_matches_the_official_body_and_land_envelope(
+    kicad_report: dict[str, Any],
+    ref: str,
+) -> None:
+    footprint = _board(kicad_report)["footprints"][ref]
+    body = footprint["fabrication_body_bbox"]
+    courtyard = footprint["courtyard_bbox"]
+    assert body is not None
+    assert courtyard is not None
+    assert body["max"][0] - body["min"][0] == pytest.approx(4.2)
+    assert body["max"][1] - body["min"][1] == pytest.approx(3.2)
+    assert courtyard["max"][0] - courtyard["min"][0] == pytest.approx(5.65)
+    assert courtyard["max"][1] - courtyard["min"][1] == pytest.approx(3.65)
 
 
 def test_checked_in_board_has_no_d2_vbus_to_vin_bridge(
@@ -891,7 +999,7 @@ def test_inspected_board_has_ground_only_on_in1(
     assert all(item.get("net") == "GND" for item in in1_tracks + in1_zones)
 
 
-def test_inspected_board_locks_rev_b_footprints_and_pad_nets(
+def test_inspected_board_locks_rev_c_footprints_and_pad_nets(
     kicad_report: dict[str, Any],
 ) -> None:
     footprints = _board(kicad_report)["footprints"]
@@ -1100,12 +1208,12 @@ def test_inspected_vbus_cannot_reach_vin(
     assert not vbus_to_vin_bridges
 
 
-def test_inspected_title_and_silkscreen_are_rev_b(
+def test_inspected_title_and_silkscreen_are_rev_c(
     kicad_report: dict[str, Any],
 ) -> None:
     board = _board(kicad_report)
     assert board["title"] == "Esp32Tap - ESP32-S3 Precor serial-bus tap"
-    assert board["revision"] == "B"
+    assert board["revision"] == "C"
 
     front_silk = [
         item
@@ -1113,7 +1221,7 @@ def test_inspected_title_and_silkscreen_are_rev_b(
         if item.get("layer") in {"F.SilkS", "F.Silkscreen"}
     ]
     rendered = "\n".join(str(item.get("text", "")) for item in front_silk)
-    assert re.search(r"Esp32Tap\s+rev\s+B", rendered, re.IGNORECASE)
+    assert re.search(r"Esp32Tap\s+rev\s+C", rendered, re.IGNORECASE)
     assert "BYPASS" in rendered
     assert "EMULATE" in rendered
 
@@ -1123,8 +1231,9 @@ def test_board_outline_and_named_jlc_stackup_are_exact(
 ) -> None:
     board = _board(kicad_report)
     outline = board["outline"]
-    assert outline["width_mm"] == pytest.approx(100.0, abs=0.001)
+    assert outline["width_mm"] == pytest.approx(95.0, abs=0.001)
     assert outline["height_mm"] == pytest.approx(55.0, abs=0.001)
+    assert outline["area_mm2"] == pytest.approx(5225.0, abs=0.1)
 
     stackup = board["stackup"]
     assert stackup["name"] == "JLC04161H-7628"
@@ -1146,6 +1255,40 @@ def test_board_outline_and_named_jlc_stackup_are_exact(
             assert actual[3] is None
         else:
             assert actual[3] == pytest.approx(expected[3])
+
+
+def test_every_footprint_courtyard_is_inside_the_board(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    outline = board["outline"]
+    intentional_edge_features = {
+        "J1",
+        "J3",
+        "MH1",
+        "MH2",
+        "MH3",
+        "U1",
+    }
+    for ref, footprint in board["footprints"].items():
+        courtyard = footprint["courtyard_bbox"]
+        if courtyard is None or ref in intentional_edge_features:
+            continue
+        assert courtyard["min"][0] >= outline["min"][0] - 0.001, ref
+        assert courtyard["min"][1] >= outline["min"][1] - 0.001, ref
+        assert courtyard["max"][0] <= outline["max"][0] + 0.001, ref
+        assert courtyard["max"][1] <= outline["max"][1] + 0.001, ref
+
+    sw2 = board["footprints"]["SW2"]["courtyard_bbox"]
+    assert sw2 is not None
+    assert outline["max"][0] - sw2["max"][0] >= 1.0
+    for ref in ("J1", "J3"):
+        body = board["footprints"][ref]["fabrication_body_bbox"]
+        assert body is not None
+        assert body["min"][0] >= outline["min"][0]
+        assert body["min"][1] >= outline["min"][1]
+        assert body["max"][0] <= outline["max"][0]
+        assert body["max"][1] <= outline["max"][1]
 
 
 def test_enclosure_geometry_is_explicit_and_board_derived(
@@ -1328,6 +1471,47 @@ def test_usb_has_clearance_from_unrelated_front_copper(
             )
             assert copper_clearance >= 0.8 - 0.002, (
                 f"{usb_track['net']} too close to {other['net']}: "
+                f"{copper_clearance:.3f} mm"
+            )
+
+
+def test_k1_no_feedback_route_vias_clear_controlled_usb_pair(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    usb = [
+        track
+        for track in board["tracks"]
+        if track["net"] in USB_ROUTE_NETS and track.get("pair_section")
+    ]
+    vias = [
+        via for via in board["vias"] if via["net"] == "K1_NO_FB"
+    ]
+    assert usb
+    assert vias
+
+    # This is the deterministic A* layer transition selected after the
+    # router reserves the full USB-to-via clearance.  The former transition
+    # at (70.8, 21.2) passed the coarse grid model but failed board DRC.
+    assert any(
+        _distance(via["at"], (166.4, 131.2)) <= 0.002 for via in vias
+    )
+    assert not any(
+        _distance(via["at"], (170.8, 121.2)) <= 0.002 for via in vias
+    )
+    for via in vias:
+        for usb_track in usb:
+            copper_clearance = (
+                _point_segment_distance(
+                    via["at"],
+                    usb_track["start"],
+                    usb_track["end"],
+                )
+                - via["size_mm"] / 2
+                - usb_track["width_mm"] / 2
+            )
+            assert copper_clearance >= 0.8 - 0.002, (
+                f"{via['id']} is too close to {usb_track['net']}: "
                 f"{copper_clearance:.3f} mm"
             )
 
@@ -1644,14 +1828,14 @@ def test_silkscreen_minimums_and_required_markings(
     kicad_report: dict[str, Any],
 ) -> None:
     board = _board(kicad_report)
-    assert board["footprint_silkscreen_graphic_count"] == 297
+    assert board["footprint_silkscreen_graphic_count"] == 301
     front = [
         text
         for text in board["texts"]
         if text["layer"] in {"F.SilkS", "F.Silkscreen"}
     ]
     expected_labels = {
-        "ESP32TAP REV B",
+        "ESP32TAP REV C",
         "BYPASS",
         "CONSOLE",
         "+ C1",
@@ -1675,11 +1859,16 @@ def test_silkscreen_minimums_and_required_markings(
     # Lock the body-clearance-reviewed placements as well as marker direction.
     expected_placements = {
         "+ C1": ([143.0, 144.4], 0.0),
-        "BYPASS": ([124.0, 112.0], 0.0),
-        "K1 P1": ([119.0, 122.2], 0.0),
-        "LED1 K": ([193.5, 112.0], 0.0),
+        "BYPASS": ([142.0, 110.0], 0.0),
+        "D1 K": ([126.5, 148.0], 90.0),
+        "EMULATE": ([129.5, 137.0], 0.0),
+        "ESP32TAP REV C": ([140.0, 102.0], 0.0),
+        "K1 P1": ([111.0, 119.2], 0.0),
+        "LED1 K": ([191.0, 121.0], 0.0),
         "K LED2": ([177.0, 153.0], 0.0),
-        "NO": ([134.0, 136.5], 0.0),
+        "NO": ([142.0, 135.0], 0.0),
+        "MOTOR": ([105.0, 131.0], 0.0),
+        "PIN 1": ([105.0, 103.0], 0.0),
         "USB DATA ONLY": ([190.0, 147.8], 90.0),
     }
     for label, (position, rotation) in expected_placements.items():

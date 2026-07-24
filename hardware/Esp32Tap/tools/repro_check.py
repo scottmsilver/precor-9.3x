@@ -31,6 +31,7 @@ from export_fab import (  # noqa: E402
 
 SOURCE_PATHS = (
     Path("tools/design.py"),
+    Path("tools/gen_footprints.py"),
     Path("tools/gen_sch.py"),
     Path("tools/gen_pcb.py"),
     Path("tools/gen_docs.py"),
@@ -47,6 +48,10 @@ GENERATED_PATHS = (
     Path("kicad/Esp32Tap.kicad_pcb"),
     Path("kicad/esp32tap.kicad_sym"),
     Path("kicad/sym-lib-table"),
+    Path("kicad/fp-lib-table"),
+    Path("kicad/Connector_Molex.pretty/Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal.kicad_mod"),
+    Path("kicad/Connector_Molex.pretty/Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal.kicad_mod"),
+    Path("kicad/Button_Switch_SMD.pretty/SW_SPST_SKRPACE010.kicad_mod"),
     Path("kicad/erc.rpt"),
     Path("kicad/drc.rpt"),
     Path("kicad/Esp32Tap-gerbers.zip"),
@@ -271,6 +276,10 @@ def _regenerate(isolated_root: Path) -> None:
     if not SYSTEM_PYTHON.is_file():
         raise ReproError(f"system Python is missing: {SYSTEM_PYTHON}")
     commands = (
+        (
+            [str(default_python), "tools/gen_footprints.py"],
+            "footprint generation",
+        ),
         (
             [str(default_python), "tools/gen_sch.py"],
             "schematic generation",

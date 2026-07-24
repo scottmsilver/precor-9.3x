@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export and atomically publish the Esp32Tap Rev B fabrication package.
+"""Export and atomically publish the Esp32Tap Rev C fabrication package.
 
 The deterministic fabrication transform normalizes KiCad's volatile
 timestamps and removes the complete component-attributed top-legend suffix
@@ -98,7 +98,7 @@ JOB_POLARITIES = {
     for filename in JOB_FUNCTIONS
 }
 REQUIRED_GENERAL_SPECS = {
-    "Size": {"X": 100.1, "Y": 55.1},
+    "Size": {"X": 95.1, "Y": 55.1},
     "LayerNumber": 4,
     "BoardThickness": 1.59,
     "Finish": "ENIG",
@@ -115,6 +115,11 @@ KICAD_PROJECT_FILES = {
     "Esp32Tap.kicad_dru",
     "esp32tap.kicad_sym",
     "sym-lib-table",
+    "fp-lib-table",
+}
+KICAD_FOOTPRINT_DIRECTORIES = {
+    "Connector_Molex.pretty",
+    "Button_Switch_SMD.pretty",
 }
 EXPECTED_FAB_FILES = set(GERBER_FUNCTIONS) | {
     "Esp32Tap-job.gbrjob",
@@ -553,6 +558,19 @@ def isolated_kicad_project(source: Path) -> Iterator[Path]:
                     f"non-symlink file: {candidate}"
                 )
             shutil.copy2(candidate, isolated_directory / filename)
+        for directory_name in sorted(KICAD_FOOTPRINT_DIRECTORIES):
+            candidate = source_directory / directory_name
+            if not candidate.exists():
+                continue
+            if candidate.is_symlink() or not candidate.is_dir():
+                raise FabExportError(
+                    "KiCad footprint library must be a regular "
+                    f"non-symlink directory: {candidate}"
+                )
+            shutil.copytree(
+                candidate,
+                isolated_directory / directory_name,
+            )
         isolated_source = isolated_directory / source.name
         if not isolated_source.is_file():
             raise FabExportError(
@@ -969,9 +987,9 @@ def _validate_profile_geometry(payload: str) -> None:
         position = point
 
     top_left = (100.0, -100.0)
-    top_right = (200.0, -100.0)
+    top_right = (195.0, -100.0)
     bottom_left = (100.0, -155.0)
-    bottom_right = (200.0, -155.0)
+    bottom_right = (195.0, -155.0)
     expected_segments = {
         tuple(sorted((top_left, top_right))),
         tuple(sorted((top_right, bottom_right))),
@@ -981,7 +999,7 @@ def _validate_profile_geometry(payload: str) -> None:
     if segments != expected_segments:
         raise FabExportError(
             "Esp32Tap-Edge_Cuts.gm1 profile must be the closed "
-            "100.0 x 55.0 mm Rev B rectangle"
+            "95.0 x 55.0 mm Rev C rectangle"
         )
 
 
@@ -1127,7 +1145,7 @@ def validate_stage(
     *,
     require_normalized: bool = False,
 ) -> None:
-    """Fail closed unless the directory is the exact Rev B four-layer package."""
+    """Fail closed unless the directory is the exact Rev C four-layer package."""
     if directory.is_symlink() or not directory.is_dir():
         raise FabExportError(f"fabrication stage is not a directory: {directory}")
     entries = list(directory.iterdir())
@@ -1342,7 +1360,7 @@ def validate_stage(
     if job_attributes != expected_job_attributes:
         raise FabExportError(
             "Gerber job file/function/polarity mapping is not the exact "
-            "Rev B set"
+            "Rev C set"
         )
     general = job.get("GeneralSpecs")
     if not isinstance(general, dict):
@@ -1383,7 +1401,7 @@ def validate_stage(
         is not REQUIRED_GENERAL_SPECS["ImpedanceControlled"]
     ):
         raise FabExportError(
-            "Gerber job GeneralSpecs differ from the locked Rev B "
+                "Gerber job GeneralSpecs differ from the locked Rev C "
             "size, layer count, thickness, finish, or impedance setting"
         )
     if require_normalized:
@@ -1702,7 +1720,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
             )
             print(
                 f"PASS: exact {len(EXPECTED_FAB_FILES)}-member "
-                "Rev B fabrication package and assembly parity"
+                "Rev C fabrication package and assembly parity"
             )
             return 0
         export_fab(

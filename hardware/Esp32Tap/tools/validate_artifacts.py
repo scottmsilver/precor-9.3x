@@ -96,13 +96,13 @@ def inspect_board() -> dict[str, Any]:
 
 
 def validate_geometry(board: dict[str, Any]) -> None:
-    require(board["revision"] == "B", "PCB revision is not B")
+    require(board["revision"] == "C", "PCB revision is not C")
     require(
         board["copper_layers"] == EXPECTED_LAYERS,
         f"copper layer set differs: {board['copper_layers']}",
     )
     outline = board["outline"]
-    require(near(outline["width_mm"], 100.0), "board width is not 100 mm")
+    require(near(outline["width_mm"], 95.0), "board width is not 95 mm")
     require(near(outline["height_mm"], 55.0), "board height is not 55 mm")
 
     stackup = board["stackup"]

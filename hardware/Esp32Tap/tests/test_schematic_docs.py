@@ -16,8 +16,8 @@ from typing import Any
 import pytest
 
 
-SCHEMATIC_TITLE = "Esp32Tap Rev B - ESP32-S3 Precor serial-bus tap"
-SCHEMATIC_DATE = "2026-07-23"
+SCHEMATIC_TITLE = "Esp32Tap Rev C - ESP32-S3 Precor serial-bus tap"
+SCHEMATIC_DATE = "2026-07-24"
 GENERATED_SCHEMATIC_FILES = (
     "Esp32Tap.kicad_sch",
     "esp32tap.kicad_sym",
@@ -163,18 +163,18 @@ def schematic(esp32tap_dir: Path) -> list[Any]:
     return parsed
 
 
-def test_schematic_title_block_identifies_rev_b(
+def test_schematic_title_block_identifies_rev_c(
     schematic: list[Any],
 ) -> None:
     title_block = _child(schematic, "title_block")
     assert _atom(_child(title_block, "title")[1]) == SCHEMATIC_TITLE
-    assert _atom(_child(title_block, "rev")[1]) == "B"
+    assert _atom(_child(title_block, "rev")[1]) == "C"
     assert _atom(_child(title_block, "date")[1]) == SCHEMATIC_DATE
     comments = {
         int(comment[1]): str(_atom(comment[2]))
         for comment in _children(title_block, "comment")
     }
-    assert comments[1] == "Status: generated Rev B typed schematic"
+    assert comments[1] == "Status: generated Rev C typed schematic"
     assert comments[2] == "Source of truth: tools/design.py"
 
 
@@ -1184,7 +1184,7 @@ def _expected_bom_rows(design: SimpleNamespace) -> list[dict[str, str]]:
     return expected
 
 
-def test_checked_in_bom_exactly_matches_populated_rev_b_components(
+def test_checked_in_bom_exactly_matches_populated_rev_c_components(
     esp32tap_dir: Path,
     design: SimpleNamespace,
 ) -> None:
@@ -1211,6 +1211,51 @@ def test_checked_in_bom_exactly_matches_populated_rev_b_components(
         reference.startswith(("TP", "MH"))
         for reference in references
     )
+    by_reference = {
+        reference: row
+        for row in actual
+        for reference in row["Designator"].split(",")
+    }
+    assert {
+        ref: (
+            by_reference[ref]["Comment"],
+            by_reference[ref]["Footprint"],
+            by_reference[ref]["LCSC Part #"],
+            by_reference[ref]["JLC class"],
+        )
+        for ref in ("J1", "J2", "SW1", "SW2", "U1")
+    } == {
+        "J1": (
+            "430450809",
+            "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
+            "C240838",
+            "Extended",
+        ),
+        "J2": (
+            "430451010",
+            "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+            "C563827",
+            "Extended",
+        ),
+        "SW1": (
+            "SKRPACE010",
+            "SW_SPST_SKRPACE010",
+            "C139797",
+            "Extended",
+        ),
+        "SW2": (
+            "SKRPACE010",
+            "SW_SPST_SKRPACE010",
+            "C139797",
+            "Extended",
+        ),
+        "U1": (
+            "ESP32-S3-WROOM-1-N8",
+            "ESP32-S3-WROOM-1",
+            "C2913198",
+            "Extended",
+        ),
+    }
 
 
 def test_checked_in_bom_uses_repository_line_endings(
