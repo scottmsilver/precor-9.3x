@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -169,7 +170,7 @@ def test_module_and_switch_audits_are_exact(esp32tap_dir: Path) -> None:
         "EN": "RESET",
     }
     assert mini["pad_map"] != wroom["pad_map"]
-    assert mini["used_gpio_audit"]["status"] == "INCOMPLETE_FOR_REV_B_SIGNAL_MATRIX"
+    assert mini["used_gpio_audit"] == wroom["used_gpio_audit"]
     assert mini["decision"] == "REJECTED_UNQUALIFIED"
     for switch in matrix["switches"]:
         assert switch["packaging"] == "tape_and_reel"
@@ -192,18 +193,28 @@ def test_selected_official_part_evidence_is_traceable(esp32tap_dir: Path) -> Non
         "C259786",
         "C139797",
         "C2913198",
+        "MOLEX-MICROFIT-PS-43045",
+        "ALPHA-3051",
+        "HT-151-00745",
+        "TE-1932219-1",
     } <= set(evidence)
     for code, record in evidence.items():
-        assert record["lcsc_code"] == code
         assert record["mpn"]
         assert record["official_manufacturer_url"].startswith("https://")
-        assert record["official_lcsc_url"].startswith("https://www.lcsc.com/")
         assert record["retrieved_at"].endswith("Z")
-        assert record["packaging"]
-        assert record["assembly_class"]
-        assert record["stock"]["status"]
-        assert len(record["lcsc_html_sha256"]) == 64
-        assert record["placement_status"] == "REQUIRES_LIVE_BOM_CPL_PROOF"
+        if code.startswith("C"):
+            assert record["lcsc_code"] == code
+            assert record["official_lcsc_url"].startswith("https://www.lcsc.com/")
+            assert record["packaging"]
+            assert record["assembly_class"]
+            assert record["stock"]["status"]
+            assert len(record["lcsc_html_sha256"]) == 64
+            assert (
+                record["placement_status"]
+                == "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF"
+            )
+        elif "source_sha256" in record:
+            assert len(record["source_sha256"]) == 64
 
 
 def test_selected_complete_mating_system_and_open_contacts(
@@ -215,8 +226,11 @@ def test_selected_complete_mating_system_and_open_contacts(
             encoding="utf-8"
         )
     )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
 
-    validator.validate_selection(selection)
+    validator.validate_selection(selection, candidates)
     for interface_name in ("console", "motor"):
         interface = selection["interfaces"][interface_name]
         assert interface["wire"]["power_ground_awg"] <= 22
@@ -231,7 +245,9 @@ def test_selected_complete_mating_system_and_open_contacts(
             assert rating["voltage_v"] >= 24
             assert rating["temperature_min_c"] <= -20
             assert rating["temperature_max_c"] >= 85
-        assert interface["terminal"]["derated_current_a"] >= 2.0
+        assert validator.derive_selected_contact_current_a(
+            interface, selection["official_part_evidence"]
+        ) >= 2.0
         assert interface["strain_relief"]["environment"] == {
             "temperature_min_c": -40,
             "temperature_max_c": 85,
@@ -240,7 +256,11 @@ def test_selected_complete_mating_system_and_open_contacts(
             assert validator.remaining_contact_current_a(
                 interface, open_net=net, total_current_a=2.0
             ) == pytest.approx(2.0)
-            validator.validate_single_open(interface, open_net=net)
+            validator.validate_single_open(
+                interface,
+                evidence=selection["official_part_evidence"],
+                open_net=net,
+            )
 
 
 def test_unequal_two_amp_case_does_not_take_sharing_credit(
@@ -266,7 +286,9 @@ def test_rj45_normal_unequal_case_supports_two_amps_but_single_open_stays_open(
 
     for interface in selection["interfaces"].values():
         rj45 = interface["rj45_termination"]
-        validator.validate_rj45_normal_case(rj45)
+        validator.validate_rj45_normal_case(
+            rj45, selection["official_part_evidence"]["TE-1932219-1"]
+        )
         assert rj45["normal_total_current_a"] == 2.0
         assert rj45["normal_unequal_branch_current_a"] == [1.35, 0.65]
         assert rj45["single_open_2a_status"] == "UNSUPPORTED_OPEN_PHYSICAL_GATE"
@@ -299,3 +321,211 @@ def test_harness_csv_maps_all_rj45_pins_one_to_one(
     assert len({row["board_position"] for row in rows}) == 8
     assert all(row["continuity_test"] == "<=100mOhm,end-to-end" for row in rows)
     assert all(row["wire_awg"] == "22" for row in rows if row["net"].startswith(("+8V", "GND")))
+
+
+def test_provisional_selection_binds_every_identity_to_official_evidence(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+
+    assert selection["status"] == "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF"
+    assert selection["placement_status"] == "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF"
+    evidence = selection["official_part_evidence"]
+    assert {
+        "ALPHA-3051",
+        "HT-151-00745",
+        "TE-1932219-1",
+    } <= set(evidence)
+    validator.validate_selection(selection, candidates)
+
+    empty_evidence = copy.deepcopy(selection)
+    empty_evidence["official_part_evidence"] = {}
+    with pytest.raises(Exception, match="evidence"):
+        validator.validate_selection(empty_evidence, candidates)
+
+    invented_header = copy.deepcopy(selection)
+    invented_header["interfaces"]["console"]["header"]["mpn"] = "INVENTED"
+    invented_header["interfaces"]["console"]["header"]["lcsc_code"] = "C0"
+    with pytest.raises(Exception, match="identity|candidate|evidence"):
+        validator.validate_selection(invented_header, candidates)
+
+    invented_terminal = copy.deepcopy(selection)
+    invented_terminal["interfaces"]["motor"]["terminal"]["mpn"] = "INVENTED"
+    with pytest.raises(Exception, match="identity|evidence"):
+        validator.validate_selection(invented_terminal, candidates)
+
+
+def test_selected_two_amp_ratings_are_derived_from_exact_evidence(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+
+    validator.validate_selection(selection, candidates)
+    for circuit_count, interface_name in ((8, "console"), (10, "motor")):
+        interface = selection["interfaces"][interface_name]
+        qualification = interface["current_qualification"]
+        assert qualification == {
+            "evidence_id": "MOLEX-MICROFIT-PS-43045",
+            "wire_awg": 22,
+            "circuit_count": circuit_count,
+            "ambient_c": 85,
+            "derived_current_per_contact_a": 4.0,
+        }
+        assert validator.derive_selected_contact_current_a(
+            interface, selection["official_part_evidence"]
+        ) == pytest.approx(4.0)
+
+    changed = copy.deepcopy(selection)
+    changed["interfaces"]["console"]["current_qualification"][
+        "derived_current_per_contact_a"
+    ] = 4.1
+    with pytest.raises(Exception, match="derating|derived"):
+        validator.validate_selection(changed, candidates)
+
+    changed = copy.deepcopy(selection)
+    changed["interfaces"]["motor"]["current_qualification"]["circuit_count"] = 8
+    with pytest.raises(Exception, match="circuit"):
+        validator.validate_selection(changed, candidates)
+
+    changed = copy.deepcopy(selection)
+    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][
+        "derating_table"
+    ][0]["current_per_contact_a"] = 4.1
+    with pytest.raises(Exception, match="evidence was altered"):
+        validator.validate_selection(changed, candidates)
+
+
+def test_module_audits_cover_every_required_safety_field(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    matrix = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validator.validate_module_audits(matrix, selection)
+    modules = {item["mpn"]: item for item in matrix["modules"]}
+    required = {
+        "pad_map",
+        "strapping_pins",
+        "reserved_pins",
+        "pulls",
+        "adc_drive_capability",
+        "decoupling",
+        "footprint_area_mm2",
+        "reset_rom_brownout_defaults",
+        "used_signal_safe_boot_states",
+        "rf",
+        "flash",
+        "native_usb",
+        "production_evidence",
+    }
+    expected_used = set(modules["ESP32-S3-WROOM-1-N8"]["used_gpio_audit"])
+    for module in modules.values():
+        assert required <= set(module)
+        assert set(module["strapping_pins"]) == {
+            "GPIO0",
+            "GPIO3",
+            "GPIO45",
+            "GPIO46",
+        }
+        assert module["footprint_area_mm2"] == pytest.approx(
+            module["package_size_mm"]["width"] * module["package_size_mm"]["length"]
+        )
+        assert set(module["used_signal_safe_boot_states"]) == expected_used
+
+    mini = modules["ESP32-S3-MINI-1-N8"]
+    assert mini["decision"] == "REJECTED_UNQUALIFIED"
+    assert mini["production_evidence"] == {
+        "firmware_build": "ABSENT",
+        "flash_log": "ABSENT",
+        "boot_log": "ABSENT",
+        "brownout_log": "ABSENT",
+        "safety_matrix": "ABSENT",
+    }
+    incomplete = copy.deepcopy(matrix)
+    del incomplete["modules"][0]["used_signal_safe_boot_states"]["GPIO21"]
+    with pytest.raises(Exception, match="safe-boot"):
+        validator.validate_module_audits(incomplete, selection)
+
+
+def test_modeled_reversal_prevention_geometry_rejects_wrong_interface(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    concept = selection["reversal_prevention"]
+
+    assert concept["status"] == "MODELED_FOR_TASK6_IMPLEMENTATION"
+    assert concept["physical_proof_status"] == "OPEN_PENDING_DELIVERED_HARNESS"
+    assert concept["concept"] == "DISTINCT_KEYED_RJ45_COLLARS_AND_APERTURES"
+    assert concept["console"]["harness_length_mm"] == 180
+    assert concept["motor"]["harness_length_mm"] == 240
+    validator.validate_reversal_geometry(concept)
+
+    wrong = copy.deepcopy(concept)
+    wrong["motor"]["key_offset_x_mm"] = wrong["console"]["key_offset_x_mm"]
+    with pytest.raises(Exception, match="wrong-mating|distinct"):
+        validator.validate_reversal_geometry(wrong)
+
+
+def test_provisional_harness_release_is_layout_only(esp32tap_dir: Path) -> None:
+    validator = esp32tap_dir / "harness" / "validate_harnesses.py"
+    layout = subprocess.run(
+        [
+            sys.executable,
+            str(validator),
+            "--release",
+            "--action",
+            "layout",
+            "--basis",
+            "conservative-predecessor",
+        ],
+        cwd=esp32tap_dir,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert layout.returncode == 0, layout.stderr
+
+    turnkey = subprocess.run(
+        [
+            sys.executable,
+            str(validator),
+            "--release",
+            "--action",
+            "turnkey_status",
+            "--basis",
+            "conservative-predecessor",
+        ],
+        cwd=esp32tap_dir,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert turnkey.returncode != 0
+    assert "provisional selection cannot release turnkey_status" in turnkey.stderr

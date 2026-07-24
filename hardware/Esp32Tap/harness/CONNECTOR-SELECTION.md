@@ -1,14 +1,17 @@
 # Esp32Tap Rev C interconnect and module selection
 
-Status: conservative verification selection; not released for deployment,
-production, purchase, or `TURNKEY_QUOTED`.
+Status: `PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF`; suitable only for
+conservative schematic/layout and verification-package work. It is not
+order-ready and is not released for deployment, production, purchase, or
+`TURNKEY_QUOTED`.
 
 Evidence was retrieved 2026-07-24T15:04:11Z. Manufacturer product pages and
 datasheets establish identity and published ratings. Official LCSC pages
 establish exact catalog identity, packaging, and public stock at retrieval
 time. Public catalog stock is **not** proof that JLCPCB will place a part. Every
-selected SMT row remains `REQUIRES_LIVE_BOM_CPL_PROOF`; no cart, order, or
-account mutation was performed.
+selected SMT row remains `PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF`; Task 10
+must prove each row in the live BOM/CPL workflow or force reselection and
+regeneration. No cart, order, or account mutation was performed.
 
 ## Selection
 
@@ -22,11 +25,14 @@ The 8-position housing cannot mate with the 10-position header and the
 and 10 are unpopulated and require individual cavity plugs in the supplier
 drawing. Labels and color are secondary defenses.
 
-Micro-Fit is selected over the smaller candidates because its published
-The Micro-Fit connector family is rated 600 V and -40 to +105 °C; the selected
+Micro-Fit is selected over the smaller candidates because the connector family
+is rated 600 V and -40 to +105 °C; the selected
 Alpha Wire 3051 conductors are rated 300 V and -40 to +105 °C. The 8.5 A
-maximum contact class provides margin
-for the conservative 2.0 A individual-contact rule. The committed validator
+maximum contact class provides margin for the conservative 2.0 A
+individual-contact rule. Selection does not trust a free current field: the
+committed validator looks up the exact 22 AWG, fully loaded 8- or 10-circuit,
++85 °C row in the pinned Molex Micro-Fit evidence. Both selected rows derive
+4.0 A per contact. The validator
 assigns the full 2.0 A load to each remaining new header/terminal/22 AWG wire
 path in turn; it never credits equal sharing. Candidate geometry is explicitly
 modeled, not a completed layout. The DuraClik and TE Micro MATE-N-LOK rows
@@ -60,11 +66,16 @@ contact. A single-open RJ45 contact carrying 2.0 A is
 Installed thermal/drop testing or a measured-envelope redesign must close this
 before deployment or turnkey status.
 
-Console/Motor reversal at the ordinary RJ45 ends is only a modeled
-enclosure/routing gate. Final harness lengths, captive routing, and enclosure
-apertures must be measured, followed by delivered-harness attempts at every
-wrong connection. Nothing in this selection claims that gate is physically
-closed.
+Console/Motor reversal at the ordinary RJ45 ends uses a modeled Task 6
+implementation concept: clip-on keyed collars fitted to distinct enclosure
+apertures. Both collar bodies are 15.6 x 13.6 mm and fit 16.0 x 14.0 mm
+apertures. A 3.0 x 2.0 mm rib fits a 3.4 x 2.2 mm slot. Console's key is at
+x=-5.0 mm and Motor's at x=+5.0 mm, giving 10.0 mm separation and a modeled
+6.6 mm wrong-mating collision margin. Modeled harness lengths are 180 mm
+Console and 240 mm Motor, each with at least 25 mm service slack. Task 6 must
+implement these dimensions in CAD. Delivered-harness wrong-connection
+attempts remain `OPEN_PENDING_DELIVERED_HARNESS`; nothing here claims physical
+proof.
 
 ## Switches
 
@@ -90,10 +101,11 @@ The WROOM audit preserves the existing assignments: GPIO4 `K1_NC_FB`,
 GPIO5 `K1_NO_FB`, GPIO6 `TREAD_OK`, GPIO7 `VBUS_PRESENT_N`, GPIO15
 `TX_ENABLE`, GPIO16 `PIN3_RX`, GPIO17 `ESP_TX`, GPIO18 `CONS_RX`, GPIO21
 `RELAY_CMD`, GPIO38 `STATUS_LED`, GPIO0 boot, GPIO43 UART0 TX, GPIO44 UART0
-RX, GPIO19 USB D-, GPIO20 USB D+, and `EN` reset. GPIO0 remains the ROM
-download strap; GPIO3/45/46 strapping/reserved behavior and safe reset,
-brownout, and ROM-download states remain subject to the existing Rev B
-contract.
+RX, GPIO19 USB D-, GPIO20 USB D+, and `EN` reset. The machine-readable audit
+now enumerates all four straps (GPIO0/3/45/46), unavailable/reserved pins,
+every external pull, ADC/digital-drive capabilities, populated or required
+decoupling, footprint area, reset/ROM/brownout defaults, and the reset-safe
+state for every used signal for both packages.
 
 The repository has no production `firmware/CMakeLists.txt`, exact production
 ESP-IDF target/sdkconfig and build artifact, hardware flash/boot/reset/brownout
@@ -109,9 +121,25 @@ migration.
 - Official LCSC pages: `C240838`, `C563827`, `C127351`, `C259745`, `C259786`,
   `C588562`, `C139797`, `C139789`, `C2913198`, and `C2913206`.
 - TE Connectivity product page for `1932219-1`.
+- Alpha Wire official 3051 specification, including all eight exact color/put-up
+  MPNs used by the CSV drawings.
+- HellermannTyton official `151-00745` record for PA66 material, UL94 V2,
+  retention function, dimensions, and -40 to +85 °C range. No electrical
+  voltage rating is assigned to this mechanical part.
 - ALPSALPINE SKRP and SKRB official product/land-pattern pages.
 - Espressif ESP32-S3-WROOM-1 and ESP32-S3-MINI-1 official datasheets.
 
 Machine-readable URLs, timestamps, stock observations, modeled dimensions,
 ratings, and rejection constraints are in `candidates.json` and
 `REV-C-PART-SELECTION.json`.
+
+## Exact Task 10 gates
+
+Task 10 must still obtain live BOM/CPL acceptance for every selected SMT row
+and a firm finished-harness quote/orderable assembly number covering the TE
+jack carrier PCB, enclosure, production drawing, tooling/NRE, continuity test,
+and strain-relief installation. Delivered assemblies must pass the modeled
+wrong-mating test. RJ45 single-open 2 A, installed voltage drop/thermal
+behavior, and the treadmill/USB-ground physical envelope remain open. Until
+those gates close, production, deployment, purchase, and turnkey status are
+forbidden.

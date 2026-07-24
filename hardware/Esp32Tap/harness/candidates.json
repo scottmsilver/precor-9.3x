@@ -24,6 +24,10 @@
       "rating": {"voltage_v": 600, "temperature_min_c": -40, "temperature_max_c": 105, "contact_resistance_mohm": 10, "nominal_current_a": 8.5, "derated_85c_8_or_10_circuit_a": 4.0},
       "mating_housing": "430250800",
       "terminal": "430300001",
+      "selected_variants": [
+        {"manufacturer": "Molex", "mpn": "430450809", "lcsc_code": "C240838", "positions": 8},
+        {"manufacturer": "Molex", "mpn": "430451010", "lcsc_code": "C563827", "positions": 10}
+      ],
       "footprint_provenance": "Molex 430450809 sales drawing",
       "step_provenance": "Molex 430450809 official product CAD",
       "rejection_constraints": ["larger than 2.0 mm alternatives", "live JLC placement not yet proven"],
@@ -134,9 +138,84 @@
       "placement_status": "EXISTING_DESIGN_CODE_REQUIRES_FRESH_LIVE_BOM_CPL_PROOF",
       "source_sha256": "513c845fdb44ef34c6948a39a2da52d688369978be002e2ff3a2faea5b88b50f",
       "package_size_mm": {"width": 18.0, "length": 25.5, "height": 3.1},
+      "footprint_area_mm2": 459.0,
       "pad_map": "41 pads; castellated 1-40 plus exposed GND pad 41",
+      "strapping_pins": {
+        "GPIO0": "ROM boot-mode strap; external 10k pull-up and BOOT switch to ground",
+        "GPIO3": "JTAG source strap; not used by Rev C",
+        "GPIO45": "VDD_SPI voltage strap; not used by Rev C",
+        "GPIO46": "ROM boot-mode strap; input-only and not used by Rev C"
+      },
+      "reserved_pins": {
+        "GPIO26-GPIO32": "integrated flash/PSRAM bus; not exposed for Rev C use",
+        "GPIO33-GPIO34": "not exposed on WROOM-1 module pads",
+        "GPIO39-GPIO42": "exposed but reserved from Rev C signal assignment",
+        "GPIO47-GPIO48": "exposed but reserved from Rev C signal assignment"
+      },
+      "pulls": {
+        "GPIO0": "external 10k pull-up",
+        "GPIO4": "external 10k pull-up through K1_NC_FB",
+        "GPIO5": "external 10k pull-up through K1_NO_FB",
+        "GPIO6": "external 10k pull-up and 100k power-off pull-down through TREAD_OK",
+        "GPIO7": "external 10k pull-up through VBUS_PRESENT_N",
+        "GPIO15": "external 10k pull-down through TX_ENABLE",
+        "GPIO16": "no discrete pull; receive path is externally driven",
+        "GPIO17": "no discrete pull; output remains high impedance during reset",
+        "GPIO18": "no discrete pull; receive path is externally driven",
+        "GPIO19": "no pull; native USB D-",
+        "GPIO20": "no pull; native USB D+",
+        "GPIO21": "external 10k pull-down through RELAY_CMD",
+        "GPIO38": "LED load only; no pull",
+        "GPIO43": "no discrete pull; UART0 TX high impedance during reset",
+        "GPIO44": "no discrete pull; UART0 RX externally driven",
+        "EN": "external 10k pull-up with 1uF reset capacitor"
+      },
+      "adc_drive_capability": {
+        "GPIO4": "ADC1_CH3 or configurable digital input/output",
+        "GPIO5": "ADC1_CH4 or configurable digital input/output",
+        "GPIO6": "ADC1_CH5 or configurable digital input/output",
+        "GPIO7": "ADC1_CH6 or configurable digital input/output",
+        "GPIO15": "ADC2_CH4 or configurable digital input/output",
+        "GPIO16": "ADC2_CH5 or configurable digital input/output",
+        "GPIO17": "ADC2_CH6 or configurable digital input/output",
+        "GPIO18": "ADC2_CH7 or configurable digital input/output",
+        "GPIO19": "ADC2_CH8 or native USB D-; USB selected",
+        "GPIO20": "ADC2_CH9 or native USB D+; USB selected",
+        "other_used_pins": "digital GPIO with configurable drive where output-capable; EN is reset input"
+      },
+      "decoupling": {
+        "3v3_bulk": "C8 10uF/16V at module supply",
+        "3v3_high_frequency": "C9 100nF at module supply",
+        "enable_rc": "R13 10k pull-up plus C10 1uF to ground"
+      },
+      "reset_rom_brownout_defaults": {
+        "reset": "EN held high by 10k and delayed by 1uF; SW1 forces EN low",
+        "rom": "normal flash boot with GPIO0 high; SW2 plus reset selects ROM download",
+        "brownout": "silicon brownout detector exists; exact production sdkconfig and hardware log remain absent"
+      },
       "native_usb": {"dm": "GPIO19", "dp": "GPIO20"},
       "used_gpio_audit": {"GPIO0": "BOOT", "GPIO4": "K1_NC_FB", "GPIO5": "K1_NO_FB", "GPIO6": "TREAD_OK", "GPIO7": "VBUS_PRESENT_N", "GPIO15": "TX_ENABLE", "GPIO16": "PIN3_RX", "GPIO17": "ESP_TX", "GPIO18": "CONS_RX", "GPIO19": "USB_D-", "GPIO20": "USB_D+", "GPIO21": "RELAY_CMD", "GPIO38": "STATUS_LED", "GPIO43": "U0TXD", "GPIO44": "U0RXD", "EN": "RESET"},
+      "used_signal_safe_boot_states": {
+        "GPIO0": "externally high; BOOT switch is service-only",
+        "GPIO4": "input; feedback pull-up",
+        "GPIO5": "input; feedback pull-up",
+        "GPIO6": "input; supervisor permission defaults fail-safe",
+        "GPIO7": "input; VBUS-present sense pull-up",
+        "GPIO15": "input/high-impedance; external pull-down disables treadmill TX",
+        "GPIO16": "input; external receive path",
+        "GPIO17": "input/high-impedance until firmware configures UART output",
+        "GPIO18": "input; external receive path",
+        "GPIO19": "native USB D- after ROM USB initialization",
+        "GPIO20": "native USB D+ after ROM USB initialization",
+        "GPIO21": "input/high-impedance; external pull-down keeps relay command off",
+        "GPIO38": "input/high-impedance; status LED not actively driven",
+        "GPIO43": "ROM UART0 TX function; no safety actuator connection",
+        "GPIO44": "ROM UART0 RX function; input only",
+        "EN": "external RC holds reset until 3V3 settles"
+      },
+      "rf": {"antenna": "on-module PCB antenna", "keepout": "manufacturer land-pattern antenna keepout plus 15 mm enclosure clearance"},
+      "flash": {"capacity_mb": 8, "mode": "Quad SPI", "internal_bus": "GPIO26-GPIO32 reserved by module"},
+      "production_evidence": {"firmware_build": "ABSENT", "flash_log": "ABSENT", "boot_log": "ABSENT", "brownout_log": "ABSENT", "safety_matrix": "HOST_MODEL_ONLY"},
       "boot_rf_safety": {"flash": "8 MB Quad SPI", "antenna": "on-module PCB antenna", "keepout": "manufacturer land-pattern antenna keepout plus 15 mm enclosure clearance", "reset_rom_brownout": "retain existing Rev B pad/GPIO contract; production logs remain open"},
       "decision": "SELECTED_RETAIN_EXISTING"
     },
@@ -153,9 +232,84 @@
       "placement_status": "REQUIRES_LIVE_BOM_CPL_PROOF",
       "source_sha256": "799081bab2fe68827f29d3bfd093d1728f99cb331ce7287dbe01d03d71c082aa",
       "package_size_mm": {"width": 15.4, "length": 20.5, "height": 2.4},
+      "footprint_area_mm2": 315.7,
       "pad_map": "65-pad LGA module; not footprint-compatible with WROOM",
+      "strapping_pins": {
+        "GPIO0": "ROM boot-mode strap; migration would require an external pull-up and BOOT switch",
+        "GPIO3": "JTAG source strap; keep unassigned",
+        "GPIO45": "VDD_SPI voltage strap; keep unassigned",
+        "GPIO46": "ROM boot-mode strap; input-only and keep unassigned"
+      },
+      "reserved_pins": {
+        "GPIO26-GPIO32": "integrated flash/PSRAM bus; unavailable for migration",
+        "GPIO33-GPIO34": "not assigned until exact MINI pad migration is reviewed",
+        "all_unassigned_LGA_pads": "reserve until schematic, footprint, and escape routing audit"
+      },
+      "pulls": {
+        "GPIO0": "requires external 10k pull-up",
+        "GPIO4": "would retain external 10k feedback pull-up",
+        "GPIO5": "would retain external 10k feedback pull-up",
+        "GPIO6": "would retain TREAD_OK pull-up/power-off pull-down",
+        "GPIO7": "would retain VBUS_PRESENT_N pull-up",
+        "GPIO15": "would retain TX_ENABLE pull-down",
+        "GPIO16": "receive input; no discrete pull",
+        "GPIO17": "output high impedance during reset",
+        "GPIO18": "receive input; no discrete pull",
+        "GPIO19": "no pull; native USB D-",
+        "GPIO20": "no pull; native USB D+",
+        "GPIO21": "would retain RELAY_CMD pull-down",
+        "GPIO38": "LED load only",
+        "GPIO43": "UART0 TX; no discrete pull",
+        "GPIO44": "UART0 RX; no discrete pull",
+        "EN": "requires external 10k pull-up and reset capacitor"
+      },
+      "adc_drive_capability": {
+        "GPIO4": "ADC1_CH3 or configurable digital input/output",
+        "GPIO5": "ADC1_CH4 or configurable digital input/output",
+        "GPIO6": "ADC1_CH5 or configurable digital input/output",
+        "GPIO7": "ADC1_CH6 or configurable digital input/output",
+        "GPIO15": "ADC2_CH4 or configurable digital input/output",
+        "GPIO16": "ADC2_CH5 or configurable digital input/output",
+        "GPIO17": "ADC2_CH6 or configurable digital input/output",
+        "GPIO18": "ADC2_CH7 or configurable digital input/output",
+        "GPIO19": "ADC2_CH8 or native USB D-; USB required",
+        "GPIO20": "ADC2_CH9 or native USB D+; USB required",
+        "other_used_pins": "same ESP32-S3 digital capability, but package-pad migration is unqualified"
+      },
+      "decoupling": {
+        "3v3_bulk": "requires 10uF at MINI supply pads",
+        "3v3_high_frequency": "requires 100nF at MINI supply pads",
+        "enable_rc": "requires 10k pull-up plus 1uF to ground",
+        "layout_status": "NOT_IMPLEMENTED"
+      },
+      "reset_rom_brownout_defaults": {
+        "reset": "same ESP32-S3 EN behavior; external network not implemented for MINI",
+        "rom": "same GPIO0/GPIO46 ROM strapping; MINI flash/boot log absent",
+        "brownout": "same silicon capability; exact production sdkconfig and hardware log absent"
+      },
       "native_usb": {"dm": "GPIO19", "dp": "GPIO20"},
-      "used_gpio_audit": {"status": "INCOMPLETE_FOR_REV_B_SIGNAL_MATRIX", "strapping_reserved": "requires exact package/pad reassignment audit"},
+      "used_gpio_audit": {"GPIO0": "BOOT", "GPIO4": "K1_NC_FB", "GPIO5": "K1_NO_FB", "GPIO6": "TREAD_OK", "GPIO7": "VBUS_PRESENT_N", "GPIO15": "TX_ENABLE", "GPIO16": "PIN3_RX", "GPIO17": "ESP_TX", "GPIO18": "CONS_RX", "GPIO19": "USB_D-", "GPIO20": "USB_D+", "GPIO21": "RELAY_CMD", "GPIO38": "STATUS_LED", "GPIO43": "U0TXD", "GPIO44": "U0RXD", "EN": "RESET"},
+      "used_signal_safe_boot_states": {
+        "GPIO0": "requires external pull-up; migration not implemented",
+        "GPIO4": "input with feedback pull-up required",
+        "GPIO5": "input with feedback pull-up required",
+        "GPIO6": "input with fail-safe supervisor bias required",
+        "GPIO7": "input with VBUS sense pull-up required",
+        "GPIO15": "external pull-down required to disable TX",
+        "GPIO16": "receive input",
+        "GPIO17": "high impedance until UART configured",
+        "GPIO18": "receive input",
+        "GPIO19": "native USB D-",
+        "GPIO20": "native USB D+",
+        "GPIO21": "external pull-down required to keep relay off",
+        "GPIO38": "high impedance; LED off",
+        "GPIO43": "ROM UART0 TX; no actuator",
+        "GPIO44": "ROM UART0 RX input",
+        "EN": "external RC reset required"
+      },
+      "rf": {"antenna": "on-module PCB antenna", "keepout": "manufacturer MINI land-pattern keepout plus 15 mm enclosure clearance"},
+      "flash": {"capacity_mb": 8, "mode": "Quad SPI", "internal_bus": "GPIO26-GPIO32 reserved by module"},
+      "production_evidence": {"firmware_build": "ABSENT", "flash_log": "ABSENT", "boot_log": "ABSENT", "brownout_log": "ABSENT", "safety_matrix": "ABSENT"},
       "boot_rf_safety": {"flash": "8 MB Quad SPI", "antenna": "on-module PCB antenna", "keepout": "manufacturer land-pattern keepout plus 15 mm enclosure clearance", "reset_rom_brownout": "no repository-bound production build/flash/boot/brownout logs"},
       "decision": "REJECTED_UNQUALIFIED"
     }

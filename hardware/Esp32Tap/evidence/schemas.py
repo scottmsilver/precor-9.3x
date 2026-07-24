@@ -177,7 +177,7 @@ PREDECESSOR_SHA256 = {
     (
         "docs/superpowers/specs/"
         "2026-07-24-esp32tap-rev-c-turnkey-compact-design.md"
-    ): "1fef24b6aadec676cd131d895d118750fb8e4a0b35f234ced423d36e24b12b5b",
+    ): "096624694b66003fdd37de42f01f48b6ca4f9fbf476ceb4366560cb405a2250e",
 }
 PREDECESSOR_ACTIONS = {
     "connector_selection",
