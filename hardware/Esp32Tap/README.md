@@ -20,6 +20,10 @@ path to a hardware-gated ESP32 transmitter.
 - USB-C carries native USB data and VBUS presence only. It cannot energize VIN,
   +3V3, +5V_RLY, or K1. Programming needs a USB data cable and current-limited
   +8 V bench power at the RJ45 power pins.
+- “Data only” does not mean isolated. J3 ground pins and shield connect to
+  board/treadmill ground. Do not attach a treadmill-powered board to a USB
+  host until host-to-treadmill ground potential and connection current have
+  been measured safely and the isolation/bonding approach has been reviewed.
 - U4 monitors protected VIN. Its window output `TREAD_OK` is hardware-ANDed
   with both `RELAY_CMD` and `TX_ENABLE`.
 - K1 pole A is the serial transfer contact. Pole B reports armature position
@@ -45,6 +49,7 @@ is not a certified functional-safety controller.
 | `bom/BOM.csv` | Populated assembly BOM with exact JLC/LCSC identities |
 | `bom/CPL-positions.csv` | Top-side placement file in JLC coordinates |
 | `kicad/Esp32Tap-gerbers.zip` | Deterministic 13-member fabrication archive |
+| `vendor/JLC-DFM-REVIEW.json` | Sanitized operator record of online DFM, bound to the exact local archive |
 | `sim/` | Seven behavioral ngspice decks, assertions, and dual-engine runner |
 | `enclosure/` | Parametric case, regenerated meshes, and independent fit validator |
 | `firmware/PLAN.md` | Normative production-firmware and bench acceptance contract |
@@ -61,9 +66,9 @@ generator. Do not repair generated connectivity, BOM rows, or Gerbers by hand.
 |---|---|
 | Finished outline | 100.0 × 55.0 mm |
 | Stack | Four copper layers, 1.59 mm modeled finished thickness |
-| Stackup metadata | `JLC04161H-7628`; 1 oz outer and 0.5 oz inner copper |
-| Inner reference | In1.Cu uninterrupted GND plane |
-| USB routing | F.Cu-only differential route, 0.285 mm width / 0.200 mm gap, no signal vias |
+| Stackup metadata | `JLC04161H-7628`; 0.035 mm outer and 0.0152 mm inner finished copper |
+| Inner reference | One In1.Cu GND zone, continuous below USB except normal antipads; explicit antenna keepout |
+| USB routing | F.Cu-only, no signal vias; 0.2906 mm / 0.2000 mm controlled run plus four short 0.20 mm connector breakouts |
 | MCU | ESP32-S3-WROOM-1-N8 |
 | Relay | Omron G6K-2F-Y-TR DC5, 237 Ω nominal coil |
 | Test access | TP1–TP13, including VIN, +5V_RLY, permission gates, TX, and both feedback contacts |
@@ -89,6 +94,12 @@ Passing them proves internal consistency under the declared models. It does
 not prove physical power integrity, relay contact behavior, RF performance,
 USB enumeration, production firmware, or vendor manufacturability.
 
+The sanitized JLCDFM file records the result an operator observed after
+uploading the exact archive named by its SHA-256. It is not a vendor-signed
+result or independent proof of upload provenance. It does not approve the
+production stack, controlled impedance, the antenna-overhang carrier, the
+RJ45 assembly fixture/process, BOM/CPL placement, or substitutions.
+
 ## Bench bring-up order
 
 1. Inspect assembly polarity, part identity, soldering, and shorts with no
@@ -96,8 +107,11 @@ USB enumeration, production firmware, or vendor manufacturability.
    isolation.
 2. Apply current-limited +8 V from a bench supply to the documented RJ45 power
    pins. Check VIN, +3V3, +5V_RLY-off, TREAD_OK, and thermal behavior.
-3. Attach USB data while bench +8 V remains present. Verify active-low
-   `VBUS_PRESENT_N`, ROM/reset attach behavior, enumeration, and unplug.
+3. Before attaching USB, measure host-to-board ground potential and connection
+   current with a safe bench method and establish the reviewed
+   isolation/bonding setup. Then attach USB data while bench +8 V remains
+   present and verify active-low `VBUS_PRESENT_N`, ROM/reset attach behavior,
+   enumeration, and unplug.
 4. Use an isolated serial fixture and logic analyzer for receive loading,
    inverted idle level, gap capture, relay transfer, feedback, and complete
    zero-frame ordering.

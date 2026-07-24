@@ -97,16 +97,23 @@ against a 104.167 µs bit, while one/two simultaneous unpowered injections are
 behavior, and framing margin require a scope and actual hardware.
 
 USB VBUS terminates in protection, bypass, discharge, and the Q2 presence
-detector. It has no local-power path. The USB pair is routed entirely on F.Cu
-with zero signal vias and sub-micrometre route-length skew in the generated
-board. Stackup and impedance still require vendor confirmation, followed by
-enumeration and eye-margin testing.
+detector. It has no local-power path. J3 signal ground and shield are directly
+tied to board/treadmill ground, so the interface is not galvanically isolated;
+safe host-to-treadmill ground potential, connection current, and
+isolation/bonding must be established before simultaneous attachment. The USB
+pair is routed entirely on F.Cu with zero signal vias. Its controlled run uses
+0.2906 mm width and a 0.2000 mm edge gap; four short connector-breakout
+segments use 0.20 mm width. Generated total-route skew is approximately
+0.012 mm. The controlled dimensions match JLC's current calculator for the
+selected stack. Production stackup and impedance still require vendor
+confirmation, followed by enumeration and eye-margin testing.
 
 ## Layout and manufacturing disposition
 
 - Board outline: 100.0 × 55.0 mm.
 - Copper: F.Cu, In1.Cu, In2.Cu, and B.Cu.
-- In1.Cu is the continuous GND reference plane.
+- In1.Cu is one GND zone and is continuous beneath the USB corridor, apart
+  from normal antipads; the antenna region has an explicit all-layer keepout.
 - The project records `JLC04161H-7628` geometry and a 90 Ω USB netclass.
 - ERC reports zero errors and warnings under the committed severity policy.
 - The combined DRC/schematic-parity report records zero DRC violations, zero
@@ -120,12 +127,27 @@ enumeration and eye-margin testing.
   thermal checks remain open.
 - The deterministic archive has exactly 13 expected members, including both
   inner copper layers, Excellon drill data, and Gerber job metadata.
+- Fabrication silkscreen intentionally contains only 15 semantic labels; it
+  omits footprint outlines and reference designators. Assembly identity and
+  orientation must be checked against the PCB source, BOM/CPL, retained
+  polarity/pin labels, and vendor placement preview.
 - Assembly audit binds design, schematic, PCB, DNP flags, BOM, CPL, LCSC code,
   class, package, position, layer, and rotation.
+- An operator observed the exact archive complete JLC's online PCB DFM
+  analysis. The sanitized SHA-bound record preserves four raw red slot-width
+  results and their explicit engineering disposition against measured
+  geometry and published capability, leaving zero unresolved actionable
+  dangers. The record is not vendor-signed or independent upload-provenance
+  evidence, and it is not production CAM approval.
 
 The ESP32 module extends 6.3 mm beyond the finished board edge. JLC must
 approve the production carrier/panel treatment without copper or metal near
-the antenna. Do not infer approval from local DRC.
+the antenna. Because the board's short axis is 55 mm and Standard PCBA
+publishes a 70 mm minimum, generic 5 mm process rails are not enough; require
+a dimensioned carrier/fixture and depanel drawing. J1/J2 are cataloged for
+wave soldering and require an assembly fixture, so the actual mixed SMT/THT
+process, seating, pallet/fixture, and quote must also be confirmed. Do not
+infer any of those approvals from local DRC or the online DFM result.
 
 ## Enclosure disposition
 
@@ -133,6 +155,8 @@ The checked meshes are regenerated from pinned OpenSCAD source. Independent
 mesh checks find one connected, watertight, consistently wound body per file.
 Functional probes cover the 100 × 55 mm cavity, mounting posts, both RJ45
 openings, USB overmold access, lid reliefs, and the 15 mm antenna void.
+That antenna clearance is axial beyond the antenna end, not 15 mm in every
+direction.
 
 Physical plug fit, material shrink/warp, screw behavior, installed clearance,
 RF range, and JLC3DP acceptance remain open.

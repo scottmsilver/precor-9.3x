@@ -25,17 +25,20 @@ mean a physical board has passed.
 
 | Gate | State | Required evidence |
 |---|---|---|
-| PCB DFM acceptance | OPEN | Read-only preview for the exact ZIP |
+| Exact-archive online PCB DFM | OBSERVED for preview scope | Operator-recorded, SHA-bound raw counts; four generic slot dangers dispositioned, zero unresolved actionable dangers |
+| Production CAM acceptance | OPEN | JLC production-file review with no unapproved edits |
 | Production stack and USB impedance | OPEN | JLC confirmation against `JLC04161H-7628` |
 | Antenna-overhang carrier/panel | OPEN | Vendor drawing with antenna clearance |
-| THT RJ45 assembly | OPEN | Service acceptance for exact unshielded jacks |
+| THT RJ45 assembly | OPEN | Confirmed wave/manual process, fixture or pallet, seating, and quote for exact jacks |
 | BOM/CPL placement | OPEN | Exact-part resolution and visual placement review |
 | Substitutions | OPEN | None, or a new engineering review |
 | Enclosure material/mesh DFM | OPEN | JLC3DP acceptance without scaling or geometry changes |
 | Current quote | OPEN | Fresh quote tied to artifact hashes |
 
-No cart, submission, or payment action is needed to perform these read-only
-checks.
+The operator recorded the online DFM result after uploading the exact ZIP. The
+record is not a vendor-signed result or independent proof of upload provenance.
+No design was added to a cart, no order was submitted, no production files
+were authorized, and no payment was made.
 
 ## Open firmware gates
 

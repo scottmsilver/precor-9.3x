@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "status": "HOLD",
+  "scope_status": "OPERATOR_OBSERVED_EXACT_ARCHIVE_ONLINE_DFM",
+  "evidence_scope": "An operator observed JLCDFM complete in the browser and transcribed the displayed counts. This record is SHA-bound to the local archive but is not a vendor-signed result or independent proof of upload provenance; production CAM acceptance remains open.",
+  "checked_at_utc": "2026-07-24T12:02:04Z",
+  "archive": {
+    "path": "kicad/Esp32Tap-gerbers.zip",
+    "sha256": "d768bb9a57c9d905c51c2cc6d3dcfcbb78cf1efbf972fec8cb65f85152ad5ddd"
+  },
+  "parsed_board": {
+    "copper_layers": 4,
+    "height_mm": 55.0,
+    "width_mm": 100.0
+  },
+  "external_actions": {
+    "added_to_cart": false,
+    "order_submitted": false,
+    "payment_authorized": false,
+    "production_files_approved": false,
+    "uploaded_for_analysis": true
+  },
+  "analysis": {
+    "actionable_danger_count": 0,
+    "categories": [
+      {
+        "name": "routing_sharp_trace_corner",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "routing_bga_pad",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "routing_via_within_pad",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "routing_trace_to_board_edge",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "routing_trace_spacing",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 4
+        },
+        "disposition": "INFORMATIONAL_ONLY"
+      },
+      {
+        "name": "routing_unconnected_trace_end",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "routing_trace_width",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 96
+        },
+        "disposition": "INFORMATIONAL_ONLY"
+      },
+      {
+        "name": "routing_fiducial",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "routing_pad_to_board_edge",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "routing_pad_spacing",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 3,
+          "informational": 63
+        },
+        "disposition": "WARNING_RETAINED"
+      },
+      {
+        "name": "routing_plated_through_hole_to_trace_clearance",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 1
+        },
+        "disposition": "INFORMATIONAL_ONLY"
+      },
+      {
+        "name": "routing_annular_ring",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 100,
+          "informational": 0
+        },
+        "disposition": "WARNING_RETAINED"
+      },
+      {
+        "name": "routing_tht_to_smd",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 1,
+          "informational": 20
+        },
+        "disposition": "WARNING_RETAINED"
+      },
+      {
+        "name": "routing_via_to_pad",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 3
+        },
+        "disposition": "INFORMATIONAL_ONLY"
+      },
+      {
+        "name": "soldermask_bridge",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 7
+        },
+        "disposition": "INFORMATIONAL_ONLY"
+      },
+      {
+        "name": "soldermask_opening_exposes_trace",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "soldermask_opening_with_multiple_segments",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 5,
+          "informational": 0
+        },
+        "disposition": "WARNING_RETAINED"
+      },
+      {
+        "name": "negative_soldermask_expansion",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 50,
+          "informational": 0
+        },
+        "disposition": "WARNING_RETAINED"
+      },
+      {
+        "name": "silkscreen_to_pad",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "silkscreen_to_hole",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "silkscreen_line_width",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 31
+        },
+        "disposition": "INFORMATIONAL_ONLY"
+      },
+      {
+        "name": "drill_unconnected_via",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "drill_missing_plated_through_hole",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "drill_unconnected_plated_hole",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "drill_plated_through_hole_spacing",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "drill_short_slot_detection",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      },
+      {
+        "name": "drill_slot_width_check",
+        "raw_counts": {
+          "danger": 4,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "ACCEPTED_DEFAULT_RULE_FALSE_POSITIVE",
+        "basis": "The viewer applies a 0.61 mm generic danger threshold. All four results are J3 shield pads S1 in the locked HRO TYPE-C-31-M-12 / C165948 connector land pattern: plated 0.600 mm slots, two 1.2 mm long and two 1.7 mm long. Their measured width is above JLC's published multilayer/general minimum slot capability. Do not alter the connector land pattern merely to clear the viewer's rounded generic threshold; production CAM acceptance remains open."
+      },
+      {
+        "name": "drill_via_to_plated_through_hole_spacing",
+        "raw_counts": {
+          "danger": 0,
+          "warning": 0,
+          "informational": 0
+        },
+        "disposition": "NO_FINDING"
+      }
+    ]
+  },
+  "open_vendor_gates": [
+    "antenna_overhang_carrier",
+    "controlled_impedance_production_confirmation",
+    "mixed_smt_tht_fixture_and_process",
+    "pcba_bom_cpl_placement_preview",
+    "production_cam_acceptance",
+    "substitution_review"
+  ],
+  "official_sources": [
+    "https://jlcpcb.com/help/article/dfm-analysis-result-view-help",
+    "https://jlcpcb.com/capabilities/pcb-capabilities/",
+    "https://jlcpcb.com/impedance",
+    "https://jlcpcb.com/help/article/how-to-add-edge-rails-fiducials-for-pcb-assembly-order",
+    "https://jlcpcb.com/capabilities/pcb-assembly-capabilities",
+    "https://jlcpcb.com/help/article/pcb-assembly-fixtures"
+  ]
+}

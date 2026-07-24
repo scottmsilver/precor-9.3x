@@ -29,7 +29,7 @@ bytes, or an inexact fabrication set.
 | Electrical source | Design invariant and exact pin/type tests | PASS | Treadmill-only local power, direct +8 V/GND pass-through, hardware relay/TX gates, one transfer pole, one feedback pole, DNP and part locks |
 | Schematic | Generated artifact plus KiCad ERC | PASS | Typed Rev B schematic; zero reported errors and warnings |
 | PCB | Inspector, independent validator, KiCad DRC with schematic parity | PASS | 100 × 55 mm four-layer stack, exact pad/net parity, 0 DRC, 0 unconnected pads, 0 footprint errors |
-| USB | Segment/topology/clearance tests | PASS | F.Cu-only pair, zero signal vias, 0.285/0.200 mm geometry, matched topology, route skew within the declared limit |
+| USB | Segment/topology/clearance tests | PASS | F.Cu-only pair, zero signal vias, 0.2906/0.2000 mm controlled run, four short 0.20 mm connector breakouts, matched topology, route skew within the declared limit |
 | Antenna | All-layer rule-area and copper audit | PASS | Copper keepout and intentional 6.3 mm module overhang match generated geometry |
 | Assembly | Design↔schematic↔PCB↔BOM↔CPL audit | PASS | Exact populated/DNP sets, flags, codes, packages, quantities, positions, layers, and rotations |
 | Fabrication | Clean export, normalized metadata, archive comparison | PASS | Exact 13-member four-layer Gerber/drill/job package with deterministic ZIP bytes |
@@ -56,11 +56,12 @@ replace a vendor preview or physical validation.
 
 | Artifact | SHA-256 |
 |---|---|
-| `kicad/Esp32Tap.kicad_pcb` | `353087eaddc0e548db4c084c814f7604a2476be857f8aa93b27ea9794c18555c` |
-| `kicad/Esp32Tap-gerbers.zip` | `ec4c982ad43ada44846b0e20741df945f166b8d2c17858c47ae7d2ea09f73d83` |
+| `kicad/Esp32Tap.kicad_pcb` | `c7395baac4170cefbfe51abe2c4239e03ccb7acf7c11d635925947489fefa8aa` |
+| `kicad/Esp32Tap-gerbers.zip` | `d768bb9a57c9d905c51c2cc6d3dcfcbb78cf1efbf972fec8cb65f85152ad5ddd` |
 | `bom/BOM.csv` | `58fd75503d1d6af46115d48dd2a150731eb25bb720ef6c99a0cbf018ad2d340d` |
 | `bom/CPL-positions.csv` | `4274b34c245ced0972235424dcd430626b52bf113d36990ea82fc58991b9b160` |
 | `bom/JLC-STOCK-SNAPSHOT.json` | `6b7bd004e8121ca75cdd4b373ac8278e1670075b0626e9f14815498ee8e95284` |
+| `vendor/JLC-DFM-REVIEW.json` | `ce15b9bd47330ecd8f9aed32053faf3d0df0e7309768b0bf69c6f8383835efd7` |
 | `enclosure/esp32tap_base.stl` | `4ec0ed81e3127cb441fa7fde67e19e435497c6f442c73ff881d35fcdc3162b77` |
 | `enclosure/esp32tap_lid.stl` | `b61b33f5d91865cfa4b9e02049225de65f293b3328e116cb94a99d0aae9a3468` |
 
@@ -94,8 +95,8 @@ assumption.
 The fresh render is compared by canonical triangle geometry, not raw facet
 order. Both meshes are watertight, winding-consistent, and have exactly two
 faces incident to every welded edge. RJ45 centers are derived from the PCB as
-12.445 and 41.445 mm. The enclosure leaves a 15.0 mm void beyond the module
-antenna.
+12.445 and 41.445 mm. The enclosure leaves 15.0 mm axial clearance beyond the
+module antenna end; it is not an all-direction clearance.
 
 ## Stock evidence
 
@@ -113,6 +114,27 @@ review.
 This does not establish assembly service compatibility, feeder choice,
 placement acceptance, current price, or continuing availability.
 
+## Operator-observed exact-archive online JLCDFM evidence
+
+`vendor/JLC-DFM-REVIEW.json` binds the operator record to the local fabrication
+archive by SHA-256 and records the displayed 100 × 55 mm, four-layer result.
+It is not a vendor-signed result or independent proof of upload provenance.
+During the observed run, the online tool reported zero danger results for
+copper, soldermask, and silkscreen; both silkscreen-to-pad and
+silkscreen-to-hole were `0, 0, 0`. The record preserves every displayed raw
+red/orange/green count. Its `actionable_danger_count` becomes zero only after
+the four raw slot-width dangers receive the documented engineering
+disposition; it is not a claim that JLC displayed an all-green result.
+
+Those four raw red results are the 0.600 mm plated shield slots in J3's
+official connector land pattern. The viewer's generic danger threshold is
+0.61 mm, while the slots exceed JLC's published multilayer/general minimum
+slot capability. They are accepted as a generic-rule false positive without
+altering the connector footprint. Production CAM must still accept them.
+Online DFM confirms file parsing and measured artwork only. It does not close
+production CAM, impedance, carrier, assembly-fixture, placement, or
+substitution gates.
+
 ## Explicitly unsupported
 
 - Actual treadmill +8 V range, source impedance, ripple, surge repetition,
@@ -124,11 +146,14 @@ placement acceptance, current price, or continuing availability.
 - Relay operate/release/bounce/weld behavior, contact temperature, and
   contact-measured fault-to-NC latency.
 - Native USB ROM/reset attach, enumeration, unplug, and eye margin.
+- USB-host/treadmill ground potential, connection current, bonding, and any
+  required isolation before simultaneous attachment.
 - RF range under the treadmill hood and radio coexistence.
 - Production ESP-IDF behavior, exact binary identity, watchdog action, and
   the complete safety matrix.
-- JLC DFM, stackup/impedance acceptance, carrier treatment for the antenna
-  overhang, placement preview, substitutions, and assembly service.
+- JLC production CAM and stackup/impedance acceptance, carrier treatment for
+  the antenna overhang, BOM/CPL placement preview, substitutions, and the
+  mixed SMT/THT assembly process and fixtures.
 - Physical connector fit, resin shrink/warp, screw fit, installed clearance,
   and JLC3DP material acceptance.
 

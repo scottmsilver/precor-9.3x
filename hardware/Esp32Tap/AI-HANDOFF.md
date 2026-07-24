@@ -17,6 +17,11 @@ treadmill.
 - USB-C is data and VBUS-presence only. VBUS has no path to VIN, +3V3,
   +5V_RLY, or the relay. Programming requires a USB cable and
   **current-limited +8 V bench power**. **USB alone cannot power or program Rev B.**
+- USB is not galvanically isolated: J3 signal ground and shield connect to
+  board/treadmill ground. Do not connect a treadmill-powered board to a USB
+  host until the host-to-treadmill ground potential and connection current
+  have been measured safely on the bench and an appropriate isolation or
+  bonding plan has been reviewed.
 - K1 is a 5 V, 237 Ω Omron G6K-2F-Y relay. Pole A is the serial transfer:
   normally closed CONS6→MOT6, normally open TX_DRV→MOT6. Pole B is dry
   armature feedback. It cannot prove pole A is unwelded.
@@ -26,7 +31,8 @@ treadmill.
 - U5 and Q1 are series relay-coil controls. U7 makes the motor TX output high
   impedance without `TX_GATE`.
 - The module antenna extends 6.3 mm off the finished board. Every copper layer
-  is kept out, and the enclosure leaves a further 15 mm plastic/air void.
+  is kept out, and the enclosure leaves a further 15 mm axial plastic/air
+  clearance beyond the antenna end. That is not 15 mm in every direction;
   JLC carrier approval and installed RF measurements remain mandatory.
 
 `tools/design.py` is the electrical source of truth. Change it and regenerate.
@@ -39,24 +45,29 @@ The checked design includes:
 
 - a generated typed schematic;
 - a 100 × 55 mm four-layer PCB with `JLC04161H-7628` stack metadata;
-- one uninterrupted In1.Cu GND reference;
-- an F.Cu-only native-USB pair with zero signal vias;
+- one In1.Cu GND zone that is continuous beneath the USB corridor, except for
+  normal antipads and the explicit all-layer antenna keepout;
+- an F.Cu-only native-USB pair with zero signal vias, 0.2906 mm controlled-run
+  width, a 0.2000 mm controlled-run edge gap, and four short 0.20 mm
+  connector-breakout segments;
 - 13 exact fabrication members and deterministic archive metadata;
 - exact BOM/CPL/DNP/class/package/position parity;
 - seven dual-engine behavioral ngspice decks;
 - pinned, regenerated, watertight enclosure meshes and functional fit probes;
 - a recent BOM-bound snapshot of 43 exact official JLC part pages;
+- a sanitized, operator-recorded online-JLCDFM result bound to the exact
+  fabrication ZIP;
 - a host firmware safety model and deterministic build-manifest checker.
 
 Those are internal consistency checks. They do not close the vendor, firmware,
 or physical gates listed below.
 
 The final PCB reroute is identified by PCB SHA-256
-`353087eaddc0e548db4c084c814f7604a2476be857f8aa93b27ea9794c18555c`.
+`c7395baac4170cefbfe51abe2c4239e03ccb7acf7c11d635925947489fefa8aa`.
 U2 VIN through C4 to required C3 is 4.206 mm total on 0.60 mm F.Cu with no
 via; the bootstrap connection is 2.205 mm and its copper loop is 6.592 mm.
 The matching deterministic fabrication ZIP SHA-256 is
-`ec4c982ad43ada44846b0e20741df945f166b8d2c17858c47ae7d2ea09f73d83`.
+`d768bb9a57c9d905c51c2cc6d3dcfcbb78cf1efbf972fec8cb65f85152ad5ddd`.
 Do not compare or upload a package with different hashes without reproducing
 the entire validation record.
 
@@ -155,6 +166,13 @@ python3 hardware/Esp32Tap/tools/check_jlc_stock.py --refresh
 
 Do not interpret public stock as a quote or assembly acceptance.
 
+The exact-archive JLCDFM record is `vendor/JLC-DFM-REVIEW.json`. It records an
+operator-observed browser result and the displayed artwork measurements. It is
+not a vendor-signed export or independent proof of upload provenance. Preserve
+its raw finding dispositions. It is not production CAM approval and does not
+approve the impedance build, the PCBA placement, either RJ45 process fixture,
+or the antenna-overhang carrier.
+
 ## Remaining gates Claude must keep open
 
 - actual +8 V range, source impedance, current capacity, inrush, noise, surge,
@@ -166,10 +184,13 @@ Do not interpret public stock as a quote or assembly acceptance.
   fault timing;
 - 1,000 normal transitions with no MOT6 byte/frame splice;
 - native USB reset/ROM attach, unplug below 3 ms, enumeration, and eye margin;
+- USB-host/treadmill ground potential, connection current, bonding, and any
+  required isolation before simultaneous attachment;
 - production ESP-IDF implementation, security, WDT, brownout, radio
   coexistence, and complete safety matrix;
-- exact-current JLC quote, DFM, stack/impedance, placement, THT service,
-  substitution review, and antenna-overhang carrier drawing;
+- exact-current JLC quote, production CAM, stack/impedance, BOM/CPL placement,
+  THT wave/manual process and fixture, substitution review, and a
+  dimensioned antenna-overhang carrier drawing;
 - enclosure material acceptance, physical plug/screw/mount fit, installed
   clearance, and RF range.
 
