@@ -73,6 +73,7 @@ WIDTHS = {
     "+5V_RLY": 0.50,
     "RELAY_SW": 0.40,
 }
+KIID_SEED = 0x45535032
 PLANNED_U6_ESCAPES = {
     "1": ((44.8, 20.8), "RELAY_CMD"),
     "2": ((44.0, 21.6), "TREAD_OK"),
@@ -147,9 +148,9 @@ PLACE = {
     "R31": (90.0, 15.0, 90),
     "C1": (43.5, 49.5, 0),
     "C2": (50.0, 52.0, 0),
-    "C3": (55.0, 52.0, 0),
-    "C4": (60.0, 45.5, 0),
-    "C5": (60.0, 52.0, 0),
+    "C3": (63.5, 43.5, 0),
+    "C4": (62.0, 45.5, 0),
+    "C5": (61.1, 51.1, 0),
     "C6": (70.0, 47.0, 0),
     "C7": (70.0, 52.0, 0),
     "C8": (66.5, 6.5, 90),
@@ -293,6 +294,7 @@ def segment_distance(
 class Generator:
     def __init__(self, output: Path):
         self.output = output
+        pcbnew.KIID.SeedGenerator(KIID_SEED)
         # Build in memory; a failed route must never truncate the last known
         # good checked-in board before the atomic save in ``fill_and_save``.
         self.board = pcbnew.NewBoard("")
@@ -610,6 +612,16 @@ class Generator:
             [self.pad("F1", "2"), self.pad("D1", "2")],
             "+8V_F",
             0.80,
+        )
+        self.add_track(
+            [self.pad("U2", "3"), self.pad("C4", "1")],
+            "VIN",
+            0.60,
+        )
+        self.add_track(
+            [self.pad("C4", "1"), self.pad("C3", "1")],
+            "VIN",
+            0.60,
         )
         sw = self.pad("U2", "2")
         l1 = self.pad("L1", "1")
@@ -1435,14 +1447,11 @@ class Generator:
         filler = pcbnew.ZONE_FILLER(self.board)
         filler.Fill(self.board.Zones())
         self.output.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            prefix=f".{self.output.name}.",
-            suffix=".kicad_pcb",
+        with tempfile.TemporaryDirectory(
+            prefix=f".{self.output.stem}-",
             dir=self.output.parent,
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
-        try:
+        ) as staging:
+            temporary = Path(staging) / self.output.name
             pcbnew.SaveBoard(str(temporary), self.board)
             source = temporary.read_text(encoding="utf-8")
             source = re.sub(
@@ -1475,9 +1484,6 @@ class Generator:
             if check is None or check.GetCopperLayerCount() != 4:
                 raise ValueError("generated board failed KiCad round-trip")
             os.replace(temporary, self.output)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
 
     def generate(self) -> None:
         self.add_footprints()

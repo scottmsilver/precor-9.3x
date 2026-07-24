@@ -736,6 +736,33 @@ def test_system_python_inspector_emits_versioned_json(
     _run_inspector(esp32tap_dir)
 
 
+def test_pcb_generator_is_byte_reproducible_and_leaves_no_sidecars(
+    esp32tap_dir: Path,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "Esp32Tap.kicad_pcb"
+    completed = subprocess.run(
+        [
+            str(SYSTEM_PYTHON),
+            "tools/gen_pcb.py",
+            "--output",
+            str(output),
+        ],
+        cwd=esp32tap_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert output.read_bytes() == (
+        esp32tap_dir / "kicad" / "Esp32Tap.kicad_pcb"
+    ).read_bytes()
+    assert {path.name for path in tmp_path.iterdir()} == {
+        "Esp32Tap.kicad_pcb"
+    }
+
+
 def test_checked_in_sources_identify_a_four_layer_rev_b_board(
     esp32tap_dir: Path,
 ) -> None:
@@ -1294,7 +1321,8 @@ def test_usb_has_clearance_from_unrelated_front_copper(
     [
         ("F1", "D1", 10.0),
         ("D1", "D3", 8.0),
-        ("U2", "C4", 3.0),
+        ("U2", "C4", 4.0),
+        ("U2", "C5", 3.0),
         ("U2", "L1", 5.0),
         ("L1", "C6", 6.0),
         ("L1", "C7", 7.0),
@@ -1316,6 +1344,73 @@ def test_critical_parts_are_compact(
         _footprint_at(kicad_report, a),
         _footprint_at(kicad_report, b),
     ) <= maximum_mm
+
+
+def test_buck_hf_bypass_has_a_short_wide_via_free_vin_route(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    u2_vin = board["footprints"]["U2"]["pads"]["3"]["at"]
+    c4_vin = board["footprints"]["C4"]["pads"]["1"]["at"]
+    matching_tracks = [
+        track
+        for track in board["tracks"]
+        if track["net"] == "VIN"
+        and track["layer"] == "F.Cu"
+        and track["width_mm"] >= 0.60
+        and (
+            (
+                _distance(track["start"], u2_vin) <= 0.002
+                and _distance(track["end"], c4_vin) <= 0.002
+            )
+            or (
+                _distance(track["end"], u2_vin) <= 0.002
+                and _distance(track["start"], c4_vin) <= 0.002
+            )
+        )
+    ]
+    assert len(matching_tracks) == 1
+    assert _track_length(matching_tracks[0]) <= 2.5
+
+
+def test_buck_required_input_cap_has_a_short_wide_via_free_vin_route(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    c4_vin = board["footprints"]["C4"]["pads"]["1"]["at"]
+    c3_vin = board["footprints"]["C3"]["pads"]["1"]["at"]
+    matching_tracks = [
+        track
+        for track in board["tracks"]
+        if track["net"] == "VIN"
+        and track["layer"] == "F.Cu"
+        and track["width_mm"] >= 0.60
+        and (
+            (
+                _distance(track["start"], c4_vin) <= 0.002
+                and _distance(track["end"], c3_vin) <= 0.002
+            )
+            or (
+                _distance(track["end"], c4_vin) <= 0.002
+                and _distance(track["start"], c3_vin) <= 0.002
+            )
+        )
+    ]
+    assert len(matching_tracks) == 1
+    u2_to_c4 = _distance(
+        board["footprints"]["U2"]["pads"]["3"]["at"],
+        c4_vin,
+    )
+    assert u2_to_c4 + _track_length(matching_tracks[0]) <= 4.5
+
+
+def test_buck_bootstrap_cap_has_a_short_direct_boot_route(
+    kicad_report: dict[str, Any],
+) -> None:
+    tracks = _tracks_on_net(kicad_report, "BST")
+    assert tracks
+    assert all(track["layer"] == "F.Cu" for track in tracks)
+    assert sum(_track_length(track) for track in tracks) <= 2.3
 
 
 def test_fb_and_c12_are_kelvin_routed_away_from_switch_node(
