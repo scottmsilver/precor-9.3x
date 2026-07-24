@@ -219,6 +219,92 @@ EXPECTED_PARTS = {
     ),
 }
 
+EXPECTED_ACTIVE_PIN_TYPES = {
+    ("U1", "1"): "power_in",
+    ("U1", "2"): "power_in",
+    ("U1", "3"): "input",
+    ("U1", "4"): "input",
+    ("U1", "5"): "input",
+    ("U1", "6"): "input",
+    ("U1", "7"): "input",
+    ("U1", "8"): "output",
+    ("U1", "9"): "input",
+    ("U1", "10"): "output",
+    ("U1", "11"): "input",
+    ("U1", "12"): "no_connect",
+    ("U1", "13"): "bidirectional",
+    ("U1", "14"): "bidirectional",
+    ("U1", "15"): "no_connect",
+    ("U1", "16"): "no_connect",
+    ("U1", "17"): "no_connect",
+    ("U1", "18"): "no_connect",
+    ("U1", "19"): "no_connect",
+    ("U1", "20"): "no_connect",
+    ("U1", "21"): "no_connect",
+    ("U1", "22"): "no_connect",
+    ("U1", "23"): "output",
+    ("U1", "24"): "no_connect",
+    ("U1", "25"): "no_connect",
+    ("U1", "26"): "no_connect",
+    ("U1", "27"): "input",
+    ("U1", "28"): "no_connect",
+    ("U1", "29"): "no_connect",
+    ("U1", "30"): "no_connect",
+    ("U1", "31"): "output",
+    ("U1", "32"): "no_connect",
+    ("U1", "33"): "no_connect",
+    ("U1", "34"): "no_connect",
+    ("U1", "35"): "no_connect",
+    ("U1", "36"): "input",
+    ("U1", "37"): "output",
+    ("U1", "38"): "no_connect",
+    ("U1", "39"): "no_connect",
+    ("U1", "40"): "power_in",
+    ("U1", "41"): "power_in",
+    ("U2", "1"): "power_in",
+    ("U2", "2"): "power_out",
+    ("U2", "3"): "power_in",
+    ("U2", "4"): "input",
+    ("U2", "5"): "input",
+    ("U2", "6"): "power_out",
+    ("U3", "1"): "bidirectional",
+    ("U3", "2"): "power_in",
+    ("U3", "3"): "bidirectional",
+    ("U3", "4"): "bidirectional",
+    ("U3", "5"): "power_in",
+    ("U3", "6"): "bidirectional",
+    ("U4", "1"): "open_collector",
+    ("U4", "2"): "power_in",
+    ("U4", "3"): "input",
+    ("U4", "4"): "input",
+    ("U4", "5"): "power_in",
+    ("U4", "6"): "open_collector",
+    ("U5", "1"): "power_in",
+    ("U5", "2"): "power_in",
+    ("U5", "3"): "input",
+    ("U5", "4"): "no_connect",
+    ("U5", "5"): "power_out",
+    ("U6", "1"): "input",
+    ("U6", "2"): "input",
+    ("U6", "3"): "output",
+    ("U6", "4"): "power_in",
+    ("U6", "5"): "input",
+    ("U6", "6"): "input",
+    ("U6", "7"): "output",
+    ("U6", "8"): "power_in",
+    ("U7", "1"): "input",
+    ("U7", "2"): "input",
+    ("U7", "3"): "power_in",
+    ("U7", "4"): "tri_state",
+    ("U7", "5"): "power_in",
+    ("Q1", "1"): "input",
+    ("Q1", "3"): "open_collector",
+    ("Q2", "1"): "input",
+    ("Q2", "3"): "open_collector",
+    ("J3", "A8"): "no_connect",
+    ("J3", "B8"): "no_connect",
+}
+
 
 def _component(design: SimpleNamespace, ref: str) -> tuple:
     assert ref in design.COMPONENTS, f"Rev B component {ref} is missing"
@@ -844,6 +930,19 @@ def test_validate_rejects_unknown_pin_type(
         r"PIN_TYPES.*unknown.*totem_pole",
     ):
         mutated.validate()
+
+
+def test_all_non_passive_pin_types_match_independent_contract(
+    design: SimpleNamespace,
+) -> None:
+    actual = {
+        pin: pin_type
+        for pin, pin_type in design.PIN_TYPES.items()
+        if pin_type != "passive"
+    }
+
+    assert len(EXPECTED_ACTIVE_PIN_TYPES) == 83
+    assert actual == EXPECTED_ACTIVE_PIN_TYPES
 
 
 @pytest.mark.parametrize(
