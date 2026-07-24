@@ -292,6 +292,104 @@ SWITCH_CANDIDATE_FIELDS = {
     "footprint_provenance",
     "module_combinations",
 }
+EXPECTED_SELECTED_PROVENANCE = {
+    "C240838": {
+        "official_manufacturer_url": "https://www.molex.com/en-us/products/part-detail/430450809",
+        "official_lcsc_url": "https://www.lcsc.com/product-detail/C240838.html",
+        "lcsc_html_sha256": "f1dddbc882ac2866762d8578c1f6ecaf856522cf971f59b7588bb4ef5855a54a",
+    },
+    "C563827": {
+        "official_manufacturer_url": "https://www.molex.com/en-us/products/part-detail/430451010",
+        "official_lcsc_url": "https://www.lcsc.com/product-detail/C563827.html",
+        "lcsc_html_sha256": "d2a821250f3f4c104759a0d59209c56be773d21f5e1d1ec6ee3984ecdebaca73",
+    },
+    "C127351": {
+        "official_manufacturer_url": "https://www.molex.com/en-us/products/part-detail/430250800",
+        "official_lcsc_url": "https://www.lcsc.com/product-detail/C127351.html",
+        "lcsc_html_sha256": "12ac1b20343f69ad14da389c8ea145d75c74e7264483190f0ebfcd89a7b6bee3",
+    },
+    "C259745": {
+        "official_manufacturer_url": "https://www.molex.com/en-us/products/part-detail/430251000",
+        "official_lcsc_url": "https://www.lcsc.com/product-detail/C259745.html",
+        "lcsc_html_sha256": "e9f8f9a9be55eea92905bc41c944b7ea3aece99875e8fa8b82fb8980482c9fc7",
+    },
+    "C259786": {
+        "official_manufacturer_url": "https://www.molex.com/en-us/products/part-detail/430300001",
+        "official_lcsc_url": "https://www.lcsc.com/product-detail/C259786.html",
+        "lcsc_html_sha256": "ed573c87246eda0f07e9db7c49fe03bcf1838d779e555746a74ff68fdcbcdcf4",
+    },
+    "C139797": {
+        "official_manufacturer_url": "https://tech.alpsalpine.com/e/products/detail/SKRPACE010/",
+        "official_lcsc_url": "https://www.lcsc.com/product-detail/C139797.html",
+        "lcsc_html_sha256": "076e68be6ba84e6dd9406d498e94dacb1f159b452949f3145cf202243a54713b",
+    },
+    "C2913198": {
+        "official_manufacturer_url": "https://www.espressif.com/en/products/modules/esp32-s3-wroom-1",
+        "official_lcsc_url": "https://www.lcsc.com/product-detail/C2913198.html",
+        "lcsc_html_sha256": "513c845fdb44ef34c6948a39a2da52d688369978be002e2ff3a2faea5b88b50f",
+    },
+    "MOLEX-MICROFIT-PS-43045": {
+        "official_manufacturer_url": (
+            "https://www.molex.com/content/dam/molex/molex-dot-com/products/"
+            "automated/en-us/productspecificationpdf/430/43045/PS-43045-001.pdf"
+        ),
+        "source_sha256": "b5f03865599a0576c43ab82828960d874a12bcc9564eda619750ff9e26a81204",
+        "document_revision": "R",
+        "document_date": "2025-11-14",
+        "table_locator": "Section 4.3, sheet 8 of 24",
+    },
+    "ALPHA-3051": {
+        "official_manufacturer_url": "https://www.alphawire.com/products/wire/hook-up-wire/premium/3051",
+        "official_specification_url": (
+            "https://www.alphawire.com/disteAPI/SpecPDF/"
+            "DownloadProductSpecPdf?productPartNumber=3051"
+        ),
+        "source_sha256": "40c4a1d9f755eba448c5bf344d2bb71be75da4fac14b48edf8e4eadb1ad0ecc9",
+    },
+    "HT-151-00745": {
+        "official_manufacturer_url": (
+            "https://www.hellermanntyton.com/products/"
+            "clips-clamps-and-plugs/pc5.0/151-00745"
+        ),
+        "source_sha256": "20a091f111ee6fe51fa33b26c80a22d5de722b6599cb939e143cf54f4495e607",
+    },
+    "TE-1932219-1": {
+        "official_manufacturer_url": "https://www.te.com/en/product-1932219-1.html",
+        "official_drawing_url": (
+            "https://www.te.com/commerce/DocumentDelivery/DDEController?"
+            "Action=srchrtrv&DocFormat=pdf&DocLang=English&DocNm=1932219"
+            "&DocType=Customer+Drawing&PartCntxt=1932219-1"
+        ),
+        "source_sha256": "974c87a05725834b9754e2458adcf6b1f9462f5f8c9d567dbd79524aca694201",
+    },
+}
+EXPECTED_SWITCH_SELECTION = {
+    "manufacturer": "ALPSALPINE",
+    "mpn": "SKRPACE010",
+    "lcsc_code": "C139797",
+    "packaging": "4000/full reel",
+    "footprint": "Button_Switch_SMD:SW_SPST_SKRPACE010",
+    "placement_status": "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
+}
+EXPECTED_MODULE_SELECTION = {
+    "manufacturer": "Espressif Systems",
+    "mpn": "ESP32-S3-WROOM-1-N8",
+    "lcsc_code": "C2913198",
+    "decision": "RETAIN_EXISTING",
+}
+MANDATORY_OPEN_GATES = {
+    "OPEN_PHYSICAL_WIRE_AMPACITY",
+    "live JLC BOM/CPL placement acceptance for every selected SMT row",
+    "factory harness firm quote/orderable assembly number",
+    "exact strain-relief and RJ45 pigtail production drawing",
+    (
+        "RJ45 single-open 2 A is UNSUPPORTED and requires physical "
+        "qualification or measured-envelope redesign"
+    ),
+    "RJ45-side reversal physical test",
+    "treadmill current envelope and complete path thermal/drop test",
+    "deployment, production release, and TURNKEY_QUOTED remain blocked",
+}
 
 
 def _exact_fields(value: object, expected: set[str], name: str) -> dict[str, Any]:
@@ -306,6 +404,15 @@ def _finite_nonnegative(value: object, name: str) -> float:
     number = float(value)
     if not math.isfinite(number) or number < 0:
         raise EvidenceError(f"{name} must be a finite nonnegative number")
+    return number
+
+
+def _finite_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EvidenceError(f"{name} must be a finite number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise EvidenceError(f"{name} must be a finite number")
     return number
 
 
@@ -512,11 +619,18 @@ def _require_rating(name: str, element: object) -> None:
     if not isinstance(element, dict) or not isinstance(element.get("rating"), dict):
         raise EvidenceError(f"{name} must define a rating")
     rating = element["rating"]
-    if rating.get("voltage_v", 0) < 24:
+    voltage = _finite_nonnegative(rating.get("voltage_v"), f"{name} voltage rating")
+    temperature_min = _finite_number(
+        rating.get("temperature_min_c"), f"{name} minimum temperature rating"
+    )
+    temperature_max = _finite_number(
+        rating.get("temperature_max_c"), f"{name} maximum temperature rating"
+    )
+    if voltage < 24:
         raise EvidenceError(f"{name} voltage rating is below 24 V")
-    if rating.get("temperature_min_c", 999) > -20:
+    if temperature_min > -20:
         raise EvidenceError(f"{name} does not cover -20 C")
-    if rating.get("temperature_max_c", -999) < 85:
+    if temperature_max < 85:
         raise EvidenceError(f"{name} does not cover +85 C")
 
 
@@ -761,6 +875,8 @@ def validate_selection(
     evidence = record.get("official_part_evidence")
     if not isinstance(evidence, dict) or not evidence:
         raise EvidenceError("official part evidence is absent")
+    if set(evidence) != set(EXPECTED_SELECTED_PROVENANCE):
+        raise EvidenceError("official evidence provenance identities are not exact")
     for evidence_id, item in evidence.items():
         if not isinstance(item, dict):
             raise EvidenceError(f"official evidence {evidence_id} is malformed")
@@ -780,6 +896,11 @@ def validate_selection(
                     _official_url(value, f"official evidence {evidence_id}")
             if key.endswith("_sha256"):
                 _sha256(value, f"official evidence {evidence_id}")
+        expected_provenance = EXPECTED_SELECTED_PROVENANCE[evidence_id]
+        if any(item.get(key) != value for key, value in expected_provenance.items()):
+            raise EvidenceError(
+                f"official evidence provenance was altered: {evidence_id}"
+            )
     candidates = validate_candidates(candidates)
     connector_identities = {
         (item.get("manufacturer"), item.get("mpn"), item.get("lcsc_code"))
@@ -940,6 +1061,8 @@ def validate_selection(
             "switch schema must contain exact reset and boot selections"
         )
     for name, switch in switches.items():
+        if switch != EXPECTED_SWITCH_SELECTION:
+            raise EvidenceError(f"{name} switch selection schema or values changed")
         if _identity(switch) != ("ALPSALPINE", "SKRPACE010", "C139797"):
             raise EvidenceError(f"{name} switch identity is not the exact selection")
         _matching_evidence(switch, evidence)
@@ -951,9 +1074,19 @@ def validate_selection(
             raise EvidenceError(f"{name} switch identity is not a candidate")
     if record.get("mini_decision") != "REJECTED_UNQUALIFIED":
         raise EvidenceError("MINI must remain rejected without production evidence")
-    if "OPEN_PHYSICAL_WIRE_AMPACITY" not in record.get("open_gates", []):
-        raise EvidenceError("OPEN_PHYSICAL_WIRE_AMPACITY gate is absent")
-    _matching_evidence(record.get("module", {}), evidence)
+    module = record.get("module")
+    if module != EXPECTED_MODULE_SELECTION:
+        raise EvidenceError("selected module schema or decision is not exact")
+    open_gates = record.get("open_gates")
+    if (
+        not isinstance(open_gates, list)
+        or not open_gates
+        or any(not isinstance(gate, str) or not gate for gate in open_gates)
+        or len(set(open_gates)) != len(open_gates)
+        or not MANDATORY_OPEN_GATES <= set(open_gates)
+    ):
+        raise EvidenceError("mandatory open gate schema or entries are incomplete")
+    _matching_evidence(module, evidence)
     validate_module_audits(candidates, record)
     validate_reversal_geometry(record.get("reversal_prevention"))
     return record

@@ -882,3 +882,127 @@ def test_candidate_schema_rejects_corruption(esp32tap_dir: Path, mutation: str) 
         candidate["module_combinations"].pop()
     with pytest.raises(validator.EvidenceError, match="candidate|geometry|schema"):
         validator.validate_candidates(changed)
+
+
+@pytest.mark.parametrize(
+    ("evidence_id", "url_field", "hash_field"),
+    (
+        ("C240838", "official_manufacturer_url", "lcsc_html_sha256"),
+        ("C563827", "official_manufacturer_url", "lcsc_html_sha256"),
+        ("C127351", "official_manufacturer_url", "lcsc_html_sha256"),
+        ("C259745", "official_manufacturer_url", "lcsc_html_sha256"),
+        ("C259786", "official_manufacturer_url", "lcsc_html_sha256"),
+        ("C139797", "official_manufacturer_url", "lcsc_html_sha256"),
+        ("C2913198", "official_manufacturer_url", "lcsc_html_sha256"),
+        ("ALPHA-3051", "official_manufacturer_url", "source_sha256"),
+        ("HT-151-00745", "official_manufacturer_url", "source_sha256"),
+        ("TE-1932219-1", "official_manufacturer_url", "source_sha256"),
+    ),
+)
+def test_every_selected_evidence_provenance_is_exact(
+    esp32tap_dir: Path,
+    evidence_id: str,
+    url_field: str,
+    hash_field: str,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    changed_url = copy.deepcopy(selection)
+    original_url = changed_url["official_part_evidence"][evidence_id][url_field]
+    changed_url["official_part_evidence"][evidence_id][url_field] = (
+        original_url.rsplit("/", 1)[0] + "/alternate"
+    )
+    with pytest.raises(validator.EvidenceError, match="provenance|official evidence"):
+        validator.validate_selection(changed_url, candidates)
+
+    changed_hash = copy.deepcopy(selection)
+    changed_hash["official_part_evidence"][evidence_id][hash_field] = "a" * 64
+    with pytest.raises(validator.EvidenceError, match="provenance|official evidence"):
+        validator.validate_selection(changed_hash, candidates)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "switch_status",
+        "switch_packaging",
+        "switch_extra",
+        "module_decision",
+        "module_extra",
+        "gates_mapping",
+        "gates_empty",
+        "missing_wire_gate",
+        "missing_live_jlc",
+        "missing_firm_harness",
+        "missing_rj45_open",
+        "missing_reversal",
+        "missing_thermal_drop",
+    ),
+)
+def test_nested_selection_schema_is_exact(esp32tap_dir: Path, mutation: str) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    changed = copy.deepcopy(selection)
+    if mutation == "switch_status":
+        changed["switches"]["reset"]["placement_status"] = "PLACED"
+    elif mutation == "switch_packaging":
+        changed["switches"]["reset"]["packaging"] = "loose"
+    elif mutation == "switch_extra":
+        changed["switches"]["reset"]["unexpected"] = True
+    elif mutation == "module_decision":
+        changed["module"]["decision"] = "MIGRATE_TO_MINI"
+    elif mutation == "module_extra":
+        changed["module"]["unexpected"] = True
+    elif mutation == "gates_mapping":
+        changed["open_gates"] = {"OPEN_PHYSICAL_WIRE_AMPACITY": True}
+    elif mutation == "gates_empty":
+        changed["open_gates"] = []
+    else:
+        gate_fragments = {
+            "missing_wire_gate": "OPEN_PHYSICAL_WIRE_AMPACITY",
+            "missing_live_jlc": "live JLC",
+            "missing_firm_harness": "firm quote",
+            "missing_rj45_open": "RJ45 single-open",
+            "missing_reversal": "reversal physical",
+            "missing_thermal_drop": "thermal/drop",
+        }
+        fragment = gate_fragments[mutation]
+        changed["open_gates"] = [
+            gate for gate in changed["open_gates"] if fragment not in gate
+        ]
+    with pytest.raises(validator.EvidenceError, match="switch|module|gate|schema"):
+        validator.validate_selection(changed, candidates)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("voltage_v", "600"),
+        ("temperature_min_c", None),
+        ("temperature_max_c", float("nan")),
+    ),
+)
+def test_selected_rating_malformed_values_are_evidence_errors(
+    esp32tap_dir: Path, field: str, value: object
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    changed = copy.deepcopy(selection)
+    changed["interfaces"]["console"]["header"]["rating"][field] = value
+    with pytest.raises(validator.EvidenceError, match="rating|finite"):
+        validator.validate_selection(changed, candidates)
