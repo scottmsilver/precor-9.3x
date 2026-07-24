@@ -823,7 +823,7 @@ class _Footprint:
         return _FootprintId()
 
     def GetOrientationDegrees(self):
-        return 0.0
+        return -90.0 if self._reference == "R1" else 0.0
 
 
 class _Board:
@@ -869,6 +869,7 @@ def ToMM(value):
     ) as cpl_file:
         rows = list(csv.DictReader(cpl_file))
     assert [row["Designator"] for row in rows] == ["R1", "R2"]
+    assert [row["Rotation"] for row in rows] == ["270", "0"]
 
 
 @pytest.fixture

@@ -43,7 +43,7 @@ hand-editing this file.
 | R6 | 100R | Resistor_SMD:R_0603_1608Metric | C22775 | Basic | Motor-pin6 TX series resistor (drive path; isolated by relay when unpowered, so 100R is safe here) |
 | R7 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | Console-pin6 RX tap series resistor — limits unpowered GPIO-clamp back-feed |
 | R8 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | Pin-3 tap series resistor — limits unpowered GPIO-clamp back-feed |
-| R9 | 1k | Resistor_SMD:R_0603_1608Metric | C21190 | Basic | Relay driver base resistor |
+| R9 | 560R | Resistor_SMD:R_0603_1608Metric | C23204 | Basic | Relay driver base resistor (forced beta <= 10 at conservative drive) |
 | R10 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | Relay driver base pull-down (relay stays off during boot/reset) |
 | R11 | 330R | Resistor_SMD:R_0603_1608Metric | C23138 | Basic | Status LED resistor (330R: 1.51mA typ through LED1 — validation fix F1; 1k gave a sub-visible 0.6mA) |
 | R12 | 1k | Resistor_SMD:R_0603_1608Metric | C21190 | Basic | Power LED resistor (1k for a clearly visible power light; was 2k at 0.78mA) |
@@ -52,7 +52,7 @@ hand-editing this file.
 | R16 | 22R | Resistor_SMD:R_0603_1608Metric | C23345 | Basic | USB D+ series termination |
 | R17 | 150k | Resistor_SMD:R_0603_1608Metric | C22807 | Basic | Undervoltage-sense divider top, 1% |
 | R18 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | Undervoltage-sense divider bottom, 1% |
-| R19 | 255k | Resistor_SMD:R_0603_1608Metric | C23354 | Basic | Overvoltage-sense divider top, 1% |
+| R19 | 255k | Resistor_SMD:R_0603_1608Metric | C23354 | Extended | Overvoltage-sense divider top, 1% |
 | R20 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | Overvoltage-sense divider bottom, 1% |
 | R21 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | TREAD_OK pull-up |
 | R22 | 100k | Resistor_SMD:R_0603_1608Metric | C25803 | Basic | TREAD_OK power-off pull-down |
@@ -66,8 +66,8 @@ hand-editing this file.
 | R30 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | VBUS_PRESENT_N pull-up |
 | R31 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | GPIO0 boot pull-up |
 | C1 | 100uF/25V | Capacitor_SMD:CP_Elec_6.3x7.7 | C72477 | Extended | Input bulk electrolytic, 100uF 25V, 6.3x7.7mm (ROQANG RVT1E101M0607 — matches the CP_Elec_6.3x7.7 footprint) |
-| C2 | 10uF/25V X7R 1206 | Capacitor_SMD:C_1206_3216Metric | C14860 | Basic | Input ceramic |
-| C3 | 10uF/25V X7R 1206 | Capacitor_SMD:C_1206_3216Metric | C14860 | Basic | Buck VIN ceramic (at pin) |
+| C2 | 10uF/25V X7R 1206 | Capacitor_SMD:C_1206_3216Metric | C14860 | Extended | Input ceramic |
+| C3 | 10uF/25V X7R 1206 | Capacitor_SMD:C_1206_3216Metric | C14860 | Extended | Buck VIN ceramic (at pin) |
 | C4 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | Buck VIN HF bypass |
 | C5 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | Buck BOOT cap |
 | C6 | 22uF/25V X7R 1210 | Capacitor_SMD:C_1210_3225Metric | C2918511 | Extended | Buck output |
@@ -76,14 +76,14 @@ hand-editing this file.
 | C9 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | ESP32 3V3 HF bypass |
 | C10 | 1uF | Capacitor_SMD:C_0603_1608Metric | C15849 | Basic | EN reset RC |
 | C11 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | VBUS bypass |
-| C12 | 56pF C0G 0603 | Capacitor_SMD:C_0603_1608Metric | C39148 | Basic | Buck feed-forward capacitor directly across R1 |
+| C12 | 56pF C0G 0603 | Capacitor_SMD:C_0603_1608Metric | C39148 | Extended | Buck feed-forward capacitor directly across R1 |
 | C13 | DNP | Capacitor_SMD:C_0603_1608Metric | - | DNP | Optional USB D- shunt-tuning footprint; do not populate |
 | C14 | DNP | Capacitor_SMD:C_0603_1608Metric | - | DNP | Optional USB D+ shunt-tuning footprint; do not populate |
-| C15 | 1uF/25V X7R 0603 | Capacitor_SMD:C_0603_1608Metric | C106858 | Basic | U5 input bypass |
-| C16 | 4.7uF/25V X7R 0805 | Capacitor_SMD:C_0805_2012Metric | C354262 | Basic | U5 relay-supply output capacitor |
+| C15 | 1uF/25V X7R 0603 | Capacitor_SMD:C_0603_1608Metric | C106858 | Extended | U5 input bypass |
+| C16 | 4.7uF/25V X7R 0805 | Capacitor_SMD:C_0805_2012Metric | C354262 | Extended | U5 relay-supply output capacitor |
 | C17 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | U4 VIN decoupling |
-| C18 | 1nF/50V C0G 0603 | Capacitor_SMD:C_0603_1608Metric | C342541 | Basic | Undervoltage-sense filter |
-| C19 | 1nF/50V C0G 0603 | Capacitor_SMD:C_0603_1608Metric | C342541 | Basic | Overvoltage-sense filter |
+| C18 | 1nF/50V C0G 0603 | Capacitor_SMD:C_0603_1608Metric | C342541 | Extended | Undervoltage-sense filter |
+| C19 | 1nF/50V C0G 0603 | Capacitor_SMD:C_0603_1608Metric | C342541 | Extended | Overvoltage-sense filter |
 | C20 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | U6 logic-supply decoupling |
 | C21 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | U7 buffer-supply decoupling |
 | TP1 | TXD0 | TestPoint:TestPoint_Pad_1.5x1.5mm | - | none | UART0 TX test pad |

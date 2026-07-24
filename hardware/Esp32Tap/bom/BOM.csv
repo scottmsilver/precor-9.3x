@@ -33,7 +33,7 @@ KMR2-BOOT,SW2,SW_Push_1P1T_NO_CK_KMR2,C72443,Extended,1,0.100,0.100,Boot (IO0) t
 100R,R6,R_0603_1608Metric,C22775,Basic,1,0.002,0.002,"Motor-pin6 TX series resistor (drive path; isolated by relay when unpowered, so 100R is safe here)"
 10k,R7,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,Console-pin6 RX tap series resistor — limits unpowered GPIO-clamp back-feed
 10k,R8,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,Pin-3 tap series resistor — limits unpowered GPIO-clamp back-feed
-1k,R9,R_0603_1608Metric,C21190,Basic,1,0.002,0.002,Relay driver base resistor
+560R,R9,R_0603_1608Metric,C23204,Basic,1,0.002,0.002,Relay driver base resistor (forced beta <= 10 at conservative drive)
 10k,R10,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,Relay driver base pull-down (relay stays off during boot/reset)
 330R,R11,R_0603_1608Metric,C23138,Basic,1,0.002,0.002,Status LED resistor (330R: 1.51mA typ through LED1 — validation fix F1; 1k gave a sub-visible 0.6mA)
 1k,R12,R_0603_1608Metric,C21190,Basic,1,0.002,0.002,Power LED resistor (1k for a clearly visible power light; was 2k at 0.78mA)
@@ -42,7 +42,7 @@ KMR2-BOOT,SW2,SW_Push_1P1T_NO_CK_KMR2,C72443,Extended,1,0.100,0.100,Boot (IO0) t
 22R,R16,R_0603_1608Metric,C23345,Basic,1,0.002,0.002,USB D+ series termination
 150k,R17,R_0603_1608Metric,C22807,Basic,1,0.002,0.002,"Undervoltage-sense divider top, 1%"
 10k,R18,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,"Undervoltage-sense divider bottom, 1%"
-255k,R19,R_0603_1608Metric,C23354,Basic,1,0.002,0.002,"Overvoltage-sense divider top, 1%"
+255k,R19,R_0603_1608Metric,C23354,Extended,1,0.002,0.002,"Overvoltage-sense divider top, 1%"
 10k,R20,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,"Overvoltage-sense divider bottom, 1%"
 10k,R21,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,TREAD_OK pull-up
 100k,R22,R_0603_1608Metric,C25803,Basic,1,0.002,0.002,TREAD_OK power-off pull-down
@@ -56,8 +56,8 @@ KMR2-BOOT,SW2,SW_Push_1P1T_NO_CK_KMR2,C72443,Extended,1,0.100,0.100,Boot (IO0) t
 10k,R30,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,VBUS_PRESENT_N pull-up
 10k,R31,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,GPIO0 boot pull-up
 100uF/25V,C1,CP_Elec_6.3x7.7,C72477,Extended,1,0.100,0.100,"Input bulk electrolytic, 100uF 25V, 6.3x7.7mm (ROQANG RVT1E101M0607 — matches the CP_Elec_6.3x7.7 footprint)"
-10uF/25V X7R 1206,C2,C_1206_3216Metric,C14860,Basic,1,0.040,0.040,Input ceramic
-10uF/25V X7R 1206,C3,C_1206_3216Metric,C14860,Basic,1,0.040,0.040,Buck VIN ceramic (at pin)
+10uF/25V X7R 1206,C2,C_1206_3216Metric,C14860,Extended,1,0.040,0.040,Input ceramic
+10uF/25V X7R 1206,C3,C_1206_3216Metric,C14860,Extended,1,0.040,0.040,Buck VIN ceramic (at pin)
 100nF,C4,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,Buck VIN HF bypass
 100nF,C5,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,Buck BOOT cap
 22uF/25V X7R 1210,"C6,C7",C_1210_3225Metric,C2918511,Extended,2,0.080,0.160,Buck output
@@ -65,11 +65,11 @@ KMR2-BOOT,SW2,SW_Push_1P1T_NO_CK_KMR2,C72443,Extended,1,0.100,0.100,Boot (IO0) t
 100nF,C9,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,ESP32 3V3 HF bypass
 1uF,C10,C_0603_1608Metric,C15849,Basic,1,0.006,0.006,EN reset RC
 100nF,C11,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,VBUS bypass
-56pF C0G 0603,C12,C_0603_1608Metric,C39148,Basic,1,0.004,0.004,Buck feed-forward capacitor directly across R1
-1uF/25V X7R 0603,C15,C_0603_1608Metric,C106858,Basic,1,0.010,0.010,U5 input bypass
-4.7uF/25V X7R 0805,C16,C_0805_2012Metric,C354262,Basic,1,0.020,0.020,U5 relay-supply output capacitor
+56pF C0G 0603,C12,C_0603_1608Metric,C39148,Extended,1,0.004,0.004,Buck feed-forward capacitor directly across R1
+1uF/25V X7R 0603,C15,C_0603_1608Metric,C106858,Extended,1,0.010,0.010,U5 input bypass
+4.7uF/25V X7R 0805,C16,C_0805_2012Metric,C354262,Extended,1,0.020,0.020,U5 relay-supply output capacitor
 100nF,C17,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,U4 VIN decoupling
-1nF/50V C0G 0603,C18,C_0603_1608Metric,C342541,Basic,1,0.004,0.004,Undervoltage-sense filter
-1nF/50V C0G 0603,C19,C_0603_1608Metric,C342541,Basic,1,0.004,0.004,Overvoltage-sense filter
+1nF/50V C0G 0603,C18,C_0603_1608Metric,C342541,Extended,1,0.004,0.004,Undervoltage-sense filter
+1nF/50V C0G 0603,C19,C_0603_1608Metric,C342541,Extended,1,0.004,0.004,Overvoltage-sense filter
 100nF,C20,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,U6 logic-supply decoupling
 100nF,C21,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,U7 buffer-supply decoupling

@@ -219,6 +219,16 @@ EXPECTED_PARTS = {
     ),
 }
 
+OFFICIAL_JLC_ASSEMBLY_CLASSES = {
+    # Verified against the current JLCPCB/LCSC part pages for Rev B.
+    "C14860": "Extended",
+    "C23354": "Extended",
+    "C342541": "Extended",
+    "C354262": "Extended",
+    "C39148": "Extended",
+    "C106858": "Extended",
+}
+
 EXPECTED_ACTIVE_PIN_TYPES = {
     ("U1", "1"): "power_in",
     ("U1", "2"): "power_in",
@@ -392,6 +402,23 @@ def _assert_design_invalid(
     return pytest.raises(ValueError, match=match)
 
 
+def test_populated_parts_use_current_official_jlc_assembly_classes(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    design = load_design()
+    matches = {
+        ref: (component[3], component[4])
+        for ref, component in design.COMPONENTS.items()
+        if component[3] in OFFICIAL_JLC_ASSEMBLY_CLASSES
+    }
+    assert matches, "JLC class lock must exercise populated Rev B parts"
+    for ref, (lcsc, actual_class) in matches.items():
+        assert actual_class == OFFICIAL_JLC_ASSEMBLY_CLASSES[lcsc], (
+            f"{ref} ({lcsc}) is currently {actual_class}; "
+            f"official assembly class is {OFFICIAL_JLC_ASSEMBLY_CLASSES[lcsc]}"
+        )
+
+
 def _u6_equations(
     design: SimpleNamespace,
 ) -> dict[str, frozenset[str]]:
@@ -553,6 +580,13 @@ def test_corrected_tap_and_vbus_passives(
 ) -> None:
     component = _component(design, ref)
     assert (component[0], component[3]) == (value, lcsc)
+
+
+def test_relay_base_drive_has_conservative_forced_beta_margin(
+    design: SimpleNamespace,
+) -> None:
+    assert _component(design, "R9")[0] == "560R"
+    assert _component(design, "R10")[0] == "10k"
 
 
 def test_new_resistors_have_the_approved_values_and_roles(

@@ -16,6 +16,15 @@ SYSTEM_PYTHON = Path("/usr/bin/python3")
 INSPECTOR = Path("tools/inspect_kicad.py")
 INSPECTOR_TIMEOUT_SECONDS = 30
 EXPECTED_LAYERS = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+EXPECTED_STACKUP = [
+    ("F.Cu", "copper", 0.035, None),
+    ("dielectric 1", "prepreg", 0.2104, 4.4),
+    ("In1.Cu", "copper", 0.0175, None),
+    ("dielectric 2", "core", 1.065, 4.38),
+    ("In2.Cu", "copper", 0.0175, None),
+    ("dielectric 3", "prepreg", 0.2104, 4.4),
+    ("B.Cu", "copper", 0.035, None),
+]
 USB_ROUTE_PATHS = {
     "D-": {"USB_DN", "USB_DN_MCU", "USB_DN_R"},
     "D+": {"USB_DP", "USB_DP_MCU", "USB_DP_R"},
@@ -104,17 +113,43 @@ def _assert_report_schema(report: Any) -> None:
         "title",
         "revision",
         "copper_layers",
+        "stackup",
+        "outline",
         "footprints",
         "tracks",
         "vias",
         "zones",
+        "rule_areas",
         "texts",
         "connectivity",
+        "antenna",
     }
     assert required <= board.keys()
     assert isinstance(board["title"], str)
     assert isinstance(board["revision"], str)
     assert _is_string_list(board["copper_layers"])
+    assert isinstance(board["stackup"], dict)
+    assert {
+        "name",
+        "finished_thickness_mm",
+        "layers",
+    } <= board["stackup"].keys()
+    assert isinstance(board["stackup"]["name"], str)
+    assert _is_number(board["stackup"]["finished_thickness_mm"])
+    assert isinstance(board["stackup"]["layers"], list)
+    for layer in board["stackup"]["layers"]:
+        assert isinstance(layer, dict)
+        assert {"name", "type", "thickness_mm", "epsilon_r"} <= layer.keys()
+        assert isinstance(layer["name"], str) and layer["name"]
+        assert isinstance(layer["type"], str) and layer["type"]
+        assert _is_number(layer["thickness_mm"])
+        assert layer["epsilon_r"] is None or _is_number(layer["epsilon_r"])
+    assert isinstance(board["outline"], dict)
+    assert {"min", "max", "width_mm", "height_mm"} <= board["outline"].keys()
+    _assert_xy(board["outline"]["min"], "outline.min")
+    _assert_xy(board["outline"]["max"], "outline.max")
+    assert _is_number(board["outline"]["width_mm"])
+    assert _is_number(board["outline"]["height_mm"])
     assert isinstance(board["footprints"], dict)
     assert all(
         isinstance(reference, str) and reference
@@ -133,6 +168,9 @@ def _assert_report_schema(report: Any) -> None:
         assert isinstance(board[key], list), key
         for item in board[key]:
             validator(item)
+    assert isinstance(board["rule_areas"], list)
+    for item in board["rule_areas"]:
+        _assert_rule_area_schema(item)
 
     copper = board["tracks"] + board["vias"] + board["zones"]
     copper_by_id = {item["id"]: item for item in copper}
@@ -142,6 +180,11 @@ def _assert_report_schema(report: Any) -> None:
         board["footprints"],
         copper_by_id,
     )
+    antenna = board["antenna"]
+    assert antenna["reference"] == "U1"
+    assert _is_number(antenna["physical_edge_y_mm"])
+    _assert_xy(antenna["span_x_mm"], "antenna.span_x_mm")
+    assert antenna["span_x_mm"][1] > antenna["span_x_mm"][0]
 
 
 def _is_number(value: Any) -> bool:
@@ -167,10 +210,28 @@ def _assert_xy(value: Any, label: str) -> None:
 
 def _assert_footprint_schema(footprint: Any) -> None:
     assert isinstance(footprint, dict)
-    assert {"footprint", "layer", "at", "pads"} <= footprint.keys()
+    assert {
+        "footprint",
+        "layer",
+        "at",
+        "rotation_deg",
+        "dnp",
+        "excluded_from_bom",
+        "board_only",
+        "bbox",
+        "pads",
+    } <= footprint.keys()
     assert isinstance(footprint["footprint"], str) and footprint["footprint"]
     assert isinstance(footprint["layer"], str) and footprint["layer"]
     _assert_xy(footprint["at"], "footprint.at")
+    assert _is_number(footprint["rotation_deg"])
+    assert 0.0 <= footprint["rotation_deg"] < 360.0
+    assert isinstance(footprint["dnp"], bool)
+    assert isinstance(footprint["excluded_from_bom"], bool)
+    assert isinstance(footprint["board_only"], bool)
+    assert isinstance(footprint["bbox"], dict)
+    _assert_xy(footprint["bbox"]["min"], "footprint.bbox.min")
+    _assert_xy(footprint["bbox"]["max"], "footprint.bbox.max")
     assert isinstance(footprint["pads"], dict)
     for number, pad in footprint["pads"].items():
         assert isinstance(number, str) and number
@@ -226,6 +287,33 @@ def _assert_zone_schema(zone: Any) -> None:
     assert isinstance(zone["outline"], list) and len(zone["outline"]) >= 3
     for point in zone["outline"]:
         _assert_xy(point, "zone.outline")
+
+
+def _assert_rule_area_schema(area: Any) -> None:
+    assert isinstance(area, dict)
+    assert {
+        "name",
+        "layers",
+        "outline",
+        "forbid_footprints",
+        "forbid_pads",
+        "forbid_tracks",
+        "forbid_vias",
+        "forbid_zone_fills",
+    } <= area.keys()
+    assert isinstance(area["name"], str) and area["name"]
+    assert _is_string_list(area["layers"])
+    assert isinstance(area["outline"], list) and len(area["outline"]) >= 3
+    for point in area["outline"]:
+        _assert_xy(point, "rule_area.outline")
+    for key in (
+        "forbid_footprints",
+        "forbid_pads",
+        "forbid_tracks",
+        "forbid_vias",
+        "forbid_zone_fills",
+    ):
+        assert isinstance(area[key], bool)
 
 
 def _assert_text_schema(text: Any) -> None:
@@ -309,6 +397,51 @@ def _nodes_on_net(
     }
 
 
+def _distance(a: list[float], b: list[float]) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _point_segment_distance(
+    point: list[float],
+    start: list[float],
+    end: list[float],
+) -> float:
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    if dx == 0 and dy == 0:
+        return _distance(point, start)
+    fraction = max(
+        0.0,
+        min(
+            1.0,
+            (
+                (point[0] - start[0]) * dx
+                + (point[1] - start[1]) * dy
+            )
+            / (dx * dx + dy * dy),
+        ),
+    )
+    projection = [start[0] + fraction * dx, start[1] + fraction * dy]
+    return _distance(point, projection)
+
+
+def _track_length(track: dict[str, Any]) -> float:
+    return _distance(track["start"], track["end"])
+
+
+def _footprint_at(report: dict[str, Any], ref: str) -> list[float]:
+    return _board(report)["footprints"][ref]["at"]
+
+
+def _tracks_on_net(
+    report: dict[str, Any],
+    net: str,
+) -> list[dict[str, Any]]:
+    return [
+        track for track in _board(report)["tracks"] if track["net"] == net
+    ]
+
+
 def _assert_usb_connectivity(report: dict[str, Any]) -> None:
     board = _board(report)
     connectivity = board["connectivity"]
@@ -346,11 +479,34 @@ def _minimal_inspector_report() -> dict[str, Any]:
             "title": "Schema fixture",
             "revision": "B",
             "copper_layers": ["F.Cu", "B.Cu"],
+            "stackup": {
+                "name": "fixture",
+                "finished_thickness_mm": 1.6,
+                "layers": [
+                    {
+                        "name": "F.Cu",
+                        "type": "copper",
+                        "thickness_mm": 0.035,
+                        "epsilon_r": None,
+                    }
+                ],
+            },
+            "outline": {
+                "min": [0.0, 0.0],
+                "max": [1.0, 1.0],
+                "width_mm": 1.0,
+                "height_mm": 1.0,
+            },
             "footprints": {
                 "X1": {
                     "footprint": "Test:Connector",
                     "layer": "F.Cu",
                     "at": [0.0, 0.0],
+                    "rotation_deg": 90.0,
+                    "dnp": False,
+                    "excluded_from_bom": False,
+                    "board_only": False,
+                    "bbox": {"min": [0.0, 0.0], "max": [1.0, 1.0]},
                     "pads": {
                         "1": {
                             "net": "N",
@@ -388,6 +544,18 @@ def _minimal_inspector_report() -> dict[str, Any]:
                     "outline": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
                 }
             ],
+            "rule_areas": [
+                {
+                    "name": "fixture",
+                    "layers": ["B.Cu"],
+                    "outline": [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                    "forbid_footprints": True,
+                    "forbid_pads": True,
+                    "forbid_tracks": True,
+                    "forbid_vias": True,
+                    "forbid_zone_fills": True,
+                }
+            ],
             "texts": [
                 {
                     "text": "Schema fixture",
@@ -410,6 +578,11 @@ def _minimal_inspector_report() -> dict[str, Any]:
                     ]
                 }
             },
+            "antenna": {
+                "reference": "U1",
+                "physical_edge_y_mm": -1.0,
+                "span_x_mm": [0.0, 1.0],
+            },
         },
     }
 
@@ -431,6 +604,11 @@ def _usb_connectivity_report() -> dict[str, Any]:
                     "footprint": f"Test:{ref}",
                     "layer": "F.Cu",
                     "at": [0.0, 0.0],
+                    "rotation_deg": 0.0,
+                    "dnp": False,
+                    "excluded_from_bom": False,
+                    "board_only": False,
+                    "bbox": {"min": [0.0, 0.0], "max": [1.0, 1.0]},
                     "pads": {},
                 },
             )
@@ -644,7 +822,18 @@ def test_checked_in_usb_copper_has_no_vias_or_back_layer_segments(
         )
     assert not [block for block in usb_blocks if block.startswith("\t(via")]
     assert all('(layer "F.Cu")' in block for block in usb_blocks)
-    assert all(re.search(r"\(width 0\.285(?:0*)?\)", block) for block in usb_blocks)
+    widths = [
+        float(match.group(1))
+        for block in usb_blocks
+        if (match := re.search(r"\(width ([0-9.]+)\)", block))
+    ]
+    assert len(widths) == len(usb_blocks)
+    assert all(
+        width == pytest.approx(0.20)
+        or width == pytest.approx(0.285)
+        for width in widths
+    )
+    assert sum(width == pytest.approx(0.20) for width in widths) == 4
 
 
 def test_inspected_board_has_ground_only_on_in1(
@@ -704,7 +893,7 @@ def test_inspected_board_locks_rev_b_footprints_and_pad_nets(
         "1": "VIN",
         "2": "GND",
         "3": "RELAY_GATE",
-        "4": "",
+        "4": "unconnected-(U5-NC-Pad4)",
         "5": "+5V_RLY",
     }
     assert _pads(kicad_report, "U7") == {
@@ -714,6 +903,21 @@ def test_inspected_board_locks_rev_b_footprints_and_pad_nets(
         "4": "TX_BUF",
         "5": "+3V3",
     }
+
+
+def test_inspected_board_preserves_schematic_dnp_and_nc_parity(
+    kicad_report: dict[str, Any],
+    design: Any,
+) -> None:
+    footprints = _board(kicad_report)["footprints"]
+    for reference in design.DNP:
+        assert footprints[reference]["dnp"] is True
+        assert footprints[reference]["excluded_from_bom"] is True
+
+    for reference, pad in design.NC:
+        pin_name = design.COMPONENTS[reference][7][pad]
+        expected = f"unconnected-({reference}-{pin_name}-Pad{pad})"
+        assert footprints[reference]["pads"][pad]["net"] == expected
     assert _pads(kicad_report, "Q2") == {
         "1": "VBUS",
         "2": "GND",
@@ -786,7 +990,20 @@ def test_inspected_usb_pair_is_front_copper_only(
             f"{polarity} lacks routed copper on {sorted(path_nets - routed_nets)}"
         )
     assert {item.get("layer") for item in tracks} == {"F.Cu"}
-    assert all(item.get("width_mm") == pytest.approx(0.285) for item in tracks)
+    breakout = [
+        item for item in tracks if item.get("role") == "CONNECTOR_BREAKOUT"
+    ]
+    assert len(breakout) == 4
+    assert all(
+        item.get("width_mm") == pytest.approx(0.20)
+        and _track_length(item) <= 2.0
+        for item in breakout
+    )
+    assert all(
+        item.get("width_mm") == pytest.approx(0.285)
+        for item in tracks
+        if item.get("role") != "CONNECTOR_BREAKOUT"
+    )
     assert not vias
     j3 = _pads(kicad_report, "J3")
     assert {
@@ -860,3 +1077,401 @@ def test_inspected_title_and_silkscreen_are_rev_b(
     assert re.search(r"Esp32Tap\s+rev\s+B", rendered, re.IGNORECASE)
     assert "BYPASS" in rendered
     assert "EMULATE" in rendered
+
+
+def test_board_outline_and_named_jlc_stackup_are_exact(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    outline = board["outline"]
+    assert outline["width_mm"] == pytest.approx(100.0, abs=0.001)
+    assert outline["height_mm"] == pytest.approx(55.0, abs=0.001)
+
+    stackup = board["stackup"]
+    assert stackup["name"] == "JLC04161H-7628"
+    assert stackup["finished_thickness_mm"] == pytest.approx(1.59)
+    observed = [
+        (
+            layer["name"],
+            layer["type"],
+            layer["thickness_mm"],
+            layer["epsilon_r"],
+        )
+        for layer in stackup["layers"]
+    ]
+    assert len(observed) == len(EXPECTED_STACKUP)
+    for actual, expected in zip(observed, EXPECTED_STACKUP):
+        assert actual[:2] == expected[:2]
+        assert actual[2] == pytest.approx(expected[2])
+        if expected[3] is None:
+            assert actual[3] is None
+        else:
+            assert actual[3] == pytest.approx(expected[3])
+
+
+def test_enclosure_geometry_is_explicit_and_board_derived(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    origin = board["outline"]["min"]
+    expected_mounting = {
+        "MH1": [2.9, 26.5],
+        "MH2": [97.0, 3.0],
+        "MH3": [97.0, 52.0],
+    }
+    for reference, local_position in expected_mounting.items():
+        observed = board["footprints"][reference]["at"]
+        assert observed == pytest.approx(
+            [
+                origin[0] + local_position[0],
+                origin[1] + local_position[1],
+            ]
+        )
+
+    antenna = board["antenna"]
+    assert antenna["reference"] == "U1"
+    assert origin[1] - antenna["physical_edge_y_mm"] == pytest.approx(6.3)
+    assert antenna["span_x_mm"] == pytest.approx([169.0, 187.0])
+
+
+def test_named_antenna_keepout_is_all_copper_and_explicit_exception(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    keepouts = [
+        area
+        for area in board["rule_areas"]
+        if area["name"] == "ESP32_ANTENNA_ALL_COPPER_KEEPOUT"
+    ]
+    assert len(keepouts) == 1
+    keepout = keepouts[0]
+    assert keepout["layers"] == EXPECTED_LAYERS
+    assert keepout["forbid_tracks"]
+    assert keepout["forbid_vias"]
+    assert keepout["forbid_zone_fills"]
+    assert not keepout["forbid_footprints"]
+    assert not keepout["forbid_pads"]
+    assert len(keepout["outline"]) >= 4
+
+    in1 = [
+        zone
+        for zone in board["zones"]
+        if zone["layer"] == "In1.Cu" and zone["net"] == "GND"
+    ]
+    assert len(in1) == 1
+    assert in1[0].get("explicit_exceptions") == [
+        "ESP32_ANTENNA_ALL_COPPER_KEEPOUT"
+    ]
+
+
+def test_inner_and_bottom_layer_policy_is_locked(
+    kicad_report: dict[str, Any],
+) -> None:
+    tracks = _board(kicad_report)["tracks"]
+    assert not [
+        track
+        for track in tracks
+        if track["layer"] == "In1.Cu" and track["net"] != "GND"
+    ]
+    in2_forbidden = USB_ROUTE_NETS | {"SW_NODE", "BST", "FB"}
+    assert not [
+        track
+        for track in tracks
+        if track["layer"] == "In2.Cu" and track["net"] in in2_forbidden
+    ]
+    bottom_forbidden = USB_ROUTE_NETS | {
+        "SW_NODE",
+        "BST",
+        "FB",
+        "UV_SENSE",
+        "OV_SENSE",
+    }
+    assert not [
+        track
+        for track in tracks
+        if track["layer"] == "B.Cu" and track["net"] in bottom_forbidden
+    ]
+
+
+def test_usb_pair_has_exact_gap_match_and_reference_plane(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    polarity_tracks = {
+        polarity: [
+            track
+            for track in board["tracks"]
+            if track["net"] in route_nets
+        ]
+        for polarity, route_nets in USB_ROUTE_PATHS.items()
+    }
+    lengths = {
+        polarity: sum(_track_length(track) for track in tracks)
+        for polarity, tracks in polarity_tracks.items()
+    }
+    assert abs(lengths["D+"] - lengths["D-"]) <= 0.5
+
+    coupled = [
+        (minus, plus)
+        for minus in polarity_tracks["D-"]
+        for plus in polarity_tracks["D+"]
+        if minus.get("pair_section") and plus.get("pair_section")
+        if minus["pair_section"] == plus["pair_section"]
+    ]
+    assert coupled
+    for minus, plus in coupled:
+        center_gap = min(
+            _point_segment_distance(minus["start"], plus["start"], plus["end"]),
+            _point_segment_distance(minus["end"], plus["start"], plus["end"]),
+        )
+        edge_gap = center_gap - 0.285
+        assert edge_gap == pytest.approx(0.200, abs=0.002)
+        assert minus.get("reference_plane") == "In1.Cu:GND"
+        assert plus.get("reference_plane") == "In1.Cu:GND"
+
+
+def test_usb_terminations_and_dnp_stubs_are_local(
+    kicad_report: dict[str, Any],
+) -> None:
+    u1_pads = _board(kicad_report)["footprints"]["U1"]["pads"]
+    for ref, pad in (("R15", "13"), ("R16", "14")):
+        assert _distance(
+            _footprint_at(kicad_report, ref),
+            u1_pads[pad]["at"],
+        ) <= 3.0
+    for net in ("USB_DN_R", "USB_DP_R"):
+        dnp_stubs = [
+            track
+            for track in _tracks_on_net(kicad_report, net)
+            if track.get("role") == "DNP_STUB"
+        ]
+        assert len(dnp_stubs) == 1
+        assert _track_length(dnp_stubs[0]) <= 2.0
+
+
+def test_usb_has_clearance_from_unrelated_front_copper(
+    kicad_report: dict[str, Any],
+) -> None:
+    front = [
+        track
+        for track in _board(kicad_report)["tracks"]
+        if track["layer"] == "F.Cu"
+    ]
+    usb = [
+        track
+        for track in front
+        if track["net"] in USB_ROUTE_NETS and track.get("pair_section")
+    ]
+    unrelated = [
+        track
+        for track in front
+        if track["net"] not in USB_ROUTE_NETS | {"GND"}
+    ]
+    assert usb
+    for usb_track in usb:
+        for other in unrelated:
+            endpoint_distance = min(
+                _point_segment_distance(
+                    endpoint,
+                    other["start"],
+                    other["end"],
+                )
+                for endpoint in (usb_track["start"], usb_track["end"])
+            )
+            copper_clearance = (
+                endpoint_distance
+                - usb_track["width_mm"] / 2
+                - other["width_mm"] / 2
+            )
+            assert copper_clearance >= 0.8 - 0.002, (
+                f"{usb_track['net']} too close to {other['net']}: "
+                f"{copper_clearance:.3f} mm"
+            )
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "maximum_mm"),
+    [
+        ("F1", "D1", 10.0),
+        ("D1", "D3", 8.0),
+        ("U2", "C4", 3.0),
+        ("U2", "L1", 5.0),
+        ("L1", "C6", 6.0),
+        ("L1", "C7", 7.0),
+        ("R1", "C12", 2.0),
+        ("U4", "C17", 3.5),
+        ("U5", "C15", 3.5),
+        ("U5", "C16", 4.0),
+        ("U6", "C20", 3.0),
+        ("U7", "C21", 3.0),
+    ],
+)
+def test_critical_parts_are_compact(
+    kicad_report: dict[str, Any],
+    a: str,
+    b: str,
+    maximum_mm: float,
+) -> None:
+    assert _distance(
+        _footprint_at(kicad_report, a),
+        _footprint_at(kicad_report, b),
+    ) <= maximum_mm
+
+
+def test_fb_and_c12_are_kelvin_routed_away_from_switch_node(
+    kicad_report: dict[str, Any],
+) -> None:
+    fb_tracks = _tracks_on_net(kicad_report, "FB")
+    sw_tracks = _tracks_on_net(kicad_report, "SW_NODE")
+    assert fb_tracks and sw_tracks
+    assert all(track["layer"] == "F.Cu" for track in fb_tracks + sw_tracks)
+    assert all(track.get("role") == "KELVIN_FB" for track in fb_tracks)
+    for fb in fb_tracks:
+        for switch in sw_tracks:
+            assert min(
+                _point_segment_distance(
+                    endpoint,
+                    switch["start"],
+                    switch["end"],
+                )
+                for endpoint in (fb["start"], fb["end"])
+            ) >= 0.8
+
+
+def test_every_decoupler_has_an_adjacent_ground_via(
+    kicad_report: dict[str, Any],
+) -> None:
+    decouplers = {
+        "C2",
+        "C3",
+        "C4",
+        "C6",
+        "C7",
+        "C8",
+        "C9",
+        "C11",
+        "C15",
+        "C16",
+        "C17",
+        "C20",
+        "C21",
+    }
+    board = _board(kicad_report)
+    ground_vias = [via for via in board["vias"] if via["net"] == "GND"]
+    assert ground_vias
+    for ref in decouplers:
+        ground_pad = board["footprints"][ref]["pads"]["2"]["at"]
+        assert min(_distance(ground_pad, via["at"]) for via in ground_vias) <= 1.5
+
+
+def test_fixture_test_pads_have_bottom_no_copper_access(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = _board(kicad_report)
+    test_refs = {f"TP{number}" for number in range(5, 14)}
+    area = [
+        candidate
+        for candidate in board["rule_areas"]
+        if candidate["name"] == "TP5_TP13_BOTTOM_FIXTURE"
+    ]
+    assert len(area) == 1
+    fixture = area[0]
+    assert "B.Cu" in fixture["layers"]
+    assert fixture["forbid_footprints"]
+    assert fixture["forbid_pads"]
+    assert fixture["forbid_tracks"]
+    assert fixture["forbid_vias"]
+    assert fixture["forbid_zone_fills"]
+    assert all(
+        board["footprints"][ref]["layer"] in {"F.Cu", "F.Courtyard"}
+        for ref in test_refs
+    )
+    for ref in test_refs:
+        assert board["footprints"][ref].get("fixture_accessible") is True
+
+
+def test_silkscreen_minimums_and_required_markings(
+    kicad_report: dict[str, Any],
+) -> None:
+    front = [
+        text
+        for text in _board(kicad_report)["texts"]
+        if text["layer"] in {"F.SilkS", "F.Silkscreen"}
+    ]
+    assert front
+    assert min(text["stroke_width_mm"] for text in front) >= 0.20
+    rendered = " ".join(text["text"] for text in front).upper()
+    for required in (
+        "REV B",
+        "BYPASS",
+        "EMULATE",
+        "CONSOLE",
+        "MOTOR",
+        "USB DATA ONLY",
+        "PIN 1",
+        "D3 K",
+        "D1 K",
+    ):
+        assert required in rendered
+
+
+def test_project_and_dru_lock_named_usb_geometry(
+    esp32tap_dir: Path,
+) -> None:
+    project = json.loads(
+        (esp32tap_dir / "kicad" / "Esp32Tap.kicad_pro").read_text(
+            encoding="utf-8"
+        )
+    )
+    classes = project["net_settings"]["classes"]
+    usb = [item for item in classes if item["name"] == "USB_90R_JLC04161H"]
+    assert len(usb) == 1
+    assert usb[0]["track_width"] == pytest.approx(0.285)
+    assert usb[0]["diff_pair_width"] == pytest.approx(0.285)
+    assert usb[0]["diff_pair_gap"] == pytest.approx(0.200)
+    assignments = project["net_settings"]["netclass_assignments"]
+    assert assignments
+    for net in USB_ROUTE_NETS:
+        assert assignments.get(net) in (
+            "USB_90R_JLC04161H",
+            ["USB_90R_JLC04161H"],
+        )
+
+    dru = (esp32tap_dir / "kicad" / "Esp32Tap.kicad_dru").read_text(
+        encoding="utf-8"
+    )
+    for token in (
+        "USB_90R_JLC04161H",
+        "0.285mm",
+        "0.200mm",
+        "0.8mm",
+        "F.Cu",
+    ):
+        assert token in dru
+
+
+def test_drc_and_schematic_parity_reports_are_clean(
+    esp32tap_dir: Path,
+) -> None:
+    for name in ("drc.rpt", "drc-parity.rpt"):
+        report = (esp32tap_dir / "kicad" / name).read_text(encoding="utf-8")
+        assert re.search(r"Found 0 DRC violations", report)
+        assert re.search(r"Found 0 unconnected pads", report)
+        assert re.search(r"Found 0 Footprint errors", report)
+
+
+def test_default_python_validator_passes(
+    esp32tap_dir: Path,
+) -> None:
+    validator = esp32tap_dir / "tools" / "validate_artifacts.py"
+    assert validator.is_file()
+    completed = subprocess.run(
+        ["python3", str(validator)],
+        cwd=esp32tap_dir,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "PASS" in completed.stdout

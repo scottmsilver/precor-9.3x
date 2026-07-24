@@ -292,6 +292,7 @@ def render_cpl(pcbnew: Any, footprints: list[Any]) -> str:
         position = footprint.GetPosition()
         x_position = pcbnew.ToMM(position.x) - auxiliary_origin_x
         y_position = auxiliary_origin_y - pcbnew.ToMM(position.y)
+        rotation = footprint.GetOrientationDegrees() % 360.0
         writer.writerow(
             [
                 reference,
@@ -299,7 +300,7 @@ def render_cpl(pcbnew: Any, footprints: list[Any]) -> str:
                 footprint.GetFPID().GetLibItemName(),
                 f"{x_position:.3f}mm",
                 f"{y_position:.3f}mm",
-                f"{footprint.GetOrientationDegrees():.0f}",
+                f"{rotation:.0f}",
                 "Top",
             ]
         )

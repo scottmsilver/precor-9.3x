@@ -1,0 +1,22 @@
+(version 1)
+
+# JLCPCB JLC04161H-7628, L1 referenced to solid L2.  The 0.285mm artwork
+# width and 0.200mm edge gap are the rounded 90-ohm geometry accepted by the
+# fabrication basis.  USB is data-only and must never change layer.
+(rule "USB_90R_JLC04161H geometry"
+    (layer "F.Cu")
+    (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.Type == 'Track' && A.NetClass == 'USB_90R_JLC04161H'")
+    (constraint track_width (min 0.285mm) (max 0.285mm) (opt 0.285mm))
+)
+
+(rule "USB_90R_JLC04161H controlled-pair gap"
+    (layer "F.Cu")
+    (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.NetClass == 'USB_90R_JLC04161H'")
+    (constraint diff_pair_gap (min 0.200mm) (max 0.200mm) (opt 0.200mm))
+)
+
+(rule "USB_90R_JLC04161H unrelated-copper exclusion"
+    (layer "F.Cu")
+    (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.NetClass == 'USB_90R_JLC04161H' && B.NetClass != 'USB_90R_JLC04161H' && B.NetName != 'GND'")
+    (constraint clearance (min 0.8mm))
+)

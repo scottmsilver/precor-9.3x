@@ -1,630 +1,1506 @@
-#!/usr/bin/env python3
-"""Generate kicad/Esp32Tap.kicad_pcb from design.py using the pcbnew API.
+#!/usr/bin/python3
+"""Generate the Esp32Tap Rev B four-layer PCB from ``design.py``.
 
-Run with:
-  LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 /usr/bin/python3 gen_pcb.py
-
-Board: 100 x 55 mm, 2 layer, origin = board top-left, +y down.
-  * Left edge: J1 (console, top) + J2 (motor, bottom) RJ45 jacks, opening -x.
-  * Pins 2,3,4,5,8 pass between the jacks as B.Cu verticals with F.Cu entry
-    stubs + vias (pins 1/7 GND connect through the B.Cu plane directly).
-  * K1 fail-safe relay between the jacks and the module on the pin-6 path.
-  * ESP32-S3 module top-center; the PCB-antenna section overhangs the top
-    board edge so the whole Espressif keep-out area is off-board.
-  * Power entry chain along the bottom edge; USB-C on the right edge.
-  * B.Cu is a GND plane; every SMD GND pad gets a stitching via.
+Critical current loops, feedback, and USB are explicit routes.  Remaining
+low-speed nets use a deterministic two-routing-layer grid search: vertical
+and horizontal freedom comes from B.Cu/In2.Cu while In1.Cu remains a solid
+ground reference.  Connectivity is always regenerated from the design
+tables; the checked-in board is never edited as an input.
 """
+
+from __future__ import annotations
+
+import argparse
+import heapq
+import math
 import os
+import re
 import sys
+import tempfile
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Iterable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import design
 import pcbnew
-from pcbnew import VECTOR2I
 from pcbnew import FromMM as MM
+from pcbnew import VECTOR2I
+
 
 design.validate()
 
-FP = design.FPLIB
-OUT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "kicad", "Esp32Tap.kicad_pcb"))
-
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OUT = ROOT / "kicad" / "Esp32Tap.kicad_pcb"
+FPLIB = Path(design.FPLIB)
 OX, OY = 100.0, 100.0
-BW, BH = 100.0, 55.0
+BOARD_W, BOARD_H = 100.0, 55.0
+F = pcbnew.F_Cu
+IN1 = pcbnew.In1_Cu
+IN2 = pcbnew.In2_Cu
+B = pcbnew.B_Cu
+ROUTING_LAYERS = (IN2, B)
+GRID = 0.4
+CLEARANCE = 0.20
+ANTENNA_KEEPOUT = (68.0, 0.0, 88.5, 4.2)
+FIXTURE_KEEPOUT = (52.0, 33.8, 82.0, 38.2)
+USB_NETS = {
+    "USB_DN",
+    "USB_DP",
+    "USB_DN_MCU",
+    "USB_DP_MCU",
+    "USB_DN_R",
+    "USB_DP_R",
+}
+MANUAL_NETS = USB_NETS | {
+    "GND",
+    "+8V_F",
+    "SW_NODE",
+    "BST",
+    "FB",
+    "UV_SENSE",
+    "OV_SENSE",
+    "CC1",
+    "CC2",
+    "VBUS",
+}
+WIDTHS = {
+    "+8V_RAW": 0.60,
+    "+8V_F": 0.80,
+    "VIN": 0.60,
+    "+3V3": 0.60,
+    "+5V_RLY": 0.50,
+    "RELAY_SW": 0.40,
+}
+PLANNED_U6_ESCAPES = {
+    "1": ((44.8, 20.8), "RELAY_CMD"),
+    "2": ((44.0, 21.6), "TREAD_OK"),
+    "3": ((44.8, 22.4), "TX_GATE"),
+    "4": ((44.0, 23.2), "GND"),
+    "5": ((52.0, 23.2), "TX_ENABLE"),
+    "6": ((51.2, 22.4), "TREAD_OK"),
+    "7": ((52.0, 21.6), "RELAY_GATE"),
+    "8": ((51.2, 20.8), "+3V3"),
+}
 
-board = pcbnew.NewBoard(OUT)
-bds = board.GetDesignSettings()
-bds.m_CopperEdgeClearance = MM(0.25)
-bds.m_MinThroughDrill = MM(0.3)  # JLC 2-layer minimum drill is 0.3mm (0.2mm needs 4+ layers)
 
-netinfo = {}
-for name in design.NETS:
-    n = pcbnew.NETINFO_ITEM(board, name)
-    board.Add(n)
-    netinfo[name] = n
-
-pad_net = {}
-for name, pads in design.NETS.items():
-    for rp in pads:
-        pad_net[rp] = name
-
-# ------------------------------------------------------------- placement
+# Coordinates are board-local millimetres.  The groups deliberately preserve
+# the RJ45/enclosure geometry, keep RF/USB clear of power, and make the
+# supervisor, relay, and converter loops probeable.
 PLACE = {
-    "J1": (12.5, 8.0, 270),  # rot270 = opening -x; pads spread +y from anchor
+    "J1": (12.5, 8.0, 270),
     "J2": (12.5, 37.0, 270),
-    "K1": (30.0, 26.0, 0),  # pads: L col x26.5 (1,2,3,4 @ y22.2/25.4/27.6/29.8)
-    # bus protection / series parts
-    "D5": (21.0, 16.2, 270),  # PESD console pin6: pad1 (21,15.15), pad2 (21,17.25)
-    "D6": (28.2, 44.2, 270),  # PESD motor pin6: pad1 (22,43.35)
-    "D7": (21.5, 41.0, 270),  # PESD pin3: pad1 (17.9,39.15)
-    "R7": (44.0, 14.24, 0),  # cons RX 4.7k: 1 W=CONS6, 2 E=CONS_RX
-    "R6": (40.5, 12.97, 180),  # TX 100R: pad1 E=ESP_TX, pad2 W=TX_DRV
-    "R8": (24.5, 36.0, 180),  # pin3 RX 4.7k: pad1 E=PIN3, pad2 W=PIN3_RX
-    # relay driver
-    "D4": (33.0, 17.5, 0),  # 1 K W=+3V3, 2 A E=RELAY_SW
-    "Q1": (38.5, 17.5, 0),  # B(37.56,16.55) E(37.56,18.45) C(39.44,17.5)
-    "R9": (42.0, 16.55, 180),  # pad2 W=Q1_B, pad1 E=RELAY_EN
-    "R10": (33.5, 15.6, 180),  # pad1 E=Q1_B, pad2 W=GND
-    # ESP32 module (antenna overhangs top edge)
-    "U1": (62.0, 6.8, 0),
-    "C9": (48.4, 2.81, 180),  # 100n at 3V3 pin: pad1 E=3V3
-    "C8": (49.2, 6.5, 180),  # 10u: pad1 E=3V3
-    # EN / BOOT
-    "R13": (43.0, 2.6, 270),  # pad1 N=+3V3 (43,1.78), pad2 S=EN (43,3.42)
-    "C10": (46.0, 6.0, 180),  # pad1 E=EN, pad2 W=GND
-    "SW1": (36.0, 5.0, 0),  # EN button
-    "SW2": (78.0, 17.4, 0),  # BOOT button
-    # LEDs / test pads
-    "R11": (75.0, 12.97, 0),  # pad1 W=STATUS_LED, pad2 E=LED1_A
-    "LED1": (79.0, 12.97, 180),  # pad2 A W, pad1 K E (GND)
-    "R12": (36.0, 44.5, 180),  # pad1 E=+3V3, pad2 W=LED2_A
-    "LED2": (32.5, 44.5, 0),  # pad2 A E, pad1 K W (GND)
-    "TP1": (75.5, 4.6, 0),
-    "TP2": (75.5, 7.4, 0),
-    "TP3": (69.0, 52.0, 0),
-    "TP4": (72.0, 52.0, 0),
-    # power chain
-    "F1": (9.0, 52.5, 0),  # pad1 W=+8V_RAW, pad2 E=+8V_F
-    "D3": (19.3, 50.9, 90),  # TVS: pad1 S(13,52.15)=+8V_F, pad2 N=GND
-    "C1": (26.0, 50.0, 90),  # elec: pad1 S(21,53.7)=+8V_F, pad2 N(21,48.3)=GND
-    "C2": (31.5, 51.0, 90),  # pad1 S(26,52.4)=+8V_F, pad2 N=GND
-    "D1": (37.0, 52.5, 180),  # pad1 E(33,52.5)=K=VIN, pad2 W(29,52.5)=A=+8V_F
-    "L1": (45.5, 49.5, 180),  # pad1 E(47,49.5)=SW, pad2 W(44,49.5)=+3V3
-    "U2": (54.0, 49.5, 0),  # 1 GND TL,2 SW ML,3 VIN BL,4 FB BR,5 EN MR,6 BOOT TR
-    "C5": (49.6, 46.8, 180),  # boot cap: pad1 E(50.38)=BST, pad2 W(48.82)=SW
-    "C3": (50.0, 52.3, 270),  # VIN 4.7u: pad1 N(50,50.4), pad2 S(50,53.2)=GND
-    "C4": (52.9, 53.0, 270),  # VIN 100n: pad1 N(51.6,51.22), pad2 S=GND
-    "R3": (58.2, 49.5, 180),  # pad1 E=VIN, pad2 W=BUCK_EN
-    "R14": (57.38, 47.2, 270),  # EN divider bottom: pad1 N=GND (57.38,46.38), pad2 S=BUCK_EN (57.38,48.02)
-    "R2": (60.0, 52.0, 270),  # pad1 N(59.5,50.68)=FB, pad2 S(59.5,52.32)=GND
-    "R1": (63.0, 50.45, 180),  # pad2 W(62.18)=FB, pad1 E(63.82)=+3V3
-    "C6": (40.5, 48.0, 90),  # 22u: pad1 S(40.5,48.95)=+3V3, pad2 N=GND
-    "C7": (38.0, 48.0, 90),  # 22u
-    # USB
-    "J3": (96.2, 36.5, 90),  # rot90 = opening +x; pad col x=92.16
-    "U3": (86.0, 36.5, 180),  # 1(87.14,37.45) 2 GND(87.14,36.5) 3(87.14,35.55)
-    # 4(84.86,35.55) 5(84.86,36.5) 6(84.86,37.45)
-    "C11": (88.5, 41.0, 180),  # pad1 E(89.28,41)=VBUS, pad2 W=GND
-    "D2": (88.0, 44.5, 0),  # pad1 W(86,44.5)=K=VIN, pad2 E(90,44.5)=A=VBUS
-    "R4": (94.5, 43.7, 270),  # pad1 N(94.5,41.68)=CC1, pad2 S=GND
-    "R5": (94.5, 28.3, 90),  # pad1 S(94.5,30.32)=CC2, pad2 N=GND
+    "J3": (96.2, 36.5, 90),
+    "U1": (78.0, 6.45, 0),
+    "K1": (27.0, 26.0, 0),
+    "U2": (60.0, 48.5, 180),
+    "U3": (87.0, 35.0, 180),
+    "U4": (35.0, 42.0, 0),
+    "U5": (37.0, 25.0, 0),
+    "U6": (48.0, 22.0, 0),
+    "U7": (58.0, 24.0, 0),
+    "Q1": (35.0, 19.0, 0),
+    "Q2": (84.0, 46.5, 0),
+    "D1": (27.5, 52.5, 180),
+    "D3": (35.0, 52.0, 0),
+    "D4": (27.0, 17.5, 0),
+    "D5": (20.0, 15.0, 270),
+    "D6": (20.0, 43.0, 270),
+    "D7": (19.0, 38.0, 270),
+    "LED1": (93.0, 10.0, 180),
+    "LED2": (77.0, 50.0, 0),
+    "SW1": (55.0, 4.0, 0),
+    "SW2": (94.0, 17.0, 0),
+    "F1": (20.5, 52.5, 0),
+    "L1": (65.0, 48.5, 0),
+    "R1": (57.0, 45.0, 0),
+    "R2": (55.0, 47.5, 180),
+    "R3": (50.0, 45.0, 0),
+    "R14": (50.0, 48.0, 0),
+    "R4": (94.0, 43.5, 270),
+    "R5": (94.0, 29.0, 90),
+    "R6": (39.0, 14.0, 0),
+    "R7": (64.0, 13.0, 0),
+    "R8": (64.0, 10.5, 0),
+    "R9": (38.5, 19.0, 90),
+    "R10": (42.0, 18.5, 0),
+    "R11": (90.0, 10.0, 0),
+    "R12": (74.0, 50.0, 0),
+    "R13": (60.0, 12.0, 90),
+    "R15": (66.5, 15.5, 0),
+    "R16": (66.5, 17.5, 0),
+    "R17": (29.0, 39.0, 0),
+    "R18": (29.0, 42.0, 180),
+    "R19": (41.0, 39.0, 0),
+    "R20": (41.0, 42.0, 180),
+    "R21": (45.0, 39.0, 0),
+    "R22": (45.0, 42.0, 0),
+    "R23": (47.0, 27.0, 0),
+    "R24": (47.0, 30.0, 0),
+    "R25": (33.5, 29.0, 90),
+    "R26": (33.5, 33.0, 90),
+    "R27": (52.0, 27.0, 0),
+    "R28": (52.0, 30.0, 0),
+    "R29": (80.0, 48.0, 0),
+    "R30": (80.0, 45.0, 0),
+    "R31": (90.0, 15.0, 90),
+    "C1": (43.5, 49.5, 0),
+    "C2": (50.0, 52.0, 0),
+    "C3": (55.0, 52.0, 0),
+    "C4": (60.0, 45.5, 0),
+    "C5": (60.0, 52.0, 0),
+    "C6": (70.0, 47.0, 0),
+    "C7": (70.0, 52.0, 0),
+    "C8": (66.5, 6.5, 90),
+    "C9": (66.5, 2.0, 90),
+    "C10": (60.0, 8.0, 90),
+    "C11": (87.0, 43.0, 0),
+    "C12": (57.0, 43.0, 0),
+    "C13": (67.3, 12.8, 90),
+    "C14": (67.3, 20.0, 270),
+    "C15": (37.0, 21.5, 0),
+    "C16": (41.0, 25.0, 90),
+    "C17": (35.0, 38.5, 0),
+    "C18": (32.0, 45.0, 0),
+    "C19": (38.0, 45.0, 0),
+    "C20": (48.0, 19.5, 0),
+    "C21": (58.0, 21.5, 0),
+    "TP1": (92.0, 5.0, 0),
+    "TP2": (92.0, 8.0, 0),
+    "TP3": (74.0, 43.0, 0),
+    "TP4": (77.0, 43.0, 0),
+    "TP5": (54.0, 36.0, 0),
+    "TP6": (57.2, 36.0, 0),
+    "TP7": (60.4, 36.0, 0),
+    "TP8": (63.6, 36.0, 0),
+    "TP9": (66.8, 36.0, 0),
+    "TP10": (70.0, 36.0, 0),
+    "TP11": (73.2, 36.0, 0),
+    "TP12": (76.4, 36.0, 0),
+    "TP13": (79.6, 36.0, 0),
 }
 
-fps = {}
-for ref, comp in design.COMPONENTS.items():
-    val, flib, fname = comp[0], comp[1], comp[2]
-    fp = pcbnew.FootprintLoad(f"{FP}/{flib}.pretty", fname)
-    assert fp, f"footprint {flib}:{fname}"
-    fp.SetReference(ref)
-    fp.SetValue(val)
-    x, y, rot = PLACE[ref]
-    fp.SetPosition(VECTOR2I(MM(OX + x), MM(OY + y)))
-    fp.SetOrientationDegrees(rot)
-    if ref == "U1":
-        # The library ESP32-S3-WROOM-1 EP thermal vias are 0.2mm drill —
-        # below the JLC 2-layer 0.3mm minimum.  Enlarge to 0.3mm drill
-        # (pad enlarged to keep >=0.05mm annulus per side).
-        for pad in fp.Pads():
-            ds = pad.GetDrillSize()
-            if ds.x > 0 and pcbnew.ToMM(ds.x) < 0.3:
-                pad.SetDrillSize(pcbnew.VECTOR2I(MM(0.3), MM(0.3)))
-                sz = pad.GetSize()
-                if pcbnew.ToMM(sz.x) < 0.45:
-                    pad.SetSize(pcbnew.VECTOR2I(MM(0.45), MM(0.45)))
-    board.Add(fp)
-    fps[ref] = fp
 
-for ref, fp in fps.items():
-    fp.Reference().SetLayer(pcbnew.F_Fab)
-    fp.Reference().SetVisible(True)
-    for pad in fp.Pads():
-        num = str(pad.GetNumber())
-        if not num:
-            continue
-        net = pad_net.get((ref, num))
-        if net:
-            pad.SetNet(netinfo[net])
+def local(point: Any) -> tuple[float, float]:
+    return (
+        pcbnew.ToMM(point.x) - OX,
+        pcbnew.ToMM(point.y) - OY,
+    )
 
 
-def pad_pos(ref, num):
-    for pad in fps[ref].Pads():
-        if str(pad.GetNumber()) == num:
-            p = pad.GetPosition()
-            return (pcbnew.ToMM(p.x) - OX, pcbnew.ToMM(p.y) - OY)
-    raise KeyError((ref, num))
+def absolute(point: tuple[float, float]) -> VECTOR2I:
+    return VECTOR2I(MM(OX + point[0]), MM(OY + point[1]))
 
 
-def all_pad_pos(ref, num):
-    out = []
-    for pad in fps[ref].Pads():
-        if str(pad.GetNumber()) == num:
-            p = pad.GetPosition()
-            out.append((pcbnew.ToMM(p.x) - OX, pcbnew.ToMM(p.y) - OY))
-    return out
+def grid_index(value: float) -> int:
+    return round(value / GRID)
 
 
-def edge_rect(x0, y0, x1, y1):
-    pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
-    for a, b in zip(pts, pts[1:]):
-        seg = pcbnew.PCB_SHAPE(board)
-        seg.SetShape(pcbnew.SHAPE_T_SEGMENT)
-        seg.SetStart(VECTOR2I(MM(OX + a[0]), MM(OY + a[1])))
-        seg.SetEnd(VECTOR2I(MM(OX + b[0]), MM(OY + b[1])))
-        seg.SetLayer(pcbnew.Edge_Cuts)
-        seg.SetWidth(MM(0.1))
-        board.Add(seg)
+def grid_point(index: tuple[int, int]) -> tuple[float, float]:
+    return (round(index[0] * GRID, 6), round(index[1] * GRID, 6))
 
 
-edge_rect(0, 0, BW, BH)
-
-F, B = pcbnew.F_Cu, pcbnew.B_Cu
-
-
-def track(pts, net, width=0.3, layer=F):
-    for a, b in zip(pts, pts[1:]):
-        if a == b:
-            continue
-        t = pcbnew.PCB_TRACK(board)
-        t.SetStart(VECTOR2I(MM(OX + a[0]), MM(OY + a[1])))
-        t.SetEnd(VECTOR2I(MM(OX + b[0]), MM(OY + b[1])))
-        t.SetWidth(MM(width))
-        t.SetLayer(layer)
-        t.SetNet(netinfo[net])
-        board.Add(t)
-
-
-def via(x, y, net, size=0.6, drill=0.3):
-    v = pcbnew.PCB_VIA(board)
-    v.SetPosition(VECTOR2I(MM(OX + x), MM(OY + y)))
-    v.SetWidth(MM(size))
-    v.SetDrill(MM(drill))
-    v.SetLayerPair(F, B)
-    v.SetNet(netinfo[net])
-    board.Add(v)
-
-
-# GND zone on B.Cu
-z = pcbnew.ZONE(board)
-z.SetLayer(B)
-z.SetNet(netinfo["GND"])
-z.SetLocalClearance(MM(0.3))
-z.SetMinThickness(MM(0.25))
-z.SetPadConnection(pcbnew.ZONE_CONNECTION_FULL)
-chain = pcbnew.SHAPE_LINE_CHAIN()
-for x, y in [(1, 1), (BW - 1, 1), (BW - 1, BH - 1), (1, BH - 1)]:
-    chain.Append(MM(OX + x), MM(OY + y))
-chain.SetClosed(True)
-z.Outline().AddOutline(chain)
-board.Add(z)
-
-P = pad_pos
+def point_segment_distance(
+    point: tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> float:
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length_squared = dx * dx + dy * dy
+    if length_squared == 0:
+        return math.dist(point, start)
+    fraction = max(
+        0.0,
+        min(
+            1.0,
+            (
+                (point[0] - start[0]) * dx
+                + (point[1] - start[1]) * dy
+            )
+            / length_squared,
+        ),
+    )
+    projection = (
+        start[0] + fraction * dx,
+        start[1] + fraction * dy,
+    )
+    return math.dist(point, projection)
 
 
-# ============================ pass-through bus (F stubs + B verticals) ===
-def passthrough(num, netname, w, lane, side):
-    a, b2 = P("J1", num), P("J2", num)
-    track([a, (lane, a[1])], netname, w)
-    via(lane, a[1], netname)
-    track([(lane, a[1]), (lane, b2[1])], netname, w, B)
-    via(lane, b2[1], netname)
-    track([(lane, b2[1]), b2], netname, w)
+def segments_intersect(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> bool:
+    def orientation(
+        p: tuple[float, float],
+        q: tuple[float, float],
+        r: tuple[float, float],
+    ) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (
+            q[1] - p[1]
+        ) * (r[0] - p[0])
+
+    def on_segment(
+        p: tuple[float, float],
+        q: tuple[float, float],
+        r: tuple[float, float],
+    ) -> bool:
+        return (
+            min(p[0], r[0]) - 1e-9 <= q[0] <= max(p[0], r[0]) + 1e-9
+            and min(p[1], r[1]) - 1e-9
+            <= q[1]
+            <= max(p[1], r[1]) + 1e-9
+        )
+
+    values = (
+        orientation(a, b, c),
+        orientation(a, b, d),
+        orientation(c, d, a),
+        orientation(c, d, b),
+    )
+    if values[0] * values[1] < 0 and values[2] * values[3] < 0:
+        return True
+    return any(
+        abs(value) <= 1e-9 and on_segment(start, point, end)
+        for value, start, point, end in (
+            (values[0], a, c, b),
+            (values[1], a, d, b),
+            (values[2], c, a, d),
+            (values[3], c, b, d),
+        )
+    )
 
 
-passthrough("2", "+8V_RAW", 0.5, 16.6, "E")
-passthrough("8", "+8V_RAW", 0.5, 17.4, "E")
-passthrough("4", "PIN4_PASS", 0.3, 18.2, "E")
-passthrough("5", "PIN5_SAFETY", 0.5, 10.9, "W")
-passthrough("3", "PIN3", 0.3, 10.1, "W")
-
-# +8V feed to fuse: continue lane 17.4 down on B, then F into F1.1
-j28 = P("J2", "8")
-f11, f12 = P("F1", "1"), P("F1", "2")
-track([(16.6, 38.27), (17.4, 38.27)], "+8V_RAW", 0.5)
-via(17.4, 38.27, "+8V_RAW")
-track([(17.4, j28[1]), (17.4, 52.5), (7.8, 52.5)], "+8V_RAW", 0.5, B)
-via(7.8, 52.5, "+8V_RAW")
-track([(7.8, 52.5), f11], "+8V_RAW", 0.5)
-
-# ============================ 8V filter chain (F, y=52.5 run) ============
-d31 = P("D3", "1")
-c11_ = P("C1", "1")
-c21 = P("C2", "1")
-d12 = P("D1", "2")
-track([f12, (29.0, 52.5), d12], "+8V_F", 0.8)
-track([(d31[0], 52.5), d31], "+8V_F", 0.5)
-track([(c11_[0], 52.5), (c11_[0], c11_[1])], "+8V_F", 0.5)
-# C2 pad1 (26,52.4) sits on the run; stub down
-track([(c21[0], 52.5), c21], "+8V_F", 0.5)
-
-# ============================ VIN =======================================
-d11 = P("D1", "1")
-u2_vin = P("U2", "3")
-c31 = P("C3", "1")
-c41 = P("C4", "1")
-d2k = P("D2", "1")
-r3vin = P("R3", "1")
-# D1 K -> junction (45.5,52.5) -> pad3 approach + C3/C4 taps
-track([d11, (48.0, 52.5)], "VIN", 0.8)
-track([(48.0, 52.5), (48.0, u2_vin[1]), u2_vin], "VIN", 0.5)
-track([c31, (c31[0], u2_vin[1])], "VIN", 0.5)  # C3.1 (50,50.4) up to run
-track([c41, (c41[0], u2_vin[1])], "VIN", 0.5)  # C4.1 (51.6,51.22) up
-# long leg to D2 (USB ORing) via x=45.5 corridor between L1 pads
-track([(45.5, 52.5), (45.5, 44.5), d2k], "VIN", 0.8)
-# R3 pull-up leg off the y=44.5 run
-track([(r3vin[0], 44.5), r3vin], "VIN", 0.3)
-
-u2_en = P("U2", "5")
-r3en = P("R3", "2")
-track([u2_en, r3en], "BUCK_EN", 0.3)
-# R14 divider bottom hangs off the R3.2/EN node (vertical at x=57.38)
-r14en = P("R14", "2")
-track([r3en, r14en], "BUCK_EN", 0.3)
-
-# ============================ SW / BST / 3V3 ============================
-u2_sw = P("U2", "2")
-l1_sw = P("L1", "1")
-c5_sw = P("C5", "2")
-c5_bst = P("C5", "1")
-u2_bst = P("U2", "6")
-track([u2_sw, l1_sw], "SW_NODE", 0.5)
-track([c5_sw, (c5_sw[0], u2_sw[1])], "SW_NODE", 0.4)
-track([u2_bst, (u2_bst[0], 47.2), (c5_bst[0], 47.2), c5_bst], "BST", 0.3)
-
-l1_out = P("L1", "2")
-c61 = P("C6", "1")
-c71 = P("C7", "1")
-r12_3v3 = P("R12", "1")
-# F chain west along y=49.5
-track([l1_out, (38.0, 49.5)], "+3V3", 0.8)
-track([(39.25, 49.5), (39.25, 44.5), P("R12", "1")], "+3V3", 0.4)
-track([(c61[0], 49.5), c61], "+3V3", 0.5)
-track([(c71[0], 49.5), c71], "+3V3", 0.5)
-# R12/LED2 power LED sits on the chain end (pad1 at 34.82 on the run)
-track([P("R12", "2"), P("LED2", "2")], "LED2_A", 0.3)
-# B trunk up to the module 3V3 pin
-via(42.8, 49.5, "+3V3")
-track([(42.8, 49.5), (42.8, 1.6), (50.5, 1.6), (50.5, 2.81)], "+3V3", 0.5, B)
-via(50.5, 2.81, "+3V3")
-m3v3 = P("U1", "2")
-track([(50.5, 2.81), m3v3], "+3V3", 0.5)
-# C9 100n on the same F row
-c91 = P("C9", "1")
-track([(50.5, 2.81), c91], "+3V3", 0.4)
-# C8 10u fed by B spur at y=6.5
-track([(42.8, 6.5), (51.3, 6.5)], "+3V3", 0.4, B)
-via(51.3, 6.5, "+3V3")
-track([(51.3, 6.5), P("C8", "1")], "+3V3", 0.4)
-# R13 (EN pull-up) 3V3 via B at top
-r13_3v3 = P("R13", "1")
-via(44.0, 0.95, "+3V3")
-track([r13_3v3, (43.0, 0.95), (44.0, 0.95)], "+3V3", 0.3)
-track([(44.0, 0.95), (42.8, 0.95), (42.8, 1.6)], "+3V3", 0.3, B)
-# relay coil + flyback K
-d4k = P("D4", "1")
-k1cp = P("K1", "1")
-track([(42.8, 20.5), (28.0, 20.5)], "+3V3", 0.4, B)
-via(28.0, 20.5, "+3V3")
-track([(28.0, 20.5), (k1cp[0], 20.5), k1cp], "+3V3", 0.4)
-track([(28.0, 20.5), (28.0, 17.5), d4k], "+3V3", 0.3)
-# R1 (FB top) + TP3 fed from B
-r1_3v3 = P("R1", "1")
-via(65.1, 50.45, "+3V3")
-track([r1_3v3, (65.1, 50.45)], "+3V3", 0.3)
-track([(65.1, 50.45), (65.1, 52.6), (42.8, 52.6), (42.8, 49.5)], "+3V3", 0.4, B)
-tp3 = P("TP3", "1")
-track([(65.1, 50.45), (tp3[0], 50.45), tp3], "+3V3", 0.3)
-
-# FB divider
-u2_fb = P("U2", "4")
-r2fb = P("R2", "1")
-r1fb = P("R1", "2")
-track([u2_fb, (r2fb[0], u2_fb[1]), r2fb], "FB", 0.3)
-track([(r2fb[0], 50.45), r1fb], "FB", 0.3)
-
-# ============================ pin 6 fail-safe ===========================
-j16 = P("J1", "6")
-k2, k7 = P("K1", "2"), P("K1", "7")
-d51 = P("D5", "1")
-r71 = P("R7", "1")
-# console line: jack -> relay NC pads -> RX resistor, one horizontal at y=14.35
-track([j16, (43.18, 14.35)], "CONS6", 0.3)  # ends inside R7.1 pad
-track([(21.0, 14.35), d51], "CONS6", 0.3)  # PESD stub
-track([(18.5, 14.35), (18.5, k2[1]), k2], "CONS6", 0.3)
-track([k2, k7], "CONS6", 0.3)
-
-j26 = P("J2", "6")
-k3, k6 = P("K1", "3"), P("K1", "6")
-d61 = P("D6", "1")
-track([j26, (28.2, 43.35)], "MOT6", 0.3)
-track([(28.2, 43.35), d61], "MOT6", 0.3)  # D6.1 sits at (22,43.35)
-via(19.5, 43.35, "MOT6")
-track([(19.5, 43.35), (19.5, k3[1])], "MOT6", 0.3, B)
-via(19.5, k3[1], "MOT6")
-track([(19.5, k3[1]), k3], "MOT6", 0.3)
-track([k3, k6], "MOT6", 0.3)
-
-k4, k5 = P("K1", "4"), P("K1", "5")
-r6tx = P("R6", "2")
-track([k4, k5], "TX_DRV", 0.3)
-track([r6tx, (24.0, 12.97)], "TX_DRV", 0.3)
-via(24.0, 12.97, "TX_DRV")
-track([(24.0, 12.97), (24.0, k4[1])], "TX_DRV", 0.3, B)
-via(24.0, k4[1], "TX_DRV")
-track([(24.0, k4[1]), k4], "TX_DRV", 0.3)
-
-track([P("R6", "1"), P("U1", "10")], "ESP_TX", 0.3)
-track([P("R7", "2"), P("U1", "11")], "CONS_RX", 0.3)
-
-# ============================ pin 3 tap =================================
-r81 = P("R8", "1")
-d71 = P("D7", "1")
-j23 = P("J2", "3")
-track([j23, (r81[0], 39.54), r81], "PIN3", 0.3)  # R8.1 at (25.32,36)? see below
-# NOTE: R8.1 is at y=36; approach: run y=39.54 then up x=r81.x
-r82 = P("R8", "2")
-track([(d71[0], 39.54), d71], "PIN3", 0.3)
-track([r82, (22.5, 36.0)], "PIN3_RX", 0.3)
-via(22.5, 36.0, "PIN3_RX")
-track([(22.5, 36.0), (22.5, 11.7)], "PIN3_RX", 0.3, B)
-via(22.5, 11.7, "PIN3_RX")
-m9 = P("U1", "9")
-track([(22.5, 11.7), (52.5, 11.7), m9], "PIN3_RX", 0.3)
-
-# ============================ relay driver ==============================
-q1c = P("Q1", "3")
-d4a = P("D4", "2")
-k8 = P("K1", "8")
-track([d4a, q1c], "RELAY_SW", 0.3)
-track([k8, (k8[0], 20.4), (36.2, 20.4), (36.2, 17.5)], "RELAY_SW", 0.3)
-q1b = P("Q1", "1")
-r9b = P("R9", "2")
-r10b = P("R10", "1")
-track([q1b, (r9b[0], q1b[1]), r9b], "Q1_B", 0.3)
-track([(36.9, q1b[1]), (36.9, r10b[1]), r10b], "Q1_B", 0.3)
-r9en = P("R9", "1")
-m23 = P("U1", "23")
-track([r9en, (44.3, r9en[1]), (44.3, 21.0), (m23[0], 21.0), m23], "RELAY_EN", 0.3)
-
-# ============================ USB =======================================
-# merged pads: VBUS at (92.16,38.95)+(92.16,34.05); GND at 39.75/33.25
-vb_n = (92.16, 38.95)
-vb_s = (92.16, 34.05)
-u35 = P("U3", "5")
-c11v = P("C11", "1")
-d2a = P("D2", "2")
-track([vb_n, (90.9, 38.95)], "VBUS", 0.4)
-via(90.9, 38.95, "VBUS")
-track([vb_s, (90.9, 34.05)], "VBUS", 0.4)
-via(90.9, 34.05, "VBUS")
-track([(90.9, 34.05), (90.9, 38.95)], "VBUS", 0.5, B)
-track([(90.9, 38.95), (90.9, 44.5)], "VBUS", 0.5, B)
-via(90.9, 44.5, "VBUS")
-track([(90.9, 44.5), d2a], "VBUS", 0.5)
-via(90.9, 41.0, "VBUS")
-track([(90.9, 41.0), c11v], "VBUS", 0.4)
-# U3.5 via B spur around the south
-track([(90.9, 34.05), (90.9, 33.5), (84.5, 33.5), (84.5, 36.5)], "VBUS", 0.4, B)
-via(84.5, 36.5, "VBUS")
-track([(84.5, 36.5), u35], "VBUS", 0.4)
-
-# USB_DN all on F: bridge A7-B7 at x=91.0, tap to U3.1
-a7, b7 = (92.16, 36.25), (92.16, 37.25)
-u31 = P("U3", "1")
-track([a7, (91.0, 36.25), (91.0, 37.25), b7], "USB_DN", 0.3)
-track([(91.0, 37.25), (91.0, 37.45), u31], "USB_DN", 0.3)
-# USB_DP: bridge A6-B6 with B hop under the connector (x=93.5), tap W of B6
-a6, b6 = (92.16, 36.75), (92.16, 35.75)
-u33 = P("U3", "3")
-track([a6, (93.5, 36.75)], "USB_DP", 0.3)
-via(93.5, 36.75, "USB_DP", size=0.5, drill=0.3)
-track([(93.5, 36.75), (93.5, 35.75)], "USB_DP", 0.3, B)
-via(93.5, 35.75, "USB_DP", size=0.5, drill=0.3)
-track([(93.5, 35.75), b6], "USB_DP", 0.3)
-track([b6, (90.2, 35.75), (90.2, 35.55), u33], "USB_DP", 0.3)
-
-# MCU legs on B.Cu
-u36 = P("U3", "6")
-u34 = P("U3", "4")
-m13 = P("U1", "13")
-m14 = P("U1", "14")
-track([u36, (83.5, u36[1])], "USB_DN_MCU", 0.3)
-via(83.5, u36[1], "USB_DN_MCU")
-track([(83.5, u36[1]), (83.5, 15.5), (54.9, 15.5)], "USB_DN_MCU", 0.3, B)
-via(54.9, 15.5, "USB_DN_MCU")
-track([(54.9, 15.5), (54.9, m13[1]), m13], "USB_DN_MCU", 0.3)
-track([u34, (82.8, u34[1])], "USB_DP_MCU", 0.3)
-via(82.8, u34[1], "USB_DP_MCU")
-track([(82.8, u34[1]), (82.8, 21.2), (55.4, 21.2), (55.4, m14[1])], "USB_DP_MCU", 0.3, B)
-via(55.4, m14[1], "USB_DP_MCU")
-track([(55.4, m14[1]), m14], "USB_DP_MCU", 0.3)
-
-# CC pull-downs (corridor between shield pads x=95.1)
-cc1_pad = (92.16, 37.75)
-cc2_pad = (92.16, 34.75)
-r4cc = P("R4", "1")
-r5cc = P("R5", "1")
-track([cc1_pad, (93.2, 37.75), (95.1, 37.75), (95.1, r4cc[1]), r4cc], "CC1", 0.3)
-track([cc2_pad, (93.2, 34.75), (95.1, 34.75), (95.1, r5cc[1]), r5cc], "CC2", 0.3)
-
-# ============================ EN / IO0 / LEDs / TPs =====================
-m_en = P("U1", "3")
-r13en = P("R13", "2")
-c10en = P("C10", "1")
-sw1 = all_pad_pos("SW1", "1")
-sw1e = max(sw1, key=lambda p: p[0])  # east pad copy
-track([m_en, (38.5, 4.08)], "EN", 0.3)
-track([(43.0, 4.08), r13en], "EN", 0.3)
-track([(c10en[0], 4.08), (c10en[0], c10en[1])], "EN", 0.3)
-track([(38.5, 4.08), (38.5, sw1e[1]), sw1e], "EN", 0.3)
-sw1w = min(sw1, key=lambda p: p[0])
-track([sw1w, sw1e], "EN", 0.3)
-g1 = all_pad_pos("SW1", "2")
-track([min(g1), max(g1)], "GND", 0.3)
-
-m27 = P("U1", "27")
-sw2 = all_pad_pos("SW2", "1")
-sw2w = min(sw2, key=lambda p: p[0])
-track([m27, (74.5, m27[1]), (74.5, sw2w[1]), sw2w], "IO0", 0.3)
-sw2e = max(sw2, key=lambda p: p[0])
-track([sw2w, sw2e], "IO0", 0.3)
-g2 = all_pad_pos("SW2", "2")
-track([min(g2), max(g2)], "GND", 0.3)
-
-m31 = P("U1", "31")
-track([m31, P("R11", "1")], "STATUS_LED", 0.3)
-track([P("R11", "2"), P("LED1", "2")], "LED1_A", 0.3)
-
-tp1 = P("TP1", "1")
-tp2 = P("TP2", "1")
-m37 = P("U1", "37")
-m36 = P("U1", "36")
-track([m37, (73.5, m37[1]), (73.5, tp1[1]), tp1], "U0TXD", 0.3)
-track([m36, (73.0, m36[1]), (73.0, tp2[1]), tp2], "U0RXD", 0.3)
-
-# ============================ GND stitching =============================
-GND_STITCH = {
-    ("U1", "1"): (-1.3, 0.0),
-    ("U1", "40"): (1.3, 0.0),
-    ("U2", "1"): (-1.3, 0.0),
-    ("U3", "2"): (0.0, 0.0),
-    ("Q1", "2"): (0.0, 1.3),
-    ("R2", "2"): (0.0, 1.3),
-    ("R4", "2"): (0.0, 1.3),
-    ("R5", "2"): (0.0, -1.3),
-    ("R10", "2"): (-1.3, 0.0),
-    ("R14", "1"): (-1.3, 0.0),
-    ("C1", "2"): (1.5, 0.0),
-    ("C2", "2"): (0.0, -1.3),
-    ("C3", "2"): (-1.3, 0.0),
-    ("C4", "2"): (1.3, 0.0),
-    ("C6", "2"): (0.0, -1.3),
-    ("C7", "2"): (0.0, -1.3),
-    ("C8", "2"): (0.0, 1.3),
-    ("C9", "2"): (-1.2, 0.0),
-    ("C10", "2"): (0.0, 1.4),
-    ("C11", "2"): (-1.3, 0.0),
-    ("D3", "2"): (0.0, -1.4),
-    ("D5", "2"): (0.0, 1.3),
-    ("D6", "2"): (0.0, 1.3),
-    ("D7", "2"): (1.3, 0.0),
-    ("LED1", "1"): (1.3, 0.0),
-    ("LED2", "1"): (-1.3, 0.0),
-    ("SW1", "2"): (0.0, 1.4),
-    ("SW2", "2"): (0.0, 1.4),
-    ("TP4", "1"): (1.3, 0.0),
-}
-for (ref, num), (dx, dy) in GND_STITCH.items():
-    pads = all_pad_pos(ref, num)
-    if ref.startswith("SW"):  # buttons: two pads per number, use east
-        pads = [max(pads, key=lambda p: p[0])]
-    for px, py in pads:
-        if dx == 0.0 and dy == 0.0:
-            via(px, py, "GND")  # via-in-pad (U3 center GND pad)
-            continue
-        track([(px, py), (px + dx, py + dy)], "GND", 0.35)
-        via(px + dx, py + dy, "GND")
-
-# module EP already has 13 thermal PTH vias in the footprint
-
-# USB shield pads: add stitch vias if the pads are SMD (THT connect via plane)
-for pad in fps["J3"].Pads():
-    if str(pad.GetNumber()) == "S1" and pad.GetAttribute() == pcbnew.PAD_ATTRIB_SMD:
-        p = pad.GetPosition()
-        px, py = pcbnew.ToMM(p.x) - OX, pcbnew.ToMM(p.y) - OY
-        dy = -1.6 if py < 36.5 else 1.6
-        track([(px, py), (px, py + dy)], "GND", 0.35)
-        via(px, py + dy, "GND")
+def segment_distance(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> float:
+    if segments_intersect(a, b, c, d):
+        return 0.0
+    return min(
+        point_segment_distance(a, c, d),
+        point_segment_distance(b, c, d),
+        point_segment_distance(c, a, b),
+        point_segment_distance(d, a, b),
+    )
 
 
-# J3 GND pads (merged A1/B12 and A12/B1) tie to the PTH shield lugs
-track([(92.16, 39.75), (93.07, 40.82)], "GND", 0.4)
-track([(92.16, 33.25), (93.07, 32.18)], "GND", 0.4)
+class Generator:
+    def __init__(self, output: Path):
+        self.output = output
+        # Build in memory; a failed route must never truncate the last known
+        # good checked-in board before the atomic save in ``fill_and_save``.
+        self.board = pcbnew.NewBoard("")
+        self.board.SetCopperLayerCount(4)
+        settings = self.board.GetDesignSettings()
+        settings.m_CopperEdgeClearance = MM(0.25)
+        settings.m_MinThroughDrill = MM(0.20)
+        settings.m_MinTrackWidth = MM(0.20)
+        title = self.board.GetTitleBlock()
+        title.SetTitle("Esp32Tap - ESP32-S3 Precor serial-bus tap")
+        title.SetRevision("B")
+        title.SetCompany("precor-9.3x")
+        title.SetComment(0, "STACKUP: JLC04161H-7628")
+        title.SetComment(
+            1,
+            "90 ohm differential USB on F.Cu referenced to In1.Cu",
+        )
 
-# mounting holes (NPTH, board-only mechanical items)
-MH = {"MH1": (2.9, 26.5), "MH2": (97.0, 3.0), "MH3": (97.0, 52.0)}
-for _ref, (_x, _y) in MH.items():
-    _fp = pcbnew.FootprintLoad(f"{FP}/MountingHole.pretty", "MountingHole_2.7mm_M2.5")
-    _fp.SetReference(_ref)
-    _fp.SetValue("M2.5")
-    _fp.Reference().SetLayer(pcbnew.F_Fab)
-    _fp.SetPosition(VECTOR2I(MM(OX + _x), MM(OY + _y)))
-    board.Add(_fp)
-    fps[_ref] = _fp
+        self.nets: dict[str, Any] = {}
+        for name in design.NETS:
+            item = pcbnew.NETINFO_ITEM(self.board, name)
+            self.board.Add(item)
+            self.nets[name] = item
+        for ref, pad in design.NC:
+            pin_name = design.COMPONENTS[ref][7][pad]
+            name = f"unconnected-({ref}-{pin_name}-Pad{pad})"
+            item = pcbnew.NETINFO_ITEM(self.board, name)
+            self.board.Add(item)
+            self.nets[name] = item
+        self.pad_net = {
+            endpoint: name
+            for name, endpoints in design.NETS.items()
+            for endpoint in endpoints
+        }
+        self.pad_net.update(
+            {
+                (ref, pad): (
+                    f"unconnected-({ref}-"
+                    f"{design.COMPONENTS[ref][7][pad]}-Pad{pad})"
+                )
+                for ref, pad in design.NC
+            }
+        )
+        self.footprints: dict[str, Any] = {}
+        self.track_records: list[
+            tuple[tuple[float, float], tuple[float, float], str, float, int]
+        ] = []
+        self.via_records: list[tuple[tuple[float, float], str]] = []
+        self.pad_objects: dict[tuple[str, str], list[Any]] = defaultdict(list)
+        self.occupied: dict[int, dict[tuple[int, int], set[str]]] = {
+            IN2: defaultdict(set),
+            B: defaultdict(set),
+        }
+        self.blocked: dict[int, set[tuple[int, int]]] = {
+            IN2: set(),
+            B: set(),
+        }
+        self.front_pad_obstacles: list[
+            tuple[float, float, float, float, str]
+        ] = []
 
-# remove footprint silkscreen segments that cross the board edge
-for _ref in ("J1", "J2", "J3", "U1"):
-    _kill = []
-    for _gi in fps[_ref].GraphicalItems():
-        if _gi.GetLayer() == pcbnew.F_SilkS:
-            _bb = _gi.GetBoundingBox()
+    def add_footprints(self) -> None:
+        missing = set(design.COMPONENTS) - set(PLACE)
+        extra = set(PLACE) - set(design.COMPONENTS)
+        if missing or extra:
+            raise ValueError(
+                f"placement mismatch missing={sorted(missing)} "
+                f"extra={sorted(extra)}"
+            )
+        for ref, component in design.COMPONENTS.items():
+            value, library, name, lcsc, jlc_class, cost, description, _ = (
+                component
+            )
+            footprint = pcbnew.FootprintLoad(
+                str(FPLIB / f"{library}.pretty"),
+                name,
+            )
+            if footprint is None:
+                raise ValueError(f"cannot load {library}:{name}")
+            footprint.SetFPIDAsString(f"{library}:{name}")
+            footprint.SetReference(ref)
+            footprint.SetValue(value)
+            footprint.SetDNP(ref in design.DNP)
+            footprint.SetExcludedFromBOM(
+                ref in design.DNP or jlc_class == "none"
+            )
+            footprint.SetField("LCSC", lcsc)
+            footprint.SetField("JLC Class", jlc_class)
+            footprint.SetField("Unit Cost USD", f"{cost:.3f}")
+            footprint.SetField("Description", description)
+            for field in footprint.GetFields():
+                field.SetVisible(False)
+                field.SetLayer(pcbnew.F_Fab)
+            x, y, rotation = PLACE[ref]
+            footprint.SetPosition(absolute((x, y)))
+            footprint.SetOrientationDegrees(rotation)
+            self.board.Add(footprint)
+            self.footprints[ref] = footprint
+
+        for ref, footprint in self.footprints.items():
+            for pad in footprint.Pads():
+                number = str(pad.GetNumber())
+                if not number:
+                    continue
+                net = self.pad_net.get((ref, number))
+                if net:
+                    pad.SetNet(self.nets[net])
+                self.pad_objects[(ref, number)].append(pad)
+
+        for reference, position in (
+            ("MH1", (2.9, 26.5)),
+            ("MH2", (97.0, 3.0)),
+            ("MH3", (97.0, 52.0)),
+        ):
+            footprint = pcbnew.FootprintLoad(
+                str(FPLIB / "MountingHole.pretty"),
+                "MountingHole_2.7mm_M2.5",
+            )
+            if footprint is None:
+                raise ValueError("cannot load M2.5 mounting-hole footprint")
+            footprint.SetFPIDAsString(
+                "MountingHole:MountingHole_2.7mm_M2.5"
+            )
+            footprint.SetReference(reference)
+            footprint.SetValue("M2.5")
+            footprint.SetPosition(absolute(position))
+            footprint.SetBoardOnly(True)
+            for field in footprint.GetFields():
+                field.SetVisible(False)
+                field.SetLayer(pcbnew.F_Fab)
+            self.board.Add(footprint)
+            self.footprints[reference] = footprint
+
+    def pad(self, ref: str, number: str) -> tuple[float, float]:
+        pads = self.pad_objects[(ref, number)]
+        if not pads:
+            raise KeyError((ref, number))
+        return local(pads[0].GetPosition())
+
+    def pads(self, ref: str, number: str) -> list[tuple[float, float]]:
+        return [local(pad.GetPosition()) for pad in self.pad_objects[(ref, number)]]
+
+    def add_outline(self) -> None:
+        corners = [(0, 0), (BOARD_W, 0), (BOARD_W, BOARD_H), (0, BOARD_H)]
+        for start, end in zip(corners, corners[1:] + corners[:1]):
+            segment = pcbnew.PCB_SHAPE(self.board)
+            segment.SetShape(pcbnew.SHAPE_T_SEGMENT)
+            segment.SetStart(absolute(start))
+            segment.SetEnd(absolute(end))
+            segment.SetLayer(pcbnew.Edge_Cuts)
+            segment.SetWidth(MM(0.10))
+            self.board.Add(segment)
+
+    def add_track(
+        self,
+        points: Iterable[tuple[float, float]],
+        net: str,
+        width: float = 0.20,
+        layer: int = F,
+    ) -> None:
+        point_list = list(points)
+        for start, end in zip(point_list, point_list[1:]):
+            if math.dist(start, end) < 1e-6:
+                continue
+            segment = pcbnew.PCB_TRACK(self.board)
+            segment.SetStart(absolute(start))
+            segment.SetEnd(absolute(end))
+            segment.SetWidth(MM(width))
+            segment.SetLayer(layer)
+            segment.SetNet(self.nets[net])
+            self.board.Add(segment)
+            self.track_records.append((start, end, net, width, layer))
+
+    def add_via(
+        self,
+        point: tuple[float, float],
+        net: str,
+        size: float = 0.60,
+        drill: float = 0.30,
+    ) -> None:
+        for existing, existing_net in self.via_records:
+            if math.dist(point, existing) < 1e-6:
+                if existing_net == net:
+                    return
+                raise ValueError(
+                    f"conflicting vias at {point}: {existing_net} and {net}"
+                )
+        via = pcbnew.PCB_VIA(self.board)
+        via.SetPosition(absolute(point))
+        via.SetWidth(MM(size))
+        via.SetDrill(MM(drill))
+        via.SetLayerPair(F, B)
+        via.SetNet(self.nets[net])
+        self.board.Add(via)
+        self.via_records.append((point, net))
+
+    def add_zone(
+        self,
+        layer: int,
+        net: str,
+        points: Iterable[tuple[float, float]],
+        name: str,
+    ) -> None:
+        zone = pcbnew.ZONE(self.board)
+        zone.SetLayer(layer)
+        zone.SetNet(self.nets[net])
+        zone.SetZoneName(name)
+        zone.SetLocalClearance(MM(0.20))
+        zone.SetMinThickness(MM(0.20))
+        zone.SetPadConnection(pcbnew.ZONE_CONNECTION_FULL)
+        chain = pcbnew.SHAPE_LINE_CHAIN()
+        for x, y in points:
+            chain.Append(MM(OX + x), MM(OY + y))
+        chain.SetClosed(True)
+        zone.Outline().AddOutline(chain)
+        self.board.Add(zone)
+
+    def add_rule_area(
+        self,
+        name: str,
+        points: Iterable[tuple[float, float]],
+        layers: Iterable[int],
+        *,
+        footprints: bool,
+        pads: bool,
+        tracks: bool,
+        vias: bool,
+        fills: bool,
+    ) -> None:
+        area = pcbnew.ZONE(self.board)
+        area.SetIsRuleArea(True)
+        area.SetZoneName(name)
+        layer_set = pcbnew.LSET()
+        for layer in layers:
+            layer_set.AddLayer(layer)
+        area.SetLayerSet(layer_set)
+        area.SetDoNotAllowFootprints(footprints)
+        area.SetDoNotAllowPads(pads)
+        area.SetDoNotAllowTracks(tracks)
+        area.SetDoNotAllowVias(vias)
+        area.SetDoNotAllowZoneFills(fills)
+        chain = pcbnew.SHAPE_LINE_CHAIN()
+        for x, y in points:
+            chain.Append(MM(OX + x), MM(OY + y))
+        chain.SetClosed(True)
+        area.Outline().AddOutline(chain)
+        self.board.Add(area)
+
+    def add_planes_and_keepouts(self) -> None:
+        outline = [(0.5, 0.5), (99.5, 0.5), (99.5, 54.5), (0.5, 54.5)]
+        self.add_zone(IN1, "GND", outline, "IN1_SOLID_GND_REFERENCE")
+        self.add_zone(B, "GND", outline, "BOTTOM_GND_FILL")
+        ax0, ay0, ax1, ay1 = ANTENNA_KEEPOUT
+        self.add_rule_area(
+            "ESP32_ANTENNA_ALL_COPPER_KEEPOUT",
+            [(ax0, ay0), (ax1, ay0), (ax1, ay1), (ax0, ay1)],
+            (F, IN1, IN2, B),
+            footprints=False,
+            pads=False,
+            tracks=True,
+            vias=True,
+            fills=True,
+        )
+        fx0, fy0, fx1, fy1 = FIXTURE_KEEPOUT
+        self.add_rule_area(
+            "TP5_TP13_BOTTOM_FIXTURE",
+            [(fx0, fy0), (fx1, fy0), (fx1, fy1), (fx0, fy1)],
+            (B,),
+            footprints=True,
+            pads=True,
+            tracks=True,
+            vias=True,
+            fills=True,
+        )
+        self.add_rule_area(
+            "USB_90R_CONTROLLED_CORRIDOR",
+            [(69.5, 23.3), (83.5, 23.3), (83.5, 25.2), (69.5, 25.2)],
+            (F,),
+            footprints=False,
+            pads=False,
+            tracks=False,
+            vias=False,
+            fills=False,
+        )
+        for ref, footprint in sorted(self.footprints.items()):
+            index = 0
+            for pad in footprint.Pads():
+                if pad.GetAttribute() != pcbnew.PAD_ATTRIB_NPTH:
+                    continue
+                index += 1
+                position = local(pad.GetPosition())
+                drill = pad.GetDrillSize()
+                half = (
+                    max(pcbnew.ToMM(drill.x), pcbnew.ToMM(drill.y)) / 2
+                    + 0.30
+                )
+                self.add_rule_area(
+                    f"NPTH_CLEARANCE_{ref}_{index}",
+                    [
+                        (position[0] - half, position[1] - half),
+                        (position[0] + half, position[1] - half),
+                        (position[0] + half, position[1] + half),
+                        (position[0] - half, position[1] + half),
+                    ],
+                    (F, IN1, IN2, B),
+                    footprints=False,
+                    pads=False,
+                    tracks=True,
+                    vias=True,
+                    fills=True,
+                )
+
+    def add_manual_buck_routes(self) -> None:
+        self.add_track(
+            [self.pad("F1", "2"), self.pad("D1", "2")],
+            "+8V_F",
+            0.80,
+        )
+        sw = self.pad("U2", "2")
+        l1 = self.pad("L1", "1")
+        c5_sw = self.pad("C5", "2")
+        self.add_track([sw, l1], "SW_NODE", 0.50)
+        self.add_track(
+            [c5_sw, (62.4, c5_sw[1]), (62.4, sw[1]), sw],
+            "SW_NODE",
+            0.30,
+        )
+        self.add_track(
+            [self.pad("U2", "6"), self.pad("C5", "1")],
+            "BST",
+            0.25,
+        )
+
+        fb = self.pad("U2", "4")
+        r1 = self.pad("R1", "2")
+        r2 = self.pad("R2", "1")
+        c12 = self.pad("C12", "2")
+        junction = (57.4, 45.8)
+        self.add_track(
+            [fb, (junction[0], fb[1]), junction],
+            "FB",
+            0.20,
+        )
+        self.add_track([junction, r1], "FB", 0.20)
+        self.add_track([junction, r2], "FB", 0.20)
+        self.add_track([junction, c12], "FB", 0.20)
+
+        uv_top = self.pad("R17", "2")
+        uv_bottom = self.pad("R18", "1")
+        uv_cap = self.pad("C18", "1")
+        uv_junction = (uv_cap[0], 43.4)
+        self.add_track([uv_top, uv_bottom], "UV_SENSE", 0.20)
+        self.add_track(
+            [
+                uv_bottom,
+                (uv_bottom[0], uv_junction[1]),
+                uv_junction,
+                (33.0, uv_junction[1]),
+                self.pad("U4", "3"),
+            ],
+            "UV_SENSE",
+            0.20,
+        )
+        self.add_track([uv_junction, uv_cap], "UV_SENSE", 0.20)
+
+        ov_top = self.pad("R19", "2")
+        ov_bottom = self.pad("R20", "1")
+        ov_cap = self.pad("C19", "1")
+        ov_junction = (38.5, 43.4)
+        self.add_track([ov_top, ov_bottom], "OV_SENSE", 0.20)
+        self.add_track(
+            [
+                ov_bottom,
+                (ov_bottom[0], ov_junction[1]),
+                ov_junction,
+                (37.0, ov_junction[1]),
+                self.pad("U4", "4"),
+            ],
+            "OV_SENSE",
+            0.20,
+        )
+        self.add_track(
+            [ov_junction, (ov_cap[0], ov_junction[1]), ov_cap],
+            "OV_SENSE",
+            0.20,
+        )
+
+    def add_usb_routes(self) -> None:
+        # Connector fan-out keeps the interleaved reversible contacts on F.Cu.
+        # D+ joins on the inboard side and leaves below the contact field; D-
+        # joins on the outboard side and leaves above it.  The two paths never
+        # cross despite the reversible A/B contact ordering.
+        a7, b7 = self.pad("J3", "A7"), self.pad("J3", "B7")
+        a6, b6 = self.pad("J3", "A6"), self.pad("J3", "B6")
+        u31, u33 = self.pad("U3", "1"), self.pad("U3", "3")
+        dn_x = 93.4
+        self.add_track([a7, (dn_x, a7[1])], "USB_DN", 0.20)
+        self.add_track([b7, (dn_x, b7[1])], "USB_DN", 0.20)
+        self.add_track(
+            [
+                (dn_x, a7[1]),
+                (dn_x, b7[1]),
+                (89.8, b7[1]),
+                (89.8, u31[1]),
+                u31,
+            ],
+            "USB_DN",
+            0.285,
+        )
+        dp_x = 90.9
+        self.add_track([a6, (dp_x, a6[1])], "USB_DP", 0.20)
+        self.add_track([b6, (dp_x, b6[1])], "USB_DP", 0.20)
+        self.add_track(
+            [
+                (dp_x, a6[1]),
+                (dp_x, b6[1]),
+                (90.4, b6[1]),
+                (90.4, 34.6),
+                (89.6, 34.6),
+                (89.6, u33[1]),
+                u33,
+            ],
+            "USB_DP",
+            0.285,
+        )
+
+        # Long post-ESD pair.  The central parallel run has 0.485 mm
+        # centre-to-centre separation: 0.285 mm copper + 0.200 mm edge gap.
+        u36, u34 = self.pad("U3", "6"), self.pad("U3", "4")
+        r151, r161 = self.pad("R15", "1"), self.pad("R16", "1")
+        dp_y, dn_y = 24.000, 24.485
+        self.add_track(
+            [
+                u36,
+                (83.2, u36[1]),
+                (83.2, dn_y),
+                (69.5, dn_y),
+                (61.99, dn_y),
+                (61.99, r151[1]),
+                r151,
+            ],
+            "USB_DN_MCU",
+            0.285,
+        )
+        self.add_track(
+            [
+                u34,
+                (83.685, u34[1]),
+                (83.685, dp_y),
+                (69.985, dp_y),
+                (69.985, 22.0),
+                (71.67, 22.0),
+                (71.67, dp_y),
+                (62.483742, dp_y),
+                (62.483742, r161[1]),
+                r161,
+            ],
+            "USB_DP_MCU",
+            0.285,
+        )
+
+        r152, r162 = self.pad("R15", "2"), self.pad("R16", "2")
+        u113, u114 = self.pad("U1", "13"), self.pad("U1", "14")
+        c131, c141 = self.pad("C13", "1"), self.pad("C14", "1")
+        self.add_track([r152, u113], "USB_DN_R", 0.285)
+        self.add_track([r162, u114], "USB_DP_R", 0.285)
+        self.add_track(
+            [c131, (c131[0], r152[1]), r152],
+            "USB_DN_R",
+            0.285,
+        )
+        self.add_track(
+            [c141, (c141[0], r162[1]), r162],
+            "USB_DP_R",
+            0.285,
+        )
+        # The paired A/B ground contacts share copper and tie directly to the
+        # plated shell stakes; those stakes provide the plane connection.
+        shell = self.pads("J3", "S1")
+        for number in ("A1", "A12", "B1", "B12"):
+            contact = self.pad("J3", number)
+            nearest = min(shell, key=lambda candidate: math.dist(contact, candidate))
+            self.add_track([contact, nearest], "GND", 0.30)
+
+        # VBUS is only sensed by U3.  Bring both reversible connector contact
+        # groups down to In2 immediately so they do not cut across the USB
+        # pair fan-out on the front layer.
+        vbus_lower = (90.4, 33.2)
+        vbus_upper = (90.4, 39.6)
+        vbus_esd = (85.2, self.pad("U3", "5")[1])
+        self.add_track(
+            [
+                self.pad("J3", "A9"),
+                (90.4, self.pad("J3", "A9")[1]),
+                (90.4, vbus_lower[1]),
+                vbus_lower,
+            ],
+            "VBUS",
+            0.30,
+        )
+        self.add_track(
+            [
+                self.pad("J3", "A4"),
+                (90.4, self.pad("J3", "A4")[1]),
+                (90.4, vbus_upper[1]),
+                vbus_upper,
+            ],
+            "VBUS",
+            0.30,
+        )
+        self.add_track([self.pad("U3", "5"), vbus_esd], "VBUS", 0.30)
+        for point in (vbus_lower, vbus_upper, vbus_esd):
+            self.add_via(point, "VBUS")
+        self.add_track(
+            [vbus_lower, vbus_esd, vbus_upper],
+            "VBUS",
+            0.30,
+            IN2,
+        )
+
+        cc_routes = (
+            (
+                "CC1",
+                self.pad("J3", "A5"),
+                (90.5, 38.2),
+                self.pad("R4", "1"),
+                (92.4, self.pad("R4", "1")[1]),
+            ),
+            (
+                "CC2",
+                self.pad("J3", "B5"),
+                (93.4, self.pad("J3", "B5")[1]),
+                self.pad("R5", "1"),
+                (92.4, self.pad("R5", "1")[1]),
+            ),
+        )
+        for net, contact, contact_via, resistor, resistor_via in cc_routes:
+            self.add_track(
+                [
+                    contact,
+                    (contact_via[0], contact[1]),
+                    contact_via,
+                ],
+                net,
+                0.20,
+            )
+            self.add_track([resistor, resistor_via], net, 0.20)
+            self.add_via(contact_via, net)
+            self.add_via(resistor_via, net)
+            inner_points = [contact_via, resistor_via]
+            if net == "CC2":
+                inner_points = [
+                    contact_via,
+                    (89.0, contact_via[1]),
+                    (89.0, resistor_via[1]),
+                    resistor_via,
+                ]
+            self.add_track(inner_points, net, 0.20, B)
+
+        vbus_loads = (
+            (self.pad("C11", "1"), (84.8, self.pad("C11", "1")[1])),
+            (self.pad("Q2", "1"), (81.8, self.pad("Q2", "1")[1])),
+            (self.pad("R29", "1"), (78.0, self.pad("R29", "1")[1])),
+        )
+        load_vias: list[tuple[float, float]] = []
+        for pad_point, via_point in vbus_loads:
+            self.add_track([pad_point, via_point], "VBUS", 0.25)
+            self.add_via(via_point, "VBUS")
+            load_vias.append(via_point)
+        self.add_track(
+            [vbus_esd, *load_vias],
+            "VBUS",
+            0.30,
+            B,
+        )
+
+    def outward_escape(
+        self,
+        ref: str,
+        pad: Any,
+        net: str,
+    ) -> tuple[tuple[float, float], list[tuple[float, float]]]:
+        point = local(pad.GetPosition())
+        escape_width = min(WIDTHS.get(net, 0.20), 0.25)
+        if ref == "U6":
+            desired = PLANNED_U6_ESCAPES[str(pad.GetNumber())][0]
+        elif ref.startswith("TP") and 5 <= int(ref[2:]) <= 13:
+            desired = (point[0], 32.8)
+        else:
+            center = local(self.footprints[ref].GetPosition())
+            dx, dy = point[0] - center[0], point[1] - center[1]
+            if abs(dx) >= abs(dy):
+                direction = 1.0 if dx >= 0 else -1.0
+                desired = (point[0] + direction * 1.2, point[1])
+            else:
+                direction = 1.0 if dy >= 0 else -1.0
+                desired = (point[0], point[1] + direction * 1.2)
+
+        preferred = (grid_index(desired[0]), grid_index(desired[1]))
+        candidates: list[tuple[int, int, int]] = []
+        for radius in range(0, 30):
+            for dx in range(-radius, radius + 1):
+                for dy in (-radius, radius):
+                    candidates.append(
+                        (abs(dx) + abs(dy), preferred[0] + dx, preferred[1] + dy)
+                    )
+            for dy in range(-radius + 1, radius):
+                for dx in (-radius, radius):
+                    candidates.append(
+                        (abs(dx) + abs(dy), preferred[0] + dx, preferred[1] + dy)
+                    )
+            for _, ix, iy in sorted(set(candidates)):
+                candidate = (ix, iy)
+                if not self.node_inside(candidate):
+                    continue
+                if self.cell_allowed(candidate, IN2, net) and self.cell_allowed(
+                    candidate, B, net
+                ):
+                    target = grid_point(candidate)
+                    if not self.via_allowed(target, net):
+                        continue
+                    doglegs = (
+                        [point, (target[0], point[1]), target],
+                        [point, (point[0], target[1]), target],
+                    )
+                    if abs(point[0] - target[0]) < abs(
+                        point[1] - target[1]
+                    ):
+                        doglegs = tuple(reversed(doglegs))
+                    for dogleg in doglegs:
+                        if all(
+                            self.front_segment_allowed(
+                                start,
+                                end,
+                                net,
+                                escape_width,
+                            )
+                            for start, end in zip(dogleg, dogleg[1:])
+                        ):
+                            return target, dogleg
+        raise RuntimeError(f"no via escape for {ref}.{pad.GetNumber()} {net}")
+
+    def via_allowed(
+        self,
+        point: tuple[float, float],
+        net: str,
+    ) -> bool:
+        for x, y, half_width, half_height, pad_net in (
+            self.front_pad_obstacles
+        ):
+            if pad_net == net:
+                continue
             if (
-                pcbnew.ToMM(_bb.GetLeft()) < OX + 0.2
-                or pcbnew.ToMM(_bb.GetRight()) > OX + BW - 0.2
-                or pcbnew.ToMM(_bb.GetTop()) < OY + 0.2
-                or pcbnew.ToMM(_bb.GetBottom()) > OY + BH - 0.2
+                abs(point[0] - x) < half_width + 0.50
+                and abs(point[1] - y) < half_height + 0.50
             ):
-                _kill.append(_gi)
-    for _gi in _kill:
-        fps[_ref].Remove(_gi)
+                return False
+
+        for footprint in self.footprints.values():
+            for pad in footprint.Pads():
+                drill = pcbnew.ToMM(pad.GetDrillSize().x)
+                if drill <= 0:
+                    continue
+                pad_point = local(pad.GetPosition())
+                if math.dist(point, pad_point) < 0.15 + drill / 2 + 0.25:
+                    return False
+
+        for existing, existing_net in self.via_records:
+            distance = math.dist(point, existing)
+            if distance < 1e-6 and existing_net == net:
+                continue
+            if distance < 0.80:
+                return False
+
+        for start, end, track_net, width, layer in self.track_records:
+            if layer != F or track_net == net:
+                continue
+            if point_segment_distance(point, start, end) < (
+                0.30 + width / 2 + CLEARANCE
+            ):
+                return False
+        return True
+
+    def front_segment_allowed(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        net: str,
+        width: float,
+    ) -> bool:
+        expansion = width / 2 + CLEARANCE
+        length = math.dist(start, end)
+        samples = max(1, math.ceil(length / 0.08))
+        for index in range(samples + 1):
+            fraction = index / samples
+            point = (
+                start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction,
+            )
+            for x, y, half_width, half_height, pad_net in (
+                self.front_pad_obstacles
+            ):
+                if pad_net == net:
+                    continue
+                if (
+                    abs(point[0] - x) < half_width + expansion
+                    and abs(point[1] - y) < half_height + expansion
+                ):
+                    return False
+
+        for other_start, other_end, track_net, other_width, layer in (
+            self.track_records
+        ):
+            if layer != F or track_net == net:
+                continue
+            if segment_distance(start, end, other_start, other_end) < (
+                width / 2 + other_width / 2 + CLEARANCE
+            ):
+                return False
+
+        for via, via_net in self.via_records:
+            if via_net == net:
+                continue
+            if point_segment_distance(via, start, end) < (
+                0.30 + width / 2 + CLEARANCE
+            ):
+                return False
+        return True
+
+    def node_inside(self, node: tuple[int, int]) -> bool:
+        x, y = grid_point(node)
+        return 0.8 <= x <= BOARD_W - 0.8 and 0.8 <= y <= BOARD_H - 0.8
+
+    def cell_allowed(
+        self,
+        node: tuple[int, int],
+        layer: int,
+        net: str,
+    ) -> bool:
+        if node in self.blocked[layer]:
+            return False
+        owners = self.occupied[layer].get(node, set())
+        return not owners or owners == {net}
+
+    def mark_circle(
+        self,
+        point: tuple[float, float],
+        radius: float,
+        layers: Iterable[int],
+        owner: str | None,
+    ) -> None:
+        cx, cy = grid_index(point[0]), grid_index(point[1])
+        cells = math.ceil(radius / GRID)
+        for ix in range(cx - cells, cx + cells + 1):
+            for iy in range(cy - cells, cy + cells + 1):
+                candidate = grid_point((ix, iy))
+                if math.dist(point, candidate) > radius + GRID * 0.72:
+                    continue
+                for layer in layers:
+                    if owner is None:
+                        self.blocked[layer].add((ix, iy))
+                    else:
+                        self.occupied[layer][(ix, iy)].add(owner)
+
+    def mark_segment(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        width: float,
+        layers: Iterable[int],
+        owner: str | None,
+        extra: float = CLEARANCE,
+    ) -> None:
+        length = math.dist(start, end)
+        samples = max(1, math.ceil(length / (GRID / 2)))
+        for index in range(samples + 1):
+            fraction = index / samples
+            point = (
+                start[0] + (end[0] - start[0]) * fraction,
+                start[1] + (end[1] - start[1]) * fraction,
+            )
+            self.mark_circle(point, width / 2 + extra, layers, owner)
+
+    def initialise_router_obstacles(self) -> None:
+        ax0, ay0, ax1, ay1 = ANTENNA_KEEPOUT
+        fx0, fy0, fx1, fy1 = FIXTURE_KEEPOUT
+        for ix in range(grid_index(0.8), grid_index(BOARD_W - 0.8) + 1):
+            for iy in range(grid_index(0.8), grid_index(BOARD_H - 0.8) + 1):
+                x, y = grid_point((ix, iy))
+                if ax0 <= x <= ax1 and ay0 <= y <= ay1:
+                    self.blocked[IN2].add((ix, iy))
+                    self.blocked[B].add((ix, iy))
+                if fx0 <= x <= fx1 and fy0 <= y <= fy1:
+                    self.blocked[B].add((ix, iy))
+
+        for footprint in self.footprints.values():
+            for pad in footprint.Pads():
+                if pad.GetAttribute() == pcbnew.PAD_ATTRIB_NPTH:
+                    drill = pad.GetDrillSize()
+                    self.mark_circle(
+                        local(pad.GetPosition()),
+                        max(
+                            pcbnew.ToMM(drill.x),
+                            pcbnew.ToMM(drill.y),
+                        )
+                        / 2
+                        + 0.25,
+                        ROUTING_LAYERS,
+                        None,
+                    )
+                if not pad.IsOnLayer(F):
+                    continue
+                position = local(pad.GetPosition())
+                bounds = pad.GetBoundingBox()
+                self.front_pad_obstacles.append(
+                    (
+                        position[0],
+                        position[1],
+                        pcbnew.ToMM(bounds.GetWidth()) / 2,
+                        pcbnew.ToMM(bounds.GetHeight()) / 2,
+                        pad.GetNetname(),
+                    )
+                )
+
+        for point, net in PLANNED_U6_ESCAPES.values():
+            self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+
+        for (ref, number), pads in self.pad_objects.items():
+            net = self.pad_net.get((ref, number))
+            if not net:
+                continue
+            for pad in pads:
+                position = local(pad.GetPosition())
+                bounds = pad.GetBoundingBox()
+                width = pcbnew.ToMM(bounds.GetWidth())
+                height = pcbnew.ToMM(bounds.GetHeight())
+                for layer in ROUTING_LAYERS:
+                    if not pad.IsOnLayer(layer):
+                        continue
+                    rx = width / 2 + CLEARANCE + 0.15
+                    ry = height / 2 + CLEARANCE + 0.15
+                    for ix in range(
+                        grid_index(position[0] - rx),
+                        grid_index(position[0] + rx) + 1,
+                    ):
+                        for iy in range(
+                            grid_index(position[1] - ry),
+                            grid_index(position[1] + ry) + 1,
+                        ):
+                            self.occupied[layer][(ix, iy)].add(net)
+
+        for start, end, net, width, layer in self.track_records:
+            if layer in ROUTING_LAYERS:
+                self.mark_segment(start, end, width, (layer,), net)
+            elif (
+                layer == F
+                and net in USB_NETS
+                and min(start[0], end[0]) >= 69.5
+            ):
+                self.mark_segment(
+                    start,
+                    end,
+                    width,
+                    ROUTING_LAYERS,
+                    net,
+                    extra=0.0,
+                )
+        for point, net in self.via_records:
+            self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+
+    def endpoint_nodes(
+        self,
+        net: str,
+    ) -> list[tuple[int, int]]:
+        endpoints: list[tuple[int, int]] = []
+        for ref, number in design.NETS[net]:
+            for pad in self.pad_objects[(ref, number)]:
+                target, dogleg = self.outward_escape(ref, pad, net)
+                self.add_track(
+                    dogleg,
+                    net,
+                    min(WIDTHS.get(net, 0.20), 0.25),
+                    F,
+                )
+                self.add_via(target, net)
+                node = (grid_index(target[0]), grid_index(target[1]))
+                endpoints.append(node)
+                self.mark_circle(target, 0.50, ROUTING_LAYERS, net)
+        return endpoints
+
+    def astar(
+        self,
+        starts: set[tuple[int, int, int]],
+        goals: set[tuple[int, int, int]],
+        net: str,
+        allowed_layers: tuple[int, ...],
+    ) -> list[tuple[int, int, int]]:
+        if starts & goals:
+            return [next(iter(starts & goals))]
+        min_x = min(node[0] for node in goals)
+        max_x = max(node[0] for node in goals)
+        min_y = min(node[1] for node in goals)
+        max_y = max(node[1] for node in goals)
+
+        def heuristic(state: tuple[int, int, int]) -> float:
+            x, y, _ = state
+            dx = max(min_x - x, 0, x - max_x)
+            dy = max(min_y - y, 0, y - max_y)
+            return dx + dy
+
+        queue: list[tuple[float, float, tuple[int, int, int]]] = []
+        distance: dict[tuple[int, int, int], float] = {}
+        previous: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+        for start in sorted(starts):
+            distance[start] = 0.0
+            heapq.heappush(queue, (heuristic(start), 0.0, start))
+        visited = 0
+        while queue:
+            _, cost, state = heapq.heappop(queue)
+            if cost != distance.get(state):
+                continue
+            if state in goals:
+                path = [state]
+                while state in previous:
+                    state = previous[state]
+                    path.append(state)
+                return list(reversed(path))
+            visited += 1
+            if visited > 500_000:
+                break
+            x, y, layer_index = state
+            candidates = [
+                (x + 1, y, layer_index, 1.0),
+                (x - 1, y, layer_index, 1.0),
+                (x, y + 1, layer_index, 1.0),
+                (x, y - 1, layer_index, 1.0),
+            ]
+            for other_index in range(len(allowed_layers)):
+                if other_index != layer_index:
+                    candidates.append((x, y, other_index, 7.0))
+            for nx, ny, next_layer_index, step_cost in candidates:
+                node = (nx, ny)
+                layer = allowed_layers[next_layer_index]
+                if not self.node_inside(node):
+                    continue
+                if not self.cell_allowed(node, layer, net):
+                    continue
+                if (
+                    next_layer_index != layer_index
+                    and not self.via_allowed(grid_point(node), net)
+                ):
+                    continue
+                next_state = (nx, ny, next_layer_index)
+                new_cost = cost + step_cost
+                if new_cost >= distance.get(next_state, math.inf):
+                    continue
+                distance[next_state] = new_cost
+                previous[next_state] = state
+                heapq.heappush(
+                    queue,
+                    (
+                        new_cost + heuristic(next_state),
+                        new_cost,
+                        next_state,
+                    ),
+                )
+        raise RuntimeError(
+            f"autorouter cannot connect {net}; starts={len(starts)} "
+            f"goals={len(goals)} visited={visited}"
+        )
+
+    def emit_grid_path(
+        self,
+        path: list[tuple[int, int, int]],
+        net: str,
+        allowed_layers: tuple[int, ...],
+    ) -> set[tuple[int, int, int]]:
+        width = WIDTHS.get(net, 0.20)
+        tree_additions: set[tuple[int, int, int]] = set(path)
+        run: list[tuple[float, float]] = []
+        run_layer: int | None = None
+        previous_direction: tuple[int, int] | None = None
+
+        def flush() -> None:
+            nonlocal run
+            if len(run) >= 2 and run_layer is not None:
+                endpoints = [run[0], run[-1]]
+                self.add_track(endpoints, net, width, run_layer)
+                self.mark_segment(
+                    endpoints[0],
+                    endpoints[1],
+                    width,
+                    (run_layer,),
+                    net,
+                )
+            run = []
+
+        for index, state in enumerate(path):
+            x, y, layer_index = state
+            layer = allowed_layers[layer_index]
+            point = grid_point((x, y))
+            if index and path[index - 1][2] != layer_index:
+                flush()
+                self.add_via(point, net)
+                self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+                previous_direction = None
+            direction = None
+            if index + 1 < len(path) and path[index + 1][2] == layer_index:
+                direction = (
+                    path[index + 1][0] - x,
+                    path[index + 1][1] - y,
+                )
+            if not run:
+                run = [point]
+                run_layer = layer
+            elif previous_direction is not None and direction != previous_direction:
+                run.append(point)
+                flush()
+                run = [point]
+                run_layer = layer
+            if run[-1] != point:
+                run.append(point)
+            previous_direction = direction
+        flush()
+        return tree_additions
+
+    def route_net(self, net: str) -> None:
+        endpoint_nodes = self.endpoint_nodes(net)
+        unique = sorted(set(endpoint_nodes))
+        if len(unique) < 2:
+            return
+        allowed_layers = ROUTING_LAYERS
+        tree: set[tuple[int, int, int]] = {
+            (unique[0][0], unique[0][1], index)
+            for index in range(len(allowed_layers))
+        }
+        remaining = set(unique[1:])
+        while remaining:
+            endpoint = min(
+                remaining,
+                key=lambda node: min(
+                    abs(node[0] - tree_node[0])
+                    + abs(node[1] - tree_node[1])
+                    for tree_node in tree
+                ),
+            )
+            starts = {
+                (endpoint[0], endpoint[1], index)
+                for index in range(len(allowed_layers))
+            }
+            path = self.astar(starts, tree, net, allowed_layers)
+            additions = self.emit_grid_path(path, net, allowed_layers)
+            tree.update(additions)
+            tree.update(
+                (endpoint[0], endpoint[1], index)
+                for index in range(len(allowed_layers))
+            )
+            remaining.remove(endpoint)
+
+    def route_slow_nets(self) -> None:
+        fanout_order = {
+            net: index
+            for index, net in enumerate(
+                (
+                    "TX_ENABLE",
+                    "RELAY_GATE",
+                    "TX_GATE",
+                    "RELAY_CMD",
+                    "ESP_TX",
+                    "TX_BUF",
+                    "PIN3_RX",
+                    "CONS_RX",
+                    "TREAD_OK",
+                    "K1_NC_FB",
+                    "K1_NO_FB",
+                    "VBUS_PRESENT_N",
+                    "STATUS_LED",
+                    "IO0",
+                    "U0TXD",
+                    "U0RXD",
+                )
+            )
+        }
+        nets = [
+            net
+            for net in design.NETS
+            if net not in MANUAL_NETS
+        ]
+        nets.sort(
+            key=lambda net: (
+                0 if net in {"+8V_RAW", "+8V_F", "VIN", "+3V3"} else 1,
+                fanout_order.get(net, len(fanout_order)),
+                -len(design.NETS[net]),
+                net,
+            )
+        )
+        for net in nets:
+            self.route_net(net)
+
+    def add_ground_connections(self) -> None:
+        for ref, number in design.NETS["GND"]:
+            if ref == "J3":
+                continue
+            for pad in self.pad_objects[(ref, number)]:
+                if pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH:
+                    continue
+                point = local(pad.GetPosition())
+                if ref == "U3" and number == "2":
+                    target = point
+                    dogleg = [point]
+                else:
+                    target, dogleg = self.outward_escape(ref, pad, "GND")
+                self.add_track(dogleg, "GND", 0.30, F)
+                self.add_via(target, "GND")
+                self.mark_circle(target, 0.50, ROUTING_LAYERS, "GND")
+
+    def add_silkscreen(self) -> None:
+        def text(x: float, y: float, value: str, size: float = 1.0) -> None:
+            item = pcbnew.PCB_TEXT(self.board)
+            item.SetText(value)
+            item.SetPosition(absolute((x, y)))
+            item.SetLayer(pcbnew.F_SilkS)
+            item.SetTextSize(VECTOR2I(MM(size), MM(size)))
+            item.SetTextThickness(MM(0.20))
+            self.board.Add(item)
+
+        text(6.5, 22.5, "CONSOLE", 1.0)
+        text(6.5, 31.0, "MOTOR", 1.0)
+        text(45.0, 2.0, "Esp32Tap rev B", 1.2)
+        text(24.0, 13.0, "BYPASS", 1.0)
+        text(30.0, 13.0, "NC", 1.0)
+        text(28.0, 35.0, "EMULATE", 1.0)
+        text(34.0, 35.0, "NO", 1.0)
+        text(91.5, 47.5, "USB DATA ONLY", 0.9)
+        text(7.5, 3.0, "PIN 1", 0.9)
+        text(26.0, 48.0, "D1 K", 0.9)
+        text(35.0, 48.0, "D3 K", 0.9)
+
+    def fill_and_save(self) -> None:
+        filler = pcbnew.ZONE_FILLER(self.board)
+        filler.Fill(self.board.Zones())
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=f".{self.output.name}.",
+            suffix=".kicad_pcb",
+            dir=self.output.parent,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+        try:
+            pcbnew.SaveBoard(str(temporary), self.board)
+            source = temporary.read_text(encoding="utf-8")
+            source = re.sub(
+                r"\(general\s*\n\s*\(thickness [^\)]+\)",
+                "(general\n\t\t(thickness 1.59)",
+                source,
+                count=1,
+            )
+            stackup = """\
+\t\t(stackup
+\t\t\t(layer "F.Cu" (type "copper") (thickness 0.035))
+\t\t\t(layer "dielectric 1" (type "prepreg") (thickness 0.2104)
+\t\t\t\t(material "7628 RC49%") (epsilon_r 4.4) (loss_tangent 0.02))
+\t\t\t(layer "In1.Cu" (type "copper") (thickness 0.0175))
+\t\t\t(layer "dielectric 2" (type "core") (thickness 1.065)
+\t\t\t\t(material "NP-155F") (epsilon_r 4.38) (loss_tangent 0.02))
+\t\t\t(layer "In2.Cu" (type "copper") (thickness 0.0175))
+\t\t\t(layer "dielectric 3" (type "prepreg") (thickness 0.2104)
+\t\t\t\t(material "7628 RC49%") (epsilon_r 4.4) (loss_tangent 0.02))
+\t\t\t(layer "B.Cu" (type "copper") (thickness 0.035))
+\t\t\t(copper_finish "ENIG")
+\t\t\t(dielectric_constraints yes)
+\t\t)
+"""
+            if "(stackup" in source:
+                raise ValueError("pcbnew unexpectedly emitted stackup metadata")
+            source = source.replace("\t(setup\n", "\t(setup\n" + stackup, 1)
+            temporary.write_text(source, encoding="utf-8")
+            check = pcbnew.LoadBoard(str(temporary))
+            if check is None or check.GetCopperLayerCount() != 4:
+                raise ValueError("generated board failed KiCad round-trip")
+            os.replace(temporary, self.output)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+    def generate(self) -> None:
+        self.add_footprints()
+        self.add_outline()
+        self.add_planes_and_keepouts()
+        self.add_manual_buck_routes()
+        self.add_usb_routes()
+        self.initialise_router_obstacles()
+        self.add_ground_connections()
+        self.route_slow_nets()
+        self.add_silkscreen()
+        self.fill_and_save()
 
 
-# ============================ silkscreen ================================
-def silk(x, y, s, size=1.2):
-    t = pcbnew.PCB_TEXT(board)
-    t.SetText(s)
-    t.SetPosition(VECTOR2I(MM(OX + x), MM(OY + y)))
-    t.SetLayer(pcbnew.F_SilkS)
-    t.SetTextSize(VECTOR2I(MM(size), MM(size)))
-    t.SetTextThickness(MM(0.15))
-    board.Add(t)
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUT)
+    args = parser.parse_args()
+    generator = Generator(args.output.resolve())
+    generator.generate()
+    print(f"wrote {args.output.resolve()}")
+    return 0
 
 
-silk(7.0, 22.5, "CONSOLE", 1.0)
-silk(7.0, 30.5, "MOTOR", 1.0)
-silk(66.0, 33.0, "Esp32Tap rev A - precor-9.3x", 1.2)
-
-import math
-
-for _ref in ("J1", "J2", "J3", "MH1", "MH2", "MH3"):
-    for _pad in fps[_ref].Pads():
-        if _pad.GetAttribute() == pcbnew.PAD_ATTRIB_NPTH:
-            _p = _pad.GetPosition()
-            _r = pcbnew.ToMM(max(_pad.GetDrillSize().x, _pad.GetDrillSize().y)) / 2 + 0.4
-            _ka = pcbnew.ZONE(board)
-            _ka.SetIsRuleArea(True)
-            _ka.SetDoNotAllowZoneFills(True)
-            _ka.SetDoNotAllowTracks(False)
-            _ka.SetDoNotAllowVias(False)
-            _ka.SetLayer(B)
-            _kchain = pcbnew.SHAPE_LINE_CHAIN()
-            for _i in range(16):
-                _a = _i * math.tau / 16
-                _kchain.Append(int(_p.x + MM(_r) * math.cos(_a)), int(_p.y + MM(_r) * math.sin(_a)))
-            _kchain.SetClosed(True)
-            _ka.Outline().AddOutline(_kchain)
-            board.Add(_ka)
-
-filler = pcbnew.ZONE_FILLER(board)
-filler.Fill(board.Zones())
-
-pcbnew.SaveBoard(OUT, board)
-print("wrote", OUT)
+if __name__ == "__main__":
+    raise SystemExit(main())
