@@ -355,6 +355,8 @@ def test_normalization_fails_if_required_creation_date_is_missing(
         ("extra-profile-flash", "profile"),
         ("extra-profile-aperture", "profile"),
         ("profile-region", "profile"),
+        ("combined-profile-line", "profile"),
+        ("combined-profile-arc", "profile"),
         ("drill-no-tools", "drill"),
         ("drill-no-plated-hit", "Plated"),
         ("drill-no-npth-hit", "NonPlated"),
@@ -610,6 +612,24 @@ def test_stage_validation_fails_closed(
             profile.read_text(encoding="utf-8").replace(
                 "M02*",
                 "G36*\nG37*\nM02*",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "combined-profile-arc":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "M02*",
+                "G02X150000000Y-127500000I1000000J0D01*\nM02*",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "combined-profile-line":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "M02*",
+                "G01X150000000Y-127500000D01*\nM02*",
             ),
             encoding="utf-8",
         )

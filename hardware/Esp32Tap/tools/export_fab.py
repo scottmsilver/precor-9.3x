@@ -730,7 +730,8 @@ def _validate_profile_geometry(payload: str) -> None:
             "Esp32Tap-Edge_Cuts.gm1 profile must use one 0.100 mm aperture"
         )
     if re.search(
-        r"(?m)^(?:G0[23]\*|G3[67]\*|D0[123]\*|"
+        r"(?m)^(?:G0[23]\*|G0[123](?!\*)[^\r\n]+|"
+        r"G3[67]\*|D0[123]\*|"
         r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D03\*)$",
         payload,
     ):
