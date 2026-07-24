@@ -52,18 +52,26 @@ unrouted outline or a design that depends on unsupported assembly operations.
 ### Board connectors
 
 J1 and J2 become low-profile, locking, surface-mount wire-to-board connectors.
-The target class is a 1.0–1.25 mm-pitch side-entry connector with at least
-eight circuits. Exact parts are selected only after confirming:
+Select the smallest side-entry connector family with at least eight circuits
+that satisfies the conservative electrical and assembly gates; pitch is not
+fixed. Official evidence may provisionally select exact parts for schematic
+and layout after confirming:
 
-- current JLCPCB/LCSC stock and Standard PCBA placement support;
+- current JLCPCB/LCSC identity and stock, with live Standard PCBA placement
+  support explicitly pending;
 - reel packaging and top-side automated assembly;
 - positive retention and a polarized housing;
-- voltage and current ratings with measured treadmill-current derating;
+- voltage and current ratings with the approved conservative verification
+  derating;
 - contact resistance and temperature-rise margin for the two +8 V and two
   ground conductors;
 - an available mating housing, crimp terminal, and factory harness source;
 - a manufacturer STEP model and recommended footprint;
 - enough insertion life for installation and service.
+
+The later live BOM/CPL workflow must confirm Standard PCBA placement. A
+missing or rejected exact row forces reselection and complete regeneration
+before order readiness.
 
 The two board interfaces must be physically non-interchangeable. Preferred
 implementations are different key codes or connector families. Using different
@@ -84,6 +92,12 @@ not satisfy this test.
 
 The connectors must not depend on hand-applied adhesive, staking, selective
 solder, or a wave-solder pallet.
+
+Official manufacturer and catalog evidence may establish a provisional exact
+part for schematic and layout. That provisional status must remain explicit
+until the exact JLC BOM/CPL row is selected in the live workflow. Failure of
+that later placement gate forces part reselection and regeneration; public
+stock alone never authorizes an order.
 
 ### Factory harnesses
 
@@ -109,6 +123,12 @@ exact orderable cable-assembly part number or a firm supplier quote covering
 quantity, tooling/NRE, electrical testing, lead time, and delivery. The
 project owner purchases the finished assemblies but does not arrange crimping
 instructions with an operator or perform any harness fabrication.
+
+A component-level harness recipe and production drawing are sufficient to
+provisionally select PCB connectors and perform layout. The exact finished
+assembly part number/firm quote, delivered harnesses, and installed
+wrong-mating proof remain mandatory before the design can be described as
+turnkey, order-ready, or physically validated.
 
 ## Electrical behavior
 
@@ -143,18 +163,35 @@ This is owner-attested field experience, not an instrumented current envelope.
 For verification-board selection and quotation only, use a deliberately
 conservative 2.0 A continuous total pass-through design envelope:
 
-- every individual +8 V and ground contact is rated for at least 2.0 A after
-  circuit-count and worst-case +85 °C derating, without credit for the
-  parallel contact;
-- each connector and its PCB copper remains within rating with either parallel
-  power or ground contact open;
+- every individual contact in the new SMT header, housing terminal, and
+  harness-wire path is rated for at least 2.0 A after circuit-count and
+  worst-case +85 °C derating, without credit for the parallel contact;
+- each new SMT header, housing terminal, harness-wire path, and its PCB copper
+  remains within rating with either parallel power or ground contact open;
+  this single-open requirement excludes the standard 8P8C termination;
 - both harnesses use 22 AWG or larger power/ground conductors;
-- the complete mating system—SMT header, housing, crimp terminal, wire
-  insulation, strain relief, and RJ45 termination—is rated for at least 24 V
+- every conductive/insulating electrical element—SMT header, housing, crimp
+  terminal, wire insulation, and RJ45 termination—is rated for at least 24 V
   and its qualified ambient range includes at least -20 °C through +85 °C;
+- nonconductive strain-relief and enclosure elements require documented
+  material, flammability where available, mechanical retention, and at least
+  -20 °C through +85 °C environmental qualification; no fictitious electrical
+  voltage rating is assigned to a purely mechanical part;
 - modeled normal operation uses unequal contacts and a 2.0 A total load;
 - transient selection uses the connector manufacturer's published envelope,
   or remains an explicit physical qualification gate if none is published.
+
+The standard 8P8C treadmill termination is an unavoidable predecessor-interface
+exception. It retains both parallel +8 V contacts (pins 2 and 8) and both
+parallel grounds (pins 1 and 7) exactly as the working PiZeroHat. Select the
+highest-current officially rated suitable non-magnetic RJ45 termination.
+Document a worst-case unequal-sharing calculation proving that both RJ45 power
+contacts and both ground contacts remain within their official circuit-count
+and +85 °C derated ratings at 2.0 A total normal load. Do not claim a 2.0 A
+single-RJ45-contact capability when its manufacturer does not publish one.
+The RJ45 single-open 2.0 A case remains `UNSUPPORTED` and an open physical
+deployment gate; it cannot be used to advance physical, production,
+deployment, or turnkey status.
 
 This basis may release conservative connector selection, PCB layout, a
 verification fabrication package, and a no-purchase quote. Throughout those
