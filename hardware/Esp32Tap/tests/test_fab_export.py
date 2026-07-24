@@ -1,0 +1,668 @@
+from __future__ import annotations
+
+import json
+import os
+import runpy
+import time
+import zipfile
+import copy
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+
+EXPECTED_FAB_FILES = {
+    "Esp32Tap-F_Cu.gtl",
+    "Esp32Tap-In1_Cu.g1",
+    "Esp32Tap-In2_Cu.g2",
+    "Esp32Tap-B_Cu.gbl",
+    "Esp32Tap-F_Mask.gts",
+    "Esp32Tap-B_Mask.gbs",
+    "Esp32Tap-F_Paste.gtp",
+    "Esp32Tap-B_Paste.gbp",
+    "Esp32Tap-F_Silkscreen.gto",
+    "Esp32Tap-B_Silkscreen.gbo",
+    "Esp32Tap-Edge_Cuts.gm1",
+    "Esp32Tap-job.gbrjob",
+    "Esp32Tap.drl",
+}
+GERBER_FUNCTIONS = {
+    "Esp32Tap-F_Cu.gtl": "Copper,L1,Top",
+    "Esp32Tap-In1_Cu.g1": "Copper,L2,Inr",
+    "Esp32Tap-In2_Cu.g2": "Copper,L3,Inr",
+    "Esp32Tap-B_Cu.gbl": "Copper,L4,Bot",
+    "Esp32Tap-F_Mask.gts": "Soldermask,Top",
+    "Esp32Tap-B_Mask.gbs": "Soldermask,Bot",
+    "Esp32Tap-F_Paste.gtp": "Paste,Top",
+    "Esp32Tap-B_Paste.gbp": "Paste,Bot",
+    "Esp32Tap-F_Silkscreen.gto": "Legend,Top",
+    "Esp32Tap-B_Silkscreen.gbo": "Legend,Bot",
+    "Esp32Tap-Edge_Cuts.gm1": "Profile,NP",
+}
+JOB_FUNCTIONS = {
+    "Esp32Tap-F_Cu.gtl": "Copper,L1,Top",
+    "Esp32Tap-In1_Cu.g1": "Copper,L2,Inr",
+    "Esp32Tap-In2_Cu.g2": "Copper,L3,Inr",
+    "Esp32Tap-B_Cu.gbl": "Copper,L4,Bot",
+    "Esp32Tap-F_Mask.gts": "SolderMask,Top",
+    "Esp32Tap-B_Mask.gbs": "SolderMask,Bot",
+    "Esp32Tap-F_Paste.gtp": "SolderPaste,Top",
+    "Esp32Tap-B_Paste.gbp": "SolderPaste,Bot",
+    "Esp32Tap-F_Silkscreen.gto": "Legend,Top",
+    "Esp32Tap-B_Silkscreen.gbo": "Legend,Bot",
+    "Esp32Tap-Edge_Cuts.gm1": "Profile",
+}
+
+
+@pytest.fixture(scope="module")
+def fab_tool(esp32tap_dir: Path) -> SimpleNamespace:
+    path = esp32tap_dir / "tools" / "export_fab.py"
+    assert path.is_file(), "tools/export_fab.py is required"
+    return SimpleNamespace(
+        **runpy.run_path(str(path), run_name="esp32tap_fab_test")
+    )
+
+
+def _write_valid_stage(directory: Path) -> None:
+    directory.mkdir(parents=True)
+    for filename, function in GERBER_FUNCTIONS.items():
+        (directory / filename).write_text(
+            "\n".join(
+                [
+                    "%TF.GenerationSoftware,KiCad,Pcbnew,10.0.1*%",
+                    "%TF.CreationDate,2026-07-24T00:00:00-07:00*%",
+                    f"%TF.FileFunction,{function}*%",
+                    (
+                        "G04 Created by KiCad (PCBNEW 10.0.1) "
+                        "date 2026-07-24 00:00:00*"
+                    ),
+                    "M02*",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    job_files = [
+        {"Path": filename, "FileFunction": function}
+        for filename, function in JOB_FUNCTIONS.items()
+    ]
+    (directory / "Esp32Tap-job.gbrjob").write_text(
+        json.dumps(
+            {
+                "Header": {
+                    "GenerationSoftware": {
+                        "Vendor": "KiCad",
+                        "Application": "Pcbnew",
+                        "Version": "10.0.1",
+                    },
+                    "CreationDate": "2026-07-24T00:00:00-07:00",
+                },
+                "GeneralSpecs": {"LayerNumber": 4},
+                "FilesAttributes": job_files,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (directory / "Esp32Tap.drl").write_text(
+        "\n".join(
+            [
+                "M48",
+                "; DRILL file KiCad 10.0.1 date 2026-07-24T00:00:00",
+                "; #@! TF.CreationDate,2026-07-24T00:00:00-07:00",
+                "; #@! TF.GenerationSoftware,Kicad,Pcbnew,10.0.1",
+                "; #@! TF.FileFunction,MixedPlating,1,4",
+                "M30",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _archive_payloads(path: Path) -> dict[str, bytes]:
+    with zipfile.ZipFile(path) as archive:
+        return {
+            info.filename: archive.read(info)
+            for info in archive.infolist()
+        }
+
+
+def test_exact_rev_b_four_layer_member_set_is_locked(
+    fab_tool: SimpleNamespace,
+) -> None:
+    assert fab_tool.EXPECTED_FAB_FILES == EXPECTED_FAB_FILES
+    assert fab_tool.GERBER_FUNCTIONS == GERBER_FUNCTIONS
+    assert fab_tool.JOB_FUNCTIONS == JOB_FUNCTIONS
+
+
+def test_normalization_removes_only_generation_timestamps(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    stage = tmp_path / "stage"
+    _write_valid_stage(stage)
+    originals = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in stage.iterdir()
+    }
+
+    fab_tool.normalize_stage(stage)
+    normalized = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in stage.iterdir()
+    }
+
+    assert normalized != originals
+    assert all("2026-07-24T00:00:00-07:00" not in text for text in normalized.values())
+    assert all(
+        "2026-07-24 00:00:00" not in text
+        for text in normalized.values()
+    )
+    assert fab_tool.NORMALIZED_ISO_DATE in normalized["Esp32Tap-F_Cu.gtl"]
+    assert fab_tool.NORMALIZED_ISO_DATE in normalized["Esp32Tap.drl"]
+    job = json.loads(normalized["Esp32Tap-job.gbrjob"])
+    assert job["Header"]["CreationDate"] == fab_tool.NORMALIZED_ISO_DATE
+    assert {
+        item["Path"] for item in job["FilesAttributes"]
+    } == set(GERBER_FUNCTIONS)
+    assert (
+        "DRILL file KiCad 10.0.1 date 1970-01-01T00:00:00"
+        in normalized["Esp32Tap.drl"]
+    )
+    fab_tool.validate_stage(stage, require_normalized=True)
+
+    fab_tool.normalize_stage(stage)
+    assert normalized == {
+        path.name: path.read_text(encoding="utf-8")
+        for path in stage.iterdir()
+    }
+
+
+def test_different_export_times_normalize_to_identical_stage_bytes(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    _write_valid_stage(first)
+    _write_valid_stage(second)
+    for path in second.iterdir():
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        text = text.replace(
+            "2026-07-24T00:00:00-07:00",
+            "2031-12-31T23:59:58+14:00",
+        ).replace(
+            "2026-07-24T00:00:00",
+            "2031-12-31T23:59:58",
+        ).replace(
+            "2026-07-24 00:00:00",
+            "2031-12-31 23:59:58",
+        )
+        path.write_text(text, encoding="utf-8")
+
+    fab_tool.normalize_stage(first)
+    fab_tool.normalize_stage(second)
+
+    assert {
+        path.name: path.read_bytes()
+        for path in first.iterdir()
+    } == {
+        path.name: path.read_bytes()
+        for path in second.iterdir()
+    }
+
+
+def test_normalization_fails_if_required_creation_date_is_missing(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    stage = tmp_path / "stage"
+    _write_valid_stage(stage)
+    gerber = stage / "Esp32Tap-F_Cu.gtl"
+    gerber.write_text(
+        gerber.read_text(encoding="utf-8").replace(
+            "%TF.CreationDate,2026-07-24T00:00:00-07:00*%\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(fab_tool.FabExportError, match="CreationDate"):
+        fab_tool.normalize_stage(stage)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing-inner", "member set"),
+        ("extra-rev-a", "member set"),
+        ("wrong-function", "FileFunction"),
+        ("extra-function", "FileFunction"),
+        ("empty-function", "FileFunction"),
+        ("wrong-drill-span", "drill FileFunction"),
+        ("extra-drill-function", "drill FileFunction"),
+        ("gerber-trailing-garbage", "end marker"),
+        ("drill-trailing-garbage", "complete Excellon"),
+        ("job-omits-inner", "Gerber job"),
+        ("job-duplicate-entry", "Gerber job"),
+        ("job-omits-layer-count", "GeneralSpecs"),
+    ],
+)
+def test_stage_validation_fails_closed(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    stage = tmp_path / mutation
+    _write_valid_stage(stage)
+    if mutation == "missing-inner":
+        (stage / "Esp32Tap-In2_Cu.g2").unlink()
+    elif mutation == "extra-rev-a":
+        (stage / "Esp32Tap-old-B_Cu.gbl").write_text(
+            "stale\n",
+            encoding="utf-8",
+        )
+    elif mutation == "wrong-function":
+        inner = stage / "Esp32Tap-In1_Cu.g1"
+        inner.write_text(
+            inner.read_text(encoding="utf-8").replace(
+                "Copper,L2,Inr",
+                "Copper,L1,Top",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "extra-function":
+        inner = stage / "Esp32Tap-In1_Cu.g1"
+        inner.write_text(
+            inner.read_text(encoding="utf-8").replace(
+                "%TF.FileFunction,Copper,L2,Inr*%",
+                "%TF.FileFunction,Copper,L1,Top*%\n"
+                "%TF.FileFunction,Copper,L2,Inr*%",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "empty-function":
+        inner = stage / "Esp32Tap-In1_Cu.g1"
+        inner.write_text(
+            inner.read_text(encoding="utf-8").replace(
+                "%TF.FileFunction,Copper,L2,Inr*%",
+                "%TF.FileFunction,*%\n"
+                "%TF.FileFunction,Copper,L2,Inr*%",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "wrong-drill-span":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "MixedPlating,1,4",
+                "MixedPlating,1,2",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "extra-drill-function":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "; #@! TF.FileFunction,MixedPlating,1,4",
+                "; #@! TF.FileFunction,MixedPlating,1,2\n"
+                "; #@! TF.FileFunction,MixedPlating,1,4",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "gerber-trailing-garbage":
+        gerber = stage / "Esp32Tap-F_Cu.gtl"
+        gerber.write_text(
+            gerber.read_text(encoding="utf-8") + "G04 AFTER END*\n",
+            encoding="utf-8",
+        )
+    elif mutation == "drill-trailing-garbage":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8") + "X000001Y000001\n",
+            encoding="utf-8",
+        )
+    elif mutation == "job-omits-inner":
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        job["FilesAttributes"] = [
+            item
+            for item in job["FilesAttributes"]
+            if item["Path"] != "Esp32Tap-In2_Cu.g2"
+        ]
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+    elif mutation == "job-duplicate-entry":
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        job["FilesAttributes"].append(dict(job["FilesAttributes"][0]))
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+    else:
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        del job["GeneralSpecs"]
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+
+    with pytest.raises(fab_tool.FabExportError, match=message):
+        fab_tool.validate_stage(stage)
+
+
+def test_archive_is_byte_reproducible_and_metadata_is_fixed(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    first_stage = tmp_path / "first"
+    second_stage = tmp_path / "second"
+    _write_valid_stage(first_stage)
+    _write_valid_stage(second_stage)
+    fab_tool.normalize_stage(first_stage)
+    fab_tool.normalize_stage(second_stage)
+
+    now = time.time()
+    for index, path in enumerate(sorted(second_stage.iterdir())):
+        os.utime(path, (now + index * 100, now + index * 100))
+
+    first_archive = tmp_path / "first.zip"
+    second_archive = tmp_path / "second.zip"
+    fab_tool.write_deterministic_archive(first_stage, first_archive)
+    fab_tool.write_deterministic_archive(second_stage, second_archive)
+
+    assert first_archive.read_bytes() == second_archive.read_bytes()
+    assert set(_archive_payloads(first_archive)) == EXPECTED_FAB_FILES
+    with zipfile.ZipFile(first_archive) as archive:
+        assert all(
+            info.date_time == fab_tool.ZIP_TIMESTAMP
+            for info in archive.infolist()
+        )
+        assert [info.filename for info in archive.infolist()] == sorted(
+            EXPECTED_FAB_FILES
+        )
+
+
+def test_publish_validates_before_replacing_checked_in_artifacts(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    kicad_dir = tmp_path / "kicad"
+    destination = kicad_dir / "gerbers"
+    destination.mkdir(parents=True)
+    sentinel = destination / "user-sentinel.txt"
+    sentinel.write_text("preserve on failure\n", encoding="utf-8")
+    archive = kicad_dir / "Esp32Tap-gerbers.zip"
+    archive.write_bytes(b"old archive")
+
+    invalid = tmp_path / "invalid"
+    _write_valid_stage(invalid)
+    (invalid / "Esp32Tap-In1_Cu.g1").unlink()
+    with pytest.raises(fab_tool.FabExportError):
+        fab_tool.publish_stage(invalid, destination, archive)
+    assert sentinel.read_text(encoding="utf-8") == "preserve on failure\n"
+    assert archive.read_bytes() == b"old archive"
+
+    valid = tmp_path / "valid"
+    _write_valid_stage(valid)
+    fab_tool.normalize_stage(valid)
+    fab_tool.publish_stage(valid, destination, archive)
+
+    assert {path.name for path in destination.iterdir()} == EXPECTED_FAB_FILES
+    assert not sentinel.exists()
+    assert set(_archive_payloads(archive)) == EXPECTED_FAB_FILES
+
+
+def test_publish_rolls_back_directory_and_archive_together(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kicad_dir = tmp_path / "kicad"
+    destination = kicad_dir / "gerbers"
+    destination.mkdir(parents=True)
+    sentinel = destination / "old.txt"
+    sentinel.write_text("old directory\n", encoding="utf-8")
+    archive = kicad_dir / "Esp32Tap-gerbers.zip"
+    archive.write_bytes(b"old archive")
+    stage = tmp_path / "valid"
+    _write_valid_stage(stage)
+    fab_tool.normalize_stage(stage)
+
+    real_replace = os.replace
+
+    def replace_then_fail(source: Any, target: Any) -> None:
+        real_replace(source, target)
+        if Path(target) == archive and Path(source).name == archive.name:
+            raise OSError("injected post-replace archive failure")
+
+    monkeypatch.setattr(fab_tool.os, "replace", replace_then_fail)
+    with pytest.raises(
+        fab_tool.FabExportError,
+        match="post-replace archive failure",
+    ):
+        fab_tool.publish_stage(stage, destination, archive)
+
+    assert {path.name for path in destination.iterdir()} == {"old.txt"}
+    assert sentinel.read_text(encoding="utf-8") == "old directory\n"
+    assert archive.read_bytes() == b"old archive"
+
+
+def test_runner_rejects_failed_kicad_commands(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Failed:
+        returncode = 7
+        stdout = "partial output"
+        stderr = "plot failed"
+
+    def fail(*args: Any, **kwargs: Any) -> Failed:
+        return Failed()
+
+    monkeypatch.setattr(fab_tool.subprocess, "run", fail)
+    with pytest.raises(
+        fab_tool.FabExportError,
+        match=r"KiCad Gerber export failed.*exit code 7",
+    ):
+        fab_tool.run_kicad(
+            ["kicad-cli", "pcb", "export", "gerbers"],
+            "KiCad Gerber export",
+            cwd=tmp_path,
+        )
+
+
+def test_cli_publish_paths_are_confined_to_the_board_kicad_directory(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    kicad_dir = tmp_path / "kicad"
+    kicad_dir.mkdir()
+    board = kicad_dir / "Esp32Tap.kicad_pcb"
+    board.write_text("board source\n", encoding="utf-8")
+    destination = kicad_dir / "gerbers"
+    archive = kicad_dir / "Esp32Tap-gerbers.zip"
+
+    fab_tool.validate_publish_paths(board, destination, archive)
+
+    with pytest.raises(fab_tool.FabExportError, match="output directory"):
+        fab_tool.validate_publish_paths(board, kicad_dir, archive)
+    with pytest.raises(fab_tool.FabExportError, match="archive"):
+        fab_tool.validate_publish_paths(board, destination, board)
+
+
+def test_cli_publish_paths_reject_symlink_and_hardlink_aliases(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    kicad_dir = tmp_path / "kicad"
+    kicad_dir.mkdir()
+    board = kicad_dir / "Esp32Tap.kicad_pcb"
+    board.write_text("board source\n", encoding="utf-8")
+    destination = kicad_dir / "gerbers"
+    archive = kicad_dir / "Esp32Tap-gerbers.zip"
+
+    archive.symlink_to(board.name)
+    with pytest.raises(fab_tool.FabExportError, match="symlink"):
+        fab_tool.validate_publish_paths(board, destination, archive)
+    archive.unlink()
+
+    os.link(board, archive)
+    with pytest.raises(fab_tool.FabExportError, match="hardlink"):
+        fab_tool.validate_publish_paths(board, destination, archive)
+
+
+def _assembly_fixture() -> dict[str, Any]:
+    components = {
+        "U1": (
+            "PART-A",
+            "Lib",
+            "Footprint_A",
+            "C100",
+            "Extended",
+            1.25,
+            "assembled part",
+            {"1": "A"},
+        ),
+        "C1": (
+            "DNP-C",
+            "Lib",
+            "Footprint_C",
+            "C200",
+            "Basic",
+            0.01,
+            "unfitted tuning part",
+            {"1": "A"},
+        ),
+        "TP1": (
+            "TEST",
+            "TestPoint",
+            "TP",
+            "",
+            "none",
+            0.0,
+            "test point",
+            {"1": "A"},
+        ),
+    }
+    schematic = {
+        reference: {
+            "value": component[0],
+            "footprint": f"{component[1]}:{component[2]}",
+            "lcsc": component[3],
+            "jlc_class": component[4],
+        }
+        for reference, component in components.items()
+    }
+    footprints = {
+        reference: {
+            "footprint": f"{component[1]}:{component[2]}",
+            "at": [110.0 + index, 120.0 + index],
+            "layer": "F.Cu",
+            "rotation_deg": 270.0,
+        }
+        for index, (reference, component) in enumerate(components.items())
+    }
+    footprints.update(
+        {
+            "MH1": {"footprint": "MountingHole:MH", "at": [101.0, 101.0]},
+            "MH2": {"footprint": "MountingHole:MH", "at": [199.0, 101.0]},
+            "MH3": {"footprint": "MountingHole:MH", "at": [199.0, 154.0]},
+        }
+    )
+    return {
+        "components": components,
+        "dnp": {"C1"},
+        "schematic": schematic,
+        "board": {
+            "outline": {"min": [100.0, 100.0], "max": [200.0, 155.0]},
+            "footprints": footprints,
+        },
+        "bom_rows": [
+            {
+                "Comment": "PART-A",
+                "Designator": "U1",
+                "Footprint": "Footprint_A",
+                "LCSC Part #": "C100",
+                "JLC class": "Extended",
+                "Qty": "1",
+                "Unit cost (USD)": "1.250",
+                "Ext cost (USD)": "1.250",
+                "Description": "assembled part",
+            }
+        ],
+        "cpl_rows": [
+            {
+                "Designator": "U1",
+                "Val": "PART-A",
+                "Package": "Footprint_A",
+                "Mid X": "10.000mm",
+                "Mid Y": "35.000mm",
+                "Rotation": "-90",
+                "Layer": "Top",
+            }
+        ],
+    }
+
+
+def test_assembly_parity_accepts_only_populated_exact_mappings(
+    fab_tool: SimpleNamespace,
+) -> None:
+    fab_tool.validate_assembly_records(**_assembly_fixture())
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("dnp-in-bom", "BOM references"),
+        ("wrong-lcsc", "LCSC"),
+        ("missing-board-ref", "PCB references"),
+        ("wrong-cpl-position", "CPL U1 Mid X"),
+        ("wrong-cpl-rotation", "CPL U1 Rotation"),
+        ("wrong-board-layer", "PCB U1 layer"),
+        ("extra-bom-column", "BOM columns"),
+        ("extra-cpl-column", "CPL columns"),
+    ],
+)
+def test_assembly_parity_fails_closed(
+    fab_tool: SimpleNamespace,
+    mutation: str,
+    message: str,
+) -> None:
+    fixture = copy.deepcopy(_assembly_fixture())
+    if mutation == "dnp-in-bom":
+        row = dict(fixture["bom_rows"][0])
+        row.update(
+            {
+                "Comment": "DNP-C",
+                "Designator": "C1",
+                "Footprint": "Footprint_C",
+                "LCSC Part #": "C200",
+                "JLC class": "Basic",
+                "Unit cost (USD)": "0.010",
+                "Ext cost (USD)": "0.010",
+                "Description": "unfitted tuning part",
+            }
+        )
+        fixture["bom_rows"].append(row)
+    elif mutation == "wrong-lcsc":
+        fixture["bom_rows"][0]["LCSC Part #"] = "C999"
+    elif mutation == "missing-board-ref":
+        fixture["board"]["footprints"].pop("U1")
+    elif mutation == "wrong-cpl-position":
+        fixture["cpl_rows"][0]["Mid X"] = "10.100mm"
+    elif mutation == "wrong-cpl-rotation":
+        fixture["cpl_rows"][0]["Rotation"] = "0"
+    elif mutation == "wrong-board-layer":
+        fixture["board"]["footprints"]["U1"]["layer"] = "B.Cu"
+    elif mutation == "extra-bom-column":
+        fixture["bom_rows"][0]["Supplier note"] = "silently ignored"
+    else:
+        fixture["cpl_rows"][0]["Feeder"] = "silently ignored"
+
+    with pytest.raises(fab_tool.FabExportError, match=message):
+        fab_tool.validate_assembly_records(**fixture)

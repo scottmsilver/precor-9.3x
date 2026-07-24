@@ -18,10 +18,10 @@ REQUIRED_TARGETS = {
     "sim",
     "enclosure",
     "fab",
+    "stock",
     "check",
     "clean-check",
 }
-DEFERRED_TARGETS = REQUIRED_TARGETS - {"test"}
 
 
 @dataclass(frozen=True)
@@ -165,17 +165,41 @@ def test_test_target_runs_only_local_pytest_suite() -> None:
     assert _dry_run(MAKEFILE, "test") == ["python3 -m pytest -q tests"]
 
 
-def test_deferred_targets_fail_explicitly_without_delegating() -> None:
+def test_generation_and_single_gate_targets_use_pinned_local_tools() -> None:
     text = _makefile_text()
-
-    for target in DEFERRED_TARGETS:
+    expected = {
+        "generate": [
+            "python3 tools/gen_sch.py",
+            "/usr/bin/python3 tools/gen_pcb.py",
+            "/usr/bin/python3 tools/gen_docs.py",
+        ],
+        "erc": ["python3 tools/repro_check.py --write-report erc"],
+        "drc": ["python3 tools/repro_check.py --write-report drc"],
+        "sim": ["python3 sim/run_simulations.py"],
+        "enclosure": ["python3 enclosure/validate_enclosure.py"],
+        "fab": ["python3 tools/export_fab.py"],
+        "stock": ["python3 tools/check_jlc_stock.py"],
+        "clean-check": ["python3 tools/repro_check.py"],
+    }
+    for target, commands in expected.items():
+        assert _dry_run(MAKEFILE, target) == commands, target
         recipe = "\n".join(_rule(text, target).recipe)
-        assert "source not implemented yet" in recipe, target
-        assert re.search(r"\bexit\s+[1-9][0-9]*\b", recipe), target
-        assert "$(MAKE)" not in recipe, target
-        assert _dry_run(MAKEFILE, target) == [
-            f'echo "{target}: source not implemented yet" >&2; exit 2'
-        ]
+        assert "source not implemented yet" not in recipe
+        assert "$(MAKE)" not in recipe
+
+
+def test_check_runs_every_repository_safe_gate_without_mutating_sources() -> None:
+    commands = _dry_run(MAKEFILE, "check")
+    assert commands == [
+        "python3 -m pytest -q tests",
+        "python3 tools/repro_check.py",
+        "python3 sim/run_simulations.py",
+        "python3 enclosure/validate_enclosure.py",
+        "python3 tools/export_fab.py --audit-only",
+        "python3 tools/check_jlc_stock.py",
+    ]
+    assert all("--write-report" not in command for command in commands)
+    assert all("tools/gen_" not in command for command in commands)
 
 
 def test_makefile_never_reaches_unrelated_or_live_hardware_workflows() -> None:
