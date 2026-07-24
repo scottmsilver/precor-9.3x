@@ -51,9 +51,10 @@ J1/J2 +8 V pass-through
         |
         +-- F1 -- D1 -- VIN -- TPS54202 --------------------- +3V3
                          |          |                            |
-                         |          +-- ESP32-S3                +-- U4 window monitor
-                         |                                       +-- U6 hardware AND gates
-                         +-- D3 TVS                              +-- U7 tri-state TX buffer
+                         |          +-- ESP32-S3                +-- U6 hardware AND gates
+                         |                                       +-- U7 tri-state TX buffer
+                         +-- D3 TVS
+                         +-- U4 window monitor
                          |
                          +-- U5 5 V LDO, EN=RELAY_GATE -- K1 coil
 
@@ -84,18 +85,21 @@ The local branch is:
 ```text
 +8V_RAW -> F1 -> +8V_F -> D1 -> VIN
 VIN -> D3 -> GND
-VIN -> C1, C2, C3, C4, U2, U5, and both U4 sense dividers
+VIN -> C1, C2, C3, C4, U2, U4 VDD and sense dividers, and U5
 ```
 
-- F1 remains the 0.75 A, 16 V resettable fuse.
+- F1 changes to Littelfuse `1812L075/24DR`, LCSC `C207065`: 0.75 A hold,
+  1.5 A trip, 24 V maximum, in an 1812 footprint. The higher rating covers
+  D3's 17 V downstream clamp plus D1 forward drop; hold-current temperature
+  derating remains a calculation and hot bench gate.
 - D1 remains the SS34 series Schottky and provides reverse-polarity
   protection. All local bulk capacitance and active circuitry move to its
   protected `VIN` side.
 - D2 and every USB-to-VIN connection are deleted.
 - D3 changes from SMBJ12A to Littelfuse SMBJ10A, LCSC `C151250`. Its 10 V
   stand-off, 12.3 V breakdown, and 17 V maximum clamp preserve margin to the
-  18 V TPS3700 limit and the 25 V capacitors. U4 itself is powered from
-  +3V3, not VIN, so its supply never sees the clamped input transient.
+  18 V TPS3700 recommended limit, 20 V absolute limit, and the 25 V
+  capacitors.
 - The TVS and input ceramic return have a short, low-inductance path to the
   ground plane. F1, D1, and D3 are placed before the long branch to the
   converter.
@@ -130,8 +134,9 @@ remain bench gates.
 
 ## Treadmill-voltage permission
 
-U4 is TPS3700DDCR, LCSC `C33002`, powered from +3V3 and decoupled with 100 nF.
-Its two open-drain outputs are tied together as `TREAD_OK`.
+U4 is TPS3700DDCR, LCSC `C33002`, powered from protected VIN and decoupled
+with 100 nF. Its two open-drain outputs are tied together as `TREAD_OK` and
+pulled up only to +3V3.
 
 | Function | U4 input | Top resistor | Bottom resistor | Filter |
 |---|---|---:|---:|---:|
@@ -140,8 +145,12 @@ Its two open-drain outputs are tied together as `TREAD_OK`.
 
 The 1 nF filters use `C342541` and produce about a 10 µs divider time
 constant. `TREAD_OK` has a 10 kΩ pull-up to +3V3 and a 100 kΩ pull-down to
-ground. The pull-down makes the permission low while +3V3 is absent; it is
-not claimed as protection against an internally failed supervisor.
+ground. When VIN is below the TPS3700 UVLO but above its power-on-reset
+level, OUTA is asserted low. Below power-on reset both outputs can be high
+impedance; that state is safe because VIN is then far below U5's operating
+range, while the command, gate, and transistor pull-downs remain. The 100 kΩ
+resistor discharges `TREAD_OK` when +3V3 is absent; it is not claimed as
+protection against an internally failed supervisor.
 
 Nominal VIN boundaries are 6.40 V undervoltage release and 10.60 V
 overvoltage trip. The following guaranteed ranges include TPS3700 threshold
@@ -159,7 +168,10 @@ D1 forward voltage, cable drop, temperature, and source impedance must be
 included when the actual treadmill rail is characterized.
 
 U4 has up to 450 µs startup delay and tens of microseconds of propagation
-delay. Until +3V3 and U4 are valid, the pull-down keeps `TREAD_OK` false.
+delay. VIN powers and qualifies U4 before the +3V3 domain can act on
+`TREAD_OK`. Simulation must cover worst relative VIN, U4, +3V3, U6, and U5
+startup and collapse timing rather than infer a state from static pull
+resistors alone.
 
 ## Relay supply, drive, and feedback
 
@@ -186,7 +198,7 @@ versus TPS70950's 500 mV maximum dropout at 50 mA.
 
 ### Hardware relay gate
 
-ESP GPIO21 is renamed `RELAY_CMD` and gets a 100 kΩ pull-down. One channel of
+ESP GPIO21 is renamed `RELAY_CMD` and gets a 10 kΩ pull-down. One channel of
 U6, SN74LVC2G08DCTR (`C352973`), computes:
 
 ```text
@@ -194,13 +206,12 @@ RELAY_GATE = RELAY_CMD AND TREAD_OK
 ```
 
 `RELAY_GATE` enables U5 and drives Q1 through the existing 1 kΩ base
-resistor.
 resistor. It also gets its own 10 kΩ pull-down, placed at U5.EN, because the
 TPS709 EN pin defaults enabled if allowed to float. The existing 10 kΩ
-base-to-ground resistor remains. This makes U5 and Q1 series control elements: a Q1
-collector-emitter short is still blocked by disabled U5, and a failed-on U5
-is still blocked by Q1. U6 is powered from +3V3, decoupled locally, and has
-partial-power-down `Ioff` behavior.
+base-to-ground resistor remains. This makes U5 and Q1 series control
+elements: a Q1 collector-emitter short is still blocked by disabled U5, and
+a failed-on U5 is still blocked by Q1. U6 is powered from +3V3, decoupled
+locally, and has partial-power-down `Ioff` behavior.
 
 Q1 changes to Nexperia BC817-40,215, LCSC `C52801`, with 45 V VCEO and the
 same SOT-23 B/E/C pad assignment. Nominal base current is approximately
@@ -271,7 +282,7 @@ load while remaining negligible for the GPIO and contact ratings.
 
 ## Transmit isolation
 
-ESP GPIO15 is `TX_ENABLE` and gets a 100 kΩ pull-down. U6's second channel
+ESP GPIO15 is `TX_ENABLE` and gets a 10 kΩ pull-down. U6's second channel
 computes:
 
 ```text
@@ -280,7 +291,7 @@ TX_GATE = TX_ENABLE AND TREAD_OK
 
 U7 is SN74LVC1G126DBVR (`C7834`), powered from +3V3:
 
-- pin 1 OE = TX_GATE, with an additional 100 kΩ pull-down;
+- pin 1 OE = TX_GATE, with an additional 10 kΩ pull-down;
 - pin 2 A = ESP_TX / GPIO17;
 - pin 3 GND = GND;
 - pin 4 Y = TX_BUF;
@@ -288,9 +299,12 @@ U7 is SN74LVC1G126DBVR (`C7834`), powered from +3V3:
 
 The existing 100 Ω R6 moves between TX_BUF and TX_DRV. U7 has `Ioff` and
 guarantees a high-impedance output when unpowered. On normal Emulate entry,
-firmware starts valid zero-speed frames, enables TX, verifies readiness, and
-only then energizes K1. On exit it de-energizes K1 first and disables TX
-after feedback reports bypass.
+firmware holds the configured inverted UART at its physical idle-low level,
+enables TX, transfers and settles K1 inside a capture-proven console
+inter-frame gap, and only then launches the first complete zero frame. A
+normal exit finishes a complete zero frame and transfers back inside a
+console inter-frame gap. Hardware and emergency faults bypass immediately,
+even if that truncates a frame.
 
 ## USB data-only interface
 
@@ -359,6 +373,28 @@ through-path edge degradation remain bench measurements.
 GPIO0, GPIO3, GPIO45, and GPIO46 are the ESP32-S3 strapping pins; new safety
 outputs do not use them.
 
+## Package, footprint, and pad locks
+
+The generator and independent pin audit enforce these exact mappings:
+
+| Ref | Package / KiCad footprint | Required pad mapping |
+|---|---|---|
+| F1 | 1812 / `Fuse_1812_4532Metric` | 1 = +8V_RAW, 2 = +8V_F |
+| D3 | DO-214AA / `Diode_SMD:D_SMB` | cathode = VIN, anode = GND |
+| D4 | DO-214AC / `Diode_SMD:D_SMA` | bidirectional, directly across K1 pins 1 and 8 |
+| U4 | DDC SOT-23-6 / `Package_TO_SOT_SMD:SOT-23-6` | 1 OUTA, 2 GND, 3 INA+, 4 INB-, 5 VIN/VDD, 6 OUTB |
+| U5 | DBV SOT-23-5 / `Package_TO_SOT_SMD:SOT-23-5` | 1 IN, 2 GND, 3 EN, 4 NC, 5 OUT |
+| U6 | DCT SM8 / `Package_SO:SSOP-8_2.95x2.8mm_P0.65mm` | 1 1A, 2 1B, 3 2Y, 4 GND, 5 2A, 6 2B, 7 1Y, 8 VCC |
+| U7 | DBV SOT-23-5 / `Package_TO_SOT_SMD:SOT-23-5` | 1 OE, 2 A, 3 GND, 4 Y, 5 VCC |
+| Q1 | SOT-23 / `Package_TO_SOT_SMD:SOT-23` | 1 base, 2 emitter, 3 collector |
+| Q2 | SOT-23 / `Package_TO_SOT_SMD:SOT-23` | 1 gate, 2 source, 3 drain |
+| K1 | `Relay_SMD:Relay_DPDT_Omron_G6K-2F-Y` | existing 1/8 coil and 2-3-4 / 7-6-5 contact map |
+
+C6/C7 change with their selected parts from 0805 to
+`Capacitor_SMD:C_1210_3225Metric`. Every generated symbol pin, footprint pad,
+BOM package, and LCSC package must agree with this table before ERC/DRC is
+considered meaningful.
+
 ## Four-layer PCB and USB constraints
 
 The selected fabrication basis is JLCPCB
@@ -410,6 +446,26 @@ polarity.
 The existing ESP32 module overhang and assembly-edge clearance still require
 written JLC assembly-engineering approval and the actual production carrier
 drawing. A repository drawing cannot close that vendor gate.
+
+### Validation access
+
+Add labeled, fixture-accessible 1.5 mm test pads for:
+
+- TP5 VIN;
+- TP6 +5V_RLY;
+- TP7 TREAD_OK;
+- TP8 RELAY_GATE;
+- TP9 RELAY_SW / Q1 collector;
+- TP10 TX_GATE;
+- TP11 TX_DRV;
+- TP12 K1_NC_FB;
+- TP13 K1_NO_FB.
+
+The pads remain reachable with the PCB mounted in the open base and are not
+under tall parts, the module, or enclosure posts. The bottom-side keepout
+also permits a bed-of-nails fixture. Timing evidence uses these pads and
+separate Kelvin probes across K1 pole A; it does not depend on probing
+fine-pitch IC leads.
 
 ## Enclosure and RF
 
@@ -482,17 +538,33 @@ Entry order is:
 1. verify TREAD_OK, bypass feedback, fresh console baseline, and no latched
    fault;
 2. set speed and incline to zero;
-3. begin transmitting valid zero frames and assert TX_ENABLE;
-4. assert RELAY_CMD;
-5. require energized feedback within 10 ms or release and latch fault.
+3. configure the inverted UART, verify ESP_TX is at physical idle-low, and
+   assert TX_ENABLE without writing a byte;
+4. wait for a capture-proven console inter-frame gap long enough for the
+   specified 3 ms maximum K1 operation plus contact-settle guard;
+5. assert RELAY_CMD, require energized feedback stable within 10 ms, and
+   otherwise release and latch fault;
+6. launch the first complete zero frame only after transfer is stable.
 
 Exit order is:
 
-1. command zero;
-2. clear RELAY_CMD;
-3. require bypass feedback within 10 ms;
+1. transmit and finish a complete zero frame;
+2. wait for a capture-proven console inter-frame gap;
+3. clear RELAY_CMD, require bypass feedback stable within 10 ms, and latch a
+   fault on mismatch;
 4. clear TX_ENABLE;
 5. release the control lease.
+
+If a suitable gap does not arrive within a bounded one-second normal-transfer
+deadline, entry aborts without moving K1. A requested normal exit falls back
+immediately at the deadline because remaining in Emulate is the less safe
+state. TREAD_OK loss, stale console, lease expiry, explicit emergency stop,
+brownout, reset, and watchdog action never wait for a gap.
+
+A logic-analyzer acceptance test performs at least 1,000 commanded entry/exit
+cycles against replayed console traffic and rejects any normal transition
+that splices a console or ESP byte/frame at MOT6. Emergency transitions are
+instead checked for the specified contact-release latency.
 
 The physical console STOP button is not claimed as universally detectable
 when its encoded value was already zero unless a distinct wire event is
@@ -514,10 +586,10 @@ that exact hash.
 
 Acceptance latencies are:
 
-- hardware TREAD_OK fault to stable bypass feedback: at most 10 ms;
-- explicit disconnect or lease-expiry action to stable bypass feedback: at
-  most 250 ms after the corresponding software event/deadline;
-- injected supervised-task stall to stable bypass feedback: at most 2.25 s
+- hardware TREAD_OK fault to stable NC contact continuity: at most 10 ms;
+- explicit disconnect or lease-expiry action to stable NC contact continuity:
+  at most 250 ms after the corresponding software event/deadline;
+- injected supervised-task stall to stable NC contact continuity: at most 2.25 s
   with the 2 s production WDT.
 
 These values are measured at K1's contacts on the production artifact. GPIO
@@ -531,8 +603,13 @@ numeric tolerances.
 
 Committed simulations cover:
 
+- F1/D1/D3 input protection with source-resistance and pulse-amplitude/width
+  sweeps, recording VIN peak, D1 and D3 peak current, pulse energy, and
+  reverse-polarity VIN; assertions use the selected parts' voltage, current,
+  and published pulse-energy envelopes;
 - VIN ramp, UV/OV entry and recovery, threshold component corners, input
-  filters, supervisor delay, TREAD_OK, and U5 enable/disable;
+  filters, the 450 µs supervisor startup corner, relative VIN/+3V3
+  rise/collapse, TREAD_OK, and U5 enable/disable;
 - all combinations of TREAD_OK, RELAY_CMD, TX_ENABLE, +3V3 present/absent,
   and default pull resistors;
 - K1 coil current and Q1/clamp stress across coil resistance, drive,
@@ -554,7 +631,10 @@ or vendor measurements.
 
 Every deck records model assumptions beside its assertions. A passing
 behavioral model means the specified topology satisfies those assumptions; it
-does not certify the product.
+does not certify the product. In particular, the PTC is represented by cold
+and hot resistance bounds; ngspice does not close its thermal trip/hold
+behavior. Pulse cases outside the published D1/D3/F1 envelopes are reported
+as unsupported rather than silently treated as passing.
 
 ## Generated artifacts and validation
 
@@ -568,6 +648,7 @@ Repository-closeable gates are:
 - KiCad ERC and DRC with zero unwaived errors;
 - four-layer count, L2 plane continuity, antenna keepout, USB topology,
   width/gap, length, via-count, and reference-plane checks;
+- package/pad-map locks and presence/clearance of TP5 through TP13;
 - BOM/CPL parity, exact MPN/LCSC/package checks, current stock snapshot, and
   explicit DNP exclusion;
 - Gerber/drill archive contents, polarity/orientation, silkscreen, and board
@@ -591,6 +672,8 @@ Vendor- or bench-only gates are:
 - dead-board backfeed and stock serial signal integrity;
 - K1 operate/release/bounce, transfer behavior, three-hour temperature, and
   trigger-to-NC timing on the production artifact;
+- logic-analyzer proof that commanded entry/exit does not splice frames at
+  MOT6, plus immediate-fault transfer characterization;
 - enclosure cable fit, RF performance, and Wi-Fi/BLE coexistence;
 - proxy-only first treadmill contact, followed by separately gated Emulate
   contact with the belt clear and safety key immediately accessible.
@@ -609,6 +692,7 @@ say **HOLD**. Passing repository checks changes the status only to
 - [Omron G6K datasheet](https://components.omron.com/system/files/2026-06/datasheet_pdf/K106-E1.pdf)
 - [Nexperia BC817 series datasheet](https://assets.nexperia.com/documents/data-sheet/BC817_SER.pdf)
 - [Littelfuse SMAJ series datasheet](https://www.littelfuse.com/~/media/electronics/datasheets/tvs_diodes/littelfuse_tvs_diode_smaj_datasheet.pdf.pdf)
+- [Littelfuse 1812L resettable PTC datasheet](https://www.littelfuse.com/~/media/electronics/datasheets/resettable_ptcs/littelfuse_ptc_1812l_datasheet.pdf.pdf)
 - [Espressif ESP32-S3 hardware design guidelines](https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32s3/esp-hardware-design-guidelines-en-master-esp32s3.pdf)
 - [ESP32-S3 datasheet](https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf)
 - [JLCPCB impedance calculator](https://jlcpcb.com/pcb-impedance-calculator/)
