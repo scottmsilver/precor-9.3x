@@ -1,0 +1,58 @@
+Esp32Tap Rev B TPS54202 AVERAGED BEHAVIORAL MODEL
+* ASSUMPTIONS:
+* TPS54202 input is behind F1/D1. The source ramp reaches 8 V through
+* explicit 0.5/1.5 ohm source corners and F1=0.11/0.29 ohm.
+* The converter is a 3.3 V Thevenin regulator with the data-sheet 5 ms
+* soft-start, 82/90 percent energy proxies, derated input/output capacitance,
+* 50 mA startup load, and a 450 mA Wi-Fi-like load step.
+* NON-CLAIMS:
+* This AVERAGED BEHAVIORAL MODEL leaves loop margin, switch-node ripple,
+* EMI, pulse-skip behavior, magnetics saturation, and vendor-model startup
+* unsupported. No switching/vendor model is used as ngspice evidence.
+
+.include models/behavioral.inc
+
+* Common output targets and load profiles.
+VTARGET_N target_n 0 PWL(0 0 0.5m 0 5.5m 3.3 20m 3.3)
+VLOAD_N load_n 0 PWL(0 0.05 8m 0.05 8.001m 0.45 10m 0.45 10.001m 0.05 20m 0.05)
+RREG_N target_n out_n 0.10
+COUT_N out_n 0 50u
+BLOAD_N out_n 0 I={v(load_n)}
+
+VSOURCE_N source_n 0 PWL(0 0 0.1m 0 0.5m 8 20m 8)
+RSOURCE_N source_n f1_n_in 0.5
+RF1_N f1_n_in d1_n_a 0.11
+DD1_N d1_n_a vin_n ESP_SS34
+CIN_N vin_n 0 120u
+BIN_N vin_n bin_n_return I={45u+v(load_n)*v(out_n)/(0.90*8)+u(v(target_n)-v(out_n))*(v(target_n)-v(out_n))*3.3/(0.10*0.90*8)}
+VBIN_N_SENSE bin_n_return 0 0
+
+* Worst averaged energy/source/capacitance corner.
+VTARGET_W target_w 0 PWL(0 0 0.5m 0 5.5m 3.3 20m 3.3)
+VLOAD_W load_w 0 PWL(0 0.05 8m 0.05 8.001m 0.45 10m 0.45 10.001m 0.05 20m 0.05)
+RREG_W target_w out_w 0.15
+COUT_W out_w 0 40u
+BLOAD_W out_w 0 I={v(load_w)}
+
+VSOURCE_W source_w 0 PWL(0 0 0.1m 0 0.5m 8 20m 8)
+RSOURCE_W source_w f1_w_in 1.5
+RF1_W f1_w_in d1_w_a 0.29
+DD1_W d1_w_a vin_w ESP_SS34
+CIN_W vin_w 0 110u
+BIN_W vin_w bin_w_return I={45u+v(load_w)*v(out_w)/(0.82*8)+u(v(target_w)-v(out_w))*(v(target_w)-v(out_w))*3.3/(0.15*0.82*8)}
+VBIN_W_SENSE bin_w_return 0 0
+
+.tran 2u 20m
+
+.meas tran startup_90pct_s TRIG v(vin_w) VAL=4.5 RISE=1 TARG v(out_w) VAL=2.97 RISE=1
+.meas tran nominal_vout_before_step_v AVG v(out_n) FROM=7m TO=7.9m
+.meas tran worst_vout_step_min_v MIN v(out_w) FROM=8m TO=10m
+.meas tran worst_vout_recovery_max_v MAX v(out_w) FROM=10m TO=12m
+.meas tran worst_vin_step_min_v MIN v(vin_w) FROM=8m TO=10m
+.meas tran worst_source_peak_a MAX par('-i(VSOURCE_W)') FROM=0 TO=20m
+.meas tran worst_input_energy_j INTEG par('v(vin_w)*i(VBIN_W_SENSE)') FROM=0.5m TO=20m
+.meas tran worst_load_energy_j INTEG par('v(out_w)*v(load_w)') FROM=0.5m TO=20m
+.meas tran nominal_input_energy_j INTEG par('v(vin_n)*i(VBIN_N_SENSE)') FROM=0.5m TO=20m
+.meas tran nominal_load_energy_j INTEG par('v(out_n)*v(load_n)') FROM=0.5m TO=20m
+
+.end

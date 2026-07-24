@@ -1,0 +1,659 @@
+{
+  "schema_version": 1,
+  "repeat_count": 3,
+  "engines": {
+    "host": {
+      "major": 42,
+      "executable": "/usr/bin/ngspice"
+    },
+    "docker": {
+      "major": 39,
+      "image": "ngspice-cached:latest",
+      "image_id": "sha256:6cb6c92d8ddfedc8857bec3884eb9dea6af1a28fac3524446abbc8bef4c1d0ae"
+    }
+  },
+  "rev_b_values": {
+    "input_nominal_v": 8.0,
+    "f1_part": "1812L075/24DR",
+    "f1_cold_resistance_ohm": [
+      0.11,
+      0.29
+    ],
+    "d1_part": "SS34",
+    "d3_part": "SMBJ10A",
+    "uv_divider_ohm": [
+      150000.0,
+      10000.0
+    ],
+    "ov_divider_ohm": [
+      255000.0,
+      10000.0
+    ],
+    "sense_filter_f": 1e-09,
+    "supervisor_startup_max_s": 0.00045,
+    "relay_part": "G6K-2F-Y-TR DC5",
+    "relay_coil_nominal_ohm": 237.0,
+    "relay_supply_v": 5.0,
+    "relay_clamp_part": "SMAJ6.0CA",
+    "relay_output_cap_f": 4.7e-06,
+    "q1_base_resistance_ohm": 560.0,
+    "vbus_cap_f": 1e-07,
+    "vbus_discharge_ohm": 10000.0,
+    "vbus_detector_part": "2N7002",
+    "uart_tap_ohm": 10000.0,
+    "uart_baud": 9600,
+    "buck_part": "TPS54202DDCR",
+    "buck_output_v": 3.3
+  },
+  "references": [
+    {
+      "part": "1812L075/24DR",
+      "url": "https://www.littelfuse.com/products/fuses-overcurrent-protection/polyswitch-resettable-pptc-devices/surface-mount-polyswitch-resettable-pptc-devices/1812l/1812l075",
+      "used_for": "24 V maximum, 0.75 A hold, 0.11/0.29 ohm resistance bounds"
+    },
+    {
+      "part": "SMBJ10A",
+      "url": "https://www.littelfuse.com/assetdocs/tvs-diodes-smbj-series-datasheet?assetguid=ba555e99-a12d-4f72-a0b6-86b06c67171e",
+      "used_for": "10 V standoff, 11.1...12.3 V breakdown, 17 V clamp at 35.3 A"
+    },
+    {
+      "part": "TPS3700",
+      "url": "https://www.ti.com/lit/ds/symlink/tps3700.pdf",
+      "used_for": "396...404 mV rising, 387...400 mV falling, input bias, 18 us fault propagation, 450 us maximum startup"
+    },
+    {
+      "part": "TPS70950",
+      "url": "https://www.ti.com/lit/ds/symlink/tps709.pdf",
+      "used_for": "1.5 ms maximum EN-to-95%-VOUT startup for output above 3.3 V"
+    },
+    {
+      "part": "SMAJ6.0CA",
+      "url": "https://www.littelfuse.com/assetdocs/tvs-diodes-smaj-datasheet?assetguid=13c2a823-03b8-4d1f-9ddc-9b44670aed9d",
+      "used_for": "6 V standoff, 6.67...7.37 V breakdown, 10.3 V clamp at 38.8 A"
+    },
+    {
+      "part": "G6K-2F-Y-TR DC5",
+      "url": "https://components.omron.com/eu-en/products/relays/G6K",
+      "used_for": "5 V, 100 mW, 237 ohm nominal coil"
+    },
+    {
+      "part": "TPS54202",
+      "url": "https://www.ti.com/lit/ds/symlink/tps54202.pdf",
+      "used_for": "4.5...28 V input, 3.3 V design point, 5 ms soft-start"
+    }
+  ],
+  "truth_table": [
+    {
+      "rail_3v3": 0,
+      "tread_ok": 0,
+      "relay_cmd": 0,
+      "tx_enable": 0,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_00_v",
+      "tx_measure": "tx_gate_row_00_v"
+    },
+    {
+      "rail_3v3": 0,
+      "tread_ok": 0,
+      "relay_cmd": 0,
+      "tx_enable": 1,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_01_v",
+      "tx_measure": "tx_gate_row_01_v"
+    },
+    {
+      "rail_3v3": 0,
+      "tread_ok": 0,
+      "relay_cmd": 1,
+      "tx_enable": 0,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_02_v",
+      "tx_measure": "tx_gate_row_02_v"
+    },
+    {
+      "rail_3v3": 0,
+      "tread_ok": 0,
+      "relay_cmd": 1,
+      "tx_enable": 1,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_03_v",
+      "tx_measure": "tx_gate_row_03_v"
+    },
+    {
+      "rail_3v3": 0,
+      "tread_ok": 1,
+      "relay_cmd": 0,
+      "tx_enable": 0,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_04_v",
+      "tx_measure": "tx_gate_row_04_v"
+    },
+    {
+      "rail_3v3": 0,
+      "tread_ok": 1,
+      "relay_cmd": 0,
+      "tx_enable": 1,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_05_v",
+      "tx_measure": "tx_gate_row_05_v"
+    },
+    {
+      "rail_3v3": 0,
+      "tread_ok": 1,
+      "relay_cmd": 1,
+      "tx_enable": 0,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_06_v",
+      "tx_measure": "tx_gate_row_06_v"
+    },
+    {
+      "rail_3v3": 0,
+      "tread_ok": 1,
+      "relay_cmd": 1,
+      "tx_enable": 1,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_07_v",
+      "tx_measure": "tx_gate_row_07_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 0,
+      "relay_cmd": 0,
+      "tx_enable": 0,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_08_v",
+      "tx_measure": "tx_gate_row_08_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 0,
+      "relay_cmd": 0,
+      "tx_enable": 1,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_09_v",
+      "tx_measure": "tx_gate_row_09_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 0,
+      "relay_cmd": 1,
+      "tx_enable": 0,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_10_v",
+      "tx_measure": "tx_gate_row_10_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 0,
+      "relay_cmd": 1,
+      "tx_enable": 1,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_11_v",
+      "tx_measure": "tx_gate_row_11_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 1,
+      "relay_cmd": 0,
+      "tx_enable": 0,
+      "relay_gate": 0,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_12_v",
+      "tx_measure": "tx_gate_row_12_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 1,
+      "relay_cmd": 0,
+      "tx_enable": 1,
+      "relay_gate": 0,
+      "tx_gate": 1,
+      "relay_measure": "relay_gate_row_13_v",
+      "tx_measure": "tx_gate_row_13_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 1,
+      "relay_cmd": 1,
+      "tx_enable": 0,
+      "relay_gate": 1,
+      "tx_gate": 0,
+      "relay_measure": "relay_gate_row_14_v",
+      "tx_measure": "tx_gate_row_14_v"
+    },
+    {
+      "rail_3v3": 1,
+      "tread_ok": 1,
+      "relay_cmd": 1,
+      "tx_enable": 1,
+      "relay_gate": 1,
+      "tx_gate": 1,
+      "relay_measure": "relay_gate_row_15_v",
+      "tx_measure": "tx_gate_row_15_v"
+    }
+  ],
+  "scenarios": {
+    "input_protection": {
+      "deck": "decks/input_protection.cir",
+      "assertions": {
+        "nominal_cold_vin_v": {
+          "unit": "V",
+          "min": 7.4,
+          "max": 7.8,
+          "abs_tolerance": 1e-06,
+          "rel_tolerance": 1e-06
+        },
+        "nominal_hot_vin_v": {
+          "unit": "V",
+          "min": 7.3,
+          "max": 7.8,
+          "abs_tolerance": 1e-06,
+          "rel_tolerance": 1e-06
+        },
+        "safe16_vin_peak_v": {
+          "unit": "V",
+          "min": 10.0,
+          "max": 17.0,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe16_high_bv_vin_peak_v": {
+          "unit": "V",
+          "min": 12.3,
+          "max": 17.0,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe16_d1_peak_a": {
+          "unit": "A",
+          "min": 0.0,
+          "max": 80.0,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe16_d3_peak_a": {
+          "unit": "A",
+          "min": 0.0,
+          "max": 35.3,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe16_d3_energy_j": {
+          "unit": "J",
+          "min": 0.0,
+          "max": 0.3,
+          "abs_tolerance": 1e-07,
+          "rel_tolerance": 1e-05
+        },
+        "safe20_vin_peak_v": {
+          "unit": "V",
+          "min": 10.0,
+          "max": 17.0,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe20_high_bv_vin_peak_v": {
+          "unit": "V",
+          "min": 12.3,
+          "max": 17.0,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe20_d1_peak_a": {
+          "unit": "A",
+          "min": 0.0,
+          "max": 80.0,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe20_d3_peak_a": {
+          "unit": "A",
+          "min": 0.0,
+          "max": 35.3,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "safe20_d3_energy_j": {
+          "unit": "J",
+          "min": 0.0,
+          "max": 0.3,
+          "abs_tolerance": 1e-07,
+          "rel_tolerance": 1e-05
+        },
+        "reverse_vin_min_v": {
+          "unit": "V",
+          "min": -0.01,
+          "max": 0.01,
+          "abs_tolerance": 1e-07,
+          "rel_tolerance": 1e-05
+        }
+      },
+      "unsupported": [
+        {
+          "claim": "PTC thermal trip, hold, and reset",
+          "reason": "F1 is only its documented cold/hot resistance bounds"
+        },
+        {
+          "claim": "temperature-dependent SS34 reverse leakage",
+          "reason": "the low-order diode model is not selected-vendor leakage evidence",
+          "measure": "reverse_d1_peak_a"
+        },
+        {
+          "claim": "pulse beyond the published protection envelope",
+          "reason": "36 V exceeds the selected F1 24 V maximum",
+          "measure": "unsupported_36v_vin_peak_v"
+        },
+        {
+          "claim": "real treadmill surge spectrum",
+          "reason": "actual source resistance, pulse waveform, and repetition require capture and bench work"
+        }
+      ]
+    },
+    "tread_permission": {
+      "deck": "decks/tread_permission.cir",
+      "assertions": {
+        "uv_rise_low_v": {
+          "unit": "V",
+          "min": 6.15,
+          "max": 6.3,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "uv_rise_high_v": {
+          "unit": "V",
+          "min": 6.5,
+          "max": 6.7,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "uv_fall_low_v": {
+          "unit": "V",
+          "min": 5.95,
+          "max": 6.15,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "uv_fall_high_v": {
+          "unit": "V",
+          "min": 6.4,
+          "max": 6.6,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "ov_rise_low_v": {
+          "unit": "V",
+          "min": 10.2,
+          "max": 10.4,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "ov_rise_high_v": {
+          "unit": "V",
+          "min": 10.8,
+          "max": 11.05,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "ov_fall_low_v": {
+          "unit": "V",
+          "min": 9.9,
+          "max": 10.2,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "ov_fall_high_v": {
+          "unit": "V",
+          "min": 10.65,
+          "max": 10.9,
+          "abs_tolerance": 1e-05,
+          "rel_tolerance": 1e-06
+        },
+        "supervisor_startup_s": {
+          "unit": "s",
+          "min": 0.00044,
+          "max": 0.00045,
+          "abs_tolerance": 1e-09,
+          "rel_tolerance": 1e-05
+        },
+        "tread_after_3v3_s": {
+          "unit": "s",
+          "min": 0.0003,
+          "max": 0.00045,
+          "abs_tolerance": 1e-10,
+          "rel_tolerance": 1e-05
+        },
+        "ov_disable_s": {
+          "unit": "s",
+          "min": 1.8e-05,
+          "max": 6e-05,
+          "abs_tolerance": 1e-09,
+          "rel_tolerance": 1e-05
+        },
+        "ov_recover_s": {
+          "unit": "s",
+          "min": 0.00044,
+          "max": 0.0005,
+          "abs_tolerance": 1e-09,
+          "rel_tolerance": 1e-05
+        },
+        "collapse_tread_before_rail_s": {
+          "unit": "s",
+          "min": 0.0009,
+          "max": 0.0011,
+          "abs_tolerance": 1e-09,
+          "rel_tolerance": 1e-05
+        },
+        "u5_enable_s": {
+          "unit": "s",
+          "min": 0.0014,
+          "max": 0.0016,
+          "abs_tolerance": 1e-09,
+          "rel_tolerance": 1e-05
+        },
+        "u5_disable_tail_s": {
+          "unit": "s",
+          "min": 0.002,
+          "max_exclusive": 0.003,
+          "abs_tolerance": 1e-08,
+          "rel_tolerance": 1e-05
+        },
+        "tread_low_when_rail_absent_v": {
+          "unit": "V",
+          "expected": 0.0,
+          "assert_tolerance": 1e-09,
+          "abs_tolerance": 1e-10,
+          "rel_tolerance": 1e-06
+        }
+      },
+      "unsupported": [
+        {
+          "claim": "physical brownout and real treadmill rail timing",
+          "reason": "relative VIN/+3V3 ramps are declared sources, not captures"
+        },
+        {
+          "claim": "TPS70950 current limit or thermal behavior",
+          "reason": "U5 is an enabled Thevenin source"
+        }
+      ]
+    },
+    "safety_truth_table": {
+      "deck": "decks/safety_truth_table.cir",
+      "assertions": {
+        "relay_gate_row_00_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_00_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_01_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_01_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_02_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_02_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_03_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_03_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_04_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_04_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_05_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_05_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_06_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_06_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_07_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_07_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_08_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_08_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_09_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_09_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_10_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_10_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_11_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_11_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_12_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_12_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_13_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_row_13_v": {"unit": "V", "expected": 3.3, "assert_tolerance": 0.01, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "relay_gate_row_14_v": {"unit": "V", "expected": 3.3, "assert_tolerance": 0.01, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "tx_gate_row_14_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 0.01, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "relay_gate_row_15_v": {"unit": "V", "expected": 3.3, "assert_tolerance": 0.01, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "tx_gate_row_15_v": {"unit": "V", "expected": 3.3, "assert_tolerance": 0.01, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "relay_gate_default_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "tx_gate_default_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06}
+      },
+      "unsupported": [
+        {
+          "claim": "logic propagation and partial-power leakage maxima",
+          "reason": "the gates are behavioral truth-table primitives"
+        },
+        {
+          "claim": "RF coupling into safety gates",
+          "reason": "RF behavior is outside a lumped static truth table"
+        }
+      ]
+    },
+    "relay_drive_release": {
+      "deck": "decks/relay_drive_release.cir",
+      "assertions": {
+        "coil_current_max_a": {"unit": "A", "min": 0.023, "max": 0.025, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "coil_current_nominal_a": {"unit": "A", "min": 0.0205, "max": 0.0215, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "coil_current_min_a": {"unit": "A", "min": 0.018, "max": 0.0195, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "fast_release_0p1h_s": {"unit": "s", "min": 0.0001, "max": 0.0003, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "fast_release_0p5h_s": {"unit": "s", "min": 0.0007, "max": 0.0011, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "fast_release_1h_s": {"unit": "s", "min": 0.0013, "max": 0.002, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "diode_release_0p5h_s": {"unit": "s", "min": 0.003, "max": 0.0035, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "q1_collector_peak_v": {"unit": "V", "min": 11.0, "max": 45.0, "abs_tolerance": 1e-05, "rel_tolerance": 1e-06},
+        "d4_peak_current_a": {"unit": "A", "min": 0.018, "max": 0.03, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "d4_energy_j": {"unit": "J", "min": 0.0, "max": 0.001, "abs_tolerance": 1e-08, "rel_tolerance": 1e-05},
+        "base_drive_current_a": {"unit": "A", "min": 0.004, "max": 0.0055, "abs_tolerance": 1e-08, "rel_tolerance": 1e-06},
+        "conservative_base_current_a": {"unit": "A", "min": 0.0017, "max": 0.0019, "abs_tolerance": 1e-09, "rel_tolerance": 1e-06},
+        "conservative_coil_current_a": {"unit": "A", "min": 0.016, "max": 0.017, "abs_tolerance": 1e-08, "rel_tolerance": 1e-06},
+        "conservative_coil_voltage_v": {"unit": "V", "min": 4.0, "max": 4.3, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "conservative_q1_vce_v": {"unit": "V", "min": 0.69, "max": 0.7, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "conservative_forced_beta": {"unit": "ratio", "min": 8.0, "max": 10.0, "abs_tolerance": 1e-05, "rel_tolerance": 1e-06},
+        "q1_open_coil_current_a": {"unit": "A", "min": 0.0, "max": 1e-06, "abs_tolerance": 1e-10, "rel_tolerance": 1e-05},
+        "q1_short_fault_current_a": {"unit": "A", "min": 0.018, "max": 0.025, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "q1_short_u5_off_tail_s": {"unit": "s", "min": 0.0025, "max": 0.004, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05}
+      },
+      "unsupported": [
+        {
+          "claim": "relay contact motion, release, bounce, or continuity",
+          "reason": "coil current decay is not contact motion evidence"
+        },
+        {
+          "claim": "guaranteed relay inductance",
+          "reason": "0.1/0.5/1 H are documented engineering sweeps, not Omron limits"
+        },
+        {
+          "claim": "BC817 transient switching and combined-temperature saturation",
+          "reason": "no selected-vendor transistor macromodel establishes these behaviors"
+        }
+      ]
+    },
+    "vbus_present": {
+      "deck": "decks/vbus_present.cir",
+      "assertions": {
+        "hotplug_worst_to_low_s": {"unit": "s", "min": 0.0, "max": 1e-05, "abs_tolerance": 1e-10, "rel_tolerance": 1e-05},
+        "hotplug_fast_to_low_s": {"unit": "s", "min": 0.0, "max": 1e-05, "abs_tolerance": 1e-10, "rel_tolerance": 1e-05},
+        "unplug_worst_indication_s": {"unit": "s", "min": 0.0015, "max_exclusive": 0.003, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "unplug_nominal_indication_s": {"unit": "s", "min": 0.0005, "max": 0.001, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "unplug_fast_indication_s": {"unit": "s", "min": 0.0003, "max": 0.0008, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "present_n_low_v": {"unit": "V", "min": 0.0, "max": 0.01, "abs_tolerance": 1e-08, "rel_tolerance": 1e-06},
+        "absent_n_high_v": {"unit": "V", "min": 3.29, "max": 3.31, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "gpio_unpowered_vmax_v": {"unit": "V", "expected": 0.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-06},
+        "vbus_to_dead_rail_peak_a": {"unit": "A", "expected": 0.0, "assert_tolerance": 1e-12, "abs_tolerance": 1e-12, "rel_tolerance": 1e-06}
+      },
+      "unsupported": [
+        {
+          "claim": "native USB pull-up and attach behavior",
+          "reason": "this is a firmware and bench gate, not a Q2 simulation result"
+        },
+        {
+          "claim": "USB eye margin and enumeration",
+          "reason": "the deck contains no USB PHY or channel model"
+        }
+      ]
+    },
+    "buck_averaged": {
+      "deck": "decks/buck_averaged.cir",
+      "assertions": {
+        "startup_90pct_s": {"unit": "s", "min": 0.004, "max": 0.0055, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "nominal_vout_before_step_v": {"unit": "V", "min": 3.28, "max": 3.31, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "worst_vout_step_min_v": {"unit": "V", "min": 3.2, "max": 3.3, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "worst_vout_recovery_max_v": {"unit": "V", "min": 3.28, "max": 3.31, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "worst_vin_step_min_v": {"unit": "V", "min": 6.5, "max": 8.0, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "worst_source_peak_a": {"unit": "A", "min": 1.5, "max": 2.1, "abs_tolerance": 1e-05, "rel_tolerance": 1e-06},
+        "worst_input_energy_j": {"unit": "J", "min": 0.01, "max": 0.02, "abs_tolerance": 1e-07, "rel_tolerance": 1e-05},
+        "worst_load_energy_j": {"unit": "J", "min": 0.004, "max": 0.007, "abs_tolerance": 1e-07, "rel_tolerance": 1e-05},
+        "nominal_input_energy_j": {"unit": "J", "min": 0.01, "max": 0.02, "abs_tolerance": 1e-07, "rel_tolerance": 1e-05},
+        "nominal_load_energy_j": {"unit": "J", "min": 0.004, "max": 0.007, "abs_tolerance": 1e-07, "rel_tolerance": 1e-05}
+      },
+      "unsupported": [
+        {
+          "claim": "switching-loop margin",
+          "reason": "AVERAGED BEHAVIORAL MODEL has no switching control loop"
+        },
+        {
+          "claim": "switch-node ripple",
+          "reason": "the switching node and vendor MOSFETs are absent"
+        },
+        {
+          "claim": "EMI",
+          "reason": "no layout, parasitic, or frequency-domain emissions model is present"
+        },
+        {
+          "claim": "vendor-model startup",
+          "reason": "the committed deck uses an explicit 5 ms averaged ramp"
+        },
+        {
+          "claim": "actual treadmill source capacity",
+          "reason": "the 0.5/1.5 ohm source assumptions require bench validation"
+        }
+      ]
+    },
+    "uart_taps": {
+      "deck": "decks/uart_taps.cir",
+      "assertions": {
+        "tap_rise_10_90_s": {"unit": "s", "min": 5e-07, "max": 2e-06, "abs_tolerance": 1e-10, "rel_tolerance": 1e-05},
+        "tap_fall_90_10_s": {"unit": "s", "min": 5e-07, "max": 2e-06, "abs_tolerance": 1e-10, "rel_tolerance": 1e-05},
+        "tap_threshold_delay_s": {"unit": "s", "min": 1e-07, "max": 1e-06, "abs_tolerance": 1e-10, "rel_tolerance": 1e-05},
+        "bit_period_s": {"unit": "s", "expected": 0.000104167, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-06},
+        "powered_sample_high_v": {"unit": "V", "min": 3.29, "max": 3.31, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06},
+        "one_tap_injection_a": {"unit": "A", "min": 0.00025, "max": 0.0003, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "two_tap_dead_rail_injection_a": {"unit": "A", "min": 0.0005, "max": 0.0006, "abs_tolerance": 1e-09, "rel_tolerance": 1e-05},
+        "dead_gpio_peak_v": {"unit": "V", "min": 0.35, "max": 0.6, "abs_tolerance": 1e-06, "rel_tolerance": 1e-06}
+      },
+      "unsupported": [
+        {
+          "claim": "real treadmill line integrity and dead-board leakage",
+          "reason": "the line and clamp are first-order behavioral corners"
+        }
+      ]
+    }
+  }
+}

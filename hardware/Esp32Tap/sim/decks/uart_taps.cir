@@ -1,0 +1,46 @@
+Esp32Tap Rev B 10k UART receive tap timing and dead-board injection
+* ASSUMPTIONS:
+* R7/R8 are 10k (+1 percent timing corner), UART is 9600 baud
+* (104.167 us/bit), and 50 pF bounds GPIO+trace+ESD capacitance.
+* The unpowered GPIO clamp uses a conservative silicon forward model at a
+* 3.3 V asserted cable level. Both taps are tested simultaneously.
+* Cable-side D5/D7 remain bidirectional and ground referenced, not +3V3.
+* NON-CLAIMS:
+* This first-order RC model does not prove real treadmill edge shape,
+* dead-board silicon leakage, ESD survival, framing margin under noise, or
+* through-path serial integrity; those remain bench measurements.
+
+.include models/behavioral.inc
+
+* Powered input timing corner.
+VUART uart_line 0 PULSE(0 3.3 1u 10n 10n 52.083u 104.167u)
+RTAP uart_line uart_rx 10.1k
+CTAP uart_rx 0 50p
+RINPUT uart_rx 0 100meg
+
+* Two simultaneously asserted taps into an unpowered ESP32 domain.
+VLINE1 line1 0 3.3
+RLINE1 line1 line1_s 10k
+VLINE1_SENSE line1_s gpio1_dead 0
+DGPIO1 gpio1_dead dead_3v3 ESP_GPIO_CLAMP
+RGPIO1 gpio1_dead 0 100meg
+
+VLINE2 line2 0 3.3
+RLINE2 line2 line2_s 10k
+VLINE2_SENSE line2_s gpio2_dead 0
+DGPIO2 gpio2_dead dead_3v3 ESP_GPIO_CLAMP
+RGPIO2 gpio2_dead 0 100meg
+VDEAD_3V3 dead_3v3 0 0
+
+.tran 10n 300u
+
+.meas tran tap_rise_10_90_s TRIG v(uart_rx) VAL=0.33 RISE=1 TARG v(uart_rx) VAL=2.97 RISE=1
+.meas tran tap_fall_90_10_s TRIG v(uart_rx) VAL=2.97 FALL=1 TARG v(uart_rx) VAL=0.33 FALL=1
+.meas tran tap_threshold_delay_s TRIG v(uart_line) VAL=1.65 RISE=1 TARG v(uart_rx) VAL=1.65 RISE=1
+.meas tran bit_period_s TRIG v(uart_line) VAL=1.65 RISE=1 TARG v(uart_line) VAL=1.65 RISE=2
+.meas tran powered_sample_high_v FIND v(uart_rx) AT=40u
+.meas tran one_tap_injection_a AVG i(VLINE1_SENSE) FROM=200u TO=300u
+.meas tran two_tap_dead_rail_injection_a AVG i(VDEAD_3V3) FROM=200u TO=300u
+.meas tran dead_gpio_peak_v MAX v(gpio1_dead) FROM=200u TO=300u
+
+.end

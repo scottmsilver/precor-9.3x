@@ -1,0 +1,85 @@
+Esp32Tap Rev B active-low VBUS_PRESENT_N hot-plug and unplug corners
+* ASSUMPTIONS:
+* USB VBUS is data-interface sensing only; it does not power VIN or +3V3.
+* C11=100 nF (+/-10 percent), R29=10k (+/-1 percent), R30=10k.
+* Q2 2N7002 is an isolated-gate open-drain switch. Threshold corners are
+* 1.0 V and 2.5 V; 4.4 V and 5.5 V VBUS source limits are exercised.
+* VBUS_PRESENT_N is LOW while VBUS exists and returns HIGH after unplug.
+* NON-CLAIMS:
+* MOSFET dynamic capacitance/leakage, ESD-array leakage, ESP32 native-USB
+* pull-up/attach behavior, USB enumeration, and USB eye margin require
+* firmware or bench evidence. This deck does not claim them.
+
+.include models/behavioral.inc
+
+* Common plug control: connected at 0.1 ms and unplugged at 2.0 ms.
+VPLUG plug_ctl 0 PWL(0 0 0.1m 0 0.101m 3.3 2m 3.3 2.001m 0 5m 0)
+
+* Slowest hot-plug: low VBUS, C high, and maximum Q2 threshold.
+VHP_SLOW_SRC hp_slow_src 0 4.4
+RHP_SLOW_SRC hp_slow_src hp_slow_sw 44
+SW_HP_SLOW hp_slow_sw vbus_hp_slow plug_ctl 0 ESP_SWITCH
+CHP_SLOW vbus_hp_slow 0 110n
+RHP_SLOW_DISCHARGE vbus_hp_slow 0 10.1k
+VHP_SLOW_RAIL rail_hp_slow 0 3.3
+XHP_SLOW_DETECT vbus_hp_slow rail_hp_slow vbus_present_n_hp_slow ESP_VBUS_DETECTOR_2V5
+
+* Fast hot-plug comparison: high VBUS, C low, and minimum Q2 threshold.
+VHP_FAST_SRC hp_fast_src 0 5.5
+RHP_FAST_SRC hp_fast_src hp_fast_sw 44
+SW_HP_FAST hp_fast_sw vbus_hp_fast plug_ctl 0 ESP_SWITCH
+CHP_FAST vbus_hp_fast 0 90n
+RHP_FAST_DISCHARGE vbus_hp_fast 0 9.9k
+VHP_FAST_RAIL rail_hp_fast 0 3.3
+XHP_FAST_DETECT vbus_hp_fast rail_hp_fast vbus_present_n_hp_fast ESP_VBUS_DETECTOR
+
+* Worst unplug delay: 5.5 V, C high, R high, and low Q2 release threshold.
+VW_SRC worst_src 0 5.5
+RW_SRC worst_src worst_sw 44
+SW_WORST worst_sw vbus_worst plug_ctl 0 ESP_SWITCH
+CWORST vbus_worst 0 110n
+RW_DISCHARGE vbus_worst 0 10.1k
+VW_RAIL rail_worst 0 3.3
+XW_DETECT vbus_worst rail_worst vbus_present_n_worst ESP_VBUS_DETECTOR
+
+* Fast opposite corner: 4.4 V, C low, R low, and 2.5 V Q2 threshold.
+VF_SRC fast_src 0 4.4
+RF_SRC fast_src fast_sw 44
+SW_FAST fast_sw vbus_fast plug_ctl 0 ESP_SWITCH
+CFAST vbus_fast 0 90n
+RF_DISCHARGE vbus_fast 0 9.9k
+VF_RAIL rail_fast 0 3.3
+XF_DETECT vbus_fast rail_fast vbus_present_n_fast ESP_VBUS_DETECTOR_2V5
+
+* Nominal 5 V / 100 nF / 10k branch.
+VN_SRC nominal_src 0 5
+RN_SRC nominal_src nominal_sw 44
+SW_NOM nominal_sw vbus_nominal plug_ctl 0 ESP_SWITCH
+CNOM vbus_nominal 0 100n
+RN_DISCHARGE vbus_nominal 0 10k
+VN_RAIL rail_nominal 0 3.3
+XN_DETECT vbus_nominal rail_nominal vbus_present_n_nominal ESP_VBUS_DETECTOR_2V5
+
+* Dead +3V3 domain. Q2 gate is not conductively connected to drain, so
+* VBUS cannot lift the unpowered GPIO or source the dead rail in this model.
+VD_SRC dead_src 0 5.5
+RD_SRC dead_src dead_sw 44
+SW_DEAD dead_sw vbus_dead plug_ctl 0 ESP_SWITCH
+CD vbus_dead 0 110n
+RD_DISCHARGE vbus_dead 0 10.1k
+VDEAD_RAIL rail_dead 0 0
+XD_DETECT vbus_dead rail_dead gpio7_dead ESP_VBUS_DETECTOR
+
+.tran 0.5u 5m
+
+.meas tran hotplug_worst_to_low_s TRIG v(plug_ctl) VAL=1.65 RISE=1 TARG v(vbus_present_n_hp_slow) VAL=1.65 FALL=1
+.meas tran hotplug_fast_to_low_s TRIG v(plug_ctl) VAL=1.65 RISE=1 TARG v(vbus_present_n_hp_fast) VAL=1.65 FALL=1
+.meas tran unplug_worst_indication_s TRIG v(plug_ctl) VAL=1.65 FALL=1 TARG v(vbus_present_n_worst) VAL=1.65 RISE=1
+.meas tran unplug_nominal_indication_s TRIG v(plug_ctl) VAL=1.65 FALL=1 TARG v(vbus_present_n_nominal) VAL=1.65 RISE=1
+.meas tran unplug_fast_indication_s TRIG v(plug_ctl) VAL=1.65 FALL=1 TARG v(vbus_present_n_fast) VAL=1.65 RISE=1
+.meas tran present_n_low_v MAX v(vbus_present_n_worst) FROM=0.2m TO=1.9m
+.meas tran absent_n_high_v MIN v(vbus_present_n_worst) FROM=4.5m TO=5m
+.meas tran gpio_unpowered_vmax_v MAX v(gpio7_dead) FROM=0 TO=5m
+.meas tran vbus_to_dead_rail_peak_a MAX par('abs(i(VDEAD_RAIL))') FROM=0 TO=5m
+
+.end

@@ -1,0 +1,116 @@
+Esp32Tap Rev B F1 D1 D3 input protection behavioral corners
+* ASSUMPTIONS:
+* F1 1812L075/24DR is resistance-only at 0.11 ohm cold and 0.29 ohm
+* hot/post-trip bound. D1 is SS34. D3 is SMBJ10A on protected VIN.
+* The supported pulses remain at or below F1's 24 V maximum and use explicit
+* source resistance. D3 energy is compared with a deliberately conservative
+* fraction of the published SMBJ pulse envelope in assertions.json. Its
+* 11.1 V breakdown corner bounds current/energy; 12.3 V/high-clamp copies
+* independently bound the protected-VIN peak.
+* NON-CLAIMS:
+* PTC thermal trip/hold/reset, repetitive surges, wiring inductance, and any
+* pulse beyond published F1/D1/D3 envelopes are not certified by this deck.
+
+.include models/behavioral.inc
+
+* Nominal 8 V treadmill rail, 150 mA local load.
+VNOM_C nom_c_src 0 8
+RNOM_C_SRC nom_c_src nom_c_f 0.5
+RNOM_C_F1 nom_c_f nom_c_a 0.11
+DNOM_C_D1 nom_c_a nom_c_vin ESP_SS34
+VNOM_C_D3_SENSE nom_c_d3_a 0 0
+DNOM_C_D3 nom_c_d3_a nom_c_vin ESP_SMBJ10A
+RNOM_C_LOAD nom_c_vin 0 53.333333
+CNOM_C nom_c_vin 0 120u
+
+VNOM_H nom_h_src 0 8
+RNOM_H_SRC nom_h_src nom_h_f 0.5
+RNOM_H_F1 nom_h_f nom_h_a 0.29
+DNOM_H_D1 nom_h_a nom_h_vin ESP_SS34
+VNOM_H_D3_SENSE nom_h_d3_a 0 0
+DNOM_H_D3 nom_h_d3_a nom_h_vin ESP_SMBJ10A
+RNOM_H_LOAD nom_h_vin 0 53.333333
+CNOM_H nom_h_vin 0 120u
+
+* Supported 16 V / 1 ms low-source-resistance pulse.
+VSAFE16 safe16_src 0 PWL(0 8 1m 8 1.001m 16 2.001m 16 2.002m 8 20m 8)
+RSAFE16_SRC safe16_src safe16_f 2
+RSAFE16_F1 safe16_f safe16_a 0.11
+VSAFE16_D1_SENSE safe16_a safe16_d1_a 0
+DSAFE16_D1 safe16_d1_a safe16_vin ESP_SS34
+VSAFE16_D3_SENSE safe16_d3_a 0 0
+DSAFE16_D3 safe16_d3_a safe16_vin ESP_SMBJ10A
+RSAFE16_LOAD safe16_vin 0 53.333333
+CSAFE16 safe16_vin 0 120u
+
+* Same 16 V pulse with D3 maximum-breakdown/high-clamp corner for worst VIN.
+VSAFE16_H safe16_h_src 0 PWL(0 8 1m 8 1.001m 16 2.001m 16 2.002m 8 20m 8)
+RSAFE16_H_SRC safe16_h_src safe16_h_f 2
+RSAFE16_H_F1 safe16_h_f safe16_h_a 0.11
+DSAFE16_H_D1 safe16_h_a safe16_h_vin ESP_SS34
+DSAFE16_H_D3 0 safe16_h_vin ESP_SMBJ10A_HIGH
+RSAFE16_H_LOAD safe16_h_vin 0 53.333333
+CSAFE16_H safe16_h_vin 0 120u
+
+* Supported 20 V / 10 ms pulse with 10 ohm source resistance.
+VSAFE20 safe20_src 0 PWL(0 8 3m 8 3.001m 20 13.001m 20 13.002m 8 20m 8)
+RSAFE20_SRC safe20_src safe20_f 10
+RSAFE20_F1 safe20_f safe20_a 0.29
+VSAFE20_D1_SENSE safe20_a safe20_d1_a 0
+DSAFE20_D1 safe20_d1_a safe20_vin ESP_SS34
+VSAFE20_D3_SENSE safe20_d3_a 0 0
+DSAFE20_D3 safe20_d3_a safe20_vin ESP_SMBJ10A
+RSAFE20_LOAD safe20_vin 0 53.333333
+CSAFE20 safe20_vin 0 120u
+
+* Same 20 V pulse with D3 maximum-breakdown/high-clamp corner for worst VIN.
+VSAFE20_H safe20_h_src 0 PWL(0 8 3m 8 3.001m 20 13.001m 20 13.002m 8 20m 8)
+RSAFE20_H_SRC safe20_h_src safe20_h_f 10
+RSAFE20_H_F1 safe20_h_f safe20_h_a 0.29
+DSAFE20_H_D1 safe20_h_a safe20_h_vin ESP_SS34
+DSAFE20_H_D3 0 safe20_h_vin ESP_SMBJ10A_HIGH
+RSAFE20_H_LOAD safe20_h_vin 0 53.333333
+CSAFE20_H safe20_h_vin 0 120u
+
+* Deliberately unsupported 36 V / 1 ms case: simulated only to make the
+* out-of-envelope case visible. The runner must print UNSUPPORTED, never PASS.
+VUNSUP36 unsup36_src 0 PWL(0 8 5m 8 5.001m 36 6.001m 36 6.002m 8 20m 8)
+RUNSUP36_SRC unsup36_src unsup36_f 10
+RUNSUP36_F1 unsup36_f unsup36_a 0.11
+DUNSUP36_D1 unsup36_a unsup36_vin ESP_SS34
+VUNSUP36_D3_SENSE unsup36_d3_a 0 0
+DUNSUP36_D3 unsup36_d3_a unsup36_vin ESP_SMBJ10A
+RUNSUP36_LOAD unsup36_vin 0 53.333333
+CUNSUP36 unsup36_vin 0 120u
+
+* Reverse-polarity branch: D1 must isolate local VIN. The long tail allows
+* the real 120 uF modeled input capacitance to discharge through its load.
+VREV rev_src 0 PWL(0 8 10m 8 10.001m -8 60m -8)
+RREV_SRC rev_src rev_f 0.5
+RREV_F1 rev_f rev_a 0.11
+VREV_D1_SENSE rev_a rev_d1_a 0
+DREV_D1 rev_d1_a rev_vin ESP_SS34
+VREV_D3_SENSE rev_d3_a 0 0
+DREV_D3 rev_d3_a rev_vin ESP_SMBJ10A
+RREV_LOAD rev_vin 0 53.333333
+CREV rev_vin 0 120u
+
+.tran 5u 60m
+
+.meas tran nominal_cold_vin_v AVG v(nom_c_vin) FROM=59m TO=60m
+.meas tran nominal_hot_vin_v AVG v(nom_h_vin) FROM=59m TO=60m
+.meas tran safe16_vin_peak_v MAX v(safe16_vin) FROM=1m TO=3m
+.meas tran safe16_high_bv_vin_peak_v MAX v(safe16_h_vin) FROM=1m TO=3m
+.meas tran safe16_d1_peak_a MAX i(VSAFE16_D1_SENSE) FROM=1m TO=3m
+.meas tran safe16_d3_peak_a MAX i(VSAFE16_D3_SENSE) FROM=1m TO=3m
+.meas tran safe16_d3_energy_j INTEG par('v(safe16_vin)*i(VSAFE16_D3_SENSE)') FROM=1m TO=3m
+.meas tran safe20_vin_peak_v MAX v(safe20_vin) FROM=3m TO=14m
+.meas tran safe20_high_bv_vin_peak_v MAX v(safe20_h_vin) FROM=3m TO=14m
+.meas tran safe20_d1_peak_a MAX i(VSAFE20_D1_SENSE) FROM=3m TO=14m
+.meas tran safe20_d3_peak_a MAX i(VSAFE20_D3_SENSE) FROM=3m TO=14m
+.meas tran safe20_d3_energy_j INTEG par('v(safe20_vin)*i(VSAFE20_D3_SENSE)') FROM=3m TO=14m
+.meas tran reverse_vin_min_v MIN v(rev_vin) FROM=10m TO=60m
+.meas tran reverse_d1_peak_a MAX par('abs(i(VREV_D1_SENSE))') FROM=50m TO=60m
+.meas tran unsupported_36v_vin_peak_v MAX v(unsup36_vin) FROM=5m TO=7m
+
+.end
