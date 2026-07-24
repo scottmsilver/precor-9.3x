@@ -62,6 +62,32 @@ COMMON_HARNESS_IDENTITIES = {
     "strain_relief": ("HellermannTyton", "151-00745", None),
     "rj45_termination": ("TE Connectivity", "1932219-1", None),
 }
+ELECTRICAL_LIMIT_FIELDS = {
+    "schema_version",
+    "basis",
+    "total_current_a",
+    "normal_unequal_branch_current_a",
+    "new_board_connectors",
+    "wire",
+    "rj45",
+    "pcb",
+    "source",
+    "local_load",
+    "usb_ground",
+    "unsupported",
+}
+ELECTRICAL_UNSUPPORTED = {
+    "RJ45_SINGLE_OPEN_2A",
+    "MINIMUM_VIN",
+    "SOURCE_IMPEDANCE",
+    "AMBIENT_THERMAL",
+    "TRANSIENT_RESPONSE",
+    "COMPLETE_INSTALLED_DROP",
+    "USB_RETURN_CURRENT",
+    "ESD",
+    "RF",
+    "SWITCHING_LOOP",
+}
 EXPECTED_MICROFIT_OFFICIAL_TABLE = {
     "configuration": "wire_to_board",
     "wire_awg": 22,
@@ -613,6 +639,167 @@ def validate_requirements(record: object) -> dict[str, Any]:
     if record["status"] == "HOLD_NOT_MEASURED" and record["interfaces"]:
         raise EvidenceError("HOLD harness requirements cannot select interfaces")
     return record
+
+
+def validate_electrical_limits(record: object) -> dict[str, Any]:
+    limits = _exact_fields(
+        record,
+        ELECTRICAL_LIMIT_FIELDS,
+        "harness electrical limits",
+    )
+    if limits["schema_version"] != 1:
+        raise EvidenceError("harness electrical limits schema version is invalid")
+    if limits["basis"] != "CONSERVATIVE_PREDECESSOR":
+        raise EvidenceError("harness electrical limits basis is not predecessor-bound")
+    total = _finite_nonnegative(limits["total_current_a"], "total current")
+    branches = limits["normal_unequal_branch_current_a"]
+    if (
+        total != 2.0
+        or not isinstance(branches, list)
+        or len(branches) != 2
+        or [
+            _finite_nonnegative(value, "normal unequal branch current")
+            for value in branches
+        ]
+        != [1.35, 0.65]
+        or not math.isclose(sum(branches), total, abs_tol=1e-12)
+    ):
+        raise EvidenceError("normal unequal predecessor current case is invalid")
+
+    connectors = _exact_fields(
+        limits["new_board_connectors"],
+        {"console", "motor"},
+        "new board connectors",
+    )
+    for name, expected_mpn in (
+        ("console", "430450809"),
+        ("motor", "430451010"),
+    ):
+        connector = _exact_fields(
+            connectors[name],
+            {
+                "mpn",
+                "contact_resistance_ohm",
+                "doubled_contact_resistance_ohm",
+            },
+            f"{name} board connector",
+        )
+        nominal = _finite_nonnegative(
+            connector["contact_resistance_ohm"],
+            f"{name} connector contact resistance",
+        )
+        doubled = _finite_nonnegative(
+            connector["doubled_contact_resistance_ohm"],
+            f"{name} doubled contact resistance",
+        )
+        if (
+            connector["mpn"] != expected_mpn
+            or nominal != 0.01
+            or doubled != 2 * nominal
+        ):
+            raise EvidenceError(
+                f"{name} exact connector or doubled contact resistance is invalid"
+            )
+
+    wire = _exact_fields(
+        limits["wire"],
+        {
+            "mpn",
+            "awg",
+            "dc_resistance_ohm_per_1000ft_at_20c",
+            "harness_length_mm",
+            "calculated_conductor_resistance_ohm",
+        },
+        "wire electrical limits",
+    )
+    if wire["mpn"] != "Alpha Wire 3051" or wire["awg"] != 22:
+        raise EvidenceError("harness wire identity is invalid")
+    dcr = _finite_nonnegative(
+        wire["dc_resistance_ohm_per_1000ft_at_20c"],
+        "wire DCR",
+    )
+    if dcr != 16.2:
+        raise EvidenceError("Alpha Wire 3051 official DCR is invalid")
+    lengths = _exact_fields(
+        wire["harness_length_mm"],
+        {"console", "motor"},
+        "harness lengths",
+    )
+    resistances = _exact_fields(
+        wire["calculated_conductor_resistance_ohm"],
+        {"console", "motor"},
+        "calculated conductor resistances",
+    )
+    for name, expected_length in (("console", 180), ("motor", 240)):
+        length = _finite_nonnegative(lengths[name], f"{name} harness length")
+        resistance = _finite_nonnegative(
+            resistances[name],
+            f"{name} conductor resistance",
+        )
+        expected = dcr * length / 304800.0
+        if length != expected_length or not math.isclose(
+            resistance,
+            expected,
+            rel_tol=0.0,
+            abs_tol=1e-15,
+        ):
+            raise EvidenceError(f"{name} wire resistance calculation is invalid")
+
+    rj45 = _exact_fields(
+        limits["rj45"],
+        {
+            "mpn",
+            "termination_count",
+            "published_max_current_per_contact_a",
+            "contact_resistance_ohm",
+            "single_open_2a_status",
+        },
+        "RJ45 electrical limits",
+    )
+    if (
+        rj45["mpn"] != "TE 1932219-1"
+        or rj45["termination_count"] != 4
+        or rj45["published_max_current_per_contact_a"] != 1.5
+        or rj45["contact_resistance_ohm"] is not None
+        or rj45["single_open_2a_status"]
+        != "UNSUPPORTED_OPEN_PHYSICAL_GATE"
+        or max(branches) > rj45["published_max_current_per_contact_a"]
+    ):
+        raise EvidenceError("RJ45 normal or unsupported single-open limits are invalid")
+
+    null_fields = (
+        ("pcb", "copper_via_resistance_ohm"),
+        ("source", "minimum_vin_v"),
+        ("source", "impedance_ohm"),
+        ("local_load", "current_a"),
+        ("usb_ground", "return_current_a"),
+    )
+    expected_section_fields = {
+        "pcb": {"copper_via_resistance_ohm"},
+        "source": {"minimum_vin_v", "impedance_ohm"},
+        "local_load": {"current_a"},
+        "usb_ground": {"return_current_a"},
+    }
+    for section, fields in expected_section_fields.items():
+        _exact_fields(
+            limits[section],
+            fields,
+            f"{section} physical limits",
+        )
+    for section, field in null_fields:
+        if limits[section][field] is not None:
+            raise EvidenceError(
+                f"{section}.{field} must remain null while physical evidence "
+                "is UNSUPPORTED"
+            )
+    unsupported = limits["unsupported"]
+    if (
+        not isinstance(unsupported, list)
+        or len(unsupported) != len(set(unsupported))
+        or set(unsupported) != ELECTRICAL_UNSUPPORTED
+    ):
+        raise EvidenceError("harness electrical UNSUPPORTED claims are not exact")
+    return limits
 
 
 def _require_rating(name: str, element: object) -> None:
@@ -1250,6 +1437,11 @@ def main(arguments: Iterable[str] | None = None) -> int:
     try:
         requirements = validate_requirements(
             json.loads((HERE / "requirements.json").read_text(encoding="utf-8"))
+        )
+        validate_electrical_limits(
+            json.loads(
+                (HERE / "electrical_limits.json").read_text(encoding="utf-8")
+            )
         )
         evidence = load_all(ROOT / "evidence")
         selection_path = ROOT / "bom" / "REV-C-PART-SELECTION.json"

@@ -274,6 +274,89 @@ def test_unequal_two_amp_case_does_not_take_sharing_credit(
         validator.validate_unequal_case(case, per_contact_derated_rating_a=1.99)
 
 
+def test_electrical_limits_bind_only_supported_two_amp_calculations(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    limits = json.loads(
+        (esp32tap_dir / "harness" / "electrical_limits.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    validated = validator.validate_electrical_limits(limits)
+    assert validated["basis"] == "CONSERVATIVE_PREDECESSOR"
+    assert validated["total_current_a"] == 2.0
+    assert validated["normal_unequal_branch_current_a"] == [1.35, 0.65]
+    assert validated["new_board_connectors"] == {
+        "console": {
+            "mpn": "430450809",
+            "contact_resistance_ohm": 0.01,
+            "doubled_contact_resistance_ohm": 0.02,
+        },
+        "motor": {
+            "mpn": "430451010",
+            "contact_resistance_ohm": 0.01,
+            "doubled_contact_resistance_ohm": 0.02,
+        },
+    }
+    assert validated["rj45"]["termination_count"] == 4
+    assert validated["rj45"]["single_open_2a_status"] == (
+        "UNSUPPORTED_OPEN_PHYSICAL_GATE"
+    )
+    assert validated["wire"]["dc_resistance_ohm_per_1000ft_at_20c"] == 16.2
+    assert validated["wire"]["harness_length_mm"] == {
+        "console": 180,
+        "motor": 240,
+    }
+    assert validated["wire"]["calculated_conductor_resistance_ohm"] == (
+        pytest.approx(
+            {
+                "console": 16.2 * 180 / 304800,
+                "motor": 16.2 * 240 / 304800,
+            }
+        )
+    )
+    assert validated["pcb"]["copper_via_resistance_ohm"] is None
+    assert validated["source"]["minimum_vin_v"] is None
+    assert validated["source"]["impedance_ohm"] is None
+    assert validated["local_load"]["current_a"] is None
+    assert validated["usb_ground"]["return_current_a"] is None
+    unsupported = set(validated["unsupported"])
+    assert {
+        "RJ45_SINGLE_OPEN_2A",
+        "MINIMUM_VIN",
+        "SOURCE_IMPEDANCE",
+        "AMBIENT_THERMAL",
+        "TRANSIENT_RESPONSE",
+        "COMPLETE_INSTALLED_DROP",
+        "USB_RETURN_CURRENT",
+    } <= unsupported
+
+
+def test_electrical_limits_reject_numeric_physical_defaults(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    path = esp32tap_dir / "harness" / "electrical_limits.json"
+    original = json.loads(path.read_text(encoding="utf-8"))
+
+    for section, field in (
+        ("pcb", "copper_via_resistance_ohm"),
+        ("source", "minimum_vin_v"),
+        ("source", "impedance_ohm"),
+        ("local_load", "current_a"),
+        ("usb_ground", "return_current_a"),
+    ):
+        changed = copy.deepcopy(original)
+        changed[section][field] = 0.0
+        with pytest.raises(
+            validator.EvidenceError,
+            match="UNSUPPORTED|physical|must remain null",
+        ):
+            validator.validate_electrical_limits(changed)
+
+
 def test_rj45_normal_unequal_case_supports_two_amps_but_single_open_stays_open(
     esp32tap_dir: Path,
 ) -> None:
