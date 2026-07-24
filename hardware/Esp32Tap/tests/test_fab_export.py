@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import runpy
 import time
 import zipfile
@@ -66,6 +67,21 @@ JOB_FUNCTIONS = {
     "Esp32Tap-B_Silkscreen.gbo": "Legend,Bot",
     "Esp32Tap-Edge_Cuts.gm1": "Profile",
 }
+JOB_POLARITIES = {
+    filename: (
+        "Negative"
+        if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"}
+        else "Positive"
+    )
+    for filename in JOB_FUNCTIONS
+}
+GENERAL_SPECS = {
+    "Size": {"X": 100.1, "Y": 55.1},
+    "LayerNumber": 4,
+    "BoardThickness": 1.59,
+    "Finish": "ENIG",
+    "ImpedanceControlled": True,
+}
 
 
 @pytest.fixture(scope="module")
@@ -81,6 +97,27 @@ def _write_valid_stage(directory: Path) -> None:
     directory.mkdir(parents=True)
     for filename, function in GERBER_FUNCTIONS.items():
         polarity = GERBER_POLARITIES[filename]
+        if filename in {
+            "Esp32Tap-B_Paste.gbp",
+            "Esp32Tap-B_Silkscreen.gbo",
+        }:
+            artwork = []
+        elif filename == "Esp32Tap-Edge_Cuts.gm1":
+            artwork = [
+                "%ADD10C,0.100000*%",
+                "D10*",
+                "X100000000Y-100000000D02*",
+                "X200000000Y-100000000D01*",
+                "X200000000Y-155000000D01*",
+                "X100000000Y-155000000D01*",
+                "X100000000Y-100000000D01*",
+            ]
+        else:
+            artwork = [
+                "%ADD10C,0.100000*%",
+                "D10*",
+                "X100000000Y-100000000D03*",
+            ]
         (directory / filename).write_text(
             "\n".join(
                 [
@@ -92,11 +129,14 @@ def _write_valid_stage(directory: Path) -> None:
                         if polarity is not None
                         else []
                     ),
+                    "%FSLAX46Y46*%",
                     (
                         "G04 Created by KiCad (PCBNEW 10.0.1) "
                         "date 2026-07-24 00:00:00*"
                     ),
+                    "%MOMM*%",
                     "%LPD*%",
+                    *artwork,
                     "M02*",
                     "",
                 ]
@@ -105,7 +145,11 @@ def _write_valid_stage(directory: Path) -> None:
         )
 
     job_files = [
-        {"Path": filename, "FileFunction": function}
+        {
+            "Path": filename,
+            "FileFunction": function,
+            "FilePolarity": JOB_POLARITIES[filename],
+        }
         for filename, function in JOB_FUNCTIONS.items()
     ]
     (directory / "Esp32Tap-job.gbrjob").write_text(
@@ -119,7 +163,7 @@ def _write_valid_stage(directory: Path) -> None:
                     },
                     "CreationDate": "2026-07-24T00:00:00-07:00",
                 },
-                "GeneralSpecs": {"LayerNumber": 4},
+                "GeneralSpecs": GENERAL_SPECS,
                 "FilesAttributes": job_files,
             },
             indent=2,
@@ -135,6 +179,16 @@ def _write_valid_stage(directory: Path) -> None:
                 "; #@! TF.CreationDate,2026-07-24T00:00:00-07:00",
                 "; #@! TF.GenerationSoftware,Kicad,Pcbnew,10.0.1",
                 "; #@! TF.FileFunction,MixedPlating,1,4",
+                "; #@! TA.AperFunction,Plated,PTH,ComponentDrill",
+                "T1C0.600",
+                "; #@! TA.AperFunction,NonPlated,NPTH,ComponentDrill",
+                "T2C2.700",
+                "%",
+                "G90",
+                "T1",
+                "X110.0Y-110.0",
+                "T2",
+                "X120.0Y-120.0",
                 "M30",
                 "",
             ]
@@ -158,6 +212,8 @@ def test_exact_rev_b_four_layer_member_set_is_locked(
     assert fab_tool.GERBER_FUNCTIONS == GERBER_FUNCTIONS
     assert fab_tool.GERBER_POLARITIES == GERBER_POLARITIES
     assert fab_tool.JOB_FUNCTIONS == JOB_FUNCTIONS
+    assert fab_tool.JOB_POLARITIES == JOB_POLARITIES
+    assert fab_tool.REQUIRED_GENERAL_SPECS == GENERAL_SPECS
 
 
 def test_normalization_removes_only_generation_timestamps(
@@ -281,7 +337,19 @@ def test_normalization_fails_if_required_creation_date_is_missing(
         ("broken-symlink", "member set"),
         ("job-omits-inner", "Gerber job"),
         ("job-duplicate-entry", "Gerber job"),
+        ("job-wrong-polarity", "Gerber job"),
+        ("job-extra-attribute", "Gerber job"),
+        ("job-duplicate-key", "duplicate JSON key"),
         ("job-omits-layer-count", "GeneralSpecs"),
+        ("job-wrong-size", "GeneralSpecs"),
+        ("job-wrong-thickness", "GeneralSpecs"),
+        ("job-wrong-finish", "GeneralSpecs"),
+        ("job-wrong-impedance", "GeneralSpecs"),
+        ("geometry-free-copper", "artwork"),
+        ("open-edge-profile", "profile"),
+        ("drill-no-tools", "drill"),
+        ("drill-no-plated-hit", "Plated"),
+        ("drill-no-npth-hit", "NonPlated"),
     ],
 )
 def test_stage_validation_fails_closed(
@@ -436,11 +504,88 @@ def test_stage_validation_fails_closed(
         job = json.loads(job_path.read_text(encoding="utf-8"))
         job["FilesAttributes"].append(dict(job["FilesAttributes"][0]))
         job_path.write_text(json.dumps(job), encoding="utf-8")
-    else:
+    elif mutation == "job-wrong-polarity":
         job_path = stage / "Esp32Tap-job.gbrjob"
         job = json.loads(job_path.read_text(encoding="utf-8"))
-        del job["GeneralSpecs"]
+        job["FilesAttributes"][0]["FilePolarity"] = "Negative"
         job_path.write_text(json.dumps(job), encoding="utf-8")
+    elif mutation == "job-extra-attribute":
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        job["FilesAttributes"][0]["Unexpected"] = "ambiguous"
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+    elif mutation == "job-duplicate-key":
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job_path.write_text(
+            job_path.read_text(encoding="utf-8").replace(
+                '"BoardThickness": 1.59',
+                '"BoardThickness": 1.59, "BoardThickness": 9.99',
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "job-omits-layer-count":
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        del job["GeneralSpecs"]["LayerNumber"]
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+    elif mutation.startswith("job-wrong-"):
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        field, value = {
+            "job-wrong-size": ("Size", {"X": 100.1, "Y": 54.9}),
+            "job-wrong-thickness": ("BoardThickness", 1.6),
+            "job-wrong-finish": ("Finish", "HASL"),
+            "job-wrong-impedance": ("ImpedanceControlled", False),
+        }[mutation]
+        job["GeneralSpecs"][field] = value
+        job_path.write_text(json.dumps(job), encoding="utf-8")
+    elif mutation == "geometry-free-copper":
+        copper = stage / "Esp32Tap-F_Cu.gtl"
+        copper.write_text(
+            re.sub(
+                r"(?m)^X[-0-9]+Y[-0-9]+D03\*\n",
+                "",
+                copper.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "open-edge-profile":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "X100000000Y-100000000D01*\nM02*",
+                "M02*",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "drill-no-tools":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            re.sub(
+                r"(?m)^T[12]C[0-9.]+\n",
+                "",
+                drill.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "drill-no-plated-hit":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "T1\nX110.0Y-110.0\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+    else:
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "T2\nX120.0Y-120.0\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
 
     with pytest.raises(fab_tool.FabExportError, match=message):
         fab_tool.validate_stage(stage)

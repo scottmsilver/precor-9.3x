@@ -86,6 +86,25 @@ JOB_FUNCTIONS = {
     "Esp32Tap-B_Silkscreen.gbo": "Legend,Bot",
     "Esp32Tap-Edge_Cuts.gm1": "Profile",
 }
+JOB_POLARITIES = {
+    filename: (
+        "Negative"
+        if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"}
+        else "Positive"
+    )
+    for filename in JOB_FUNCTIONS
+}
+REQUIRED_GENERAL_SPECS = {
+    "Size": {"X": 100.1, "Y": 55.1},
+    "LayerNumber": 4,
+    "BoardThickness": 1.59,
+    "Finish": "ENIG",
+    "ImpedanceControlled": True,
+}
+EMPTY_ARTWORK_LAYERS = {
+    "Esp32Tap-B_Paste.gbp",
+    "Esp32Tap-B_Silkscreen.gbo",
+}
 EXPECTED_FAB_FILES = set(GERBER_FUNCTIONS) | {
     "Esp32Tap-job.gbrjob",
     "Esp32Tap.drl",
@@ -651,6 +670,120 @@ def _read_nonempty(path: Path) -> str:
     return payload
 
 
+def _validate_profile_geometry(payload: str) -> None:
+    if payload.count("%FSLAX46Y46*%") != 1 or payload.count("%MOMM*%") != 1:
+        raise FabExportError(
+            "Esp32Tap-Edge_Cuts.gm1 profile must use exact 4.6 metric format"
+        )
+    if (
+        payload.count("%ADD10C,0.100000*%") != 1
+        or len(re.findall(r"(?m)^D10\*$", payload)) != 1
+    ):
+        raise FabExportError(
+            "Esp32Tap-Edge_Cuts.gm1 profile must use one 0.100 mm aperture"
+        )
+
+    position: tuple[float, float] | None = None
+    segments: set[
+        tuple[tuple[float, float], tuple[float, float]]
+    ] = set()
+    coordinate_commands = re.findall(
+        r"(?m)^X([+-]?\d+)Y([+-]?\d+)D0([12])\*$",
+        payload,
+    )
+    for raw_x, raw_y, operation in coordinate_commands:
+        point = (int(raw_x) / 1_000_000, int(raw_y) / 1_000_000)
+        if operation == "1":
+            if position is None:
+                raise FabExportError(
+                    "Esp32Tap-Edge_Cuts.gm1 profile draws before moving"
+                )
+            segments.add(tuple(sorted((position, point))))
+        position = point
+
+    top_left = (100.0, -100.0)
+    top_right = (200.0, -100.0)
+    bottom_left = (100.0, -155.0)
+    bottom_right = (200.0, -155.0)
+    expected_segments = {
+        tuple(sorted((top_left, top_right))),
+        tuple(sorted((top_right, bottom_right))),
+        tuple(sorted((bottom_right, bottom_left))),
+        tuple(sorted((bottom_left, top_left))),
+    }
+    if segments != expected_segments:
+        raise FabExportError(
+            "Esp32Tap-Edge_Cuts.gm1 profile must be the closed "
+            "100.0 x 55.0 mm Rev B rectangle"
+        )
+
+
+def _validate_drill_artwork(drill: str) -> None:
+    tool_plating: dict[str, str] = {}
+    pending_plating: str | None = None
+    active_tool: str | None = None
+    hits = {"Plated": 0, "NonPlated": 0}
+    for line in (item.strip() for item in drill.splitlines()):
+        aperture = re.fullmatch(
+            r";\s*#@!\s*TA\.AperFunction,"
+            r"(Plated|NonPlated),[^\r\n]+",
+            line,
+        )
+        if aperture:
+            pending_plating = aperture.group(1)
+            continue
+        definition = re.fullmatch(r"T(\d+)C([0-9]+(?:\.[0-9]+)?)", line)
+        if definition:
+            tool, raw_diameter = definition.groups()
+            if (
+                pending_plating is None
+                or tool in tool_plating
+                or not math.isfinite(float(raw_diameter))
+                or float(raw_diameter) <= 0
+            ):
+                raise FabExportError(
+                    "Esp32Tap.drl has an invalid or ambiguous drill tool"
+                )
+            tool_plating[tool] = pending_plating
+            pending_plating = None
+            continue
+        selection = re.fullmatch(r"T(\d+)", line)
+        if selection:
+            active_tool = selection.group(1)
+            if active_tool not in tool_plating:
+                raise FabExportError(
+                    "Esp32Tap.drl selects an undefined drill tool"
+                )
+            continue
+        if re.fullmatch(
+            r"X[+-]?[0-9]+(?:\.[0-9]+)?"
+            r"Y[+-]?[0-9]+(?:\.[0-9]+)?",
+            line,
+        ):
+            if active_tool is None:
+                raise FabExportError(
+                    "Esp32Tap.drl has a hit without a selected drill tool"
+                )
+            hits[tool_plating[active_tool]] += 1
+
+    if not tool_plating:
+        raise FabExportError("Esp32Tap.drl has no drill tool definitions")
+    for plating in ("Plated", "NonPlated"):
+        if hits[plating] < 1:
+            raise FabExportError(
+                f"Esp32Tap.drl has no {plating} drill hit"
+            )
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise FabExportError(f"Gerber job has duplicate JSON key {key!r}")
+        result[key] = value
+    return result
+
+
 def validate_stage(
     directory: Path,
     *,
@@ -702,6 +835,16 @@ def validate_stage(
             raise FabExportError(
                 f"{filename} must have exactly one LPD and no LPC"
             )
+        artwork = re.findall(
+            r"(?m)^(?:X[+-]?\d+)?(?:Y[+-]?\d+)?D0[13]\*$",
+            payload,
+        )
+        if filename not in EMPTY_ARTWORK_LAYERS and not artwork:
+            raise FabExportError(
+                f"{filename} must contain actual Gerber artwork"
+            )
+        if filename == "Esp32Tap-Edge_Cuts.gm1":
+            _validate_profile_geometry(payload)
         commands = [
             line.strip()
             for line in payload.splitlines()
@@ -752,6 +895,7 @@ def validate_stage(
         or drill_commands[-1] != "M30"
     ):
         raise FabExportError("Esp32Tap.drl is not a complete Excellon drill file")
+    _validate_drill_artwork(drill)
     if require_normalized:
         drill_creation_dates = re.findall(
             r"(?m)^;\s*#@!\s*TF\.CreationDate,([^\r\n]+)$",
@@ -771,7 +915,10 @@ def validate_stage(
 
     job_text = _read_nonempty(directory / "Esp32Tap-job.gbrjob")
     try:
-        job = json.loads(job_text)
+        job = json.loads(
+            job_text,
+            object_pairs_hook=_strict_json_object,
+        )
     except json.JSONDecodeError as error:
         raise FabExportError(f"Gerber job JSON is invalid: {error}") from error
     try:
@@ -780,23 +927,81 @@ def validate_stage(
             raise FabExportError(
                 "Gerber job must contain each file/function entry exactly once"
             )
-        job_functions = {
-            entry["Path"]: entry["FileFunction"]
-            for entry in entries
-        }
+        job_attributes: dict[str, dict[str, str]] = {}
+        for entry in entries:
+            if (
+                not isinstance(entry, dict)
+                or set(entry)
+                != {"Path", "FileFunction", "FilePolarity"}
+            ):
+                raise FabExportError(
+                    "Gerber job FilesAttributes entries must contain exactly "
+                    "Path, FileFunction, and FilePolarity"
+                )
+            path = entry["Path"]
+            if not isinstance(path, str) or path in job_attributes:
+                raise FabExportError(
+                    "Gerber job has a blank or duplicate file entry"
+                )
+            job_attributes[path] = entry
     except (KeyError, TypeError) as error:
         raise FabExportError(
             "Gerber job lacks valid FilesAttributes"
         ) from error
-    if job_functions != JOB_FUNCTIONS:
+    expected_job_attributes = {
+        filename: {
+            "Path": filename,
+            "FileFunction": function,
+            "FilePolarity": JOB_POLARITIES[filename],
+        }
+        for filename, function in JOB_FUNCTIONS.items()
+    }
+    if job_attributes != expected_job_attributes:
         raise FabExportError(
-            "Gerber job file/function mapping is not the exact Rev B set: "
-            f"expected={JOB_FUNCTIONS}, actual={job_functions}"
+            "Gerber job file/function/polarity mapping is not the exact "
+            "Rev B set"
         )
     general = job.get("GeneralSpecs")
-    if not isinstance(general, dict) or general.get("LayerNumber") != 4:
+    if not isinstance(general, dict):
         raise FabExportError(
-            "Gerber job GeneralSpecs must explicitly declare four layers"
+            "Gerber job GeneralSpecs must be an object"
+        )
+    size = general.get("Size")
+    numeric_specs = (
+        isinstance(size, dict)
+        and set(size) == {"X", "Y"}
+        and all(
+            not isinstance(size.get(axis), bool)
+            and isinstance(size.get(axis), (int, float))
+            and math.isfinite(float(size[axis]))
+            and math.isclose(
+                float(size[axis]),
+                REQUIRED_GENERAL_SPECS["Size"][axis],
+                abs_tol=1e-9,
+            )
+            for axis in ("X", "Y")
+        )
+        and not isinstance(general.get("LayerNumber"), bool)
+        and isinstance(general.get("LayerNumber"), int)
+        and general["LayerNumber"] == REQUIRED_GENERAL_SPECS["LayerNumber"]
+        and not isinstance(general.get("BoardThickness"), bool)
+        and isinstance(general.get("BoardThickness"), (int, float))
+        and math.isfinite(float(general["BoardThickness"]))
+        and math.isclose(
+            float(general["BoardThickness"]),
+            REQUIRED_GENERAL_SPECS["BoardThickness"],
+            abs_tol=1e-9,
+        )
+    )
+    if (
+        not numeric_specs
+        or general.get("Finish") != REQUIRED_GENERAL_SPECS["Finish"]
+        or general.get("ImpedanceControlled")
+        is not REQUIRED_GENERAL_SPECS["ImpedanceControlled"]
+    ):
+        raise FabExportError(
+            "Gerber job GeneralSpecs differ from the locked Rev B "
+            "size, layer count, thickness, finish, or impedance setting"
         )
     if require_normalized:
         try:
