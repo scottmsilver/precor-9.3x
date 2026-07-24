@@ -60,6 +60,7 @@ Expected: empty worktree status and the Rev B reproducibility gate passes.
 - Create: `hardware/Esp32Tap/evidence/model.json`
 - Create: `hardware/Esp32Tap/evidence/vendor.json`
 - Create: `hardware/Esp32Tap/evidence/physical.json`
+- Create: `hardware/Esp32Tap/evidence/predecessor.json`
 - Create: `hardware/Esp32Tap/tests/test_evidence.py`
 - Create: `hardware/Esp32Tap/tests/test_harnesses.py`
 - Create: `hardware/Esp32Tap/harness/requirements.json`
@@ -91,6 +92,18 @@ def test_unmeasured_current_envelope_blocks_part_release(evidence):
 The validator must reject a model assertion in `physical.json`, an
 operator-observed browser fact in `model.json`, any unbound raw record, and
 `TURNKEY_QUOTED` while a required vendor/cost field is absent.
+`predecessor.json` records and byte-hashes these exact artifacts:
+
+- `hardware/PiZeroHat/README.md`
+- `hardware/PiZeroHat/kicad/WIRING.md`
+- `hardware/PiZeroHat/kicad/PiZeroHat.kicad_sch`
+- `hardware/PiZeroHat/kicad/PiZeroHat.kicad_pcb`
+- the approved Rev C specification containing the owner's authorization
+
+Add an action-matrix test proving that this verified predecessor basis permits
+only `connector_selection`, `layout`, `verification_fabrication`, and
+`no_purchase_quote`. It must keep `physical.json` literally `NOT_MEASURED`
+and reject `production_release`, `deployment`, and `TURNKEY_QUOTED`.
 
 - [ ] **Step 2: Run tests and confirm the evidence layer is absent**
 
@@ -112,6 +125,8 @@ each open physical item names the instrument/fixture/data required. Implement
 Wire the gate into `validate_harnesses.py --release` and
 `export_fab.py --require-rev-c-release`; ordinary Rev B audit mode remains
 available while Rev C is unselected.
+Conservative verification uses a separate, hash-bound predecessor action
+matrix; it must never satisfy the physical or turnkey predicates.
 
 - [ ] **Step 4: Run schema tests green**
 
@@ -153,9 +168,12 @@ Search repository measurement records for raw, instrument-bound treadmill
 source voltage, source impedance, maximum continuous pass-through current,
 startup/transient waveform and duration, installed ambient/airflow/bundling,
 and USB-ground potential/current. Validate hashes and provenance. If the
-complete measured envelope is absent, record exactly what is missing and stop
-before exact connector selection, layout release, fabrication export, or any
-turnkey claim. Simulation must not fill physical fields.
+complete measured envelope is absent, record exactly what is missing. The
+owner-authorized PiZeroHat predecessor basis may then release only conservative
+verification connector selection, layout, fabrication, and quotation using
+the fixed 2.0 A/22 AWG requirements in the specification. Simulation must not
+fill physical fields, `physical.json` remains `NOT_MEASURED`, and no turnkey
+or deployment claim is permitted.
 
 - [ ] **Step 7: Validate the physical release gate**
 
@@ -164,13 +182,15 @@ Run:
 ```bash
 python3 -m pytest -q hardware/Esp32Tap/tests/test_evidence.py
 python3 hardware/Esp32Tap/evidence/schemas.py \
-  --require connector-selection
+  --require connector-selection --basis conservative-predecessor
 ```
 
 Expected: pytest passes in both HOLD and measured states; the explicit
-`--require connector-selection` command passes only with bound measured
-evidence. If that command fails,
-leave issue `precor-9_3x-1dj` open with `NOT_MEASURED` and stop safely.
+connector-selection command passes with either bound measured evidence or the
+repository-bound conservative predecessor evidence and fixed 2.0 A/22 AWG
+limits. Fabrication uses a separate `verification_fabrication` action;
+production/deployment and `TURNKEY_QUOTED` remain blocked while
+`NOT_MEASURED`. If the conservative gate fails, stop safely.
 
 - [ ] **Step 8: Commit the green evidence framework**
 
@@ -207,6 +227,13 @@ constraints. Require both WROOM and MINI module comparisons and exact switch
 alternatives. Run the focused test and observe failure before writing the
 candidate records:
 
+Add executable validator tests requiring every individual power and ground
+contact to retain at least 2.0 A rating after circuit-count and +85 °C
+derating; 22 AWG or larger power/ground wire; at least 24 V and -20 °C through
++85 °C ratings for header, housing, terminal, wire insulation, strain relief,
+and RJ45 termination; an unequal-contact 2.0 A modeled case; and separate
+single-open cases for each +8 V and ground contact.
+
 ```bash
 python3 -m pytest -q \
   hardware/Esp32Tap/tests/test_harnesses.py::test_candidate_matrix_is_complete
@@ -220,6 +247,11 @@ Use manufacturer datasheets and official JLCPCB/LCSC pages. Reject any part
 whose board connector is not tape-and-reel SMT, whose housing/terminals cannot
 be bought as a finished harness, or whose exact row cannot be selected in
 JLC's placement workflow. Do not infer placement support from public stock.
+Reject any connector below 2.0 A per individual power/ground contact after
+circuit-count and +85 °C derating. Reject any complete mating-system element
+below 24 V or without -20 °C to +85 °C coverage. Require 22 AWG or larger
+power/ground conductors and verify each single-open parallel contact case
+leaves the remaining contact within rating at 2.0 A.
 
 - [ ] **Step 3: Choose physically incompatible Console and Motor interfaces**
 
@@ -399,9 +431,10 @@ clearance contract without board overhang.
 
 - [ ] **Step 4: Route power and safety nets explicitly**
 
-Route both +8 V and ground pass-through paths for the measured single-degraded-
-contact current. Keep the local fuse branch separate. Preserve direct relay
-NC bypass, feedback separation, short TVS returns, and converter geometry.
+Route both +8 V and ground pass-through paths on the 2.0 A conservative
+single-contact basis, including every individual open-contact case. Keep the
+local fuse branch separate. Preserve direct relay NC bypass, feedback
+separation, short TVS returns, and converter geometry.
 
 - [ ] **Step 5: Route USB on the locked four-layer stack**
 
@@ -446,18 +479,22 @@ git commit -m "hardware: lay out compact Esp32Tap Rev C PCB"
 
 - [ ] **Step 1: Add failing simulation-manifest tests**
 
-Require numeric assertions for normal imbalance, one open +8 V contact, one
-open ground contact, doubled contact resistance, minimum VIN, complete-path
-drop ≤250 mV, and no modeled USB return current.
+Require numeric assertions supported by the predecessor basis for 2.0 A normal
+imbalance, each individual open +8 V contact, each individual open ground
+contact, and doubled contact resistance. Treat minimum VIN, source impedance,
+ambient/thermal behavior, transient response, complete installed-path drop,
+and USB return current as `UNSUPPORTED` until physical inputs exist.
 
 - [ ] **Step 2: Implement the ngspice deck**
 
 Model both production harnesses, four RJ45 terminations, both board connectors,
 PCB copper/vias, unequal parallel contacts, source impedance, local load, and
-USB ground path. Load current, transient waveform, source voltage/impedance,
-and ambient metadata from the hash-bound measured physical envelope; reject
-unknown or unbound inputs. Mark thermal, ESD, RF, and switching-loop phenomena
-`UNSUPPORTED` rather than converting them into modeled passes.
+USB ground path. If measured physical evidence exists, bind its current,
+transient, source and ambient values. Otherwise use the explicit 2.0 A
+conservative verification envelope bound to the predecessor design and owner
+authorization, while leaving source/ambient/USB-ground physical fields open.
+Mark thermal, ESD, RF, and switching-loop phenomena `UNSUPPORTED` rather than
+converting them into modeled passes.
 
 - [ ] **Step 3: Run host and pinned Docker simulations**
 
@@ -469,8 +506,10 @@ python3 hardware/Esp32Tap/sim/run_simulations.py \
   --docker-image ngspice-cached:latest
 ```
 
-Expected: every manifest-listed numeric assertion passes identically across
-three host and three Docker repetitions.
+Expected: every predecessor-supported numeric assertion passes identically
+across three host and three Docker repetitions. The manifest explicitly
+reports physical-dependent outcomes as `UNSUPPORTED`; it does not manufacture
+default source, ambient, transient, thermal, or USB-ground values.
 
 - [ ] **Step 4: Validate electrical-limit calculations and commit**
 
@@ -678,7 +717,10 @@ expired/non-firm supplier quotes, missing operations, unhashed evidence,
 unsanitized account data, wrong quantities, or a purchase-state flag.
 It emits `INCOMPLETE_COST` whenever any required item, vendor acceptance,
 shipping, or tax is unavailable. It permits `TURNKEY_QUOTED` only when all
-four structured records are complete and mutually hash-bound.
+four structured records are complete and mutually hash-bound **and**
+`physical.json` is literally `MEASURED` with every required installed test
+closed. Under conservative predecessor authorization, a fully priced
+no-purchase quote still uses a non-turnkey verification status.
 Add a document-status test that rejects “turnkey complete,” “complete delivered
 cost,” or `TURNKEY_QUOTED` in `ORDER-READY.md` and
 `REV-C-DELIVERED-COST.md` whenever `REV-C-COST-STATUS.json` is
@@ -736,7 +778,9 @@ make -C hardware/Esp32Tap check
 ```
 
 Expected: evidence tests pass. Status is `TURNKEY_QUOTED` only if all delivered
-costs are firm; otherwise it is explicitly `INCOMPLETE_COST` and HOLD.
+costs are firm and physical evidence is `MEASURED`; a firm conservative
+verification quote uses `VERIFICATION_QUOTED`. Missing costs remain explicitly
+`INCOMPLETE_COST` and HOLD.
 
 - [ ] **Step 9: Commit sanitized evidence**
 
