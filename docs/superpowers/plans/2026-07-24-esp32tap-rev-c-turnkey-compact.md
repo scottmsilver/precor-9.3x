@@ -227,12 +227,21 @@ constraints. Require both WROOM and MINI module comparisons and exact switch
 alternatives. Run the focused test and observe failure before writing the
 candidate records:
 
-Add executable validator tests requiring every individual power and ground
-contact to retain at least 2.0 A rating after circuit-count and +85 °C
-derating; 22 AWG or larger power/ground wire; at least 24 V and -20 °C through
-+85 °C ratings for header, housing, terminal, wire insulation, strain relief,
-and RJ45 termination; an unequal-contact 2.0 A modeled case; and separate
-single-open cases for each +8 V and ground contact.
+Add executable validator tests requiring every individual new SMT-header,
+housing-terminal, and harness-wire power/ground path to retain at least 2.0 A
+rating after circuit-count and +85 °C derating; 22 AWG or larger power/ground
+wire; and at least 24 V and -20 °C through +85 °C ratings for the complete
+mating system's electrical elements. Require strain-relief material,
+mechanical-retention, and -20 °C through +85 °C environmental evidence without
+inventing a voltage rating for a nonconductive part. Require an unequal-contact
+2.0 A modeled case and separate
+single-open cases for the new board-connector paths. The standard RJ45 end
+retains dual parallel contacts from PiZeroHat; if its official rating does not
+support a 2.0 A single-contact case, require that case to remain explicitly
+`UNSUPPORTED` and physically open. Require a worst-case unequal-sharing
+calculation proving both RJ45 power contacts and both ground contacts stay
+within their official circuit-count and +85 °C derated ratings at 2.0 A total
+normal load.
 
 ```bash
 python3 -m pytest -q \
@@ -245,20 +254,30 @@ Expected: FAIL on missing candidate fields.
 
 Use manufacturer datasheets and official JLCPCB/LCSC pages. Reject any part
 whose board connector is not tape-and-reel SMT, whose housing/terminals cannot
-be bought as a finished harness, or whose exact row cannot be selected in
-JLC's placement workflow. Do not infer placement support from public stock.
-Reject any connector below 2.0 A per individual power/ground contact after
-circuit-count and +85 °C derating. Reject any complete mating-system element
-below 24 V or without -20 °C to +85 °C coverage. Require 22 AWG or larger
-power/ground conductors and verify each single-open parallel contact case
-leaves the remaining contact within rating at 2.0 A.
+be bought as a finished harness. Before the live workflow exists, mark the
+exact selection `PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF`; do not infer
+placement support from public stock. Task 10 rejects any part whose exact row
+cannot be selected and must either close that gate or force
+reselection/regeneration before order readiness.
+Reject any new board connector/terminal below 2.0 A per individual
+power/ground contact after circuit-count and +85 °C derating. Reject any
+conductive/insulating electrical mating-system element below 24 V or without
+-20 °C to +85 °C coverage. Require mechanical strain-relief material,
+retention, and the same temperature range without a fictional voltage field.
+Require 22 AWG or larger power/ground conductors and verify each single-open
+new board-connector case leaves the remaining contact within rating at 2.0 A.
+For the standard RJ45 termination, select the highest-current officially rated
+non-magnetic part and preserve the dual power/ground contacts; require the
+documented 2.0 A unequal-sharing normal-load calculation and never convert an
+unpublished single-contact rating into a pass.
 
 - [ ] **Step 3: Choose physically incompatible Console and Motor interfaces**
 
 Prefer two key codes; otherwise select different circuit counts/families.
 Document installed RJ45-end reversal prevention using measured routing length
 or keyed enclosure/shroud geometry. Record this as modeled geometry only;
-actual delivered-harness wrong-connection attempts remain OPEN in
+Task 2 must select and dimension the prevention concept; Task 6 closes its CAD
+geometry. Actual delivered-harness wrong-connection attempts remain OPEN in
 `evidence/physical.json`.
 
 - [ ] **Step 4: Complete the ESP module pin audit**
@@ -480,10 +499,12 @@ git commit -m "hardware: lay out compact Esp32Tap Rev C PCB"
 - [ ] **Step 1: Add failing simulation-manifest tests**
 
 Require numeric assertions supported by the predecessor basis for 2.0 A normal
-imbalance, each individual open +8 V contact, each individual open ground
-contact, and doubled contact resistance. Treat minimum VIN, source impedance,
-ambient/thermal behavior, transient response, complete installed-path drop,
-and USB return current as `UNSUPPORTED` until physical inputs exist.
+imbalance, each individual open new-board-connector +8 V contact, each
+individual open new-board-connector ground contact, and doubled contact
+resistance. Keep any unsupported RJ45 single-open 2.0 A case, minimum VIN,
+source impedance, ambient/thermal behavior, transient response, complete
+installed-path drop, and USB return current as `UNSUPPORTED` until physical
+inputs exist.
 
 - [ ] **Step 2: Implement the ngspice deck**
 
