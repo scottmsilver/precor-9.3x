@@ -965,6 +965,82 @@ def test_explicit_predecessor_verification_entry_points_pass(
 @pytest.mark.parametrize(
     "command",
     [
+        ["evidence/schemas.py", "--basis", "conservative-predecessor"],
+        ["harness/validate_harnesses.py", "--action", "layout"],
+        ["harness/validate_harnesses.py", "--basis", "conservative-predecessor"],
+        ["tools/export_fab.py", "--rev-c-action", "verification_fabrication"],
+        ["tools/export_fab.py", "--basis", "conservative-predecessor"],
+    ],
+)
+def test_gate_options_cannot_be_orphaned(
+    esp32tap_dir: Path,
+    command: list[str],
+) -> None:
+    result = subprocess.run(
+        [sys.executable, *command],
+        cwd=esp32tap_dir,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "requires" in result.stderr
+
+
+@pytest.mark.parametrize("predecessor_payload", [None, "{not-json"])
+def test_exporter_normalizes_missing_and_malformed_evidence_errors(
+    esp32tap_dir: Path,
+    tmp_path: Path,
+    predecessor_payload: str | None,
+) -> None:
+    isolated = tmp_path / "Esp32Tap"
+    (isolated / "tools").mkdir(parents=True)
+    (isolated / "evidence").mkdir()
+    shutil.copyfile(
+        esp32tap_dir / "tools" / "export_fab.py",
+        isolated / "tools" / "export_fab.py",
+    )
+    shutil.copyfile(
+        esp32tap_dir / "evidence" / "schemas.py",
+        isolated / "evidence" / "schemas.py",
+    )
+    for filename in ("model.json", "vendor.json", "physical.json"):
+        shutil.copyfile(
+            esp32tap_dir / "evidence" / filename,
+            isolated / "evidence" / filename,
+        )
+    if predecessor_payload is not None:
+        (isolated / "evidence" / "predecessor.json").write_text(
+            predecessor_payload,
+            encoding="utf-8",
+        )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/export_fab.py",
+            "--audit-only",
+            "--require-rev-c-release",
+            "--rev-c-action",
+            "verification_fabrication",
+            "--basis",
+            "conservative-predecessor",
+        ],
+        cwd=isolated,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert result.stderr.startswith("export_fab:")
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         ["harness/validate_harnesses.py", "--release"],
         [
             "tools/export_fab.py",

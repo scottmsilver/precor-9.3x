@@ -67,7 +67,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(arguments: Iterable[str] | None = None) -> int:
-    args = _parser().parse_args(arguments)
+    parser = _parser()
+    args = parser.parse_args(arguments)
+    if args.action and not args.release:
+        parser.error("--action requires --release")
+    if args.basis and not args.release:
+        parser.error("--basis requires --release")
     try:
         requirements = validate_requirements(
             json.loads((HERE / "requirements.json").read_text(encoding="utf-8"))

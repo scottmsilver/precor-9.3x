@@ -899,7 +899,10 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(arguments: Iterable[str] | None = None) -> int:
-    args = _parser().parse_args(arguments)
+    parser = _parser()
+    args = parser.parse_args(arguments)
+    if args.basis and not args.require:
+        parser.error("--basis requires --require")
     try:
         evidence = load_all()
         if args.require:

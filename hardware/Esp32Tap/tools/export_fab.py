@@ -171,7 +171,7 @@ def _require_rev_c_release(
             action,
             basis=basis,
         )
-    except EvidenceError as error:
+    except (EvidenceError, OSError, json.JSONDecodeError) as error:
         raise FabExportError(str(error)) from error
 
 
@@ -1657,7 +1657,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--rev-c-action",
         choices=("fabrication_release", "verification_fabrication"),
-        default="fabrication_release",
     )
     parser.add_argument(
         "--basis",
@@ -1685,10 +1684,16 @@ def _validate_checked_in(
 
 
 def main(arguments: Iterable[str] | None = None) -> int:
-    args = _parser().parse_args(arguments)
+    parser = _parser()
+    args = parser.parse_args(arguments)
+    if args.rev_c_action and not args.require_rev_c_release:
+        parser.error("--rev-c-action requires --require-rev-c-release")
+    if args.basis and not args.require_rev_c_release:
+        parser.error("--basis requires --require-rev-c-release")
     try:
         if args.require_rev_c_release:
-            _require_rev_c_release(args.rev_c_action, args.basis)
+            action = args.rev_c_action or "fabrication_release"
+            _require_rev_c_release(action, args.basis)
         if args.audit_only:
             _validate_checked_in(
                 args.output_dir,
