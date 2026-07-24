@@ -23,12 +23,15 @@ ant_x1       = 72.0;
 ant_air_gap  = 3.0;     // required air to any wall at the antenna end
 
 // RJ45 jacks on the X=0 wall (Y centers, body width 16.7, height 13.4).
-// Values are the board-relative jack body centerlines measured from the PCB
-// F.CrtYd/F.Fab (parse of Esp32Tap.kicad_pcb): J1=3.555, J2=32.555.  The
-// earlier 12.25/41.25 were a sign-flipped anchor→body offset (pin1.Y+4.25
-// instead of −4.445), putting both apertures 8.695 mm off in Y so plugs
-// could not seat — fixed here.
-j1_yc = 3.555;  j2_yc = 32.555;
+// Board-relative jack pad-block centerlines, computed from the PCB by
+// transforming each pad (at, rot −90) to board coords and taking the
+// centroid: J1=12.445, J2=41.445 (independently cross-checked: J3/USB-C by
+// the same transform = 36.500, matching usb_yc, which validates the method).
+// HISTORY / do not repeat: the original 12.25/41.25 were ~0.2 mm off (fine);
+// a 2026-07-23 "fix" wrongly moved them to 3.555/32.555 (−4.445 instead of
+// +4.445 anchor→body offset) — an 8.89 mm error that would have stopped plugs
+// seating. Caught by an independent review; reverted to the correct centers.
+j1_yc = 12.445;  j2_yc = 41.445;
 rj45_w = 16.7;  rj45_h = 13.4;
 
 // USB-C on the X=board_l wall.  The receptacle face sits at the board edge,

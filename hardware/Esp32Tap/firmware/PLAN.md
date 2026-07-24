@@ -194,6 +194,15 @@ requiring M3 before treadmill contact.)
    logic-analyzer captures) archived.
 2. Safety-matrix bench evidence explicitly includes the WDT column: proof
    that stalling each supervised task releases the relay via panic reset.
+   **HARD CONFIG GATE (independent verification, not just a behavior test):**
+   `grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig` MUST pass on the *exact*
+   sdkconfig of the binary being flashed to the treadmill — the IDF default
+   only logs the stall and never releases the relay, so a build missing this
+   flag is silently unsafe even though the board looks alive. The WDT-release
+   behavior test in this item must have been run on THAT build's sdkconfig,
+   not a debug build. (This is the specific gap an independent 2026-07-23
+   review flagged: behavior can pass on one build and regress on the flashed
+   one; verify the flag on the artifact, every flash.)
 3. Signal-integrity-while-dead test passed (README bring-up step 6).
 4. +8 V rail sourcing capacity measured per the PiZeroHat WIRING-CHECKLIST
    before first connect (carried-forward unknown).
