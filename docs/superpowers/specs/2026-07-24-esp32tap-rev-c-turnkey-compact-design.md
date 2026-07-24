@@ -132,9 +132,41 @@ continuous and transient pass-through current. Until treadmill measurements
 close that gate, select contacts conservatively and retain both parallel power
 and both parallel ground paths.
 
-No connector or harness is released until the actual treadmill current envelope
-is measured. The selected interconnect then satisfies all of these numeric
-acceptance limits:
+### Owner-authorized conservative verification basis
+
+The working `hardware/PiZeroHat` predecessor is accepted as empirical basis
+for selecting parts for a Rev C verification build. It used the same two
+parallel +8 V and two parallel ground conductors, specified 22 AWG power
+wiring, and powered a Pololu 5 V / 1 A Pi regulator from the treadmill rail.
+This is owner-attested field experience, not an instrumented current envelope.
+
+For verification-board selection and quotation only, use a deliberately
+conservative 2.0 A continuous total pass-through design envelope:
+
+- every individual +8 V and ground contact is rated for at least 2.0 A after
+  circuit-count and worst-case +85 °C derating, without credit for the
+  parallel contact;
+- each connector and its PCB copper remains within rating with either parallel
+  power or ground contact open;
+- both harnesses use 22 AWG or larger power/ground conductors;
+- the complete mating system—SMT header, housing, crimp terminal, wire
+  insulation, strain relief, and RJ45 termination—is rated for at least 24 V
+  and its qualified ambient range includes at least -20 °C through +85 °C;
+- modeled normal operation uses unequal contacts and a 2.0 A total load;
+- transient selection uses the connector manufacturer's published envelope,
+  or remains an explicit physical qualification gate if none is published.
+
+This basis may release conservative connector selection, PCB layout, a
+verification fabrication package, and a no-purchase quote. Throughout those
+activities `physical.json` remains literally `NOT_MEASURED`; no other physical
+status is permitted. While it remains `NOT_MEASURED`, deployment, production
+release, and `TURNKEY_QUOTED` are fail-closed. Installed current, voltage drop,
+temperature, USB-ground current, and transient tests remain mandatory before
+any of those statuses can advance.
+
+No connector or harness is released for deployment until the actual treadmill
+current envelope is measured. The selected interconnect then satisfies all of
+these numeric acceptance limits:
 
 - each individual +8 V and ground contact is rated, after manufacturer
   temperature and circuit-count derating, for at least 2× the measured
