@@ -48,15 +48,21 @@ BROWNOUT_THRESHOLDS = {
     "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7": 2.44,
 }
 REQUIRED_SDKCONFIG = {
+    "CONFIG_ESP_TASK_WDT_EN": "y",
     "CONFIG_ESP_TASK_WDT_INIT": "y",
     "CONFIG_ESP_TASK_WDT_TIMEOUT_S": "2",
     "CONFIG_ESP_TASK_WDT_PANIC": "y",
+    "CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT": "y",
+    "CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS": "0",
     "CONFIG_ESP_BROWNOUT_DET": "y",
 }
 FORBIDDEN_ENABLED_SDKCONFIG = (
     "CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT",
+    "CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT",
     "CONFIG_ESP_SYSTEM_PANIC_GDBSTUB",
-    "CONFIG_ESP_SYSTEM_PANIC_GDBSTUB_RUNTIME",
+    "CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME",
+    "CONFIG_ESP_DEBUG_OCDAWARE",
+    "CONFIG_ESP_DEBUG_STUBS_ENABLE",
 )
 
 
@@ -96,8 +102,7 @@ def _read_nonempty(path: Path, label: str) -> bytes:
     return payload
 
 
-def _artifact(path: Path, label: str) -> dict[str, Any]:
-    payload = _read_nonempty(path, label)
+def _artifact(path: Path, payload: bytes) -> dict[str, Any]:
     return {
         "filename": path.name,
         "size": len(payload),
@@ -105,8 +110,8 @@ def _artifact(path: Path, label: str) -> dict[str, Any]:
     }
 
 
-def _parse_sdkconfig(path: Path) -> dict[str, str]:
-    text = _read_nonempty(path, "sdkconfig").decode("utf-8", errors="strict")
+def _parse_sdkconfig(payload: bytes) -> dict[str, str]:
+    text = payload.decode("utf-8", errors="strict")
     values: dict[str, str] = {}
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
         line = raw_line.strip()
@@ -123,12 +128,12 @@ def _parse_sdkconfig(path: Path) -> dict[str, str]:
     return values
 
 
-def _validate_sdkconfig(
-    path: Path,
+def _validate_power_evidence(
     *,
     measured_min_3v3: float,
     brownout_threshold: float,
-) -> str:
+    selector: str,
+) -> None:
     if (
         not math.isfinite(measured_min_3v3)
         or not math.isfinite(brownout_threshold)
@@ -140,26 +145,12 @@ def _validate_sdkconfig(
         raise ManifestError(
             "brownout threshold must be below measured minimum +3V3"
         )
-
-    values = _parse_sdkconfig(path)
-    for key, expected in REQUIRED_SDKCONFIG.items():
-        if values.get(key) != expected:
-            raise ManifestError(
-                f"unsafe sdkconfig: require {key}={expected}"
-            )
-    for key in FORBIDDEN_ENABLED_SDKCONFIG:
-        if values.get(key) == "y":
-            raise ManifestError(f"unsafe sdkconfig: {key}=y is forbidden")
-
-    enabled_selectors = [
-        key for key in BROWNOUT_THRESHOLDS if values.get(key) == "y"
-    ]
-    if len(enabled_selectors) != 1:
+    try:
+        selected_voltage = BROWNOUT_THRESHOLDS[selector]
+    except KeyError as error:
         raise ManifestError(
-            "sdkconfig must enable exactly one supported brownout selector"
-        )
-    selector = enabled_selectors[0]
-    selected_voltage = BROWNOUT_THRESHOLDS[selector]
+            f"unsupported brownout selector: {selector}"
+        ) from error
     if not math.isclose(
         selected_voltage,
         brownout_threshold,
@@ -190,6 +181,43 @@ def _validate_sdkconfig(
             f"{selector} is not the highest supported threshold below "
             f"{measured_min_3v3:.3f} V; expected {highest_safe:.2f} V"
         )
+
+
+def _validate_sdkconfig(
+    payload: bytes,
+    *,
+    measured_min_3v3: float,
+    brownout_threshold: float,
+) -> str:
+    values = _parse_sdkconfig(payload)
+    for key, expected in REQUIRED_SDKCONFIG.items():
+        if values.get(key) != expected:
+            raise ManifestError(
+                f"unsafe sdkconfig: require {key}={expected}"
+            )
+    for key in FORBIDDEN_ENABLED_SDKCONFIG:
+        if values.get(key) == "y":
+            raise ManifestError(f"unsafe sdkconfig: {key}=y is forbidden")
+
+    enabled_selectors = [
+        key for key in BROWNOUT_THRESHOLDS if values.get(key) == "y"
+    ]
+    if len(enabled_selectors) != 1:
+        raise ManifestError(
+            "sdkconfig must enable exactly one supported brownout selector"
+        )
+    selector = enabled_selectors[0]
+    selector_number = selector.rsplit("_", 1)[1]
+    if values.get("CONFIG_ESP_BROWNOUT_DET_LVL") != selector_number:
+        raise ManifestError(
+            "unsafe sdkconfig: CONFIG_ESP_BROWNOUT_DET_LVL must match "
+            f"{selector}"
+        )
+    _validate_power_evidence(
+        measured_min_3v3=measured_min_3v3,
+        brownout_threshold=brownout_threshold,
+        selector=selector,
+    )
     return selector
 
 
@@ -236,6 +264,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     except jsonschema.ValidationError as error:
         path = ".".join(str(part) for part in error.absolute_path) or "<root>"
         raise ManifestError(f"schema validation failed at {path}: {error.message}") from error
+    power = manifest["power_evidence"]
+    _validate_power_evidence(
+        measured_min_3v3=power["measured_min_3v3_volts"],
+        brownout_threshold=power["brownout_threshold_volts"],
+        selector=power["brownout_selector"],
+    )
     expected_contract = _digest(_contract_payload(manifest))
     if manifest["contract_manifest_sha256"] != expected_contract:
         raise ManifestError("contract_manifest_sha256 does not match content")
@@ -253,11 +287,6 @@ def build_manifest(
     measured_min_3v3: float,
     brownout_threshold: float,
 ) -> dict[str, Any]:
-    selector = _validate_sdkconfig(
-        sdkconfig,
-        measured_min_3v3=measured_min_3v3,
-        brownout_threshold=brownout_threshold,
-    )
     paths = {
         "application": application,
         "bootloader": bootloader,
@@ -268,6 +297,15 @@ def build_manifest(
         "safety_schema": SCHEMA_PATH,
         "firmware_plan": FIRMWARE_DIR / "PLAN.md",
     }
+    payloads = {
+        label: _read_nonempty(path, label)
+        for label, path in paths.items()
+    }
+    selector = _validate_sdkconfig(
+        payloads["sdkconfig"],
+        measured_min_3v3=measured_min_3v3,
+        brownout_threshold=brownout_threshold,
+    )
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "generated_by": GENERATED_BY,
@@ -279,6 +317,9 @@ def build_manifest(
             ),
             "relay_feedback_seconds": (
                 Controller.RELAY_FEEDBACK_DEADLINE_SECONDS
+            ),
+            "relay_feedback_stable_seconds": (
+                Controller.RELAY_FEEDBACK_STABLE_SECONDS
             ),
             "watchdog_seconds": Controller.WDT_SECONDS,
             "tread_ok_to_nc_max_seconds": (
@@ -300,7 +341,8 @@ def build_manifest(
             "brownout_selector": selector,
         },
         "artifacts": {
-            label: _artifact(path, label) for label, path in paths.items()
+            label: _artifact(path, payloads[label])
+            for label, path in paths.items()
         },
     }
     manifest["contract_manifest_sha256"] = _digest(
@@ -340,6 +382,24 @@ def _atomic_write(path: Path, payload: bytes) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def _reject_output_alias(
+    output: Path,
+    explicit_inputs: Iterable[Path],
+) -> None:
+    output_target = output.expanduser().resolve(strict=False)
+    implicit_inputs = (
+        FIRMWARE_DIR / "safety_model.py",
+        FIRMWARE_DIR / "build_safety_manifest.py",
+        SCHEMA_PATH,
+        FIRMWARE_DIR / "PLAN.md",
+    )
+    for input_path in (*explicit_inputs, *implicit_inputs):
+        if input_path.expanduser().resolve(strict=False) == output_target:
+            raise ManifestError(
+                f"output aliases hashed input artifact: {input_path}"
+            )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -390,6 +450,15 @@ def main(argv: Iterable[str] | None = None) -> int:
         missing = [name for name, value in required.items() if value is None]
         if missing:
             parser.error(f"missing build options: {', '.join(missing)}")
+        _reject_output_alias(
+            args.output,
+            (
+                args.application,
+                args.bootloader,
+                args.partition_table,
+                args.sdkconfig,
+            ),
+        )
         manifest = build_manifest(
             application=args.application,
             bootloader=args.bootloader,

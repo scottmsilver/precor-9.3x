@@ -48,11 +48,12 @@ ESP-IDF code. Production behavior must match its tests:
 - console freshness comes only from a complete valid parsed frame and expires
   at 1.5 s;
 - entry order is zero → inverted-UART physical idle-low → TX enable → qualified
-  gap → relay command → Emulate feedback within 10 ms → first complete zero
-  frame;
+  gap → relay command → at least 1 ms continuously stable Emulate feedback,
+  qualified within 10 ms → first complete zero frame;
 - entry aborts without moving K1 if no gap arrives within 1 s;
-- normal exit finishes a zero frame → qualified gap → relay off → bypass
-  feedback within 10 ms → TX off → lease release;
+- normal exit finishes a zero frame → qualified gap → relay off → at least
+  1 ms continuously stable bypass feedback, qualified within 10 ms → TX off
+  → lease release;
 - normal exit deasserts K1 at the 1 s gap deadline; TREAD_OK loss, stale
   console, lease expiry, emergency stop, brownout, reset, and WDT never wait;
 - GPIO7 is `VBUS_PRESENT_N`: LOW permits native-USB attach, HIGH requires the
@@ -69,9 +70,11 @@ in captures. The independent treadmill safety key remains authoritative.
 
 ## Production build identity
 
-Every Emulate-capable build must use a 2 s task WDT with panic/reset, enabled
-brownout reset at the highest supported threshold below the measured minimum
-+3V3, and no panic-halt/GDB-stub mode. Preserve this exact gate:
+Every Emulate-capable build must use a 2 s task WDT with immediate silent
+panic/reset and zero reboot delay, enabled brownout reset at the highest
+supported threshold below the measured minimum +3V3, and no panic-halt,
+print-reboot, GDB/OpenOCD-stub, or OCD-aware halt mode. Preserve this exact
+spot gate and require the manifest builder to validate the rest:
 
 ```bash
 grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig

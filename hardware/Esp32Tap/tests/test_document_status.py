@@ -250,9 +250,13 @@ def test_firmware_plan_preserves_exact_safety_gates(
         encoding="utf-8"
     )
     required = (
+        "CONFIG_ESP_TASK_WDT_EN=y",
         "CONFIG_ESP_TASK_WDT_INIT=y",
         "CONFIG_ESP_TASK_WDT_TIMEOUT_S=2",
         "CONFIG_ESP_TASK_WDT_PANIC=y",
+        "CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y",
+        "CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0",
+        "continuously for at least 1 ms",
         "no 10 s reconnect grace",
         "younger than\n1.5 s",
         "at most 1 s",

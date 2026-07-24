@@ -47,23 +47,24 @@ class Feedback(str, Enum):
         }[(bool(nc_high), bool(no_high))]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class ConnectionIdentity:
     """A connection object/handle plus a non-reusable generation."""
 
     transport: Transport
-    handle: str | int
+    handle: object
     generation: int
 
     def __post_init__(self) -> None:
         if not isinstance(self.transport, Transport):
             raise TypeError("transport must be a Transport")
-        if isinstance(self.handle, bool) or not isinstance(
-            self.handle,
-            (str, int),
+        if self.handle is None or isinstance(self.handle, bool):
+            raise TypeError("handle must identify a concrete connection")
+        if self.transport is not Transport.WSS and not isinstance(
+            self.handle, (str, int)
         ):
-            raise TypeError("handle must be a concrete string or integer")
-        if isinstance(self.handle, str) and not self.handle:
+            raise TypeError("BLE/executor handle must be a string or integer")
+        if self.handle == "":
             raise ValueError("handle cannot be empty")
         if (
             isinstance(self.generation, bool)
@@ -71,6 +72,29 @@ class ConnectionIdentity:
             or self.generation < 0
         ):
             raise ValueError("generation must be a non-negative integer")
+
+    @property
+    def connection_key(self) -> tuple[Transport, str, object]:
+        """Key generations by object identity for WSS and value otherwise."""
+
+        if self.transport is Transport.WSS:
+            return (self.transport, "identity", id(self.handle))
+        return (self.transport, "value", self.handle)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ConnectionIdentity):
+            return NotImplemented
+        if (
+            self.transport is not other.transport
+            or self.generation != other.generation
+        ):
+            return False
+        if self.transport is Transport.WSS:
+            return self.handle is other.handle
+        return self.handle == other.handle
+
+    def __hash__(self) -> int:
+        return hash((*self.connection_key, self.generation))
 
 
 @dataclass(slots=True)
@@ -86,6 +110,7 @@ class Controller:
     CONSOLE_FRESH_SECONDS = 1.5
     TRANSFER_GAP_DEADLINE_SECONDS = 1.0
     RELAY_FEEDBACK_DEADLINE_SECONDS = 0.010
+    RELAY_FEEDBACK_STABLE_SECONDS = 0.001
     WDT_SECONDS = 2.0
     TREAD_OK_TO_NC_MAX_SECONDS = 0.010
     SOFTWARE_TO_NC_MAX_SECONDS = 0.250
@@ -112,9 +137,10 @@ class Controller:
 
         self._lease: Lease | None = None
         self._active_connections: set[ConnectionIdentity] = set()
-        self._highest_generation: dict[tuple[Transport, str | int], int] = {}
+        self._highest_generation: dict[tuple[Transport, str, object], int] = {}
         self._console_candidate = bytearray()
         self._phase_deadline: float | None = None
+        self._feedback_candidate_since: float | None = None
 
     @property
     def owner(self) -> ConnectionIdentity | None:
@@ -125,7 +151,7 @@ class Controller:
         return None if self._lease is None else self._lease.expires_at
 
     def connect(self, connection: ConnectionIdentity) -> bool:
-        key = (connection.transport, connection.handle)
+        key = connection.connection_key
         highest = self._highest_generation.get(key, -1)
         if connection.generation <= highest:
             self.events.append("connection_rejected:stale_generation")
@@ -139,6 +165,7 @@ class Controller:
         return True
 
     def acquire(self, connection: ConnectionIdentity, *, now: float) -> bool:
+        self._expire_manual_lease(now=now)
         if self._lease is not None:
             self.events.append("lease_rejected:already_owned")
             return False
@@ -160,6 +187,30 @@ class Controller:
     def _is_owner(self, connection: ConnectionIdentity) -> bool:
         return self._lease is not None and self._lease.owner == connection
 
+    def _expire_manual_lease(self, *, now: float) -> bool:
+        if (
+            self._lease is None
+            or self._lease.expires_at is None
+            or now < self._lease.expires_at
+        ):
+            return False
+        self.emergency_stop(reason="lease_expired", now=now)
+        return True
+
+    def _authorize_owner(
+        self,
+        connection: ConnectionIdentity,
+        *,
+        now: float,
+        ignored_event: str,
+    ) -> bool:
+        if self._expire_manual_lease(now=now):
+            return False
+        if not self._is_owner(connection):
+            self.events.append(ignored_event)
+            return False
+        return True
+
     def _renew(self, *, now: float) -> None:
         if self._lease is None:
             return
@@ -167,8 +218,11 @@ class Controller:
             self._lease.expires_at = now + self.MANUAL_LEASE_SECONDS
 
     def heartbeat(self, connection: ConnectionIdentity, *, now: float) -> bool:
-        if not self._is_owner(connection):
-            self.events.append("ignored_non_owner_heartbeat")
+        if not self._authorize_owner(
+            connection,
+            now=now,
+            ignored_event="ignored_non_owner_heartbeat",
+        ):
             return False
         self._renew(now=now)
         self.events.append("owner_heartbeat")
@@ -182,8 +236,11 @@ class Controller:
         incline_half_percent: int,
         now: float,
     ) -> bool:
-        if not self._is_owner(connection):
-            self.events.append("ignored_non_owner_motion")
+        if not self._authorize_owner(
+            connection,
+            now=now,
+            ignored_event="ignored_non_owner_motion",
+        ):
             return False
         if not 0 <= speed_tenths <= 120:
             self.events.append("motion_rejected:speed_range")
@@ -266,8 +323,18 @@ class Controller:
         now: float,
         uart_idle_low: bool,
     ) -> bool:
-        if not self._is_owner(connection):
-            self.events.append("entry_rejected:not_owner")
+        if not self._authorize_owner(
+            connection,
+            now=now,
+            ignored_event="entry_rejected:not_owner",
+        ):
+            return False
+        if (
+            self.mode is not Mode.PROXY
+            or self.relay_cmd
+            or self.tx_enable
+        ):
+            self.events.append("entry_rejected:not_proxy")
             return False
         if self.fault_latched:
             self.events.append("entry_rejected:fault_latched")
@@ -299,26 +366,92 @@ class Controller:
         self.tx_enable = True
         self.mode = Mode.ENTRY_WAIT_GAP
         self._phase_deadline = now + self.TRANSFER_GAP_DEADLINE_SECONDS
+        self._feedback_candidate_since = None
         self._renew(now=now)
         return True
 
     def observe_interframe_gap(self, *, now: float) -> bool:
-        if (
-            self._phase_deadline is None
-            or now >= self._phase_deadline - self._TIME_EPSILON
-        ):
+        if self._enforce_immediate_safety(now=now):
+            return False
+        if self._phase_deadline is None:
+            return False
+        if now >= self._phase_deadline - self._TIME_EPSILON:
+            self.tick(now=now)
             return False
         if self.mode is Mode.ENTRY_WAIT_GAP:
+            if self.feedback is not Feedback.BYPASS:
+                self.fault_latched = True
+                self.emergency_stop(
+                    reason="entry_feedback_changed_before_transfer",
+                    now=now,
+                )
+                return False
             self.relay_cmd = True
             self.mode = Mode.ENTRY_WAIT_FEEDBACK
             self._phase_deadline = now + self.RELAY_FEEDBACK_DEADLINE_SECONDS
+            self._feedback_candidate_since = None
             self.events.append("relay_cmd_on")
             return True
         if self.mode is Mode.EXIT_WAIT_GAP:
+            if self.feedback is not Feedback.EMULATE:
+                self.fault_latched = True
+                self.emergency_stop(
+                    reason="exit_feedback_changed_before_transfer",
+                    now=now,
+                )
+                return False
             self.relay_cmd = False
             self.mode = Mode.EXIT_WAIT_FEEDBACK
             self._phase_deadline = now + self.RELAY_FEEDBACK_DEADLINE_SECONDS
+            self._feedback_candidate_since = None
             self.events.append("relay_cmd_off")
+            return True
+        return False
+
+    def _feedback_expected(self) -> Feedback | None:
+        if self.mode is Mode.ENTRY_WAIT_FEEDBACK:
+            return Feedback.EMULATE
+        if self.mode is Mode.EXIT_WAIT_FEEDBACK:
+            return Feedback.BYPASS
+        return None
+
+    def _finish_feedback_transfer(self) -> None:
+        if self.mode is Mode.ENTRY_WAIT_FEEDBACK:
+            self.mode = Mode.EMULATING
+            self._phase_deadline = None
+            self._feedback_candidate_since = None
+            self.events.extend(
+                (
+                    "feedback_emulate_stable",
+                    "send_first_complete_zero_frame",
+                )
+            )
+        elif self.mode is Mode.EXIT_WAIT_FEEDBACK:
+            self.mode = Mode.PROXY
+            self._phase_deadline = None
+            self._feedback_candidate_since = None
+            self.events.extend(
+                (
+                    "feedback_bypass_stable",
+                    "tx_enable_off",
+                )
+            )
+            self.tx_enable = False
+            self._release_lease(log=True)
+
+    def _qualify_feedback(self, *, now: float) -> bool:
+        expected = self._feedback_expected()
+        deadline = self._phase_deadline
+        since = self._feedback_candidate_since
+        if expected is None or deadline is None or since is None:
+            return False
+        qualification_time = since + self.RELAY_FEEDBACK_STABLE_SECONDS
+        if (
+            self.feedback is expected
+            and qualification_time <= now + self._TIME_EPSILON
+            and qualification_time < deadline - self._TIME_EPSILON
+        ):
+            self._finish_feedback_transfer()
             return True
         return False
 
@@ -329,51 +462,42 @@ class Controller:
         no_high: bool,
         now: float,
     ) -> Feedback:
+        if self._enforce_immediate_safety(now=now):
+            return Feedback.from_gpio(nc_high, no_high)
         feedback = Feedback.from_gpio(nc_high, no_high)
         self.feedback = feedback
 
-        if self.mode is Mode.ENTRY_WAIT_FEEDBACK:
+        expected = self._feedback_expected()
+        if expected is not None:
             if (
-                feedback is Feedback.EMULATE
-                and self._phase_deadline is not None
-                and now < self._phase_deadline - self._TIME_EPSILON
+                self._phase_deadline is None
+                or now >= self._phase_deadline - self._TIME_EPSILON
             ):
-                self.mode = Mode.EMULATING
-                self._phase_deadline = None
-                self.events.extend(
-                    (
-                        "feedback_emulate_stable",
-                        "send_first_complete_zero_frame",
-                    )
-                )
-            else:
                 self.fault_latched = True
                 self.emergency_stop(
-                    reason="entry_feedback_mismatch",
+                    reason="feedback_after_deadline",
                     now=now,
                 )
-        elif self.mode is Mode.EXIT_WAIT_FEEDBACK:
-            if (
-                feedback is Feedback.BYPASS
-                and self._phase_deadline is not None
-                and now < self._phase_deadline - self._TIME_EPSILON
-            ):
-                self.mode = Mode.PROXY
-                self._phase_deadline = None
-                self.events.extend(
-                    (
-                        "feedback_bypass_stable",
-                        "tx_enable_off",
-                    )
-                )
-                self.tx_enable = False
-                self._release_lease(log=True)
+            elif feedback is expected:
+                if self._feedback_candidate_since is None:
+                    self._feedback_candidate_since = now
+                    self.events.append("feedback_candidate")
+                self._qualify_feedback(now=now)
             else:
-                self.fault_latched = True
-                self.emergency_stop(
-                    reason="exit_feedback_mismatch",
-                    now=now,
-                )
+                self._feedback_candidate_since = None
+                self.events.append("feedback_transition")
+        elif self.mode is Mode.ENTRY_WAIT_GAP and feedback is not Feedback.BYPASS:
+            self.fault_latched = True
+            self.emergency_stop(
+                reason="entry_feedback_changed_before_gap",
+                now=now,
+            )
+        elif self.mode is Mode.EXIT_WAIT_GAP and feedback is not Feedback.EMULATE:
+            self.fault_latched = True
+            self.emergency_stop(
+                reason="exit_feedback_changed_before_gap",
+                now=now,
+            )
         elif self.mode is Mode.EMULATING and feedback is not Feedback.EMULATE:
             self.fault_latched = True
             self.emergency_stop(reason="relay_feedback_invalid", now=now)
@@ -388,8 +512,13 @@ class Controller:
         *,
         now: float,
     ) -> bool:
-        if not self._is_owner(connection):
-            self.events.append("exit_rejected:not_owner")
+        if not self._authorize_owner(
+            connection,
+            now=now,
+            ignored_event="exit_rejected:not_owner",
+        ):
+            return False
+        if self._enforce_immediate_safety(now=now):
             return False
         if self.mode is not Mode.EMULATING:
             self.events.append("exit_rejected:not_emulating")
@@ -404,6 +533,7 @@ class Controller:
         self.incline_half_percent = 0
         self.mode = Mode.EXIT_WAIT_GAP
         self._phase_deadline = now + self.TRANSFER_GAP_DEADLINE_SECONDS
+        self._feedback_candidate_since = None
         return True
 
     def set_tread_ok(self, value: bool, *, now: float) -> None:
@@ -426,19 +556,10 @@ class Controller:
         )
 
     def tick(self, *, now: float) -> None:
-        if (
-            self._lease is not None
-            and self._lease.expires_at is not None
-            and now >= self._lease.expires_at
-        ):
-            self.emergency_stop(reason="lease_expired", now=now)
+        if self._enforce_immediate_safety(now=now):
             return
 
-        if (
-            self.mode is Mode.EMULATING
-            and not self._console_is_fresh(now)
-        ):
-            self.emergency_stop(reason="console_stale", now=now)
+        if self._qualify_feedback(now=now):
             return
 
         if (
@@ -447,10 +568,7 @@ class Controller:
         ):
             return
         if self.mode is Mode.ENTRY_WAIT_GAP:
-            self.tx_enable = False
-            self.mode = Mode.PROXY
-            self._phase_deadline = None
-            self._release_lease(log=True)
+            self.emergency_stop(reason="entry_no_gap", now=now)
             self.events.append("entry_abort:no_gap")
         elif self.mode is Mode.ENTRY_WAIT_FEEDBACK:
             self.fault_latched = True
@@ -463,6 +581,7 @@ class Controller:
             self.relay_cmd = False
             self.mode = Mode.EXIT_WAIT_FEEDBACK
             self._phase_deadline = now + self.RELAY_FEEDBACK_DEADLINE_SECONDS
+            self._feedback_candidate_since = None
             self.events.append("relay_cmd_off")
         elif self.mode is Mode.EXIT_WAIT_FEEDBACK:
             self.fault_latched = True
@@ -470,6 +589,19 @@ class Controller:
                 reason="exit_feedback_timeout",
                 now=now,
             )
+
+    def _enforce_immediate_safety(self, *, now: float) -> bool:
+        if self._expire_manual_lease(now=now):
+            return True
+        if self.mode is Mode.PROXY:
+            return False
+        if not self.tread_ok:
+            self.emergency_stop(reason="tread_not_ok", now=now)
+            return True
+        if not self._console_is_fresh(now):
+            self.emergency_stop(reason="console_stale", now=now)
+            return True
+        return False
 
     def _release_lease(self, *, log: bool) -> None:
         self._lease = None
@@ -484,14 +616,23 @@ class Controller:
         self.tx_enable = False
         self.mode = Mode.PROXY
         self._phase_deadline = None
+        self._feedback_candidate_since = None
         self._release_lease(log=False)
         self.events.append(f"emergency:{reason}")
 
     def watchdog_stall(self, *, now: float) -> None:
-        self.emergency_stop(reason="watchdog", now=now)
+        self._reset_class_stop(reason="watchdog", now=now)
 
     def reset(self, *, now: float, reason: str = "reset") -> None:
+        self._reset_class_stop(reason=reason, now=now)
+
+    def _reset_class_stop(self, *, reason: str, now: float) -> None:
         self.emergency_stop(reason=reason, now=now)
+        self._active_connections.clear()
+        self._console_candidate.clear()
+        self.last_complete_console_frame_at = None
+        self.feedback = Feedback.BYPASS
+        self.usb_pullup_enabled = False
 
 
 __all__ = [

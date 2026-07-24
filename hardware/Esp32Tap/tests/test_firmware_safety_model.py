@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import subprocess
@@ -19,6 +20,7 @@ from safety_model import (  # noqa: E402
     Mode,
     Transport,
 )
+import build_safety_manifest as manifest_builder  # noqa: E402
 
 
 def identity(
@@ -47,7 +49,12 @@ def enter_emulate(
     assert controller.mode is Mode.ENTRY_WAIT_GAP
     assert controller.observe_interframe_gap(now=now + 0.1)
     assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
-    controller.observe_relay_feedback(nc_high=True, no_high=False, now=now + 0.105)
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=now + 0.105,
+    )
+    controller.tick(now=now + 0.106)
     assert controller.mode is Mode.EMULATING
 
 
@@ -111,6 +118,40 @@ def test_only_owner_mutates_or_renews_the_single_four_second_lease() -> None:
     assert controller.speed_tenths == 0
     assert controller.incline_half_percent == 0
     assert not controller.relay_cmd
+
+
+def test_manual_lease_cannot_be_renewed_at_or_after_its_deadline() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+
+    assert not controller.heartbeat(owner, now=4.0)
+    assert controller.owner is None
+    assert controller.lease_expires_at is None
+    assert controller.mode is Mode.PROXY
+    assert controller.events[-1] == "emergency:lease_expired"
+
+
+def test_wss_owner_requires_the_same_concrete_handle_object() -> None:
+    class EqualHandle:
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, EqualHandle)
+
+    concrete_handle = EqualHandle()
+    equal_but_distinct = EqualHandle()
+    owner = identity(Transport.WSS, concrete_handle, 3)
+    impostor = identity(Transport.WSS, equal_but_distinct, 3)
+    controller = connected_controller(owner)
+
+    assert concrete_handle == equal_but_distinct
+    assert concrete_handle is not equal_but_distinct
+    assert not controller.command_motion(
+        impostor,
+        speed_tenths=20,
+        incline_half_percent=2,
+        now=1.0,
+    )
+    assert not controller.disconnect(impostor, now=1.1)
+    assert controller.owner is owner
 
 
 def test_owner_disconnect_is_immediate_but_non_owner_disconnect_is_ignored() -> None:
@@ -224,6 +265,26 @@ def test_reset_and_watchdog_matrix_always_returns_hardware_to_proxy(
     assert not controller.tx_enable
 
 
+@pytest.mark.parametrize("failure", ("reset", "watchdog"))
+def test_reset_class_failures_invalidate_pre_reset_connections(
+    failure: str,
+) -> None:
+    handle = object()
+    old = identity(Transport.WSS, handle, 1)
+    controller = connected_controller(old)
+    if failure == "reset":
+        controller.reset(now=1.0)
+    else:
+        controller.watchdog_stall(now=1.0)
+
+    assert not controller.acquire(old, now=1.1)
+    assert not controller.connect(old)
+    fresh = identity(Transport.WSS, handle, 2)
+    assert controller.connect(fresh)
+    assert controller.acquire(fresh, now=1.2)
+    assert controller.owner is fresh
+
+
 def test_console_source_is_hardware_bridge_and_network_failures_do_nothing() -> None:
     controller = Controller()
     controller.disconnect_transport(Transport.WSS, now=1.0)
@@ -250,11 +311,14 @@ def test_console_freshness_requires_a_complete_valid_frame() -> None:
 
 @pytest.mark.parametrize("age", (1.500001, 20.0))
 def test_stale_console_forces_immediate_zero_and_bypass(age: float) -> None:
-    owner = identity()
+    owner = (
+        identity()
+        if age < Controller.MANUAL_LEASE_SECONDS
+        else identity(Transport.EXECUTOR, "program-stale", 1)
+    )
     controller = connected_controller(owner)
     enter_emulate(controller, owner, now=0.0)
 
-    assert controller.heartbeat(owner, now=max(0.1, age - 1.0))
     controller.tick(now=age)
     assert controller.mode is Mode.PROXY
     assert controller.events[-1] == "emergency:console_stale"
@@ -294,6 +358,8 @@ def test_entry_order_and_first_zero_frame_follow_settled_transfer() -> None:
         no_high=False,
         now=0.205,
     )
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    controller.tick(now=0.206)
     assert controller.events[-2:] == [
         "feedback_emulate_stable",
         "send_first_complete_zero_frame",
@@ -348,6 +414,42 @@ def test_entry_gap_timeout_aborts_without_moving_relay() -> None:
     assert controller.events[-1] == "entry_abort:no_gap"
 
 
+def test_gap_event_at_entry_deadline_cannot_leave_tx_enabled() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    controller.observe_console_bytes(b"[loop:5550]", now=0.99)
+
+    assert not controller.observe_interframe_gap(now=1.0)
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
+
+
+def test_reentrant_entry_request_cannot_rewind_an_active_transfer() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    assert controller.observe_interframe_gap(now=0.1)
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    assert controller.relay_cmd
+
+    assert not controller.request_emulate(
+        owner,
+        now=0.2,
+        uart_idle_low=True,
+    )
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    controller.tick(now=0.210)
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
+
+
 def test_entry_feedback_timeout_releases_and_latches_fault() -> None:
     owner = identity()
     controller = connected_controller(owner)
@@ -381,10 +483,11 @@ def test_entry_feedback_mismatch_releases_and_latches_fault(
         no_high=no_high,
         now=0.205,
     )
+    controller.tick(now=0.210)
     assert controller.mode is Mode.PROXY
     assert controller.fault_latched
     assert not controller.relay_cmd
-    assert controller.events[-1] == "emergency:entry_feedback_mismatch"
+    assert controller.events[-1] == "emergency:entry_feedback_timeout"
 
 
 def test_complete_normal_exit_order() -> None:
@@ -407,6 +510,8 @@ def test_complete_normal_exit_order() -> None:
         no_high=True,
         now=0.705,
     )
+    assert controller.mode is Mode.EXIT_WAIT_FEEDBACK
+    controller.tick(now=0.706)
     assert controller.events[-3:] == [
         "feedback_bypass_stable",
         "tx_enable_off",
@@ -421,11 +526,25 @@ def test_normal_exit_gap_timeout_bypasses_immediately_then_checks_feedback() -> 
     controller = connected_controller(owner)
     enter_emulate(controller, owner)
     assert controller.request_normal_exit(owner, now=0.5)
+    controller.observe_console_bytes(b"[loop:5550]", now=1.49)
 
     controller.tick(now=1.5)
     assert not controller.relay_cmd
     assert controller.mode is Mode.EXIT_WAIT_FEEDBACK
     assert controller.events[-2:] == ["exit_gap_timeout", "relay_cmd_off"]
+
+
+def test_gap_event_at_exit_deadline_cannot_leave_relay_energized() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    enter_emulate(controller, owner)
+    assert controller.request_normal_exit(owner, now=0.5)
+    controller.observe_console_bytes(b"[loop:5550]", now=1.49)
+
+    assert not controller.observe_interframe_gap(now=1.5)
+    assert controller.mode is Mode.EXIT_WAIT_FEEDBACK
+    assert not controller.relay_cmd
+    assert controller.tx_enable
 
 
 @pytest.mark.parametrize(
@@ -447,10 +566,11 @@ def test_exit_feedback_mismatch_releases_and_latches_fault(
         no_high=no_high,
         now=0.705,
     )
+    controller.tick(now=0.710)
     assert controller.mode is Mode.PROXY
     assert controller.fault_latched
     assert not controller.relay_cmd
-    assert controller.events[-1] == "emergency:exit_feedback_mismatch"
+    assert controller.events[-1] == "emergency:exit_feedback_timeout"
 
 
 def test_exit_feedback_timeout_latches_fault() -> None:
@@ -464,6 +584,128 @@ def test_exit_feedback_timeout_latches_fault() -> None:
     assert controller.mode is Mode.PROXY
     assert controller.fault_latched
     assert controller.events[-1] == "emergency:exit_feedback_timeout"
+
+
+@pytest.mark.parametrize(
+    "mode",
+    (
+        Mode.ENTRY_WAIT_GAP,
+        Mode.ENTRY_WAIT_FEEDBACK,
+        Mode.EXIT_WAIT_GAP,
+        Mode.EXIT_WAIT_FEEDBACK,
+    ),
+)
+def test_console_staleness_never_waits_for_a_transition_deadline(
+    mode: Mode,
+) -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    entry_mode = mode in {Mode.ENTRY_WAIT_GAP, Mode.ENTRY_WAIT_FEEDBACK}
+    entry_time = 1.49 if entry_mode else 0.0
+    assert controller.request_emulate(
+        owner,
+        now=entry_time,
+        uart_idle_low=True,
+    )
+    if mode is Mode.ENTRY_WAIT_FEEDBACK:
+        assert controller.observe_interframe_gap(now=1.495)
+    if mode in {Mode.EXIT_WAIT_GAP, Mode.EXIT_WAIT_FEEDBACK}:
+        assert controller.observe_interframe_gap(now=0.1)
+        controller.observe_relay_feedback(
+            nc_high=True,
+            no_high=False,
+            now=0.105,
+        )
+        controller.tick(now=0.106)
+        assert controller.request_normal_exit(owner, now=0.6)
+    if mode is Mode.EXIT_WAIT_FEEDBACK:
+        assert controller.observe_interframe_gap(now=1.495)
+    assert controller.mode is mode
+
+    controller.tick(now=1.5)
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
+    assert controller.events[-1] == "emergency:console_stale"
+
+
+def test_stale_console_cannot_be_raced_by_a_gap_observation() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=1.49, uart_idle_low=True)
+
+    assert not controller.observe_interframe_gap(now=1.5)
+    assert controller.mode is Mode.PROXY
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
+    assert controller.events[-1] == "emergency:console_stale"
+
+
+def test_matching_feedback_requires_temporal_stability() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    assert controller.observe_interframe_gap(now=0.1)
+
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.101,
+    )
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    assert "send_first_complete_zero_frame" not in controller.events
+    controller.tick(now=0.101999)
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    controller.tick(now=0.102)
+    assert controller.mode is Mode.EMULATING
+    assert controller.events[-2:] == [
+        "feedback_emulate_stable",
+        "send_first_complete_zero_frame",
+    ]
+
+
+def test_transition_feedback_may_pass_through_both_open_before_settling() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    assert controller.observe_interframe_gap(now=0.1)
+
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=True,
+        now=0.101,
+    )
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    assert not controller.fault_latched
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.105,
+    )
+    controller.tick(now=0.106)
+    assert controller.mode is Mode.EMULATING
+    assert not controller.fault_latched
+
+
+@pytest.mark.parametrize("failure", ("brownout", "watchdog"))
+def test_console_bridge_failure_matrix_remains_hardware_proxy(
+    failure: str,
+) -> None:
+    controller = Controller()
+    if failure == "brownout":
+        controller.reset(now=1.0, reason="brownout")
+    else:
+        controller.watchdog_stall(now=1.0)
+
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
 
 
 @pytest.mark.parametrize(
@@ -560,6 +802,7 @@ def test_model_constants_are_the_normative_deadlines() -> None:
     assert Controller.CONSOLE_FRESH_SECONDS == 1.5
     assert Controller.TRANSFER_GAP_DEADLINE_SECONDS == 1.0
     assert Controller.RELAY_FEEDBACK_DEADLINE_SECONDS == 0.010
+    assert Controller.RELAY_FEEDBACK_STABLE_SECONDS == 0.001
     assert Controller.WDT_SECONDS == 2.0
     assert Controller.TREAD_OK_TO_NC_MAX_SECONDS == 0.010
     assert Controller.SOFTWARE_TO_NC_MAX_SECONDS == 0.250
@@ -569,14 +812,21 @@ def test_model_constants_are_the_normative_deadlines() -> None:
 
 def _safe_sdkconfig() -> str:
     return """\
+CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=2
 CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y
+CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0
 CONFIG_ESP_BROWNOUT_DET=y
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_3=y
+CONFIG_ESP_BROWNOUT_DET_LVL=3
 # CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT is not set
+# CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT is not set
 # CONFIG_ESP_SYSTEM_PANIC_GDBSTUB is not set
-# CONFIG_ESP_SYSTEM_PANIC_GDBSTUB_RUNTIME is not set
+# CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME is not set
+# CONFIG_ESP_DEBUG_OCDAWARE is not set
+# CONFIG_ESP_DEBUG_STUBS_ENABLE is not set
 """
 
 
@@ -646,6 +896,7 @@ def test_safety_manifest_is_deterministic_and_hashes_every_artifact(
         "manual_lease_seconds": 4.0,
         "normal_transition_acceptance_cycles": 1000,
         "relay_feedback_seconds": 0.01,
+        "relay_feedback_stable_seconds": 0.001,
         "software_to_nc_max_seconds": 0.25,
         "tread_ok_to_nc_max_seconds": 0.01,
         "transfer_gap_seconds": 1.0,
@@ -679,9 +930,34 @@ def test_safety_manifest_is_deterministic_and_hashes_every_artifact(
     assert len(manifest["bundle_sha256"]) == 64
 
 
+def test_bundle_digest_depends_on_every_artifact_record(
+    tmp_path: Path,
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    result = _run_manifest(tmp_path, paths)
+    assert result.returncode == 0, result.stderr
+    manifest = json.loads((tmp_path / "safety-manifest.json").read_bytes())
+    baseline = manifest["bundle_sha256"]
+
+    for label in manifest["artifacts"]:
+        changed = copy.deepcopy(manifest)
+        changed["artifacts"][label]["sha256"] = "0" * 64
+        if label in manifest_builder.CONTRACT_ARTIFACTS:
+            changed["contract_manifest_sha256"] = manifest_builder._digest(
+                manifest_builder._contract_payload(changed)
+            )
+        assert (
+            manifest_builder._digest(
+                manifest_builder._bundle_payload(changed)
+            )
+            != baseline
+        ), label
+
+
 @pytest.mark.parametrize(
     "unsafe_change",
     (
+        ("CONFIG_ESP_TASK_WDT_EN=y", "# CONFIG_ESP_TASK_WDT_EN is not set"),
         ("CONFIG_ESP_TASK_WDT_INIT=y", "# CONFIG_ESP_TASK_WDT_INIT is not set"),
         ("CONFIG_ESP_TASK_WDT_TIMEOUT_S=2", "CONFIG_ESP_TASK_WDT_TIMEOUT_S=3"),
         ("CONFIG_ESP_TASK_WDT_PANIC=y", "# CONFIG_ESP_TASK_WDT_PANIC is not set"),
@@ -697,6 +973,26 @@ def test_safety_manifest_is_deterministic_and_hashes_every_artifact(
         (
             "# CONFIG_ESP_SYSTEM_PANIC_GDBSTUB is not set",
             "CONFIG_ESP_SYSTEM_PANIC_GDBSTUB=y",
+        ),
+        (
+            "# CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME is not set",
+            "CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME=y",
+        ),
+        (
+            "# CONFIG_ESP_DEBUG_OCDAWARE is not set",
+            "CONFIG_ESP_DEBUG_OCDAWARE=y",
+        ),
+        (
+            "# CONFIG_ESP_DEBUG_STUBS_ENABLE is not set",
+            "CONFIG_ESP_DEBUG_STUBS_ENABLE=y",
+        ),
+        (
+            "CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0",
+            "CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=99",
+        ),
+        (
+            "CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y",
+            "# CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT is not set",
         ),
     ),
 )
@@ -714,6 +1010,65 @@ def test_manifest_rejects_unsafe_sdkconfig(
     result = _run_manifest(tmp_path, paths)
     assert result.returncode != 0
     assert not (tmp_path / "safety-manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    "input_label",
+    ("application", "bootloader", "partition_table", "sdkconfig"),
+)
+def test_manifest_refuses_output_aliasing_an_input(
+    tmp_path: Path,
+    input_label: str,
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    before = paths[input_label].read_bytes()
+
+    result = _run_manifest(
+        tmp_path,
+        paths,
+        output_name=paths[input_label].name,
+    )
+
+    assert result.returncode != 0
+    assert paths[input_label].read_bytes() == before
+
+
+def test_manifest_snapshots_sdkconfig_once(
+    tmp_path: Path,
+) -> None:
+    class ChangingSdkconfig:
+        name = "sdkconfig"
+
+        def __init__(self) -> None:
+            self.read_count = 0
+
+        def read_bytes(self) -> bytes:
+            self.read_count += 1
+            if self.read_count == 1:
+                return _safe_sdkconfig().encode("utf-8")
+            return _safe_sdkconfig().replace(
+                "CONFIG_ESP_TASK_WDT_PANIC=y",
+                "# CONFIG_ESP_TASK_WDT_PANIC is not set",
+            ).encode("utf-8")
+
+        def __str__(self) -> str:
+            return "<changing-sdkconfig>"
+
+    paths = _manifest_inputs(tmp_path)
+    sdkconfig = ChangingSdkconfig()
+    manifest = manifest_builder.build_manifest(
+        application=paths["application"],
+        bootloader=paths["bootloader"],
+        partition_table=paths["partition_table"],
+        sdkconfig=sdkconfig,
+        measured_min_3v3=3.05,
+        brownout_threshold=2.98,
+    )
+
+    assert sdkconfig.read_count == 1
+    assert manifest["artifacts"]["sdkconfig"]["sha256"] == hashlib.sha256(
+        _safe_sdkconfig().encode("utf-8")
+    ).hexdigest()
 
 
 def test_manifest_rejects_missing_artifact_and_bad_brownout_evidence(
@@ -804,3 +1159,42 @@ def test_manifest_bundle_hash_rejects_metadata_tampering(
     )
     assert validate.returncode != 0
     assert "bundle_sha256 does not match" in validate.stderr
+
+
+def test_manifest_validation_rejects_rehashed_unsafe_power_evidence(
+    tmp_path: Path,
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    result = _run_manifest(tmp_path, paths)
+    assert result.returncode == 0, result.stderr
+    manifest_path = tmp_path / "safety-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["power_evidence"] = {
+        "measured_min_3v3_volts": 2.75,
+        "brownout_threshold_volts": 3.30,
+        "brownout_selector": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_1",
+    }
+    manifest["contract_manifest_sha256"] = manifest_builder._digest(
+        manifest_builder._contract_payload(manifest)
+    )
+    manifest["bundle_sha256"] = manifest_builder._digest(
+        manifest_builder._bundle_payload(manifest)
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    validate = subprocess.run(
+        [
+            sys.executable,
+            str(FIRMWARE_DIR / "build_safety_manifest.py"),
+            "--validate",
+            str(manifest_path),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert validate.returncode != 0
+    assert "brownout threshold must be below" in validate.stderr

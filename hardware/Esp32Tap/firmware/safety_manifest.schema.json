@@ -28,6 +28,7 @@
         "console_fresh_seconds",
         "transfer_gap_seconds",
         "relay_feedback_seconds",
+        "relay_feedback_stable_seconds",
         "watchdog_seconds",
         "tread_ok_to_nc_max_seconds",
         "software_to_nc_max_seconds",
@@ -46,6 +47,9 @@
         },
         "relay_feedback_seconds": {
           "const": 0.01
+        },
+        "relay_feedback_stable_seconds": {
+          "const": 0.001
         },
         "watchdog_seconds": {
           "const": 2.0
@@ -85,7 +89,121 @@
           "type": "string",
           "pattern": "^CONFIG_ESP_BROWNOUT_DET_LVL_SEL_[1-7]$"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "brownout_selector": {
+                "const": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_1"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "brownout_threshold_volts": {
+                "const": 3.3
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "brownout_selector": {
+                "const": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_2"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "brownout_threshold_volts": {
+                "const": 3.19
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "brownout_selector": {
+                "const": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_3"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "brownout_threshold_volts": {
+                "const": 2.98
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "brownout_selector": {
+                "const": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_4"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "brownout_threshold_volts": {
+                "const": 2.84
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "brownout_selector": {
+                "const": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_5"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "brownout_threshold_volts": {
+                "const": 2.67
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "brownout_selector": {
+                "const": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_6"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "brownout_threshold_volts": {
+                "const": 2.56
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "brownout_selector": {
+                "const": "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "brownout_threshold_volts": {
+                "const": 2.44
+              }
+            }
+          }
+        }
+      ]
     },
     "artifacts": {
       "type": "object",

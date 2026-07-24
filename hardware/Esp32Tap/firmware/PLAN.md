@@ -83,13 +83,18 @@ at the driver base).
 * Required sdkconfig (defaults put WiFi/BT on core 0 — must override):
   `CONFIG_BT_NIMBLE_PINNED_TO_CORE=1`, WiFi task pinned to core 1, BT
   controller on core 1, `CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y`, WiFi PS
-  `MIN_MODEM`, `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3`, and
-  `CONFIG_ESP_TASK_WDT_INIT=y`, `CONFIG_ESP_TASK_WDT_TIMEOUT_S=2`, and
-  **`CONFIG_ESP_TASK_WDT_PANIC=y`** (task-WDT stall must panic-reset so the
-  relay releases — the IDF default only logs a warning). Brownout detection is
-  enabled, with the highest ESP32-S3 threshold strictly below the measured
-  minimum +3V3 of the exact production artifact. Panic-halt and GDB-stub modes
-  are forbidden in an Emulate-capable build. Residual core-0 ISRs are accepted;
+  `MIN_MODEM`, `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3`,
+  `CONFIG_ESP_TASK_WDT_EN=y`, `CONFIG_ESP_TASK_WDT_INIT=y`,
+  `CONFIG_ESP_TASK_WDT_TIMEOUT_S=2`,
+  **`CONFIG_ESP_TASK_WDT_PANIC=y`**,
+  `CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y`, and
+  `CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0` (task-WDT stall must
+  panic-reset promptly so the relay releases—the IDF default only logs a
+  warning). Brownout detection is enabled, with the highest ESP32-S3 threshold
+  strictly below the measured minimum +3V3 of the exact production artifact.
+  Panic halt/print-reboot/GDB-stub, runtime GDB stub, OpenOCD debug stubs, and
+  `CONFIG_ESP_DEBUG_OCDAWARE=y` are forbidden in an Emulate-capable build.
+  Residual core-0 ISRs are accepted;
   the 128-byte UART
   FIFOs (~133 ms of RX buffering at 9600) absorb scheduler jitter.
 * **Task stack sizing (QEMU-validated constraint)**: `KvPair` is 128 bytes,
@@ -165,7 +170,8 @@ Normal Emulate entry is exactly:
    TX_ENABLE without sending a byte;
 4. wait for a capture-qualified console inter-frame gap, for at most 1 s;
 5. assert RELAY_CMD and require the dry-contact feedback pole to report
-   Emulate stably within 10 ms;
+   Emulate continuously for at least 1 ms, completing qualification within
+   10 ms;
 6. only then transmit the first complete zero frame.
 
 If no gap arrives within 1 s, entry aborts without moving K1. Wrong or missing
@@ -175,7 +181,8 @@ Normal exit is exactly:
 
 1. transmit and finish a complete zero frame;
 2. wait for a capture-qualified gap, for at most 1 s;
-3. deassert RELAY_CMD and require stable bypass feedback within 10 ms;
+3. deassert RELAY_CMD and require bypass feedback continuously for at least
+   1 ms, completing qualification within 10 ms;
 4. deassert TX_ENABLE;
 5. release ownership.
 
@@ -234,13 +241,17 @@ emits one deterministic `bundle_sha256`. The machine-readable contract is
 hashed first; that hash is combined with the four flash/config artifacts so
 there is no circular self-hash.
 
-The build fails if any artifact is missing/empty, if the 2 s task WDT is not
-initialized with panic/reset, if brownout detection is absent, if a panic-halt
-or GDB-stub mode is enabled, or if the configured brownout selector is not the
-highest documented ESP32-S3 threshold below the supplied physical minimum
-+3V3 measurement. The selector numbers are inverse to voltage: for example,
-with a measured 3.05 V minimum, level 3 (approximately 2.98 V), not level 7,
-is the highest supported threshold below the measurement.
+The build snapshots every input once and fails if any artifact is
+missing/empty, if its output aliases any hashed input, if the 2 s task WDT is
+not enabled and initialized with panic/reset, if the panic action is not an
+immediate silent reboot, if brownout detection is absent, if any halt/debug
+mode is enabled, or if the configured brownout selector is not the highest
+documented ESP32-S3 threshold below the supplied physical minimum +3V3
+measurement. Validation rechecks selector/voltage/measurement correspondence
+even when a manifest's hashes were recomputed. The selector numbers are
+inverse to voltage: for example, with a measured 3.05 V minimum, level 3
+(approximately 2.98 V), not level 7, is the highest supported threshold below
+the measurement.
 
 The exact sdkconfig gate remains mandatory on every flashed build:
 
