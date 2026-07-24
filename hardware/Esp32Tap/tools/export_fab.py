@@ -911,6 +911,14 @@ def validate_stage(
             raise FabExportError(
                 f"{filename} must have exactly one LPD and no LPC"
             )
+        if re.search(
+            r"%(?:SR|LM|LR|LS|OF|SF|MI)[^%\r\n]*\*%",
+            payload,
+        ):
+            raise FabExportError(
+                f"{filename} must not contain Gerber repeat or transform "
+                "commands"
+            )
         artwork = re.findall(
             r"(?m)^(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|"
             r"Y[+-]?\d+)D0[13]\*$",
@@ -972,6 +980,23 @@ def validate_stage(
         or drill_commands[-1] != "M30"
     ):
         raise FabExportError("Esp32Tap.drl is not a complete Excellon drill file")
+    if (
+        len(
+            re.findall(
+                r"(?m)^;\s*FORMAT=\{-:-/ absolute / metric / decimal\}\s*$",
+                drill,
+            )
+        )
+        != 1
+        or drill_commands.count("FMAT,2") != 1
+        or drill_commands.count("METRIC") != 1
+        or drill_commands.count("G90") != 1
+        or "INCH" in drill_commands
+        or "G91" in drill_commands
+    ):
+        raise FabExportError(
+            "Esp32Tap.drl must use exactly one absolute metric decimal mode"
+        )
     _validate_drill_artwork(drill)
     if require_normalized:
         drill_creation_dates = re.findall(

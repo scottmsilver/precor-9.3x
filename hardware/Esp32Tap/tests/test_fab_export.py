@@ -179,9 +179,12 @@ def _write_valid_stage(directory: Path) -> None:
             [
                 "M48",
                 "; DRILL file KiCad 10.0.1 date 2026-07-24T00:00:00",
+                "; FORMAT={-:-/ absolute / metric / decimal}",
                 "; #@! TF.CreationDate,2026-07-24T00:00:00-07:00",
                 "; #@! TF.GenerationSoftware,Kicad,Pcbnew,10.0.1",
                 "; #@! TF.FileFunction,MixedPlating,1,4",
+                "FMAT,2",
+                "METRIC",
                 "; #@! TA.AperFunction,Plated,PTH,ComponentDrill",
                 "T1C0.600",
                 "; #@! TA.AperFunction,NonPlated,NPTH,ComponentDrill",
@@ -357,9 +360,13 @@ def test_normalization_fails_if_required_creation_date_is_missing(
         ("profile-region", "profile"),
         ("combined-profile-line", "profile"),
         ("combined-profile-arc", "profile"),
+        ("profile-step-repeat", "transform"),
+        ("profile-transform", "transform"),
         ("drill-no-tools", "drill"),
         ("drill-no-plated-hit", "Plated"),
         ("drill-no-npth-hit", "NonPlated"),
+        ("drill-incremental", "absolute metric decimal"),
+        ("drill-inch", "absolute metric decimal"),
     ],
 )
 def test_stage_validation_fails_closed(
@@ -633,6 +640,27 @@ def test_stage_validation_fails_closed(
             ),
             encoding="utf-8",
         )
+    elif mutation == "profile-step-repeat":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "D10*",
+                "%SRX2Y1I110.000000J0.000000*%\nD10*",
+            ).replace(
+                "M02*",
+                "%SR*%\nM02*",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "profile-transform":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "D10*",
+                "%LS2.000000*%\nD10*",
+            ),
+            encoding="utf-8",
+        )
     elif mutation == "drill-no-tools":
         drill = stage / "Esp32Tap.drl"
         drill.write_text(
@@ -652,12 +680,30 @@ def test_stage_validation_fails_closed(
             ),
             encoding="utf-8",
         )
-    else:
+    elif mutation == "drill-no-npth-hit":
         drill = stage / "Esp32Tap.drl"
         drill.write_text(
             drill.read_text(encoding="utf-8").replace(
                 "T2\nX120.0Y-120.0\n",
                 "",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "drill-incremental":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "G90",
+                "G90\nG91",
+            ),
+            encoding="utf-8",
+        )
+    else:
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "METRIC",
+                "METRIC\nINCH",
             ),
             encoding="utf-8",
         )
