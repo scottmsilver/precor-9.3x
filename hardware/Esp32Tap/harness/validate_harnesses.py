@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 from pathlib import Path
 import sys
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 
 HERE = Path(__file__).resolve().parent
@@ -71,9 +73,421 @@ EXPECTED_MICROFIT_OFFICIAL_TABLE = {
         {"circuit_count": 12, "current_per_contact_a": 4.0},
     ],
 }
-MICROFIT_DERIVATION_FORMULA = (
-    "I_base*sqrt(allowed_rise/official_rise)*safety_factor"
-)
+MICROFIT_DERIVATION_FORMULA = "I_base*sqrt(allowed_rise/official_rise)*safety_factor"
+CSV_FIELDS = [
+    "rj45_pin",
+    "board_position",
+    "net",
+    "wire_mpn",
+    "wire_awg",
+    "color",
+    "label",
+    "board_header",
+    "board_housing",
+    "terminal",
+    "rj45_assembly",
+    "strain_relief",
+    "continuity_test",
+]
+SELECTION_FIELDS = {
+    "revision",
+    "status",
+    "retrieved_at",
+    "placement_status",
+    "official_part_evidence",
+    "interfaces",
+    "reversal_prevention",
+    "switches",
+    "module",
+    "mini_decision",
+    "open_gates",
+}
+COMMON_INTERFACE_FIELDS = {
+    "header",
+    "housing",
+    "terminal",
+    "wire",
+    "strain_relief",
+    "rj45_termination",
+    "current_qualification",
+    "wire_current_qualification",
+    "contact_nets",
+    "factory_assembly",
+    "routing_gate",
+}
+INTERFACE_ELEMENT_FIELDS = {
+    "header": {
+        "manufacturer",
+        "mpn",
+        "lcsc_code",
+        "positions",
+        "packaging",
+        "rating",
+    },
+    "housing": {"manufacturer", "mpn", "lcsc_code", "positions", "rating"},
+    "terminal": {
+        "manufacturer",
+        "mpn",
+        "lcsc_code",
+        "packaging",
+        "wire_awg",
+        "rating",
+    },
+    "wire": {
+        "manufacturer",
+        "mpn",
+        "exact_color_mpns",
+        "power_ground_awg",
+        "signal_awg",
+        "colors",
+        "rating",
+    },
+    "strain_relief": {
+        "manufacturer",
+        "mpn",
+        "description",
+        "environment",
+    },
+    "rj45_termination": {
+        "manufacturer",
+        "mpn",
+        "type",
+        "rating",
+        "published_max_current_per_contact_a",
+        "rating_application",
+        "normal_total_current_a",
+        "normal_unequal_branch_current_a",
+        "single_open_2a_status",
+        "predecessor_exception",
+    },
+}
+CURRENT_QUALIFICATION_FIELDS = {
+    "evidence_id",
+    "wire_awg",
+    "selected_circuit_count",
+    "conservative_reference_circuit_count",
+    "ambient_c",
+    "connector_maximum_c",
+    "official_temperature_rise_limit_c",
+    "base_current_per_contact_a",
+    "allowed_temperature_rise_c",
+    "engineering_safety_factor",
+    "formula",
+    "derived_current_per_contact_a",
+    "expected_temperature_rise_at_2a_c",
+    "thermal_margin_at_2a_c",
+    "basis_class",
+}
+MODULE_AUDIT_FIELDS = {
+    "pad_map",
+    "strapping_pins",
+    "reserved_pins",
+    "pulls",
+    "adc_drive_capability",
+    "decoupling",
+    "footprint_area_mm2",
+    "reset_rom_brownout_defaults",
+    "used_gpio_audit",
+    "used_signal_safe_boot_states",
+    "rf",
+    "flash",
+    "native_usb",
+    "production_evidence",
+}
+MODULE_AUDIT_SHA256 = {
+    "ESP32-S3-WROOM-1-N8": "6252aaa46c189e853e096b0b227bbf25ffbdcbfa8703ccb7a59f40506a704035",
+    "ESP32-S3-MINI-1-N8": "825d36cc81a51bb3ea2dc64a67e6f812d45c6068cbaaca786c6124a751730812",
+}
+ALLOWED_OFFICIAL_DOMAINS = {
+    "www.molex.com",
+    "www.alphawire.com",
+    "www.hellermanntyton.com",
+    "www.te.com",
+    "www.espressif.com",
+    "tech.alpsalpine.com",
+}
+CONNECTOR_CANDIDATE_FIELDS = {
+    "kind",
+    "family",
+    "manufacturer",
+    "mpn",
+    "lcsc_code",
+    "official_product_url",
+    "official_datasheet_url",
+    "retrieved_at",
+    "stock",
+    "assembly_class",
+    "placement_status",
+    "source_sha256",
+    "board_mount",
+    "packaging",
+    "viability",
+    "positions",
+    "locking",
+    "rating",
+    "mating_housing",
+    "terminal",
+    "footprint_provenance",
+    "step_provenance",
+    "rejection_constraints",
+    "module_combinations",
+}
+MODULE_COMBINATION_FIELDS = {
+    "module",
+    "pcb_width_mm",
+    "pcb_length_mm",
+    "pcb_height_mm",
+    "antenna_volume_mm3",
+    "enclosure_width_mm",
+    "enclosure_length_mm",
+    "enclosure_height_mm",
+    "minimum_bend_radius_mm",
+    "service_clearance_mm",
+    "assembly_support",
+    "installed_bounding_volume_mm3",
+    "rejection_constraints",
+}
+MODULE_FIELDS = {
+    "manufacturer",
+    "mpn",
+    "lcsc_code",
+    "official_product_url",
+    "official_datasheet_url",
+    "retrieved_at",
+    "stock",
+    "packaging",
+    "assembly_class",
+    "placement_status",
+    "source_sha256",
+    "package_size_mm",
+    "footprint_area_mm2",
+    "pad_map",
+    "strapping_pins",
+    "reserved_pins",
+    "pulls",
+    "adc_drive_capability",
+    "decoupling",
+    "reset_rom_brownout_defaults",
+    "native_usb",
+    "used_gpio_audit",
+    "used_signal_safe_boot_states",
+    "rf",
+    "flash",
+    "production_evidence",
+    "boot_rf_safety",
+    "decision",
+}
+SWITCH_CANDIDATE_FIELDS = {
+    "manufacturer",
+    "mpn",
+    "lcsc_code",
+    "official_product_url",
+    "official_datasheet_url",
+    "retrieved_at",
+    "stock",
+    "assembly_class",
+    "placement_status",
+    "source_sha256",
+    "packaging",
+    "footprint_provenance",
+    "module_combinations",
+}
+
+
+def _exact_fields(value: object, expected: set[str], name: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise EvidenceError(f"{name} schema fields are not exact")
+    return value
+
+
+def _finite_nonnegative(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EvidenceError(f"{name} must be a finite nonnegative number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise EvidenceError(f"{name} must be a finite nonnegative number")
+    return number
+
+
+def _official_url(value: object, name: str) -> str:
+    if not isinstance(value, str):
+        raise EvidenceError(f"{name} official URL is absent")
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_OFFICIAL_DOMAINS:
+        raise EvidenceError(f"{name} official URL domain is invalid")
+    return value
+
+
+def _sha256(value: object, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise EvidenceError(f"{name} SHA-256 provenance is invalid")
+    return value
+
+
+def _audit_sha256(module: dict[str, Any]) -> str:
+    payload = {field: module[field] for field in sorted(MODULE_AUDIT_FIELDS)}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def validate_candidates(record: object) -> dict[str, Any]:
+    candidate_matrix = _exact_fields(
+        record,
+        {
+            "schema_version",
+            "retrieved_at",
+            "evidence_policy",
+            "connector_candidates",
+            "modules",
+            "switches",
+        },
+        "candidate matrix",
+    )
+    connectors = candidate_matrix["connector_candidates"]
+    if not isinstance(connectors, list) or not connectors:
+        raise EvidenceError("candidate connector list is absent")
+    identities: set[tuple[object, object, object]] = set()
+    for candidate in connectors:
+        expected = set(CONNECTOR_CANDIDATE_FIELDS)
+        if isinstance(candidate, dict) and "selected_variants" in candidate:
+            expected.add("selected_variants")
+        candidate = _exact_fields(candidate, expected, "candidate connector")
+        identity = _identity(candidate)
+        if identity in identities:
+            raise EvidenceError("candidate identity is duplicated")
+        identities.add(identity)
+        _official_url(candidate.get("official_product_url"), "candidate")
+        _official_url(candidate.get("official_datasheet_url"), "candidate")
+        _sha256(candidate.get("source_sha256"), "candidate")
+        if candidate.get("packaging") != "tape_and_reel":
+            raise EvidenceError("candidate packaging is not tape-and-reel")
+        if candidate.get("placement_status") != "REQUIRES_LIVE_BOM_CPL_PROOF":
+            raise EvidenceError("candidate placement status is invalid")
+        if (
+            not isinstance(candidate.get("rejection_constraints"), list)
+            or not candidate["rejection_constraints"]
+        ):
+            raise EvidenceError("candidate rejection constraints are absent")
+        _exact_fields(
+            candidate.get("stock"),
+            {"public_catalog_quantity", "status"},
+            "candidate stock",
+        )
+        if (
+            not isinstance(candidate.get("positions"), int)
+            or candidate["positions"] <= 0
+        ):
+            raise EvidenceError("candidate positions are invalid")
+        if not isinstance(candidate.get("locking"), bool):
+            raise EvidenceError("candidate locking value is invalid")
+        rating = candidate.get("rating")
+        if not isinstance(rating, dict):
+            raise EvidenceError("candidate rating schema is invalid")
+        for field in (
+            "voltage_v",
+            "temperature_min_c",
+            "temperature_max_c",
+            "contact_resistance_mohm",
+            "nominal_current_a",
+        ):
+            value = rating.get(field)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+            ):
+                raise EvidenceError(f"candidate rating {field} is not finite")
+        if (
+            rating["voltage_v"] < 0
+            or rating["contact_resistance_mohm"] < 0
+            or rating["nominal_current_a"] < 0
+        ):
+            raise EvidenceError("candidate rating values must be nonnegative")
+        if "selected_variants" in candidate:
+            variants = candidate["selected_variants"]
+            if not isinstance(variants, list) or len(variants) != 2:
+                raise EvidenceError("candidate selected variants are not exact")
+            for variant in variants:
+                _exact_fields(
+                    variant,
+                    {"manufacturer", "mpn", "lcsc_code", "positions"},
+                    "candidate selected variant",
+                )
+        combinations = candidate.get("module_combinations")
+        if not isinstance(combinations, list) or {
+            item.get("module") for item in combinations if isinstance(item, dict)
+        } != {"ESP32-S3-WROOM-1-N8", "ESP32-S3-MINI-1-N8"}:
+            raise EvidenceError("candidate module combinations are not exact")
+        for combination in combinations:
+            combination = _exact_fields(
+                combination, MODULE_COMBINATION_FIELDS, "candidate geometry"
+            )
+            dimensions = (
+                "pcb_width_mm",
+                "pcb_length_mm",
+                "pcb_height_mm",
+                "antenna_volume_mm3",
+                "enclosure_width_mm",
+                "enclosure_length_mm",
+                "enclosure_height_mm",
+                "minimum_bend_radius_mm",
+                "service_clearance_mm",
+                "installed_bounding_volume_mm3",
+            )
+            values = {
+                field: _finite_nonnegative(
+                    combination.get(field), f"candidate geometry {field}"
+                )
+                for field in dimensions
+            }
+            if any(values[field] <= 0 for field in dimensions):
+                raise EvidenceError("candidate geometry dimensions must be positive")
+            volume = (
+                values["enclosure_width_mm"]
+                * values["enclosure_length_mm"]
+                * values["enclosure_height_mm"]
+            )
+            if not math.isclose(
+                values["installed_bounding_volume_mm3"], volume, abs_tol=1e-9
+            ):
+                raise EvidenceError("candidate geometry volume is inconsistent")
+            if not isinstance(combination.get("rejection_constraints"), list) or not (
+                combination["rejection_constraints"]
+            ):
+                raise EvidenceError(
+                    "candidate geometry rejection constraints are absent"
+                )
+    modules = candidate_matrix["modules"]
+    if not isinstance(modules, list) or len(modules) != 2:
+        raise EvidenceError("candidate module schema is not exact")
+    for module in modules:
+        _exact_fields(module, MODULE_FIELDS, "candidate module")
+        _official_url(module.get("official_product_url"), "candidate module")
+        _official_url(module.get("official_datasheet_url"), "candidate module")
+        _sha256(module.get("source_sha256"), "candidate module")
+    switches = candidate_matrix["switches"]
+    if not isinstance(switches, list) or not switches:
+        raise EvidenceError("candidate switch schema is absent")
+    switch_identities = set()
+    for switch in switches:
+        switch = _exact_fields(switch, SWITCH_CANDIDATE_FIELDS, "candidate switch")
+        identity = _identity(switch)
+        if identity in switch_identities:
+            raise EvidenceError("candidate switch identity is duplicated")
+        switch_identities.add(identity)
+        _official_url(switch.get("official_product_url"), "candidate switch")
+        _official_url(switch.get("official_datasheet_url"), "candidate switch")
+        _sha256(switch.get("source_sha256"), "candidate switch")
+        if switch.get("packaging") != "tape_and_reel":
+            raise EvidenceError("candidate switch packaging is invalid")
+        if switch.get("module_combinations") != []:
+            raise EvidenceError("candidate switch module combinations must be empty")
+    return candidate_matrix
 
 
 def validate_requirements(record: object) -> dict[str, Any]:
@@ -151,6 +565,21 @@ def derive_selected_contact_current_a(
         source.get("official_table"),
     ) != ("Molex", "PS-43045", EXPECTED_MICROFIT_OFFICIAL_TABLE):
         raise EvidenceError("official Micro-Fit derating evidence was altered")
+    expected_provenance = {
+        "official_manufacturer_url": (
+            "https://www.molex.com/content/dam/molex/molex-dot-com/products/"
+            "automated/en-us/productspecificationpdf/430/43045/PS-43045-001.pdf"
+        ),
+        "document_revision": "R",
+        "document_date": "2025-11-14",
+        "table_locator": "Section 4.3, sheet 8 of 24",
+        "source_sha256": (
+            "b5f03865599a0576c43ab82828960d874a12bcc9564eda619750ff9e26a81204"
+        ),
+    }
+    if any(source.get(key) != value for key, value in expected_provenance.items()):
+        raise EvidenceError("official Micro-Fit provenance was altered")
+    _official_url(source["official_manufacturer_url"], "Micro-Fit evidence")
     if qualification.get("selected_circuit_count") != interface["header"].get(
         "positions"
     ):
@@ -161,9 +590,7 @@ def derive_selected_contact_current_a(
         raise EvidenceError("current derating circuit count does not match housing")
     if qualification.get("wire_awg") != interface["wire"].get("power_ground_awg"):
         raise EvidenceError("current derating wire gauge does not match selected wire")
-    reference_circuits = qualification.get(
-        "conservative_reference_circuit_count"
-    )
+    reference_circuits = qualification.get("conservative_reference_circuit_count")
     rows = [
         row
         for row in source["official_table"]["rows"]
@@ -181,11 +608,7 @@ def derive_selected_contact_current_a(
         raise EvidenceError("Micro-Fit temperature-rise derivation is not positive")
     if not 0 < safety_factor <= 0.75:
         raise EvidenceError("engineering safety factor must be within 0..0.75")
-    derived = (
-        base_current
-        * math.sqrt(allowed_rise / official_rise)
-        * safety_factor
-    )
+    derived = base_current * math.sqrt(allowed_rise / official_rise) * safety_factor
     expected_rise = official_rise * (2.0 / base_current) ** 2
     thermal_margin = allowed_rise - expected_rise
     if qualification.get("ambient_c") != 85:
@@ -238,10 +661,8 @@ def validate_reversal_geometry(concept: object) -> None:
         common.get("collar_body_width_mm", 999) >= common.get("aperture_width_mm", 0)
         or common.get("collar_body_height_mm", 999)
         >= common.get("aperture_height_mm", 0)
-        or common.get("key_rib_width_mm", 999)
-        >= common.get("key_slot_width_mm", 0)
-        or common.get("key_rib_depth_mm", 999)
-        >= common.get("key_slot_depth_mm", 0)
+        or common.get("key_rib_width_mm", 999) >= common.get("key_slot_width_mm", 0)
+        or common.get("key_rib_depth_mm", 999) >= common.get("key_slot_depth_mm", 0)
     ):
         raise EvidenceError("matching keyed collar lacks insertion clearance")
     console = concept.get("console", {})
@@ -258,16 +679,18 @@ def validate_reversal_geometry(concept: object) -> None:
     collision_margin = separation - float(common["key_slot_width_mm"])
     if (
         modeled.get("key_offset_separation_mm") != separation
-        or abs(modeled.get("minimum_collision_margin_mm", -1) - collision_margin)
-        > 1e-9
+        or abs(modeled.get("minimum_collision_margin_mm", -1) - collision_margin) > 1e-9
     ):
         raise EvidenceError("wrong-mating collision geometry is inconsistent")
-    if min(
-        console.get("harness_length_mm", 0),
-        motor.get("harness_length_mm", 0),
-        console.get("minimum_service_slack_mm", 0),
-        motor.get("minimum_service_slack_mm", 0),
-    ) <= 0:
+    if (
+        min(
+            console.get("harness_length_mm", 0),
+            motor.get("harness_length_mm", 0),
+            console.get("minimum_service_slack_mm", 0),
+            motor.get("minimum_service_slack_mm", 0),
+        )
+        <= 0
+    ):
         raise EvidenceError("end-to-end harness reach dimensions are absent")
     if concept.get("physical_proof_status") != "OPEN_PENDING_DELIVERED_HARNESS":
         raise EvidenceError("physical wrong-mating proof must remain open")
@@ -276,21 +699,8 @@ def validate_reversal_geometry(concept: object) -> None:
 def validate_module_audits(
     candidates: dict[str, Any], selection: dict[str, Any]
 ) -> None:
-    required = {
-        "pad_map",
-        "strapping_pins",
-        "reserved_pins",
-        "pulls",
-        "adc_drive_capability",
-        "decoupling",
-        "footprint_area_mm2",
-        "reset_rom_brownout_defaults",
-        "used_signal_safe_boot_states",
-        "rf",
-        "flash",
-        "native_usb",
-        "production_evidence",
-    }
+    if not isinstance(candidates, dict) or not isinstance(selection, dict):
+        raise EvidenceError("module audit inputs must be objects")
     modules = {
         item.get("mpn"): item
         for item in candidates.get("modules", [])
@@ -304,7 +714,7 @@ def validate_module_audits(
     wroom = modules["ESP32-S3-WROOM-1-N8"]
     mini = modules["ESP32-S3-MINI-1-N8"]
     for module in modules.values():
-        if not required <= set(module):
+        if not MODULE_AUDIT_FIELDS <= set(module):
             raise EvidenceError(f"{module.get('mpn')} module audit is incomplete")
         if set(module["strapping_pins"]) != {
             "GPIO0",
@@ -312,17 +722,20 @@ def validate_module_audits(
             "GPIO45",
             "GPIO46",
         }:
-            raise EvidenceError(f"{module['mpn']} strapping-pin audit is incomplete")
-        area = (
-            float(module["package_size_mm"]["width"])
-            * float(module["package_size_mm"]["length"])
+            raise EvidenceError(
+                f"{module['mpn']} module strapping-pin audit is incomplete"
+            )
+        area = float(module["package_size_mm"]["width"]) * float(
+            module["package_size_mm"]["length"]
         )
         if abs(float(module["footprint_area_mm2"]) - area) > 1e-9:
             raise EvidenceError(f"{module['mpn']} footprint area is inconsistent")
-        if set(module["used_signal_safe_boot_states"]) != set(
-            wroom["used_gpio_audit"]
-        ):
-            raise EvidenceError(f"{module['mpn']} safe-boot signal audit is incomplete")
+        if set(module["used_signal_safe_boot_states"]) != set(wroom["used_gpio_audit"]):
+            raise EvidenceError(
+                f"{module['mpn']} module safe-boot signal audit is incomplete"
+            )
+        if _audit_sha256(module) != MODULE_AUDIT_SHA256[module["mpn"]]:
+            raise EvidenceError(f"{module['mpn']} module audit values were altered")
     selected_module = selection.get("module", {})
     if (
         selected_module.get("mpn"),
@@ -338,20 +751,36 @@ def validate_module_audits(
 def validate_selection(
     record: object, candidates: object | None = None
 ) -> dict[str, Any]:
-    if not isinstance(record, dict) or record.get("revision") != "C":
+    record = _exact_fields(record, SELECTION_FIELDS, "selection")
+    if record.get("revision") != "C":
         raise EvidenceError("Rev C part selection is required")
     if record.get("status") != "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF":
         raise EvidenceError("selection must remain provisional")
-    if (
-        record.get("placement_status")
-        != "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF"
-    ):
+    if record.get("placement_status") != "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF":
         raise EvidenceError("public stock must not be promoted to placement proof")
     evidence = record.get("official_part_evidence")
     if not isinstance(evidence, dict) or not evidence:
         raise EvidenceError("official part evidence is absent")
-    if not isinstance(candidates, dict):
-        raise EvidenceError("candidate matrix is absent")
+    for evidence_id, item in evidence.items():
+        if not isinstance(item, dict):
+            raise EvidenceError(f"official evidence {evidence_id} is malformed")
+        for key, value in item.items():
+            if key.startswith("official_") and key.endswith("_url"):
+                if key == "official_lcsc_url":
+                    parsed = urlparse(value) if isinstance(value, str) else None
+                    if (
+                        parsed is None
+                        or parsed.scheme != "https"
+                        or parsed.hostname != "www.lcsc.com"
+                    ):
+                        raise EvidenceError(
+                            f"official evidence {evidence_id} LCSC URL is invalid"
+                        )
+                else:
+                    _official_url(value, f"official evidence {evidence_id}")
+            if key.endswith("_sha256"):
+                _sha256(value, f"official evidence {evidence_id}")
+    candidates = validate_candidates(candidates)
     connector_identities = {
         (item.get("manufacturer"), item.get("mpn"), item.get("lcsc_code"))
         for item in candidates.get("connector_candidates", [])
@@ -366,10 +795,38 @@ def validate_selection(
         raise EvidenceError("exact console and motor interfaces are required")
     console = interfaces["console"]
     motor = interfaces["motor"]
+    for interface_name, interface in interfaces.items():
+        expected_fields = set(COMMON_INTERFACE_FIELDS)
+        if interface_name == "motor":
+            expected_fields |= {"unused_positions", "unused_position_treatment"}
+        _exact_fields(interface, expected_fields, f"{interface_name} interface")
+        for element_name, element_fields in INTERFACE_ELEMENT_FIELDS.items():
+            _exact_fields(
+                interface.get(element_name),
+                element_fields,
+                f"{interface_name}.{element_name}",
+            )
+        _exact_fields(
+            interface.get("current_qualification"),
+            CURRENT_QUALIFICATION_FIELDS,
+            f"{interface_name}.current_qualification",
+        )
+        _exact_fields(
+            interface.get("factory_assembly"),
+            {
+                "supplier",
+                "orderable_part_number",
+                "owner_crimping",
+                "continuity_test",
+            },
+            f"{interface_name}.factory_assembly",
+        )
     if console["header"]["mpn"] == motor["header"]["mpn"]:
         raise EvidenceError("console and motor headers must be physically incompatible")
     if (console["housing"]["positions"], motor["housing"]["positions"]) != (8, 10):
-        raise EvidenceError("console/motor physical keying must be 8 versus 10 positions")
+        raise EvidenceError(
+            "console/motor physical keying must be 8 versus 10 positions"
+        )
     for interface_name, interface in interfaces.items():
         header = interface["header"]
         expected_identities = {
@@ -412,24 +869,41 @@ def validate_selection(
         derived_current = derive_selected_contact_current_a(interface, evidence)
         if derived_current < 2.0:
             raise EvidenceError(
-                f"{interface_name} exact Micro-Fit path is below 2.0 A"
+                f"{interface_name} Micro-Fit connector/terminal basis is below 2.0 A"
             )
-        system_rating = evidence["MOLEX-MICROFIT-PS-43045"][
-            "electrical_rating"
-        ]
+        wire_qualification = _exact_fields(
+            interface.get("wire_current_qualification"),
+            {
+                "status",
+                "alpha_3051_dcr_ohm_per_1000ft_at_20c",
+                "microfit_test_conductor",
+                "claim",
+            },
+            f"{interface_name} wire current qualification",
+        )
+        if wire_qualification != {
+            "status": "OPEN_PHYSICAL_WIRE_AMPACITY",
+            "alpha_3051_dcr_ohm_per_1000ft_at_20c": 16.2,
+            "microfit_test_conductor": "22 AWG tinned stranded copper",
+            "claim": "NOT_A_COMPLETE_PATH_CURRENT_QUALIFICATION",
+        }:
+            raise EvidenceError(
+                f"{interface_name} wire current qualification must remain open"
+            )
+        system_rating = evidence["MOLEX-MICROFIT-PS-43045"]["electrical_rating"]
         for element_name in ("header", "housing", "terminal"):
             if interface[element_name].get("rating") != system_rating:
                 raise EvidenceError(
                     f"{interface_name}.{element_name} rating is not evidence-bound"
                 )
         if interface["wire"].get("power_ground_awg", 999) > 22:
-            raise EvidenceError(f"{interface_name} power/ground wire is smaller than 22 AWG")
+            raise EvidenceError(
+                f"{interface_name} power/ground wire is smaller than 22 AWG"
+            )
         wire_evidence = _matching_evidence(interface["wire"], evidence)
         if (
-            interface["wire"].get("power_ground_awg")
-            != wire_evidence.get("wire_awg")
-            or interface["wire"].get("rating")
-            != wire_evidence.get("electrical_rating")
+            interface["wire"].get("power_ground_awg") != wire_evidence.get("wire_awg")
+            or interface["wire"].get("rating") != wire_evidence.get("electrical_rating")
             or set(interface["wire"].get("exact_color_mpns", {}).values())
             != set(wire_evidence.get("exact_color_mpns", []))
         ):
@@ -460,7 +934,12 @@ def validate_selection(
         (item.get("manufacturer"), item.get("mpn"), item.get("lcsc_code"))
         for item in candidates.get("switches", [])
     }
-    for name, switch in record.get("switches", {}).items():
+    switches = record.get("switches")
+    if not isinstance(switches, dict) or set(switches) != {"reset", "boot"}:
+        raise EvidenceError(
+            "switch schema must contain exact reset and boot selections"
+        )
+    for name, switch in switches.items():
         if _identity(switch) != ("ALPSALPINE", "SKRPACE010", "C139797"):
             raise EvidenceError(f"{name} switch identity is not the exact selection")
         _matching_evidence(switch, evidence)
@@ -472,6 +951,8 @@ def validate_selection(
             raise EvidenceError(f"{name} switch identity is not a candidate")
     if record.get("mini_decision") != "REJECTED_UNQUALIFIED":
         raise EvidenceError("MINI must remain rejected without production evidence")
+    if "OPEN_PHYSICAL_WIRE_AMPACITY" not in record.get("open_gates", []):
+        raise EvidenceError("OPEN_PHYSICAL_WIRE_AMPACITY gate is absent")
     _matching_evidence(record.get("module", {}), evidence)
     validate_module_audits(candidates, record)
     validate_reversal_geometry(record.get("reversal_prevention"))
@@ -486,7 +967,7 @@ def remaining_contact_current_a(
     if open_net not in interface["contact_nets"]:
         raise EvidenceError(f"{open_net} is absent")
     # No sharing credit: after one nominally parallel board contact opens, the
-    # remaining new-header/crimp/wire path is assigned the complete load.
+    # remaining connector/terminal contact is assigned the complete load.
     return float(total_current_a)
 
 
@@ -502,26 +983,28 @@ def validate_single_open(
     )
     if derive_selected_contact_current_a(interface, evidence) < assigned:
         raise EvidenceError(
-            f"individual {open_net} Micro-Fit path cannot carry {assigned:.1f} A"
+            f"individual {open_net} Micro-Fit connector/terminal basis "
+            f"cannot carry {assigned:.1f} A"
         )
-    if interface["wire"]["power_ground_awg"] > 22:
-        raise EvidenceError(f"individual {open_net} wire is smaller than 22 AWG")
 
 
-def validate_unequal_case(
-    case: object, *, per_contact_derated_rating_a: float
-) -> None:
-    if not isinstance(case, dict) or case.get("total_current_a") != 2.0:
+def validate_unequal_case(case: object, *, per_contact_derated_rating_a: float) -> None:
+    if not isinstance(case, dict):
+        raise EvidenceError("unequal case schema is invalid")
+    total = _finite_nonnegative(case.get("total_current_a"), "total current")
+    rating = _finite_nonnegative(per_contact_derated_rating_a, "per-contact rating")
+    if total != 2.0:
         raise EvidenceError("unequal case must model exactly 2.0 A total")
     branches = case.get("branch_current_a")
-    if (
-        not isinstance(branches, list)
-        or len(branches) != 2
-        or branches[0] == branches[1]
-        or abs(sum(branches) - 2.0) > 1e-9
-    ):
+    if not isinstance(branches, list) or len(branches) != 2:
+        raise EvidenceError("unequal case branches must contain two finite values")
+    branch_values = [
+        _finite_nonnegative(branch, f"branch {index} current")
+        for index, branch in enumerate(branches)
+    ]
+    if branch_values[0] == branch_values[1] or abs(sum(branch_values) - 2.0) > 1e-9:
         raise EvidenceError("unequal case branches must be unequal and sum to 2.0 A")
-    if per_contact_derated_rating_a < 2.0:
+    if rating < 2.0 or any(branch > rating for branch in branch_values):
         raise EvidenceError("individual contact rating must be at least 2.0 A")
 
 
@@ -530,19 +1013,29 @@ def validate_rj45_normal_case(
 ) -> None:
     if not isinstance(rj45, dict):
         raise EvidenceError("RJ45 termination record is absent")
+    total = _finite_nonnegative(
+        rj45.get("normal_total_current_a"), "RJ45 normal total current"
+    )
     branches = rj45.get("normal_unequal_branch_current_a")
+    if not isinstance(branches, list) or len(branches) != 2:
+        raise EvidenceError("RJ45 normal branches must contain two finite values")
+    branch_values = [
+        _finite_nonnegative(branch, f"RJ45 branch {index} current")
+        for index, branch in enumerate(branches)
+    ]
     if (
-        rj45.get("normal_total_current_a") != 2.0
-        or not isinstance(branches, list)
-        or len(branches) != 2
-        or branches[0] == branches[1]
-        or abs(sum(branches) - 2.0) > 1e-9
+        total != 2.0
+        or branch_values[0] == branch_values[1]
+        or abs(sum(branch_values) - 2.0) > 1e-9
     ):
         raise EvidenceError("RJ45 normal case must be unequal and total 2.0 A")
     if not isinstance(evidence, dict):
         raise EvidenceError("RJ45 official evidence is absent")
     official_rating = evidence.get("electrical_rating", {})
-    published = official_rating.get("published_max_current_per_contact_a", 0)
+    published = _finite_nonnegative(
+        official_rating.get("published_max_current_per_contact_a"),
+        "RJ45 published rating",
+    )
     if rj45.get("published_max_current_per_contact_a") != published:
         raise EvidenceError("RJ45 selected current does not match official evidence")
     if rj45.get("rating") != {
@@ -550,7 +1043,7 @@ def validate_rj45_normal_case(
         for key in ("voltage_v", "temperature_min_c", "temperature_max_c")
     }:
         raise EvidenceError("RJ45 selected rating does not match official evidence")
-    if any(branch > published for branch in branches):
+    if any(branch > published for branch in branch_values):
         raise EvidenceError("RJ45 normal branch exceeds official per-contact rating")
     if official_rating.get("temperature_max_c", -999) < 85:
         raise EvidenceError("RJ45 official rating does not cover +85 C")
@@ -558,25 +1051,38 @@ def validate_rj45_normal_case(
         raise EvidenceError("RJ45 single-open 2 A must remain unsupported")
 
 
-def validate_harness_csv(path: Path, interface: dict[str, Any]) -> None:
+def validate_harness_csv(
+    path: Path, interface_name: str, interface: dict[str, Any]
+) -> None:
     with path.open(newline="", encoding="utf-8") as stream:
-        rows = list(csv.DictReader(stream))
-    if [int(row["rj45_pin"]) for row in rows] != list(range(1, 9)):
-        raise EvidenceError(f"{path.name} must map RJ45 pins 1 through 8 exactly once")
-    if len({row["board_position"] for row in rows}) != 8:
-        raise EvidenceError(f"{path.name} board positions are not one-to-one")
-    if {row["net"] for row in rows} != set(interface["contact_nets"]):
-        raise EvidenceError(f"{path.name} nets do not match the selected interface")
-    for row in rows:
-        pin = int(row["rj45_pin"])
-        if row["net"] != RJ45_NET_BY_PIN[pin]:
-            raise EvidenceError(
-                f"{path.name} pin {pin} must be {RJ45_NET_BY_PIN[pin]}"
-            )
-        if row["net"] in POWER_GROUND_NETS and int(row["wire_awg"]) > 22:
-            raise EvidenceError(f"{path.name} has undersized power/ground wire")
-        if row["continuity_test"] != "<=100mOhm,end-to-end":
-            raise EvidenceError(f"{path.name} continuity limit is not exact")
+        reader = csv.DictReader(stream)
+        if reader.fieldnames != CSV_FIELDS:
+            raise EvidenceError(f"{path.name} CSV schema fields are not exact")
+        rows = list(reader)
+    colors = interface["wire"]["colors"]
+    exact_mpns = interface["wire"]["exact_color_mpns"]
+    expected_rows = []
+    for pin in range(1, 9):
+        color = colors[str(pin)]
+        expected_rows.append(
+            {
+                "rj45_pin": str(pin),
+                "board_position": str(pin),
+                "net": RJ45_NET_BY_PIN[pin],
+                "wire_mpn": f"Alpha-Wire-{exact_mpns[color].replace(' ', '-')}",
+                "wire_awg": "22",
+                "color": color,
+                "label": f"{'C' if interface_name == 'console' else 'M'}-P{pin}",
+                "board_header": interface["header"]["mpn"],
+                "board_housing": interface["housing"]["mpn"],
+                "terminal": interface["terminal"]["mpn"],
+                "rj45_assembly": "TE-1932219-1-carrier-PENDING-FIRM-QUOTE",
+                "strain_relief": "HellermannTyton-151-00745",
+                "continuity_test": interface["factory_assembly"]["continuity_test"],
+            }
+        )
+    if rows != expected_rows:
+        raise EvidenceError(f"{path.name} CSV fabrication tuples are not exact")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -623,10 +1129,14 @@ def main(arguments: Iterable[str] | None = None) -> int:
                 candidates,
             )
             validate_harness_csv(
-                HERE / "console-harness.csv", selection["interfaces"]["console"]
+                HERE / "console-harness.csv",
+                "console",
+                selection["interfaces"]["console"],
             )
             validate_harness_csv(
-                HERE / "motor-harness.csv", selection["interfaces"]["motor"]
+                HERE / "motor-harness.csv",
+                "motor",
+                selection["interfaces"]["motor"],
             )
             validate_unequal_case(
                 {"total_current_a": 2.0, "branch_current_a": [1.35, 0.65]},
@@ -639,15 +1149,21 @@ def main(arguments: Iterable[str] | None = None) -> int:
             )
         if args.release:
             action = args.action or requirements["release_action"]
-            if (
-                selection_path.exists()
-                and action in {"production_release", "deployment", "turnkey_status"}
-            ):
-                raise EvidenceError(
-                    f"provisional selection cannot release {action}"
-                )
+            if selection_path.exists() and action in {
+                "production_release",
+                "deployment",
+                "turnkey_status",
+            }:
+                raise EvidenceError(f"provisional selection cannot release {action}")
             require_release(evidence, action, basis=args.basis)
-    except (EvidenceError, OSError, json.JSONDecodeError) as error:
+    except (
+        EvidenceError,
+        OSError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     print(f"VALID harness requirements status={requirements['status']}")

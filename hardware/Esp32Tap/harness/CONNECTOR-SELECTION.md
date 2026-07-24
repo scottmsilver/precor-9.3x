@@ -42,13 +42,18 @@ the 105 °C connector limit allows 20 °C rise. I²R scaling plus an additional
 `4.0 * sqrt(20 / 30) * 0.75 = 2.449 A/contact`. At the required 2.0 A, the
 expected rise is `30 * (2 / 4)² = 7.5 °C`, leaving 12.5 °C to the connector
 limit. The validator recomputes each result and
-assigns the full 2.0 A load to each remaining new header/terminal/22 AWG wire
-path in turn; it never credits equal sharing. Candidate geometry is explicitly
-modeled, not a completed layout. The DuraClik and TE Micro MATE-N-LOK rows
-remain viable comparison families pending exact live placement and final
-derating proof. The direct-SMT Molex `855437001` / `C588562` RJ45 is retained
-only as the required size baseline and is rejected for the replacement
-interface.
+assigns the full 2.0 A load to each remaining Micro-Fit connector/terminal
+contact in turn; it never credits equal sharing. This does not qualify the
+complete conductor path. Alpha publishes the selected 3051 wire as 22 AWG,
+7/30 tinned copper with 16.2 ohm/1000 ft maximum DC resistance at 20 °C, but
+does not publish an ampacity for this installed assembly. Therefore
+`OPEN_PHYSICAL_WIRE_AMPACITY` remains a release gate until the delivered
+harness passes the physical current, temperature-rise, and voltage-drop test.
+Candidate geometry is explicitly modeled, not a completed layout. The
+DuraClik and TE Micro MATE-N-LOK rows remain viable comparison families
+pending exact live placement and final derating proof. The direct-SMT Molex
+`855437001` / `C588562` RJ45 is retained only as the required size baseline
+and is rejected for the replacement interface.
 
 ## Harness definition and RJ45 exception
 

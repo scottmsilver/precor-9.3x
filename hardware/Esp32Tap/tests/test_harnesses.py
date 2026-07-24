@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import importlib.util
 import json
 from pathlib import Path
@@ -14,9 +15,7 @@ def test_harness_requirements_remain_unselected_while_current_is_unmeasured(
     esp32tap_dir: Path,
 ) -> None:
     requirements = json.loads(
-        (esp32tap_dir / "harness" / "requirements.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "harness" / "requirements.json").read_text(encoding="utf-8")
     )
 
     assert set(requirements) == {
@@ -125,15 +124,18 @@ def test_candidate_matrix_is_complete(esp32tap_dir: Path) -> None:
 
 def test_selected_parts_and_module_policy_are_exact(esp32tap_dir: Path) -> None:
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
     interfaces = selection["interfaces"]
-    assert interfaces["console"]["header"]["mpn"] != interfaces["motor"]["header"]["mpn"]
+    assert (
+        interfaces["console"]["header"]["mpn"] != interfaces["motor"]["header"]["mpn"]
+    )
     assert interfaces["console"]["housing"]["positions"] == 8
     assert interfaces["motor"]["housing"]["positions"] == 10
-    assert interfaces["console"]["terminal"]["mpn"] == interfaces["motor"]["terminal"]["mpn"]
+    assert (
+        interfaces["console"]["terminal"]["mpn"]
+        == interfaces["motor"]["terminal"]["mpn"]
+    )
     assert selection["module"]["mpn"] == "ESP32-S3-WROOM-1-N8"
     assert selection["module"]["lcsc_code"] == "C2913198"
     assert selection["mini_decision"] == "REJECTED_UNQUALIFIED"
@@ -179,9 +181,7 @@ def test_module_and_switch_audits_are_exact(esp32tap_dir: Path) -> None:
 
 def test_selected_official_part_evidence_is_traceable(esp32tap_dir: Path) -> None:
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
     evidence = selection["official_part_evidence"]
 
@@ -210,8 +210,7 @@ def test_selected_official_part_evidence_is_traceable(esp32tap_dir: Path) -> Non
             assert record["stock"]["status"]
             assert len(record["lcsc_html_sha256"]) == 64
             assert (
-                record["placement_status"]
-                == "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF"
+                record["placement_status"] == "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF"
             )
         elif "source_sha256" in record:
             assert len(record["source_sha256"]) == 64
@@ -222,9 +221,7 @@ def test_selected_complete_mating_system_and_open_contacts(
 ) -> None:
     validator = _load_validator(esp32tap_dir)
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
     candidates = json.loads(
         (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
@@ -245,9 +242,12 @@ def test_selected_complete_mating_system_and_open_contacts(
             assert rating["voltage_v"] >= 24
             assert rating["temperature_min_c"] <= -20
             assert rating["temperature_max_c"] >= 85
-        assert validator.derive_selected_contact_current_a(
-            interface, selection["official_part_evidence"]
-        ) >= 2.0
+        assert (
+            validator.derive_selected_contact_current_a(
+                interface, selection["official_part_evidence"]
+            )
+            >= 2.0
+        )
         assert interface["strain_relief"]["environment"] == {
             "temperature_min_c": -40,
             "temperature_max_c": 85,
@@ -270,7 +270,7 @@ def test_unequal_two_amp_case_does_not_take_sharing_credit(
     case = {"total_current_a": 2.0, "branch_current_a": [1.35, 0.65]}
 
     validator.validate_unequal_case(case, per_contact_derated_rating_a=2.0)
-    with pytest.raises(Exception, match="individual"):
+    with pytest.raises(validator.EvidenceError, match="individual"):
         validator.validate_unequal_case(case, per_contact_derated_rating_a=1.99)
 
 
@@ -279,9 +279,7 @@ def test_rj45_normal_unequal_case_supports_two_amps_but_single_open_stays_open(
 ) -> None:
     validator = _load_validator(esp32tap_dir)
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
 
     for interface in selection["interfaces"].values():
@@ -302,13 +300,13 @@ def test_harness_csv_maps_all_rj45_pins_one_to_one(
 
     rows = list(
         csv.DictReader(
-            (esp32tap_dir / "harness" / filename).read_text(encoding="utf-8").splitlines()
+            (esp32tap_dir / "harness" / filename)
+            .read_text(encoding="utf-8")
+            .splitlines()
         )
     )
     assert [int(row["rj45_pin"]) for row in rows] == list(range(1, 9))
-    assert {
-        int(row["rj45_pin"]): row["net"] for row in rows
-    } == {
+    assert {int(row["rj45_pin"]): row["net"] for row in rows} == {
         1: "GND_A",
         2: "+8V_A",
         3: "DATA_A",
@@ -320,7 +318,9 @@ def test_harness_csv_maps_all_rj45_pins_one_to_one(
     }
     assert len({row["board_position"] for row in rows}) == 8
     assert all(row["continuity_test"] == "<=100mOhm,end-to-end" for row in rows)
-    assert all(row["wire_awg"] == "22" for row in rows if row["net"].startswith(("+8V", "GND")))
+    assert all(
+        row["wire_awg"] == "22" for row in rows if row["net"].startswith(("+8V", "GND"))
+    )
 
 
 def test_provisional_selection_binds_every_identity_to_official_evidence(
@@ -328,9 +328,7 @@ def test_provisional_selection_binds_every_identity_to_official_evidence(
 ) -> None:
     validator = _load_validator(esp32tap_dir)
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
     candidates = json.loads(
         (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
@@ -348,18 +346,18 @@ def test_provisional_selection_binds_every_identity_to_official_evidence(
 
     empty_evidence = copy.deepcopy(selection)
     empty_evidence["official_part_evidence"] = {}
-    with pytest.raises(Exception, match="evidence"):
+    with pytest.raises(validator.EvidenceError, match="evidence"):
         validator.validate_selection(empty_evidence, candidates)
 
     invented_header = copy.deepcopy(selection)
     invented_header["interfaces"]["console"]["header"]["mpn"] = "INVENTED"
     invented_header["interfaces"]["console"]["header"]["lcsc_code"] = "C0"
-    with pytest.raises(Exception, match="identity|candidate|evidence"):
+    with pytest.raises(validator.EvidenceError, match="identity|candidate|evidence"):
         validator.validate_selection(invented_header, candidates)
 
     invented_terminal = copy.deepcopy(selection)
     invented_terminal["interfaces"]["motor"]["terminal"]["mpn"] = "INVENTED"
-    with pytest.raises(Exception, match="identity|evidence"):
+    with pytest.raises(validator.EvidenceError, match="identity|evidence"):
         validator.validate_selection(invented_terminal, candidates)
 
 
@@ -368,9 +366,7 @@ def test_selected_two_amp_ratings_are_derived_from_exact_evidence(
 ) -> None:
     validator = _load_validator(esp32tap_dir)
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
     candidates = json.loads(
         (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
@@ -407,35 +403,35 @@ def test_selected_two_amp_ratings_are_derived_from_exact_evidence(
     changed["interfaces"]["console"]["current_qualification"][
         "derived_current_per_contact_a"
     ] = 2.5
-    with pytest.raises(Exception, match="derating|derived"):
+    with pytest.raises(validator.EvidenceError, match="derating|derived"):
         validator.validate_selection(changed, candidates)
 
     changed = copy.deepcopy(selection)
     changed["interfaces"]["motor"]["current_qualification"][
         "selected_circuit_count"
     ] = 8
-    with pytest.raises(Exception, match="circuit"):
+    with pytest.raises(validator.EvidenceError, match="circuit"):
         validator.validate_selection(changed, candidates)
 
     changed = copy.deepcopy(selection)
-    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][
-        "official_table"
-    ]["rows"][0]["current_per_contact_a"] = 4.6
-    with pytest.raises(Exception, match="evidence was altered"):
+    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"]["official_table"][
+        "rows"
+    ][0]["current_per_contact_a"] = 4.6
+    with pytest.raises(validator.EvidenceError, match="evidence was altered"):
         validator.validate_selection(changed, candidates)
 
     changed = copy.deepcopy(selection)
-    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][
-        "official_table"
-    ]["temperature_rise_limit_c"] = 29
-    with pytest.raises(Exception, match="evidence was altered"):
+    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"]["official_table"][
+        "temperature_rise_limit_c"
+    ] = 29
+    with pytest.raises(validator.EvidenceError, match="evidence was altered"):
         validator.validate_selection(changed, candidates)
 
     changed = copy.deepcopy(selection)
-    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][
-        "electrical_rating"
-    ]["temperature_max_c"] = 104
-    with pytest.raises(Exception, match="rating|evidence|derivation"):
+    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"]["electrical_rating"][
+        "temperature_max_c"
+    ] = 104
+    with pytest.raises(validator.EvidenceError, match="rating|evidence|derivation"):
         validator.validate_selection(changed, candidates)
 
     mutations = (
@@ -449,7 +445,7 @@ def test_selected_two_amp_ratings_are_derived_from_exact_evidence(
     for field, value in mutations:
         changed = copy.deepcopy(selection)
         changed["interfaces"]["console"]["current_qualification"][field] = value
-        with pytest.raises(Exception, match="derivation|margin|evidence"):
+        with pytest.raises(validator.EvidenceError, match="derivation|margin|evidence"):
             validator.validate_selection(changed, candidates)
 
 
@@ -461,9 +457,7 @@ def test_module_audits_cover_every_required_safety_field(
         (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
     )
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
     validator.validate_module_audits(matrix, selection)
     modules = {item["mpn"]: item for item in matrix["modules"]}
@@ -507,7 +501,7 @@ def test_module_audits_cover_every_required_safety_field(
     }
     incomplete = copy.deepcopy(matrix)
     del incomplete["modules"][0]["used_signal_safe_boot_states"]["GPIO21"]
-    with pytest.raises(Exception, match="safe-boot"):
+    with pytest.raises(validator.EvidenceError, match="safe-boot"):
         validator.validate_module_audits(incomplete, selection)
 
 
@@ -516,9 +510,7 @@ def test_modeled_reversal_prevention_geometry_rejects_wrong_interface(
 ) -> None:
     validator = _load_validator(esp32tap_dir)
     selection = json.loads(
-        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(
-            encoding="utf-8"
-        )
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
     )
     concept = selection["reversal_prevention"]
 
@@ -531,7 +523,7 @@ def test_modeled_reversal_prevention_geometry_rejects_wrong_interface(
 
     wrong = copy.deepcopy(concept)
     wrong["motor"]["key_offset_x_mm"] = wrong["console"]["key_offset_x_mm"]
-    with pytest.raises(Exception, match="wrong-mating|distinct"):
+    with pytest.raises(validator.EvidenceError, match="wrong-mating|distinct"):
         validator.validate_reversal_geometry(wrong)
 
 
@@ -571,3 +563,322 @@ def test_provisional_harness_release_is_layout_only(esp32tap_dir: Path) -> None:
     )
     assert turnkey.returncode != 0
     assert "provisional selection cannot release turnkey_status" in turnkey.stderr
+
+
+CSV_FIELDS = [
+    "rj45_pin",
+    "board_position",
+    "net",
+    "wire_mpn",
+    "wire_awg",
+    "color",
+    "label",
+    "board_header",
+    "board_housing",
+    "terminal",
+    "rj45_assembly",
+    "strain_relief",
+    "continuity_test",
+]
+
+
+def _csv_rows(path: Path) -> list[dict[str, str]]:
+    return list(csv.DictReader(path.read_text(encoding="utf-8").splitlines()))
+
+
+def _write_csv(
+    path: Path, rows: list[dict[str, str]], fieldnames: list[str] | None = None
+) -> None:
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=fieldnames or CSV_FIELDS,
+            extrasaction="ignore",
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+@pytest.mark.parametrize(
+    ("interface_name", "filename"),
+    (("console", "console-harness.csv"), ("motor", "motor-harness.csv")),
+)
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    (
+        ("rj45_pin", "8"),
+        ("board_position", "2"),
+        ("net", "+8V_B"),
+        ("wire_mpn", "INVENTED-WIRE"),
+        ("wire_awg", "24"),
+        ("color", "violet"),
+        ("label", "WRONG-P1"),
+        ("board_header", "INVENTED-HEADER"),
+        ("board_housing", "INVENTED-HOUSING"),
+        ("terminal", "INVENTED-TERMINAL"),
+        ("rj45_assembly", "INVENTED-RJ45"),
+        ("strain_relief", "INVENTED-RELIEF"),
+        ("continuity_test", "<=999mOhm,end-to-end"),
+    ),
+)
+def test_harness_csv_binds_every_fabrication_column(
+    esp32tap_dir: Path,
+    tmp_path: Path,
+    interface_name: str,
+    filename: str,
+    field: str,
+    bad_value: str,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    rows = _csv_rows(esp32tap_dir / "harness" / filename)
+    path = tmp_path / filename
+    _write_csv(path, rows)
+    validator.validate_harness_csv(
+        path, interface_name, selection["interfaces"][interface_name]
+    )
+
+    rows[0][field] = bad_value
+    _write_csv(path, rows)
+    with pytest.raises(validator.EvidenceError, match="CSV|csv|column|row|exact"):
+        validator.validate_harness_csv(
+            path, interface_name, selection["interfaces"][interface_name]
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "swap_board_positions",
+        "duplicate_row",
+        "missing_row",
+        "extra_row",
+        "missing_header",
+        "extra_header",
+    ),
+)
+def test_harness_csv_rejects_structural_mutations(
+    esp32tap_dir: Path, tmp_path: Path, mutation: str
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    rows = _csv_rows(esp32tap_dir / "harness" / "motor-harness.csv")
+    fieldnames = list(CSV_FIELDS)
+    if mutation == "swap_board_positions":
+        rows[0]["board_position"], rows[1]["board_position"] = (
+            rows[1]["board_position"],
+            rows[0]["board_position"],
+        )
+    elif mutation == "duplicate_row":
+        rows[1] = dict(rows[0])
+    elif mutation == "missing_row":
+        rows.pop()
+    elif mutation == "extra_row":
+        rows.append(dict(rows[-1]))
+    elif mutation == "missing_header":
+        fieldnames.remove("terminal")
+    elif mutation == "extra_header":
+        fieldnames.append("unexpected")
+        for row in rows:
+            row["unexpected"] = "bad"
+    path = tmp_path / "motor.csv"
+    _write_csv(path, rows, fieldnames)
+    with pytest.raises(validator.EvidenceError, match="CSV|csv|column|row|exact"):
+        validator.validate_harness_csv(path, "motor", selection["interfaces"]["motor"])
+
+
+def test_wire_ampacity_remains_an_explicit_physical_gate(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+
+    for interface in selection["interfaces"].values():
+        wire_gate = interface["wire_current_qualification"]
+        assert wire_gate["status"] == "OPEN_PHYSICAL_WIRE_AMPACITY"
+        assert wire_gate["alpha_3051_dcr_ohm_per_1000ft_at_20c"] == 16.2
+        assert wire_gate["microfit_test_conductor"] == "22 AWG tinned stranded copper"
+        assert wire_gate["claim"] == "NOT_A_COMPLETE_PATH_CURRENT_QUALIFICATION"
+    assert "OPEN_PHYSICAL_WIRE_AMPACITY" in selection["open_gates"]
+    validator.validate_selection(selection, candidates)
+
+    changed = copy.deepcopy(selection)
+    changed["interfaces"]["console"]["wire_current_qualification"][
+        "status"
+    ] = "QUALIFIED"
+    with pytest.raises(validator.EvidenceError, match="wire.*ampacity|wire.*open"):
+        validator.validate_selection(changed, candidates)
+
+
+def test_official_provenance_is_exact_and_mutation_resistant(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    expected_url = (
+        "https://www.molex.com/content/dam/molex/molex-dot-com/products/"
+        "automated/en-us/productspecificationpdf/430/43045/PS-43045-001.pdf"
+    )
+    selected = candidates["connector_candidates"][0]
+    evidence = selection["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"]
+    assert selected["official_datasheet_url"] == expected_url
+    assert evidence["official_manufacturer_url"] == expected_url
+    assert evidence["document_revision"] == "R"
+    assert evidence["document_date"] == "2025-11-14"
+    assert evidence["table_locator"] == "Section 4.3, sheet 8 of 24"
+    assert evidence["source_sha256"] == (
+        "b5f03865599a0576c43ab82828960d874a12bcc9564eda619750ff9e26a81204"
+    )
+    validator.validate_selection(selection, candidates)
+
+    for field, value in (
+        ("official_manufacturer_url", "https://example.invalid/fake.pdf"),
+        ("source_sha256", "0" * 64),
+        ("document_revision", "FAKE"),
+        ("table_locator", "nowhere"),
+    ):
+        changed = copy.deepcopy(selection)
+        changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][field] = value
+        with pytest.raises(
+            validator.EvidenceError, match="official|provenance|evidence"
+        ):
+            validator.validate_selection(changed, candidates)
+
+
+@pytest.mark.parametrize(
+    ("branches", "rating"),
+    (
+        ([3.0, -1.0], 3.0),
+        ([float("nan"), 0.65], 3.0),
+        ([float("inf"), 0.0], float("inf")),
+        ([1.6, 0.4], 1.5),
+    ),
+)
+def test_unequal_current_rejects_nonfinite_negative_and_overrating(
+    esp32tap_dir: Path, branches: list[float], rating: float
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    with pytest.raises(validator.EvidenceError, match="finite|nonnegative|rating"):
+        validator.validate_unequal_case(
+            {"total_current_a": 2.0, "branch_current_a": branches},
+            per_contact_derated_rating_a=rating,
+        )
+
+
+def test_selection_schema_is_exact_and_malformed_shapes_are_normalized(
+    esp32tap_dir: Path,
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    validator.validate_selection(selection, candidates)
+
+    mutations = []
+    for key in selection:
+        changed = copy.deepcopy(selection)
+        del changed[key]
+        mutations.append(changed)
+    extra = copy.deepcopy(selection)
+    extra["unexpected"] = True
+    mutations.append(extra)
+    empty_switches = copy.deepcopy(selection)
+    empty_switches["switches"] = {}
+    mutations.append(empty_switches)
+    malformed_interface = copy.deepcopy(selection)
+    malformed_interface["interfaces"]["console"] = []
+    mutations.append(malformed_interface)
+    for changed in mutations:
+        with pytest.raises(
+            validator.EvidenceError, match="schema|fields|switch|interface"
+        ):
+            validator.validate_selection(changed, candidates)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("pad_map", "invented pad map"),
+        ("native_usb", {"dm": "GPIO18", "dp": "GPIO20"}),
+        ("strapping_pins", {"GPIO0": "wrong"}),
+        ("reserved_pins", {"GPIO26-GPIO32": "available"}),
+        ("pulls", {"GPIO0": "none"}),
+        ("adc_drive_capability", {"GPIO4": "output only"}),
+        ("decoupling", {"3v3_bulk": "none"}),
+        ("used_signal_safe_boot_states", {"GPIO21": "relay on"}),
+        ("flash", {"capacity_mb": 4}),
+        ("rf", {"antenna": "external"}),
+    ),
+)
+def test_module_audit_value_mutations_are_rejected(
+    esp32tap_dir: Path, field: str, value: object
+) -> None:
+    validator = _load_validator(esp32tap_dir)
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    selection = json.loads(
+        (esp32tap_dir / "bom" / "REV-C-PART-SELECTION.json").read_text(encoding="utf-8")
+    )
+    changed = copy.deepcopy(candidates)
+    changed["modules"][0][field] = value
+    with pytest.raises(validator.EvidenceError, match="module.*audit|module.*evidence"):
+        validator.validate_module_audits(changed, selection)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "negative_dimension",
+        "bad_volume",
+        "duplicate_candidate",
+        "bad_url",
+        "bad_packaging",
+        "bad_status",
+        "empty_rejection",
+        "missing_module_combination",
+    ),
+)
+def test_candidate_schema_rejects_corruption(esp32tap_dir: Path, mutation: str) -> None:
+    validator = _load_validator(esp32tap_dir)
+    candidates = json.loads(
+        (esp32tap_dir / "harness" / "candidates.json").read_text(encoding="utf-8")
+    )
+    changed = copy.deepcopy(candidates)
+    candidate = changed["connector_candidates"][0]
+    combination = candidate["module_combinations"][0]
+    if mutation == "negative_dimension":
+        combination["pcb_width_mm"] = -1
+    elif mutation == "bad_volume":
+        combination["installed_bounding_volume_mm3"] += 1
+    elif mutation == "duplicate_candidate":
+        changed["connector_candidates"].append(copy.deepcopy(candidate))
+    elif mutation == "bad_url":
+        candidate["official_product_url"] = "https://example.invalid/fake"
+    elif mutation == "bad_packaging":
+        candidate["packaging"] = "loose"
+    elif mutation == "bad_status":
+        candidate["placement_status"] = "PLACED"
+    elif mutation == "empty_rejection":
+        combination["rejection_constraints"] = []
+    elif mutation == "missing_module_combination":
+        candidate["module_combinations"].pop()
+    with pytest.raises(validator.EvidenceError, match="candidate|geometry|schema"):
+        validator.validate_candidates(changed)
