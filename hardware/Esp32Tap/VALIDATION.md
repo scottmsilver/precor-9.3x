@@ -1,14 +1,11 @@
-# Esp32Tap Rev B validation record
+# Esp32Tap Rev C validation record
 
-**Status: HOLD.** This record distinguishes reproducible repository evidence
-from vendor and physical claims. A passing row never promotes an unsupported
-claim to a hardware result.
+**Status: HOLD.** Passing repository gates establish internal consistency
+under declared models, not vendor acceptance or physical treadmill behavior.
 
 **Evidence date:** 2026-07-24
 
-## Canonical gate
-
-Run from the repository root:
+## Canonical repository gate
 
 ```bash
 make -C hardware/Esp32Tap clean-check
@@ -16,163 +13,118 @@ make -C hardware/Esp32Tap check
 git diff --check
 ```
 
-The declared environment is Python 3.12/pytest 8, KiCad/pcbnew 10.0.1,
-host ngspice 42, pinned offline Docker ngspice 39, and pinned Docker OpenSCAD
-2021.01. Reproduction uses only declared source files in a temporary tree and
-rejects undeclared outputs, symlinks, malformed summaries, stale generated
-bytes, or an inexact fabrication set.
+The declared engines include KiCad/pcbnew 10.0.1, host ngspice 42, pinned
+offline Docker ngspice 39, and three repetitions of every simulation deck.
 
-## Repository evidence ledger
+## Evidence ledger
 
-| Area | Gate | Repository result | What it establishes |
-|---|---|---|---|
-| Electrical source | Design invariant and exact pin/type tests | PASS | Treadmill-only local power, direct +8 V/GND pass-through, hardware relay/TX gates, one transfer pole, one feedback pole, DNP and part locks |
-| Schematic | Generated artifact plus KiCad ERC | PASS | Typed Rev B schematic; zero reported errors and warnings |
-| PCB | Inspector, independent validator, KiCad DRC with schematic parity | PASS | 100 × 55 mm four-layer stack, exact pad/net parity, 0 DRC, 0 unconnected pads, 0 footprint errors |
-| USB | Segment/topology/clearance tests | PASS | F.Cu-only pair, zero signal vias, 0.2906/0.2000 mm controlled run, four short 0.20 mm connector breakouts, matched topology, route skew within the declared limit |
-| Antenna | All-layer rule-area and copper audit | PASS | Copper keepout and intentional 6.3 mm module overhang match generated geometry |
-| Assembly | Design↔schematic↔PCB↔BOM↔CPL audit | PASS | Exact populated/DNP sets, flags, codes, packages, quantities, positions, layers, and rotations |
-| Fabrication | Clean export, normalized metadata, archive comparison | PASS | Exact 13-member four-layer Gerber/drill/job package with deterministic ZIP bytes |
-| Enclosure | Pinned fresh render, canonical geometry, Trimesh and functional probes | PASS | Checked meshes match SCAD; each is one connected watertight body; declared cavity/openings/posts/antenna void exist |
-| Firmware contract | Host safety model and manifest-builder tests | PASS as host reference | Deadline ordering, ownership, freshness, feedback, fail-closed transitions, and build-manifest policy |
-| Parts | Official-page parser plus recent BOM-bound snapshot | PASS at recorded instant | Exact identity/class/package and public assembly stock for all 43 unique populated codes |
+| Area | Result | Repository-supported statement |
+|---|---|---|
+| Schematic | PASS | Typed Rev C schematic; ERC policy clean |
+| PCB | PASS | 95 × 58 mm, four layers, exact net/pad parity, DRC/parity clean |
+| Antenna | PASS | U1 fully on-board; 3.25/3.30 mm margins; exact stock all-layer keepout |
+| USB | PASS | F.Cu-only, no signal vias, cycle-free planar topology, both A/B paths matched |
+| Power | PASS under model | Exact 2 A trace-union solve plus conservative independent GND-via envelope |
+| Assembly | PASS | Design↔schematic↔PCB↔BOM↔CPL identity and placement parity |
+| Fabrication | PASS | Exact deterministic 13-member package |
+| Simulations | PASS under models | Eight decks × three runs on host 42 and Docker 39 |
+| Firmware | Host reference only | Safety state-machine and manifest policy tests |
 
-The DRC policy contains one intentional ignored check: silkscreen clipped by
-the board edge at the module's off-board antenna geometry. The validator
-requires that exact ignored set and rejects additions.
+## Board geometry and routing
 
-The final buck input layout was independently replayed after rerouting. The
-U2 VIN pin-to-C4 path is 2.052 mm and C4-to-required-C3 path is 2.154 mm:
-4.206 mm total on 0.60 mm F.Cu with no via. C4 and C3 ground branches reach
-their vias in 1.229 and 1.030 mm; U2 ground reaches its via in 0.486 mm. The
-bootstrap path is 2.205 mm and its complete modeled copper loop is 6.592 mm.
-These measurements close the earlier placement/layout defect; switching
-ripple, loop stability, EMI, and thermal behavior remain physical gates.
+- Finished outline: 95.0 × 58.0 mm.
+- U1 body-to-finished-edge margins: 3.25 and 3.30 mm.
+- J1/J2: SMT Micro-Fit `430450809`/`430451010`; RJ45 is external pigtail
+  hardware only.
+- USB shortest paths:
+  D− A/B 60.0528786214/59.0528786214 mm,
+  D+ A/B 60.0528777233/59.0528777233 mm.
+- D+/D− per-side skew: 0.0000008981 mm.
+- Controlled USB geometry: 0.2906 mm width and 0.2000 mm edge gap.
 
-## Current artifact identity
+## Exact PCB power model
 
-These hashes identify the repository evidence reviewed here. They do not
-replace a vendor preview or physical validation.
+At 2.0 A the emitted-copper planar-union solve gives:
+
+| Quantity | Result |
+|---|---:|
+| +8 V resistance | 18.745090 mΩ |
+| Conservative trace-only GND resistance | 19.665484 mΩ |
+| Supply-plus-return drop | 76.821149 mV |
+| +8 V maximum via current | 1.131922 A |
+| +8 V maximum via rise | 15.234166 °C |
+| +8 V maximum via I²R | 1.864230 mW |
+| Maximum F/B track rise | 6.660309 °C |
+
+The graph splits intersections and collinear overlaps, unions coincident
+same-layer copper, preserves distinct parallel routes, and rejects duplicate
+intended via occurrences.
+
+In1 plane sharing is not solved exactly. Therefore each 1.4/1.0 mm GND via is
+also qualified independently at the full 2.0 A using 20 µm barrel plating:
+12.273573 °C rise and 2.328020 mW I²R. This is a conservative envelope, not
+an installed thermal result. The 20 µm assumption is the IPC-6012 Class 2
+average-hole-copper basis described by JLC; live quote/DFM confirmation is
+mandatory.
+
+## Eight-deck ngspice evidence
+
+`input_protection`, `tread_permission`, `safety_truth_table`,
+`relay_drive_release`, `vbus_present`, `buck_averaged`, `uart_taps`, and
+`harness_supply_drop` each run three times on both engines. Representative
+supported values remain recorded in `sim/README.md`; `sim/assertions.json` is
+the pass/fail authority.
+
+The exact machine-readable harness unsupported list is:
+
+- `RJ45_SINGLE_OPEN_2A`
+- `MINIMUM_VIN`
+- `SOURCE_IMPEDANCE`
+- `AMBIENT_THERMAL`
+- `TRANSIENT_RESPONSE`
+- `COMPLETE_INSTALLED_DROP`
+- `USB_RETURN_CURRENT`
+- `ESD`
+- `RF`
+- `SWITCHING_LOOP`
+
+Scenario-specific unsupported simulation claims also remain unsupported:
+PPTC thermal behavior; vendor diode leakage; out-of-envelope surges; real
+treadmill rail/surge timing; regulator current-limit/thermal behavior; gate
+propagation/partial-power leakage; RF coupling; relay contact motion and
+guaranteed inductance; BC817 transient/combined-temperature saturation;
+native USB attach/enumeration/eye margin; switching-loop margin/ripple/EMI;
+vendor-model startup; real UART integrity/leakage; and all physical enclosure
+effects.
+
+## Current local artifact identity
 
 | Artifact | SHA-256 |
 |---|---|
-| `kicad/Esp32Tap.kicad_pcb` | `c7395baac4170cefbfe51abe2c4239e03ccb7acf7c11d635925947489fefa8aa` |
-| `kicad/Esp32Tap-gerbers.zip` | `d768bb9a57c9d905c51c2cc6d3dcfcbb78cf1efbf972fec8cb65f85152ad5ddd` |
-| `bom/BOM.csv` | `58fd75503d1d6af46115d48dd2a150731eb25bb720ef6c99a0cbf018ad2d340d` |
-| `bom/CPL-positions.csv` | `4274b34c245ced0972235424dcd430626b52bf113d36990ea82fc58991b9b160` |
-| `bom/JLC-STOCK-SNAPSHOT.json` | `6b7bd004e8121ca75cdd4b373ac8278e1670075b0626e9f14815498ee8e95284` |
-| `vendor/JLC-DFM-REVIEW.json` | `ce15b9bd47330ecd8f9aed32053faf3d0df0e7309768b0bf69c6f8383835efd7` |
-| `enclosure/esp32tap_base.stl` | `4ec0ed81e3127cb441fa7fde67e19e435497c6f442c73ff881d35fcdc3162b77` |
-| `enclosure/esp32tap_lid.stl` | `b61b33f5d91865cfa4b9e02049225de65f293b3328e116cb94a99d0aae9a3468` |
+| `kicad/Esp32Tap.kicad_pcb` | `af6208addc4253620bfacf9dbca51c0963ef676910b3934d1bcf307996803f1a` |
+| `kicad/Esp32Tap-gerbers.zip` | `219562b21c51bf71e11474c5ea3fae9b698c56b279ad1a41950b440381507ed5` |
+| `bom/BOM.csv` | `9e972a4008ede233bc63c19e05d1b15e43d6e0e15094e2106f43ec3737647f7c` |
+| `bom/CPL-positions.csv` | `977f1a0ac2ba081d7f5c49f900a9250c8c2d5c26de7ca02cec59130619426e87` |
 
-## Dual-ngspice evidence
+These identify repository bytes only. The operator-observed
+`vendor/JLC-DFM-REVIEW.json` is bound to an older archive and must not be
+presented as review of these bytes.
 
-Seven decks run three times on both engines. The assertion manifest fixes
-engine identity, supported measurements, tolerances, and unsupported claims.
-Representative values are:
+## Open vendor and physical gates
 
-| Deck | Supported result |
-|---|---|
-| Input protection | 8 V protected VIN 7.60–7.625 V; 20 V pulse VIN peak 12.531 V; modeled TVS pulse energies within declared bound |
-| Tread permission | UV rising 6.224–6.600 V; OV rising 10.300–10.928 V; modeled OV disable 36.1 µs |
-| Truth table | All 16 combinations match both hardware-AND equations; unpowered outputs low |
-| Relay drive/release | Coil 18.79–23.90 mA; conservative forced beta 8.83; Q1 peak 12.27 V |
-| VBUS presence | Active-low assertion in 4.083 µs; worst modeled unplug-to-high 1.912 ms; dead-domain injection zero in the isolated-gate model |
-| Averaged buck | 90% startup 4.495 ms; 450 mA step minimum 3.233 V |
-| UART taps | 1.110 µs rise; 0.286/0.572 mA one/two-tap unpowered injection |
+- live current ZIP/BOM/CPL placement and production CAM review;
+- stack/impedance and 20 µm barrel-plating confirmation;
+- J3 plated mechanical stakes accepted under normal top-side reflow, without
+  manual/wave processing;
+- carrier/rails/tooling/depanel details for the 58 mm board axis;
+- exact turnkey Micro-Fit-to-RJ45 pigtail drawings and quote;
+- current enclosure quote, material, fit, installed clearance, and RF tests;
+- treadmill source, minimum VIN, transient, complete installed drop, ambient,
+  current, and thermal measurements;
+- RJ45 single-open 2 A qualification;
+- relay contact timing/bounce/weld/temperature and 1,000 transitions;
+- native USB attach/enumeration/unplug/eye/ground-current tests;
+- production ESP-IDF binary, WDT/brownout, security, and safety matrix.
 
-Host/Docker and repeat-to-repeat values agree within the manifest tolerances.
-See `sim/README.md` and `sim/assertions.json` for every measure and source
-assumption.
-
-## Enclosure evidence
-
-| Mesh | SHA-256 | Bodies | Volume |
-|---|---|---:|---:|
-| `esp32tap_base.stl` | `4ec0ed81e3127cb441fa7fde67e19e435497c6f442c73ff881d35fcdc3162b77` | 1 | 47,294.952 mm³ |
-| `esp32tap_lid.stl` | `b61b33f5d91865cfa4b9e02049225de65f293b3328e116cb94a99d0aae9a3468` | 1 | 30,663.317 mm³ |
-
-The fresh render is compared by canonical triangle geometry, not raw facet
-order. Both meshes are watertight, winding-consistent, and have exactly two
-faces incident to every welded edge. RJ45 centers are derived from the PCB as
-12.445 and 41.445 mm. The enclosure leaves 15.0 mm axial clearance beyond the
-module antenna end; it is not an all-direction clearance.
-
-## Stock evidence
-
-`bom/JLC-STOCK-SNAPSHOT.json` records 43 exact parts for build quantity two,
-with a BOM SHA-256 binding and official exact-page URLs. The recorded check is
-`2026-07-24T09:16:59Z`. The smallest recorded assembly-stock ratio is the
-54602-908LF RJ45: 3,484 available against four required.
-
-`overseasStockCount` is treated as the public JLC assembly-stock field.
-`canPresaleNumber` is retained as non-gating pre-order evidence because it can
-be zero while the official page reports substantial assembly stock. The gate
-rejects a snapshot older than 24 hours; refresh immediately before any vendor
-review.
-
-This does not establish assembly service compatibility, feeder choice,
-placement acceptance, current price, or continuing availability.
-
-## Operator-observed exact-archive online JLCDFM evidence
-
-`vendor/JLC-DFM-REVIEW.json` binds the operator record to the local fabrication
-archive by SHA-256 and records the displayed 100 × 55 mm, four-layer result.
-It is not a vendor-signed result or independent proof of upload provenance.
-During the observed run, the online tool reported zero danger results for
-copper, soldermask, and silkscreen; both silkscreen-to-pad and
-silkscreen-to-hole were `0, 0, 0`. The record preserves every displayed raw
-red/orange/green count. Its `actionable_danger_count` becomes zero only after
-the four raw slot-width dangers receive the documented engineering
-disposition; it is not a claim that JLC displayed an all-green result.
-
-Those four raw red results are the 0.600 mm plated shield slots in J3's
-official connector land pattern. The viewer's generic danger threshold is
-0.61 mm, while the slots exceed JLC's published multilayer/general minimum
-slot capability. They are accepted as a generic-rule false positive without
-altering the connector footprint. Production CAM must still accept them.
-Online DFM confirms file parsing and measured artwork only. It does not close
-production CAM, impedance, carrier, assembly-fixture, placement, or
-substitution gates.
-
-## Explicitly unsupported
-
-- Actual treadmill +8 V range, source impedance, ripple, surge repetition,
-  startup, current capacity, brownout, and Wi-Fi/BLE load behavior.
-- PPTC thermal trip/reset, TVS repetitive stress, capacitor DC-bias/temperature
-  derating, and TPS54202 switching-loop/EMI performance.
-- Real dead-board leakage, line levels, source impedance, edge quality, and
-  serial timing margin.
-- Relay operate/release/bounce/weld behavior, contact temperature, and
-  contact-measured fault-to-NC latency.
-- Native USB ROM/reset attach, enumeration, unplug, and eye margin.
-- USB-host/treadmill ground potential, connection current, bonding, and any
-  required isolation before simultaneous attachment.
-- RF range under the treadmill hood and radio coexistence.
-- Production ESP-IDF behavior, exact binary identity, watchdog action, and
-  the complete safety matrix.
-- JLC production CAM and stackup/impedance acceptance, carrier treatment for
-  the antenna overhang, BOM/CPL placement preview, substitutions, and the
-  mixed SMT/THT assembly process and fixtures.
-- Physical connector fit, resin shrink/warp, screw fit, installed clearance,
-  and JLC3DP material acceptance.
-
-## Physical acceptance gates
-
-Before any treadmill contact, archive evidence against one production
-`bundle_sha256` and perform:
-
-1. rail, current, thermal, surge, brownout, and converter ripple/startup tests;
-2. unpowered through-bus loading and serial waveform tests;
-3. active-low VBUS presence plus reset/ROM/enumeration/unplug tests;
-4. relay and TX hardware truth table, fault injection, feedback, and stable-NC
-   timing measurements;
-5. at least 1,000 contact-observed normal transitions with no MOT6 byte or
-   frame splice;
-6. three-hour load/thermal and radio-coexistence tests;
-7. enclosure plug, mounting, material, and RF tests;
-8. Proxy-only first treadmill contact, followed later by separately authorized
-   Emulate testing.
-
-Until those applicable gates and vendor review are recorded, the correct
-decision remains HOLD.
+Until those applicable gates are closed and the owner authorizes purchase, the
+correct decision remains HOLD.

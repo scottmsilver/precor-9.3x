@@ -1,183 +1,126 @@
-# Esp32Tap Rev B engineering review
+# Esp32Tap Rev C engineering review
 
-**Status: HOLD.** Repository-closeable design checks are separated from the
-vendor, production-firmware, and physical evidence that still does not exist.
-This report is not authorization to fabricate, pay, or operate a treadmill.
+**Status: HOLD.** This report is not authorization to fabricate, pay, deploy,
+or operate a treadmill.
 
 ## Executive conclusion
 
-The confirmed pre-fabrication defects that triggered the redesign have been
-addressed in source:
+Rev C is internally coherent under the checked repository models:
 
-- USB VBUS no longer powers the board or relay.
-- Treadmill-derived voltage permission independently gates relay power and the
-  motor transmit buffer.
-- The relay uses one signal pole and one feedback pole instead of parallel
-  signal contacts.
-- The coil is the 5 V Omron part and is driven from a gated 5 V LDO through a
-  BC817-40 with a 560 Ω base resistor.
-- The protected input, TVS, local ceramics, output capacitors, and TPS54202
-  feed-forward network were revised.
-- Receive taps are 10 kΩ, reducing modeled dead-board injection.
-- Native USB is a short, matched, F.Cu-only pair on a declared four-layer
-  stackup.
-- The antenna keepout, board test access, enclosure connector centers,
-  antenna void, posts, and meshes are generated and independently checked.
-- Schematic, PCB, BOM, CPL, reports, Gerbers, stock evidence, and meshes now
-  have fail-closed reproduction gates.
+- 95 × 58 mm four-layer PCB;
+- U1 fully inside the board with 3.25/3.30 mm margins and its stock all-layer
+  manufacturer keepout intact;
+- SMT Micro-Fit board interfaces and separate turnkey RJ45 pigtail concept;
+- serial +8 V as the only board power source and USB as data-only;
+- hardware-qualified relay and TX permissions;
+- cycle-free, via-free, closely matched native USB routing;
+- exact 2 A emitted-copper trace-union analysis with independent GND-via
+  envelope;
+- exact schematic/PCB/BOM/CPL/fabrication parity;
+- eight repeated dual-engine behavioral simulation decks.
 
-That is enough to call the design internally coherent. It is not enough to
-call the product physically validated.
+This closes repository-detectable consistency defects. It does not close
+vendor, harness, firmware, or physical safety work.
 
-## Safety path review
+## Safety and power architecture
 
 ```text
-J1/J2 +8 V pass-through
+Micro-Fit J1/J2 serial +8 V pass-through
         |
         +-- F1 -- D1 -- VIN -- U2 ------------------------- +3V3
                          |                                   |
-                         +-- D3 clamp                        +-- U6 AND gates
+                         +-- D3 clamp                        +-- U6 gates
                          +-- U4 voltage window                   |
-                         +-- U5 gated 5 V relay supply           +-- U7 TX buffer
+                         +-- U5 gated relay supply               +-- U7 TX
 
 RELAY_GATE = RELAY_CMD AND TREAD_OK
 TX_GATE    = TX_ENABLE AND TREAD_OK
 ```
 
-| Condition | Pole A | TX path | Repository-supported statement |
-|---|---|---|---|
-| No board power | NC bypass | High impedance | Passive topology and generated connectivity agree |
-| Boot/reset | Command pull-downs request bypass | Disabled | Static circuit behavior is fail-to-bypass |
-| Proxy | NC bypass | Disabled | Console path does not need firmware forwarding |
-| Emulate request without TREAD_OK | NC bypass requested | Disabled | U6 blocks both permissions in hardware |
-| Qualified Emulate | NO connects TX_DRV to MOT6 | Enabled | Requires firmware ordering and measured feedback |
-| Power/permission loss | Coil supply and TX permission fall | Disabled | Electrical decay is modeled; contact closure time remains unmeasured |
+USB VBUS ends in protection, bypass, discharge, and presence detection. It has
+no local-power path. The USB and treadmill grounds are common, so safe
+simultaneous attachment remains a bench gate.
 
-Single-fault limitations remain. Pole-B feedback is an armature proxy, not
-direct continuity sensing of pole A. A common gate fault, open suppression
-part, welded signal contact, component misload, or layout/manufacturing defect
-can defeat an assumption. The treadmill safety key is authoritative.
+The relay's feedback pole is an armature proxy, not direct continuity sensing
+of the transfer pole. Contact operation, release, bounce, weld behavior, and
+fault-to-stable-NC time remain unsupported.
 
-## Electrical disposition
+## PCB power disposition
 
-### Input and rails
+The exact 2 A trace-union solve gives:
 
-The local branch uses a 0.75 A/24 V PPTC, SS34 series diode, SMBJ10A TVS,
-100 µF bulk, two 10 µF/25 V X7R ceramics, and local 100 nF bypass. The
-TPS54202 starting network is 10 µH, two 22 µF/25 V X7R outputs, 100 kΩ /
-22 kΩ feedback, and 56 pF feed-forward compensation.
+- +8 V: 18.745090 mΩ;
+- conservative trace-only GND: 19.665484 mΩ;
+- combined loop drop: **76.821149 mV**.
 
-U4's modeled protected-VIN release/trip corners are approximately 6.22–6.60 V
-for undervoltage recovery and 10.30–10.93 V for overvoltage trip. These are
-not treadmill-connector limits; D1 drop, cable drop, source impedance, noise,
-temperature, and actual component tolerances must be measured.
+Coincident trace primitives are treated as one physical copper union, while
+geometrically separate branches remain parallel. Duplicate coincident
+intended vias fail validation.
 
-The ngspice buck deck is an averaged energy-envelope model. It supports a
-4.495 ms 90% startup and 3.233 V minimum for the declared 450 mA load step.
-It does not establish TPS54202 control-loop margin, ripple, EMI, pulse
-skipping, thermal margin, or production capacitor derating.
+At the worst exact +8 V case, maximum via current is 1.131922 A, barrel rise
+is 15.234166 °C, and I²R is 1.864230 mW. The trace model does not solve In1
+plane current sharing, so every 1.4/1.0 mm GND via receives a separate
+full-2.0-A envelope: 12.273573 °C and 2.328020 mW at 20 µm plating.
 
-### Relay path
+Twenty micrometres is the IPC-6012 Class 2 average PTH copper basis cited by
+JLC, not measured delivered copper. The live quote/DFM must confirm it.
+Complete installed drop, ambient temperature, airflow, solder joints, RJ45
+terminations, treadmill source impedance, and transients remain unsupported.
 
-The 5 V/237 Ω relay draws 18.79–23.90 mA across declared coil corners.
-The conservative drive case yields 1.82 mA base current, 16.11 mA coil
-current, 4.20 V across the high-resistance coil, and forced beta 8.83.
-The SMAJ6.0CA suppression model keeps Q1 peak voltage at 12.27 V and provides
-faster current decay than an ordinary flyback diode under the assumed
-0.1/0.5/1 H sweep.
+## USB disposition
 
-Coil-current decay is not contact movement. Operate, release, bounce, welding,
-three-hour temperature, and fault-to-stable-NC timing remain bench gates.
+USB stays on F.Cu with zero signal vias. The controlled sections use
+0.2906 mm traces and a 0.2000 mm edge gap. Exact shortest paths are:
 
-### Serial and USB
+| Side | D− | D+ | Skew |
+|---|---:|---:|---:|
+| A | 60.0528786214 mm | 60.0528777233 mm | 0.0000008981 mm |
+| B | 59.0528786214 mm | 59.0528777233 mm | 0.0000008981 mm |
 
-Both passive receive taps are 10 kΩ. The modeled 10–90% rise is 1.110 µs
-against a 104.167 µs bit, while one/two simultaneous unpowered injections are
-0.286/0.572 mA. Real cable capacitance, source impedance, ESP32 leakage, clamp
-behavior, and framing margin require a scope and actual hardware.
+Production stack/impedance, native USB ROM/reset attachment, enumeration,
+unplug behavior, eye margin, and USB/treadmill return current remain open.
 
-USB VBUS terminates in protection, bypass, discharge, and the Q2 presence
-detector. It has no local-power path. J3 signal ground and shield are directly
-tied to board/treadmill ground, so the interface is not galvanically isolated;
-safe host-to-treadmill ground potential, connection current, and
-isolation/bonding must be established before simultaneous attachment. The USB
-pair is routed entirely on F.Cu with zero signal vias. Its controlled run uses
-0.2906 mm width and a 0.2000 mm edge gap; four short connector-breakout
-segments use 0.20 mm width. Generated total-route skew is approximately
-0.012 mm. The controlled dimensions match JLC's current calculator for the
-selected stack. Production stackup and impedance still require vendor
-confirmation, followed by enumeration and eye-margin testing.
+## Interfaces and manufacturing
 
-## Layout and manufacturing disposition
+J1/J2 are `430450809` and `430451010` right-angle SMT Micro-Fit headers. The
+external treadmill interfaces require two separately quoted, keyed,
+dimensioned Micro-Fit-to-RJ45 pigtails. Their RJ45 source, pin mapping, crimp,
+strain relief, continuity/pull testing, and single-open 2 A behavior are not
+qualified.
 
-- Board outline: 100.0 × 55.0 mm.
-- Copper: F.Cu, In1.Cu, In2.Cu, and B.Cu.
-- In1.Cu is one GND zone and is continuous beneath the USB corridor, apart
-  from normal antipads; the antenna region has an explicit all-layer keepout.
-- The project records `JLC04161H-7628` geometry and a 90 Ω USB netclass.
-- ERC reports zero errors and warnings under the committed severity policy.
-- The combined DRC/schematic-parity report records zero DRC violations, zero
-  unconnected pads, and zero footprint errors. The locked ignored item is the
-  intentional silkscreen clipping associated with the off-board antenna
-  geometry.
-- The rerouted buck input path from U2 through local C4 to required C3 is
-  4.206 mm total, 0.60 mm wide, and via-free. The bootstrap connection is
-  2.205 mm and its copper loop is 6.592 mm. Independent replay found no
-  remaining prototype-layout blocker; physical ripple, load-step, EMI, and
-  thermal checks remain open.
-- The deterministic archive has exactly 13 expected members, including both
-  inner copper layers, Excellon drill data, and Gerber job metadata.
-- Fabrication silkscreen intentionally contains only 15 semantic labels; it
-  omits footprint outlines and reference designators. Assembly identity and
-  orientation must be checked against the PCB source, BOM/CPL, retained
-  polarity/pin labels, and vendor placement preview.
-- Assembly audit binds design, schematic, PCB, DNP flags, BOM, CPL, LCSC code,
-  class, package, position, layer, and rotation.
-- An operator observed the exact archive complete JLC's online PCB DFM
-  analysis. The sanitized SHA-bound record preserves four raw red slot-width
-  results and their explicit engineering disposition against measured
-  geometry and published capability, leaving zero unresolved actionable
-  dangers. The record is not vendor-signed or independent upload-provenance
-  evidence, and it is not production CAM approval.
+J3 is a standard-reflow USB-C part. Its four plated S1 holes are mechanical
+stakes in the stock footprint; no manual/wave operation is requested.
 
-The ESP32 module extends 6.3 mm beyond the finished board edge. JLC must
-approve the production carrier/panel treatment without copper or metal near
-the antenna. Because the board's short axis is 55 mm and Standard PCBA
-publishes a 70 mm minimum, generic 5 mm process rails are not enough; require
-a dimensioned carrier/fixture and depanel drawing. J1/J2 are cataloged for
-wave soldering and require an assembly fixture, so the actual mixed SMT/THT
-process, seating, pallet/fixture, and quote must also be confirmed. Do not
-infer any of those approvals from local DRC or the online DFM result.
+U1 is fully on-board with the locked margins above. The 58 mm short axis still
+requires a dimensioned vendor response for carrier/rails, tooling, fiducials,
+tabs, support, depanelization, and delivered-edge treatment.
 
-## Enclosure disposition
+The existing operator-observed online JLCDFM JSON is preserved as historical
+evidence bound to an older archive. A new live review must use the current
+exact 13-member ZIP together with its exact BOM, CPL, and placement preview.
 
-The checked meshes are regenerated from pinned OpenSCAD source. Independent
-mesh checks find one connected, watertight, consistently wound body per file.
-Functional probes cover the 100 × 55 mm cavity, mounting posts, both RJ45
-openings, USB overmold access, lid reliefs, and the 15 mm antenna void.
-That antenna clearance is axial beyond the antenna end, not 15 mm in every
-direction.
+## Simulation and evidence boundary
 
-Physical plug fit, material shrink/warp, screw behavior, installed clearance,
-RF range, and JLC3DP acceptance remain open.
+Eight decks run three times on host ngspice 42 and pinned Docker ngspice 39:
+input protection, treadmill permission, safety truth table, relay drive,
+VBUS presence, averaged buck, UART taps, and harness supply drop.
 
-## Evidence boundaries
+The exact harness unsupported list remains `RJ45_SINGLE_OPEN_2A`,
+`MINIMUM_VIN`, `SOURCE_IMPEDANCE`, `AMBIENT_THERMAL`,
+`TRANSIENT_RESPONSE`, `COMPLETE_INSTALLED_DROP`, `USB_RETURN_CURRENT`, `ESD`,
+`RF`, and `SWITCHING_LOOP`. The simulation manifest additionally keeps
+device thermal/leakage, real surge/rail behavior, relay contact motion,
+native-USB channel behavior, regulator switching/EMI, real UART integrity,
+and physical enclosure/RF effects unsupported.
 
-The current stock snapshot binds 43 exact JLC/LCSC identities to the BOM for a
-two-board quantity. It was read from official anonymous JLC part-detail pages
-and expires after 24 hours. Stock is not a quote, placement acceptance, or
-permission to substitute.
-
-`firmware/safety_model.py` exercises lease, deadline, freshness, relay
-transition, feedback, reset, and watchdog semantics on the host. No production
-ESP-IDF application is present. No repository test can prove its GPIO timing,
-watchdog release, native USB behavior, radio coexistence, or treadmill safety.
+The host firmware model is not production ESP-IDF firmware and cannot prove
+GPIO timing, watchdog release, brownout behavior, security, radio coexistence,
+or treadmill safety.
 
 ## Recommendation
 
-Keep the package on HOLD. The next permitted activity is read-only vendor
-review of the exact regenerated archive/BOM/CPL and both meshes. If that review
-is clean, the owner may decide whether to authorize a current-limited
-verification prototype while explicitly accepting that physical evidence can
-only be gathered after assembly. Production operation remains blocked by the
-firmware and complete bench matrices.
+Keep HOLD. The next allowed actions are read-only/live vendor reviews of the
+current exact ZIP/BOM/CPL, 20 µm barrel plating, standard-reflow J3 stakes,
+carrier/rails, pigtail drawings, and enclosure quote. Purchase requires owner
+authorization after those reviews. First treadmill contact remains Proxy-only
+with relay energization compiled out; Emulate requires a later explicit gate.
