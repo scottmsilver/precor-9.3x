@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import shutil
@@ -32,19 +33,23 @@ def _sample_report() -> dict[str, object]:
         "schema_version": 1,
         "board": {
             "outline": {
-                "min": [100.0, 100.0],
-                "max": [200.0, 155.0],
-                "width_mm": 100.0,
-                "height_mm": 55.0,
+                "min": [100.0, 97.0],
+                "max": [195.0, 155.0],
+                "width_mm": 95.0,
+                "height_mm": 58.0,
             },
             "footprints": {
                 "J1": {
-                    "at": [112.5, 108.0],
+                    "at": [112.5, 111.0],
+                    "fabrication_body_bbox": {
+                        "min": [100.065, 103.125],
+                        "max": [110.075, 118.875],
+                    },
                     "pads": {
                         str(index): {
                             "at": [
-                                112.5 if index % 2 else 115.04,
-                                108.0 + 1.27 * (index - 1),
+                                114.815 if index <= 4 else 110.185,
+                                106.5 + 3.0 * ((index - 1) % 4),
                             ]
                         }
                         for index in range(1, 9)
@@ -52,24 +57,30 @@ def _sample_report() -> dict[str, object]:
                 },
                 "J2": {
                     "at": [112.5, 137.0],
+                    "fabrication_body_bbox": {
+                        "min": [100.065, 127.625],
+                        "max": [110.075, 146.375],
+                    },
                     "pads": {
                         str(index): {
                             "at": [
-                                112.5 if index % 2 else 115.04,
-                                137.0 + 1.27 * (index - 1),
+                                114.815 if index <= 5 else 110.185,
+                                131.0 + 3.0 * ((index - 1) % 5),
                             ]
                         }
-                        for index in range(1, 9)
+                        for index in range(1, 11)
                     },
                 },
-                "J3": {"at": [196.2, 136.5], "pads": {}},
-                "MH1": {"at": [102.9, 126.5], "pads": {}},
-                "MH2": {"at": [197.0, 103.0], "pads": {}},
-                "MH3": {"at": [197.0, 152.0], "pads": {}},
+                "J3": {"at": [191.2, 136.5], "pads": {}},
+                "SW1": {"at": [142.0, 104.0], "pads": {}},
+                "SW2": {"at": [191.0, 117.0], "pads": {}},
+                "MH1": {"at": [120.0, 103.0], "pads": {}},
+                "MH2": {"at": [148.0, 103.0], "pads": {}},
+                "MH3": {"at": [192.0, 152.0], "pads": {}},
             },
             "antenna": {
                 "reference": "U1",
-                "physical_edge_y_mm": 93.7,
+                "physical_edge_y_mm": 100.3,
                 "span_x_mm": [169.0, 187.0],
             },
         },
@@ -97,7 +108,7 @@ def _isolated_enclosure_project(
     return project, inspection
 
 
-def test_scad_encodes_rev_b_air_gap_and_overlapping_posts(
+def test_scad_encodes_rev_c_air_gap_and_overlapping_posts(
     esp32tap_dir: Path,
 ) -> None:
     source = (
@@ -111,14 +122,14 @@ def test_scad_encodes_rev_b_air_gap_and_overlapping_posts(
     assert parameters["post_inset"] == pytest.approx(3.25)
     assert parameters["ant_x0"] == pytest.approx(69.0)
     assert parameters["ant_x1"] == pytest.approx(87.0)
-    assert parameters["j1_yc"] == pytest.approx(12.445)
-    assert parameters["j2_yc"] == pytest.approx(41.445)
+    assert parameters["j1_yc"] == pytest.approx(14.0)
+    assert parameters["j2_yc"] == pytest.approx(40.0)
     assert "post_inset = post_d / 2 - post_wall_overlap;" in source
     assert source.count("wall+post_inset") == 4
     assert "d = post_d + 0.6" in source
 
 
-def test_enclosure_dimensions_are_derived_from_rev_b_parameters(
+def test_enclosure_dimensions_are_derived_from_rev_c_parameters(
     esp32tap_dir: Path,
 ) -> None:
     source = (
@@ -127,10 +138,10 @@ def test_enclosure_dimensions_are_derived_from_rev_b_parameters(
     parameters = validate_enclosure.parse_scad_parameters(source)
 
     assert validate_enclosure.expected_dimensions(parameters) == {
-        "interior_length_mm": pytest.approx(104.0),
-        "interior_width_mm": pytest.approx(85.3),
-        "outer_length_mm": pytest.approx(109.0),
-        "outer_width_mm": pytest.approx(90.3),
+        "interior_length_mm": pytest.approx(99.0),
+        "interior_width_mm": pytest.approx(78.7),
+        "outer_length_mm": pytest.approx(104.0),
+        "outer_width_mm": pytest.approx(83.7),
         "base_height_mm": pytest.approx(23.6),
         "antenna_void_mm": pytest.approx(15.0),
         "post_wall_overlap_mm": pytest.approx(0.25),
@@ -154,7 +165,7 @@ def test_checked_in_mesh_is_one_valid_manifold_volume(
     assert set(_edge_incidence(loaded)) == {2}, filename
 
 
-def test_checked_in_mesh_matches_rev_b_outer_dimensions(
+def test_checked_in_mesh_matches_rev_c_outer_dimensions(
     esp32tap_dir: Path,
 ) -> None:
     enclosure = esp32tap_dir / "enclosure"
@@ -192,16 +203,16 @@ def test_checked_in_mesh_matches_rev_b_outer_dimensions(
 def test_board_geometry_derives_connector_centers_independently() -> None:
     geometry = validate_enclosure.derive_board_geometry(_sample_report())
 
-    assert geometry["board_size_mm"] == pytest.approx([100.0, 55.0])
-    assert geometry["rj45_centers_y_mm"] == pytest.approx([12.445, 41.445])
-    assert geometry["usb_center_y_mm"] == pytest.approx(36.5)
+    assert geometry["board_size_mm"] == pytest.approx([95.0, 58.0])
+    assert geometry["rj45_centers_y_mm"] == pytest.approx([14.0, 40.0])
+    assert geometry["usb_center_y_mm"] == pytest.approx(39.5)
     for actual, expected in zip(
         geometry["mounting_holes_mm"],
-        [[2.9, 26.5], [97.0, 3.0], [97.0, 52.0]],
+        [[20.0, 6.0], [48.0, 6.0], [92.0, 55.0]],
         strict=True,
     ):
         assert actual == pytest.approx(expected)
-    assert geometry["antenna_overhang_mm"] == pytest.approx(6.3)
+    assert geometry["antenna_overhang_mm"] == pytest.approx(-3.3)
     assert geometry["antenna_span_x_mm"] == pytest.approx([69.0, 87.0])
 
 
@@ -245,8 +256,8 @@ def test_validator_rejects_stale_rj45_and_tangent_post_geometry(
         validate_enclosure.validate_fit(source, tangent_post, geometry)
 
     stale_mounting_holes = source.replace(
-        "mh = [[2.9, 26.5], [97.0, 3.0], [97.0, 52.0]];",
-        "mh = [[2.9, 26.5], [96.0, 3.0], [97.0, 52.0]];",
+        "mh = [[20.0, 6.0], [48.0, 6.0], [92.0, 55.0]];",
+        "mh = [[20.0, 6.0], [47.0, 6.0], [92.0, 55.0]];",
     )
     assert stale_mounting_holes != source
     with pytest.raises(
@@ -316,8 +327,8 @@ def test_validator_rejects_active_scad_geometry_not_present_in_mesh(
     source_path = project / "enclosure" / "esp32tap_case.scad"
     source = source_path.read_text(encoding="utf-8")
     changed = source.replace(
-        "wall + by0 + yc - (rj45_w/2 + 0.5)",
-        "wall + by0 + yc + 4 - (rj45_w/2 + 0.5)",
+        "wall + by0 + yc - collar_aperture_w/2",
+        "wall + by0 + yc + 4 - collar_aperture_w/2",
     )
     assert changed != source
     source_path.write_text(changed, encoding="utf-8")
@@ -369,3 +380,117 @@ def test_actual_board_and_enclosure_validate_together(
     assert result["status"] == "PASS"
     assert result["openscad_image"] == OPENSCAD_IMAGE
     assert math.isclose(result["antenna_void_mm"], 15.0, abs_tol=0.01)
+
+
+def test_rev_c_geometry_is_derived_from_inspector_report() -> None:
+    geometry = validate_enclosure.derive_board_geometry(_sample_report())
+
+    assert geometry["board_size_mm"] == pytest.approx([95.0, 58.0])
+    for actual, expected in zip(
+        geometry["connector_centers_mm"],
+        [[12.5, 14.0], [12.5, 40.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert geometry["connector_body_widths_mm"] == pytest.approx([15.75, 18.75])
+    assert geometry["usb_center_mm"] == pytest.approx([91.2, 39.5])
+    for actual, expected in zip(
+        geometry["switch_centers_mm"],
+        [[42.0, 7.0], [91.0, 20.0]],
+        strict=True,
+    ):
+        assert actual == pytest.approx(expected)
+    assert geometry["antenna_overhang_mm"] == pytest.approx(-3.3)
+    assert geometry["antenna_span_x_mm"] == pytest.approx([69.0, 87.0])
+
+
+def test_rev_c_source_encodes_keyed_harness_and_service_contract(
+    esp32tap_dir: Path,
+) -> None:
+    source = (
+        esp32tap_dir / "enclosure" / "esp32tap_case.scad"
+    ).read_text(encoding="utf-8")
+    parameters = validate_enclosure.parse_scad_parameters(source)
+
+    assert parameters["board_l"] == pytest.approx(95.0)
+    assert parameters["board_w"] == pytest.approx(58.0)
+    assert parameters["ant_overhang"] == pytest.approx(-3.3)
+    assert parameters["j1_yc"] == pytest.approx(14.0)
+    assert parameters["j2_yc"] == pytest.approx(40.0)
+    assert parameters["j1_housing_w"] == pytest.approx(12.85)
+    assert parameters["j2_housing_w"] == pytest.approx(15.85)
+    assert parameters["housing_h"] == pytest.approx(10.81)
+    assert parameters["housing_depth"] == pytest.approx(17.56)
+    assert parameters["mated_depth"] == pytest.approx(24.77)
+    assert parameters["housing_dim_tolerance"] == pytest.approx(0.25)
+    assert parameters["pigtail_exit_direction"] == pytest.approx(-1.0)
+    assert parameters["collar_body_w"] == pytest.approx(15.6)
+    assert parameters["collar_body_h"] == pytest.approx(13.6)
+    assert parameters["collar_aperture_w"] == pytest.approx(16.6)
+    assert parameters["collar_aperture_h"] == pytest.approx(14.0)
+    assert parameters["key_slot_w"] == pytest.approx(3.4)
+    assert parameters["key_slot_d"] == pytest.approx(2.2)
+    assert parameters["j1_key_offset"] == pytest.approx(-5.0)
+    assert parameters["j2_key_offset"] == pytest.approx(5.0)
+    assert parameters["cable_bend_radius"] == pytest.approx(18.0)
+    assert parameters["latch_clearance"] >= 6.0
+    assert parameters["strain_relief_diameter"] == pytest.approx(5.0)
+    assert parameters["snap_clearance"] == pytest.approx(0.3)
+    assert "module keyed_harness_aperture" in source
+    assert "module mated_housing_service_envelope" in source
+    assert "Molex 430250000-SD" in source
+    assert "43025-0800" in source
+    assert "43025-1000" in source
+    assert "pigtail_exit_direction" in source
+    assert "module strain_relief_bridge" in source
+    assert "module snap_latch" in source
+
+
+def test_rev_c_key_geometry_rejects_wrong_harness() -> None:
+    result = validate_enclosure.validate_keyed_apertures(
+        collar_body_width=15.6,
+        aperture_width=16.0,
+        key_rib_width=3.0,
+        key_slot_width=3.4,
+        console_offset=-5.0,
+        motor_offset=5.0,
+    )
+
+    assert result["matching_clearance_mm"] == pytest.approx(0.2)
+    assert result["wrong_mating_collision_margin_mm"] == pytest.approx(6.6)
+
+
+def test_enclosure_evidence_remains_model_only_and_physical_open(
+    esp32tap_dir: Path,
+) -> None:
+    model = json.loads(
+        (esp32tap_dir / "evidence" / "model.json").read_text(encoding="utf-8")
+    )
+    physical = json.loads(
+        (esp32tap_dir / "evidence" / "physical.json").read_text(encoding="utf-8")
+    )
+
+    claims = {assertion["claim"] for assertion in model["assertions"]}
+    assert "Rev C enclosure CAD fit and keyed-aperture geometry" in claims
+    assertion = next(
+        item
+        for item in model["assertions"]
+        if item["claim"]
+        == "Rev C enclosure CAD fit and keyed-aperture geometry"
+    )
+    artifact_path = esp32tap_dir / "evidence" / assertion["artifact_path"]
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert assertion["artifact_sha256"] == hashlib.sha256(
+        artifact_path.read_bytes()
+    ).hexdigest()
+    assert artifact["board_size_mm"] == [95.0, 58.0, 1.6]
+    assert artifact["antenna_void_mm"] == pytest.approx(15.0)
+    assert {
+        item["mpn"] for item in artifact["mated_housing_envelopes_mm"]
+    } == {"430250800", "430251000"}
+    for relative, expected_hash in artifact["artifacts"].items():
+        assert hashlib.sha256((esp32tap_dir / relative).read_bytes()).hexdigest() == (
+            expected_hash
+        )
+    assert physical["status"] == "NOT_MEASURED"
+    assert model["status"] == "MODELED"

@@ -124,6 +124,15 @@ VENDOR_OBSERVATION_FIELDS = {
     "artifact_sha256",
     "supports",
 }
+VENDOR_PTH_OBSERVATION_FIELDS = VENDOR_OBSERVATION_FIELDS | {
+    "requirement",
+    "gerber_archive_sha256",
+    "order_configuration",
+}
+REV_C_GERBER_SHA256 = (
+    "219562b21c51bf71e11474c5ea3fae9b698c56b279ad1a41950b440381507ed5"
+)
+PTH_BARREL_REQUIREMENT = "pth_barrel_minimum_20um"
 QUOTE_COST_FIELDS = {
     "pcb_fabrication_usd",
     "pcba_usd",
@@ -534,11 +543,21 @@ def _validate_hash_bound_items(
     *,
     evidence_root: Path,
     approved_directory: str,
+    alternate_fields: tuple[set[str], ...] = (),
 ) -> None:
     if not isinstance(items, list):
         raise EvidenceError(f"{label} must be a list")
     for index, item in enumerate(items):
-        bound = _exact_fields(f"{label}[{index}]", item, fields)
+        variants = (fields, *alternate_fields)
+        selected = next(
+            (
+                candidate_fields
+                for candidate_fields in variants
+                if isinstance(item, dict) and set(item) == candidate_fields
+            ),
+            fields,
+        )
+        bound = _exact_fields(f"{label}[{index}]", item, selected)
         if not isinstance(bound["artifact_sha256"], str) or not SHA256.fullmatch(
             bound["artifact_sha256"]
         ):
@@ -584,7 +603,48 @@ def _validate_vendor(record: dict[str, Any], evidence_root: Path) -> None:
         VENDOR_OBSERVATION_FIELDS,
         evidence_root=evidence_root,
         approved_directory="vendor",
+        alternate_fields=(VENDOR_PTH_OBSERVATION_FIELDS,),
     )
+    for index, observation in enumerate(record["observations"]):
+        if observation.get("requirement") != PTH_BARREL_REQUIREMENT:
+            continue
+        if (
+            not isinstance(observation["order_configuration"], str)
+            or not observation["order_configuration"].strip()
+        ):
+            raise EvidenceError(
+                "PTH barrel observation must name the exact order configuration"
+            )
+        if observation["gerber_archive_sha256"] != REV_C_GERBER_SHA256:
+            raise EvidenceError(
+                "PTH barrel observation must bind the exact Rev C Gerber archive"
+            )
+        if "fabrication_release" not in observation["supports"]:
+            raise EvidenceError(
+                "PTH barrel observation must support fabrication_release"
+            )
+        artifact = _verified_artifact(
+            evidence_root=evidence_root,
+            relative_path=observation["artifact_path"],
+            approved_directory="vendor",
+            expected_sha256=observation["artifact_sha256"],
+            label=f"observations[{index}] PTH artifact",
+        )
+        try:
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise EvidenceError("PTH barrel artifact must be JSON") from error
+        if (
+            not isinstance(payload, dict)
+            or payload.get("archive_sha256") != REV_C_GERBER_SHA256
+            or payload.get("minimum_um") != 20
+            or payload.get("order_configuration")
+            != observation["order_configuration"]
+        ):
+            raise EvidenceError(
+                "PTH barrel artifact must bind 20 um minimum, exact Rev C "
+                "Gerber archive, and order configuration"
+            )
     if record["status"] == "VENDOR_ACCEPTED" and not record["observations"]:
         raise EvidenceError("VENDOR_ACCEPTED requires a verified observation")
     if record["status"] == "VENDOR_ACCEPTED" and not any(
@@ -755,6 +815,15 @@ def _physical_ready(evidence: dict[str, dict[str, Any]]) -> bool:
     )
 
 
+def _pth_barrel_ready(vendor: dict[str, Any]) -> bool:
+    return any(
+        observation.get("requirement") == PTH_BARREL_REQUIREMENT
+        and observation.get("gerber_archive_sha256") == REV_C_GERBER_SHA256
+        and "fabrication_release" in observation.get("supports", ())
+        for observation in vendor["observations"]
+    )
+
+
 def release_allowed(
     evidence: dict[str, dict[str, Any]],
     action: str,
@@ -802,7 +871,7 @@ def release_allowed(
     if vendor["status"] != "VENDOR_ACCEPTED":
         return False
     if required == "fabrication_release":
-        return True
+        return _pth_barrel_ready(vendor)
     return vendor["turnkey_quote"]["status"] == "TURNKEY_QUOTED"
 
 
@@ -846,6 +915,12 @@ def release_denial_reason(
         return (
             f"{action} blocked: requires vendor.status=VENDOR_ACCEPTED; "
             f"actual={vendor['status']}"
+        )
+    if required == "fabrication_release" and not _pth_barrel_ready(vendor):
+        return (
+            f"{action} blocked: requires vendor observation "
+            f"{PTH_BARREL_REQUIREMENT} bound to Rev C Gerber archive "
+            f"{REV_C_GERBER_SHA256}"
         )
     quote_status = vendor["turnkey_quote"]["status"]
     if required == "turnkey_status" and quote_status != "TURNKEY_QUOTED":

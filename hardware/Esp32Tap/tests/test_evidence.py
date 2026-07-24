@@ -74,11 +74,32 @@ PREDECESSOR_FORBIDDEN_ACTIONS = {
     "TURNKEY_QUOTED",
 }
 REAL_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+REV_C_GERBER_SHA256 = (
+    "219562b21c51bf71e11474c5ea3fae9b698c56b279ad1a41950b440381507ed5"
+)
 
 
 @pytest.fixture()
 def evidence(esp32tap_dir: Path) -> dict[str, object]:
     return load_all(esp32tap_dir / "evidence")
+
+
+def _copy_model_artifacts(
+    evidence: dict[str, object],
+    evidence_root: Path,
+) -> None:
+    for assertion in evidence["model"]["assertions"]:
+        relative = Path(assertion["artifact_path"])
+        source = (
+            REAL_REPOSITORY_ROOT
+            / "hardware"
+            / "Esp32Tap"
+            / "evidence"
+            / relative
+        )
+        target = evidence_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
 
 
 def _measured_physical_record(
@@ -90,6 +111,7 @@ def _measured_physical_record(
     bound_fields: list[str] | None = None,
     extra_rows: list[str] | None = None,
 ) -> dict[str, object]:
+    _copy_model_artifacts(evidence, evidence_root)
     measured = copy.deepcopy(evidence["physical"])
     measured["status"] = "PHYSICALLY_VALIDATED"
     envelope = measured["treadmill_current_envelope"]
@@ -166,6 +188,38 @@ def _accepted_vendor_record(
         }
     ]
     return vendor
+
+
+def _add_pth_barrel_observation(
+    vendor: dict[str, object],
+    evidence_root: Path,
+) -> None:
+    artifact = evidence_root / "vendor" / "pth-barrel-confirmation.json"
+    artifact.write_text(
+        (
+            '{"archive_sha256":"'
+            + REV_C_GERBER_SHA256
+            + '","minimum_um":20,"order_configuration":"4-layer, 1.6 mm, '
+            'exact uploaded Gerber archive"}\n'
+        ),
+        encoding="utf-8",
+    )
+    vendor["observations"].append(
+        {
+            "claim": "Vendor confirms minimum 20 um PTH barrel copper",
+            "requirement": "pth_barrel_minimum_20um",
+            "gerber_archive_sha256": REV_C_GERBER_SHA256,
+            "order_configuration": (
+                "4-layer, 1.6 mm, exact uploaded Gerber archive"
+            ),
+            "source_url": "https://vendor.example/review/pth-456",
+            "operator": "operator-1",
+            "observed_at_utc": "2026-07-24T12:05:00Z",
+            "artifact_path": "vendor/pth-barrel-confirmation.json",
+            "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            "supports": ["fabrication_release"],
+        }
+    )
 
 
 def _predecessor_record(repository_root: Path) -> dict[str, object]:
@@ -838,6 +892,63 @@ def test_fabrication_release_rejects_vendor_accepted_without_observations(
     candidate["vendor"]["status"] = "VENDOR_ACCEPTED"
 
     with pytest.raises(EvidenceError, match="verified observation"):
+        release_allowed(
+            candidate,
+            "fabrication_release",
+            evidence_root=evidence_root,
+        )
+
+
+def test_generic_fabrication_observation_cannot_bypass_pth_barrel_gate(
+    evidence: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    candidate = copy.deepcopy(evidence)
+    candidate["physical"] = _measured_physical_record(evidence, evidence_root)
+    candidate["vendor"] = _accepted_vendor_record(evidence, evidence_root)
+
+    assert not release_allowed(
+        candidate,
+        "fabrication_release",
+        evidence_root=evidence_root,
+    )
+    assert "pth_barrel_minimum_20um" in release_denial_reason(
+        candidate,
+        "fabrication_release",
+        evidence_root=evidence_root,
+    )
+
+
+def test_exact_archive_pth_barrel_observation_satisfies_vendor_gate(
+    evidence: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    candidate = copy.deepcopy(evidence)
+    candidate["physical"] = _measured_physical_record(evidence, evidence_root)
+    candidate["vendor"] = _accepted_vendor_record(evidence, evidence_root)
+    _add_pth_barrel_observation(candidate["vendor"], evidence_root)
+
+    assert release_allowed(
+        candidate,
+        "fabrication_release",
+        evidence_root=evidence_root,
+    )
+
+
+def test_pth_barrel_observation_is_bound_to_exact_rev_c_archive(
+    evidence: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    candidate = copy.deepcopy(evidence)
+    candidate["physical"] = _measured_physical_record(evidence, evidence_root)
+    candidate["vendor"] = _accepted_vendor_record(evidence, evidence_root)
+    _add_pth_barrel_observation(candidate["vendor"], evidence_root)
+    candidate["vendor"]["observations"][-1]["gerber_archive_sha256"] = "0" * 64
+
+    with pytest.raises(EvidenceError, match="exact Rev C Gerber archive"):
         release_allowed(
             candidate,
             "fabrication_release",

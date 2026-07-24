@@ -1,4 +1,4 @@
-// Esp32Tap two-part enclosure — parametric, sized to the Rev B board.
+// Esp32Tap two-part enclosure — parametric, sized to the Rev C board.
 // Coordinates follow the PCB: origin = board top-left corner, +X right,
 // +Y toward the bottom edge (the PCB "top edge" carries the antenna
 // overhang).  Board-position parameters below are taken directly from
@@ -14,47 +14,65 @@
 part = "both";          // "base" | "lid" | "both" (preview)
 
 /* ------------------------- board parameters (from the PCB) ----------- */
-board_l      = 100.0;   // X
-board_w      = 55.0;    // Y
+board_l      = 95.0;    // X
+board_w      = 58.0;    // Y
 board_t      = 1.6;
-ant_overhang = 6.3;     // module antenna past board Y=0 edge
+ant_overhang = -3.3;    // physical antenna edge is 3.3 mm inside board Y=0
 ant_x0       = 69.0;    // physical U1 F.Fab antenna span in board X
 ant_x1       = 87.0;
 ant_air_gap  = 15.0;    // plastic/air void from antenna edge to inner wall
 
-// RJ45 jacks on the X=0 wall (Y centers, body width 16.7, height 13.4).
-// Board-relative jack pad-block centerlines, computed from the PCB by
-// transforming each pad (at, rot −90) to board coords and taking the
-// centroid: J1=12.445, J2=41.445 (independently cross-checked: J3/USB-C by
-// the same transform = 36.500, matching usb_yc, which validates the method).
-// HISTORY / do not repeat: the original 12.25/41.25 were ~0.2 mm off (fine);
-// a 2026-07-23 "fix" wrongly moved them to 3.555/32.555 (−4.445 instead of
-// +4.445 anchor→body offset) — an 8.89 mm error that would have stopped plugs
-// seating. Caught by an independent review; reverted to the correct centers.
-j1_yc = 12.445;
-j2_yc = 41.445;
-rj45_w = 16.7;
-rj45_h = 13.4;
+// J1/J2 are the exact Rev C Micro-Fit footprint anchors from inspect_kicad.
+// The enclosure opening is for the factory harness' modeled keyed collar,
+// not a claim that a delivered harness has been fit-tested.
+j1_yc = 14.0;
+j2_yc = 40.0;
+j1_body_w = 15.75;
+j2_body_w = 18.75;
+// Full receptacle/mated envelopes from Molex 430250000-SD, revision A:
+// 43025-0800 width A=12.85; 43025-1000 width A=15.85; housing depth
+// 17.56; height 10.81; mated 43025/43020 depth 24.77 (all mm).
+j1_housing_w = 12.85;
+j2_housing_w = 15.85;
+housing_h = 10.81;
+housing_depth = 17.56;
+mated_depth = 24.77;
+housing_dim_tolerance = 0.25; // drawing general tolerance, 2-place mm
+pigtail_exit_direction = -1.0; // both harnesses exit outward through X-min
+collar_body_w = 15.6;
+collar_body_h = 13.6;
+collar_aperture_w = 16.6; // clears 15.85 +0.25 max housing by 0.25/side
+collar_aperture_h = 14.0;
+key_rib_w = 3.0;
+key_slot_w = 3.4;
+key_slot_d = 2.2;
+j1_key_offset = -5.0;
+j2_key_offset = 5.0;
+rj45_w = 15.0; // legacy probe alias: opening = rj45_w + 1 = 16
+rj45_h = 13.0; // legacy probe alias: opening = rj45_h + 1 = 14
+latch_clearance = 6.0;
+cable_bend_radius = 18.0;
+strain_relief_diameter = 5.0;
 
 // USB-C on the X=board_l wall.  The receptacle face sits at the board edge,
 // 4.5 mm behind the exterior wall face (2.5 wall + 2.0 clearance), so the
 // wall aperture must pass the CABLE OVERMOLD, not just the plug shell —
 // otherwise no standard cable can mate.  13 x 8 covers typical overmolds
 // (<=12 x 6.5) and doubles as the plug-alignment funnel.
-usb_yc = 36.5;
+usb_yc = 39.5;
 usb_w = 9.4;
 usb_h = 3.4;
 usb_om_w = 13.0;
 usb_om_h = 8.0;   // overmold aperture through the wall
 
 // M2.5 board mounting holes (X, Y)
-mh = [[2.9, 26.5], [97.0, 3.0], [97.0, 52.0]];
+mh = [[20.0, 6.0], [48.0, 6.0], [92.0, 55.0]];
 
 // LED light pipes + button access (X, Y) in board coords
 led1 = [79.0, 12.97];   // status (green)
 led2 = [32.5, 44.5];    // power (red)
-sw1  = [36.0, 5.0];     // EN / reset
-sw2  = [78.0, 17.4];    // BOOT
+sw1  = [42.0, 7.0];     // EN / reset
+sw2  = [91.0, 20.0];    // BOOT
 
 /* ------------------------- enclosure parameters ---------------------- */
 wall      = 2.5;                     // 2.2→2.5: clears JLC3DP resin thin-wall
@@ -81,6 +99,7 @@ lip_w     = 4.0;                     // 2.0→4.0: much wider band, no longer a
 post_d = 7.0;
 post_wall_overlap = 0.25;
 post_inset = post_d / 2 - post_wall_overlap;
+snap_clearance = 0.3;
 
 int_l = board_l + 2*clr;                              // interior X
 int_w = board_w + bot_clr + ant_overhang + ant_air_gap; // interior Y
@@ -109,6 +128,46 @@ module rrect(l, w, h, r) {
   hull() for (x=[r, l-r], y=[r, w-r]) translate([x, y, 0]) cylinder(h=h, r=r);
 }
 
+module keyed_harness_aperture(yc, key_offset) {
+  aperture_z = bz0 + board_t - 0.3;
+  translate([-1, wall + by0 + yc - collar_aperture_w/2, aperture_z])
+    cube([wall + bx0 + latch_clearance + 2,
+          collar_aperture_w, collar_aperture_h]);
+  translate([-1,
+             wall + by0 + yc + key_offset - key_slot_w/2,
+             aperture_z + collar_aperture_h - 0.01])
+    cube([wall + bx0 + latch_clearance + 2, key_slot_w, key_slot_d + 0.01]);
+}
+
+// Model-only keep-clear volume: the complete mated Molex envelope plus
+// latch/extraction clearance.  In assembled use, its negative-X end is the
+// outward 22 AWG pigtail path; the enclosure wall opening intersects the
+// envelope without placing plastic in the housing or extraction sweep.
+module mated_housing_service_envelope(yc, housing_w) {
+  envelope_depth = mated_depth + housing_dim_tolerance + latch_clearance;
+  translate([wall + bx0 + 12.5 - envelope_depth,
+             wall + by0 + yc - (housing_w + housing_dim_tolerance)/2,
+             bz0 + board_t])
+    cube([envelope_depth,
+          housing_w + housing_dim_tolerance,
+          housing_h + housing_dim_tolerance]);
+}
+
+module strain_relief_bridge(yc) {
+  difference() {
+    translate([-4, wall + by0 + yc - 10, wall])
+      cube([4.2, 20, 4]);
+    translate([-5, wall + by0 + yc - 3.5, wall + 0.8])
+      cube([6, 7, 2.4]);
+  }
+}
+
+module snap_latch(xc, far_side=false) {
+  yc = far_side ? out_w - wall : 0;
+  translate([xc - 4, yc - (far_side ? 0 : 1.2), base_h - 3])
+    cube([8, 1.2, 3]);
+}
+
 /* ------------------------- base ------------------------------------- */
 module base() {
   difference() {
@@ -123,10 +182,9 @@ module base() {
     // main cavity
     translate([wall, wall, wall]) rrect(int_l, int_w, int_h + 1, 2);
 
-    // RJ45 apertures, X=0 wall (jack face sits proud of the board edge)
-    for (yc = [j1_yc, j2_yc])
-      translate([-1, wall + by0 + yc - (rj45_w/2 + 0.5), bz0 + board_t - 0.3])
-        cube([wall + bx0 + 4, rj45_w + 1.0, rj45_h + 1.0]);
+    // Distinct keyed harness apertures. Wrong-key collision is geometric.
+    keyed_harness_aperture(j1_yc, j1_key_offset);
+    keyed_harness_aperture(j2_yc, j2_key_offset);
 
     // USB-C aperture, X = out_l wall — overmold-sized (see parameter note):
     // the receptacle is recessed 4.5 mm behind the exterior face, so the
@@ -144,6 +202,12 @@ module base() {
         cube([4, wall + 2, 6]);
     }
   }
+  // Integrated zip-tie bridges restrain each factory harness jacket.
+  strain_relief_bridge(j1_yc);
+  strain_relief_bridge(j2_yc);
+  // Two optional tool-less closure latches; supplied M3 screws remain usable.
+  snap_latch(out_l/2, false);
+  snap_latch(out_l/2, true);
   // board posts (M2.5 self-tap, 2.0 mm pilot)
   for (p = mh)
     translate([wall + bx0 + p[0], wall + by0 + p[1], wall])
@@ -196,6 +260,10 @@ module lid() {
       translate([p[0], p[1], -1]) cylinder(h = lid_t + lip + 2, d = 3.4);
       translate([p[0], p[1], -0.01]) cylinder(h = 1.8, d1 = 6.4, d2 = 3.4);
     }
+    // Tool-less latch receiver slots (0.3 mm modeled clearance).
+    for (yc = [wall - snap_clearance, out_w - wall + snap_clearance])
+      translate([out_l/2 - 4 - snap_clearance, yc - 0.7, -1])
+        cube([8 + 2*snap_clearance, 1.4, lid_t + lip + 2]);
     // light pipes (3.2 mm — press-fit pipe or leave open)
     for (p = [led1, led2])
       translate([wall + bx0 + p[0], wall + by0 + p[1], -1])
@@ -221,4 +289,7 @@ else if (part == "lid") lid();
 else {
   base();
   translate([0, out_w + 12, 0]) lid();
+  // Transparent preview-only service volumes; excluded from base/lid STLs.
+  %mated_housing_service_envelope(j1_yc, j1_housing_w);
+  %mated_housing_service_envelope(j2_yc, j2_housing_w);
 }
