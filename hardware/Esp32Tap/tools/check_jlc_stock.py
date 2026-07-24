@@ -157,7 +157,33 @@ def parse_catalog_page(source: str, expected_code: str) -> dict[str, Any]:
     decoded = source.replace('\\"', '"')
     marker = '"componentInfo":'
     candidates: list[dict[str, Any]] = []
+    summaries: list[dict[str, str]] = []
     candidate_errors: list[StockError] = []
+    required_fields = {
+        "componentCode",
+        "componentModelEn",
+        "componentSpecificationEn",
+        "canPresaleNumber",
+        "overseasStockCount",
+        "componentLibraryType",
+    }
+    allowed_summary_shapes = {
+        frozenset(
+            {
+                "componentCode",
+                "componentModelEn",
+                "componentSpecificationEn",
+            }
+        ),
+        frozenset(
+            {
+                "componentCode",
+                "componentModelEn",
+                "componentSpecificationEn",
+                "componentLibraryType",
+            }
+        ),
+    }
     cursor = 0
     while True:
         position = decoded.find(marker, cursor)
@@ -189,6 +215,41 @@ def parse_catalog_page(source: str, expected_code: str) -> dict[str, Any]:
         except StockError:
             continue
         if code != expected_code:
+            continue
+        present_fields = frozenset(required_fields.intersection(record))
+        if present_fields in allowed_summary_shapes:
+            try:
+                summary = {
+                    "model": _string_field(record, "componentModelEn"),
+                    "package": _string_field(
+                        record,
+                        "componentSpecificationEn",
+                    ),
+                }
+                if "componentLibraryType" in present_fields:
+                    library_type = _string_field(
+                        record,
+                        "componentLibraryType",
+                    )
+                    if library_type not in LIBRARY_CLASSES:
+                        raise StockError(
+                            f"{expected_code}: unsupported library type "
+                            f"{library_type!r}"
+                        )
+                    summary["library_type"] = library_type
+                summaries.append(summary)
+            except StockError as error:
+                candidate_errors.append(error)
+            continue
+        if present_fields != required_fields:
+            missing = sorted(required_fields - present_fields)
+            extra_shape = sorted(present_fields)
+            candidate_errors.append(
+                StockError(
+                    f"{expected_code}: componentInfo direct field schema is "
+                    f"incomplete; present={extra_shape}, missing={missing}"
+                )
+            )
             continue
         try:
             library_type = _string_field(record, "componentLibraryType")
@@ -236,11 +297,15 @@ def parse_catalog_page(source: str, expected_code: str) -> dict[str, Any]:
         raise StockError(
             f"{expected_code}: ambiguous componentInfo records disagree"
         )
-    return json.loads(
-        next(iter(unique)),
-        object_pairs_hook=_unique_json_object,
-        parse_constant=_reject_json_constant,
-    )
+    canonical = candidates[0]
+    for summary in summaries:
+        for field, value in summary.items():
+            if canonical[field] != value:
+                raise StockError(
+                    f"{expected_code}: ambiguous componentInfo summaries "
+                    f"disagree on {field}"
+                )
+    return canonical
 
 
 def _load_design(root: Path) -> Any:

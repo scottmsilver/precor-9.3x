@@ -140,6 +140,31 @@ def test_catalog_parser_extracts_exact_identity_class_and_stock(
     }
 
 
+def test_catalog_parser_accepts_consistent_official_summary_shapes(
+    stock_tool: SimpleNamespace,
+) -> None:
+    identity_with_class = (
+        '<script>{"componentInfo":{'
+        '"componentCode":"C123",'
+        '"componentModelEn":"EXACT-PART",'
+        '"componentSpecificationEn":"SOT-23",'
+        '"componentLibraryType":"expand",'
+        '"assemblyMode":"SMT"}}</script>'
+    )
+    category_summary = (
+        '<script>{"componentInfo":{'
+        '"componentCode":"C123",'
+        '"componentModelEn":"EXACT-PART",'
+        '"componentSpecificationEn":"SOT-23",'
+        '"firstTypeNameEn":"Transistors"}}</script>'
+    )
+
+    assert stock_tool.parse_catalog_page(
+        identity_with_class + category_summary + _catalog_html(),
+        "C123",
+    ) == stock_tool.parse_catalog_page(_catalog_html(), "C123")
+
+
 @pytest.mark.parametrize(
     ("html", "message"),
     [

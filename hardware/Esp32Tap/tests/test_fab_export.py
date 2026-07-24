@@ -588,14 +588,28 @@ def _assembly_fixture() -> dict[str, Any]:
             "at": [110.0 + index, 120.0 + index],
             "layer": "F.Cu",
             "rotation_deg": 270.0,
+            "dnp": reference == "C1",
+            "excluded_from_bom": (
+                reference == "C1" or component[4] == "none"
+            ),
+            "board_only": False,
         }
         for index, (reference, component) in enumerate(components.items())
     }
     footprints.update(
         {
-            "MH1": {"footprint": "MountingHole:MH", "at": [101.0, 101.0]},
-            "MH2": {"footprint": "MountingHole:MH", "at": [199.0, 101.0]},
-            "MH3": {"footprint": "MountingHole:MH", "at": [199.0, 154.0]},
+            reference: {
+                "footprint": "MountingHole:MH",
+                "at": position,
+                "dnp": False,
+                "excluded_from_bom": True,
+                "board_only": True,
+            }
+            for reference, position in {
+                "MH1": [101.0, 101.0],
+                "MH2": [199.0, 101.0],
+                "MH3": [199.0, 154.0],
+            }.items()
         }
     )
     return {
@@ -648,6 +662,12 @@ def test_assembly_parity_accepts_only_populated_exact_mappings(
         ("wrong-cpl-position", "CPL U1 Mid X"),
         ("wrong-cpl-rotation", "CPL U1 Rotation"),
         ("wrong-board-layer", "PCB U1 layer"),
+        ("dnp-flag-missing", "PCB C1 assembly flags"),
+        ("dnp-not-excluded", "PCB C1 assembly flags"),
+        ("populated-excluded", "PCB U1 assembly flags"),
+        ("none-not-excluded", "PCB TP1 assembly flags"),
+        ("design-board-only", "PCB U1 assembly flags"),
+        ("mounting-hole-not-board-only", "PCB MH1 assembly flags"),
         ("extra-bom-column", "BOM columns"),
         ("extra-cpl-column", "CPL columns"),
     ],
@@ -683,6 +703,18 @@ def test_assembly_parity_fails_closed(
         fixture["cpl_rows"][0]["Rotation"] = "0"
     elif mutation == "wrong-board-layer":
         fixture["board"]["footprints"]["U1"]["layer"] = "B.Cu"
+    elif mutation == "dnp-flag-missing":
+        fixture["board"]["footprints"]["C1"]["dnp"] = False
+    elif mutation == "dnp-not-excluded":
+        fixture["board"]["footprints"]["C1"]["excluded_from_bom"] = False
+    elif mutation == "populated-excluded":
+        fixture["board"]["footprints"]["U1"]["excluded_from_bom"] = True
+    elif mutation == "none-not-excluded":
+        fixture["board"]["footprints"]["TP1"]["excluded_from_bom"] = False
+    elif mutation == "design-board-only":
+        fixture["board"]["footprints"]["U1"]["board_only"] = True
+    elif mutation == "mounting-hole-not-board-only":
+        fixture["board"]["footprints"]["MH1"]["board_only"] = False
     elif mutation == "extra-bom-column":
         fixture["bom_rows"][0]["Supplier note"] = "silently ignored"
     else:

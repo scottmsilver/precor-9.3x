@@ -169,6 +169,45 @@ def validate_assembly_records(
         design_references | {"MH1", "MH2", "MH3"},
         set(footprints),
     )
+    flag_names = ("dnp", "excluded_from_bom", "board_only")
+    for reference, component in components.items():
+        expected_flags = {
+            "dnp": reference in dnp,
+            "excluded_from_bom": (
+                reference in dnp or component[4] == "none"
+            ),
+            "board_only": False,
+        }
+        actual_flags = {
+            name: footprints[reference].get(name)
+            for name in flag_names
+        }
+        if (
+            any(type(value) is not bool for value in actual_flags.values())
+            or actual_flags != expected_flags
+        ):
+            raise FabExportError(
+                f"PCB {reference} assembly flags differ: "
+                f"expected={expected_flags}, actual={actual_flags}"
+            )
+    for reference in ("MH1", "MH2", "MH3"):
+        expected_flags = {
+            "dnp": False,
+            "excluded_from_bom": True,
+            "board_only": True,
+        }
+        actual_flags = {
+            name: footprints[reference].get(name)
+            for name in flag_names
+        }
+        if (
+            any(type(value) is not bool for value in actual_flags.values())
+            or actual_flags != expected_flags
+        ):
+            raise FabExportError(
+                f"PCB {reference} assembly flags differ: "
+                f"expected={expected_flags}, actual={actual_flags}"
+            )
 
     bom_by_reference: dict[str, dict[str, str]] = {}
     for row in bom_rows:
