@@ -13,6 +13,11 @@ import pytest
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 INSPECTOR = Path("tools/inspect_kicad.py")
 EXPECTED_LAYERS = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+USB_ROUTE_PATHS = {
+    "D-": {"USB_DN", "USB_DN_MCU", "USB_DN_R"},
+    "D+": {"USB_DP", "USB_DP_MCU", "USB_DP_R"},
+}
+USB_ROUTE_NETS = set().union(*USB_ROUTE_PATHS.values())
 EXPECTED_FOOTPRINTS = {
     "F1": "Fuse:Fuse_1812_4532Metric",
     "D3": "Diode_SMD:D_SMB",
@@ -204,8 +209,17 @@ def test_checked_in_usb_copper_has_no_vias_or_back_layer_segments(
         for block in route_blocks
         if re.search(r'\(net "USB_D[NP](?:_MCU|_R)?"\)', block)
     ]
+    routed_nets = {
+        match.group(1)
+        for block in usb_blocks
+        if block.startswith("\t(segment")
+        if (match := re.search(r'\(net "(USB_D[NP](?:_MCU|_R)?)"\)', block))
+    }
 
-    assert usb_blocks, "checked-in PCB must route the native USB nets"
+    for polarity, path_nets in USB_ROUTE_PATHS.items():
+        assert path_nets <= routed_nets, (
+            f"{polarity} lacks routed copper on {sorted(path_nets - routed_nets)}"
+        )
     assert not [block for block in usb_blocks if block.startswith("\t(via")]
     assert all('(layer "F.Cu")' in block for block in usb_blocks)
     assert all(re.search(r"\(width 0\.285(?:0*)?\)", block) for block in usb_blocks)
@@ -336,20 +350,18 @@ def test_inspected_usb_pair_is_front_copper_only(
     kicad_report: dict[str, Any],
 ) -> None:
     board = _board(kicad_report)
-    usb_nets = {
-        "USB_DN",
-        "USB_DP",
-        "USB_DN_MCU",
-        "USB_DP_MCU",
-        "USB_DN_R",
-        "USB_DP_R",
-    }
     tracks = [
-        item for item in board["tracks"] if item.get("net") in usb_nets
+        item for item in board["tracks"] if item.get("net") in USB_ROUTE_NETS
     ]
-    vias = [item for item in board["vias"] if item.get("net") in usb_nets]
+    vias = [
+        item for item in board["vias"] if item.get("net") in USB_ROUTE_NETS
+    ]
 
-    assert tracks, "inspector must report the routed USB pair"
+    routed_nets = {item.get("net") for item in tracks}
+    for polarity, path_nets in USB_ROUTE_PATHS.items():
+        assert path_nets <= routed_nets, (
+            f"{polarity} lacks routed copper on {sorted(path_nets - routed_nets)}"
+        )
     assert {item.get("layer") for item in tracks} == {"F.Cu"}
     assert all(item.get("width_mm") == pytest.approx(0.285) for item in tracks)
     assert not vias
