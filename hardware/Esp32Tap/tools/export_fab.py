@@ -912,7 +912,7 @@ def validate_stage(
                 f"{filename} must have exactly one LPD and no LPC"
             )
         if re.search(
-            r"%(?:SR|LM|LR|LS|OF|SF|MI)[^%\r\n]*\*%",
+            r"%(?:SR|LM|LR|LS|OF|SF|MI|IP|AS|IR)[^%\r\n]*\*%",
             payload,
         ):
             raise FabExportError(
@@ -974,6 +974,16 @@ def validate_stage(
         for line in drill.splitlines()
         if line.strip()
     ]
+    unit_commands = [
+        command
+        for command in drill_commands
+        if re.fullmatch(r"(?:METRIC|INCH)(?:,.*)?", command)
+    ]
+    legacy_mode_commands = [
+        command
+        for command in drill_commands
+        if re.fullmatch(r"(?:M7[12]|G7[01]|ICI,.*)", command)
+    ]
     if (
         len(re.findall(r"(?m)^M48\s*$", drill)) != 1
         or drill_commands.count("M30") != 1
@@ -989,10 +999,10 @@ def validate_stage(
         )
         != 1
         or drill_commands.count("FMAT,2") != 1
-        or drill_commands.count("METRIC") != 1
+        or unit_commands != ["METRIC"]
         or drill_commands.count("G90") != 1
-        or "INCH" in drill_commands
         or "G91" in drill_commands
+        or legacy_mode_commands
     ):
         raise FabExportError(
             "Esp32Tap.drl must use exactly one absolute metric decimal mode"

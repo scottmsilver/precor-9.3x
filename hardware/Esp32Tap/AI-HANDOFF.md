@@ -51,6 +51,15 @@ The checked design includes:
 Those are internal consistency checks. They do not close the vendor, firmware,
 or physical gates listed below.
 
+The final PCB reroute is identified by PCB SHA-256
+`353087eaddc0e548db4c084c814f7604a2476be857f8aa93b27ea9794c18555c`.
+U2 VIN through C4 to required C3 is 4.206 mm total on 0.60 mm F.Cu with no
+via; the bootstrap connection is 2.205 mm and its copper loop is 6.592 mm.
+The matching deterministic fabrication ZIP SHA-256 is
+`ec4c982ad43ada44846b0e20741df945f166b8d2c17858c47ae7d2ea09f73d83`.
+Do not compare or upload a package with different hashes without reproducing
+the entire validation record.
+
 ## Firmware contract Claude must implement
 
 `firmware/safety_model.py` is an executable **host reference**, not production

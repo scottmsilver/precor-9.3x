@@ -41,6 +41,29 @@ The DRC policy contains one intentional ignored check: silkscreen clipped by
 the board edge at the module's off-board antenna geometry. The validator
 requires that exact ignored set and rejects additions.
 
+The final buck input layout was independently replayed after rerouting. The
+U2 VIN pin-to-C4 path is 2.052 mm and C4-to-required-C3 path is 2.154 mm:
+4.206 mm total on 0.60 mm F.Cu with no via. C4 and C3 ground branches reach
+their vias in 1.229 and 1.030 mm; U2 ground reaches its via in 0.486 mm. The
+bootstrap path is 2.205 mm and its complete modeled copper loop is 6.592 mm.
+These measurements close the earlier placement/layout defect; switching
+ripple, loop stability, EMI, and thermal behavior remain physical gates.
+
+## Current artifact identity
+
+These hashes identify the repository evidence reviewed here. They do not
+replace a vendor preview or physical validation.
+
+| Artifact | SHA-256 |
+|---|---|
+| `kicad/Esp32Tap.kicad_pcb` | `353087eaddc0e548db4c084c814f7604a2476be857f8aa93b27ea9794c18555c` |
+| `kicad/Esp32Tap-gerbers.zip` | `ec4c982ad43ada44846b0e20741df945f166b8d2c17858c47ae7d2ea09f73d83` |
+| `bom/BOM.csv` | `58fd75503d1d6af46115d48dd2a150731eb25bb720ef6c99a0cbf018ad2d340d` |
+| `bom/CPL-positions.csv` | `4274b34c245ced0972235424dcd430626b52bf113d36990ea82fc58991b9b160` |
+| `bom/JLC-STOCK-SNAPSHOT.json` | `6b7bd004e8121ca75cdd4b373ac8278e1670075b0626e9f14815498ee8e95284` |
+| `enclosure/esp32tap_base.stl` | `4ec0ed81e3127cb441fa7fde67e19e435497c6f442c73ff881d35fcdc3162b77` |
+| `enclosure/esp32tap_lid.stl` | `b61b33f5d91865cfa4b9e02049225de65f293b3328e116cb94a99d0aae9a3468` |
+
 ## Dual-ngspice evidence
 
 Seven decks run three times on both engines. The assertion manifest fixes

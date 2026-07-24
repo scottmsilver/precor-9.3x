@@ -362,11 +362,14 @@ def test_normalization_fails_if_required_creation_date_is_missing(
         ("combined-profile-arc", "profile"),
         ("profile-step-repeat", "transform"),
         ("profile-transform", "transform"),
+        ("legacy-image-polarity", "transform"),
         ("drill-no-tools", "drill"),
         ("drill-no-plated-hit", "Plated"),
         ("drill-no-npth-hit", "NonPlated"),
         ("drill-incremental", "absolute metric decimal"),
         ("drill-inch", "absolute metric decimal"),
+        ("drill-inch-suffixed", "absolute metric decimal"),
+        ("drill-ici", "absolute metric decimal"),
     ],
 )
 def test_stage_validation_fails_closed(
@@ -661,6 +664,15 @@ def test_stage_validation_fails_closed(
             ),
             encoding="utf-8",
         )
+    elif mutation == "legacy-image-polarity":
+        copper = stage / "Esp32Tap-F_Cu.gtl"
+        copper.write_text(
+            copper.read_text(encoding="utf-8").replace(
+                "%LPD*%",
+                "%IPNEG*%\n%LPD*%",
+            ),
+            encoding="utf-8",
+        )
     elif mutation == "drill-no-tools":
         drill = stage / "Esp32Tap.drl"
         drill.write_text(
@@ -698,12 +710,30 @@ def test_stage_validation_fails_closed(
             ),
             encoding="utf-8",
         )
-    else:
+    elif mutation == "drill-inch":
         drill = stage / "Esp32Tap.drl"
         drill.write_text(
             drill.read_text(encoding="utf-8").replace(
                 "METRIC",
                 "METRIC\nINCH",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "drill-inch-suffixed":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "METRIC",
+                "METRIC\nINCH,LZ",
+            ),
+            encoding="utf-8",
+        )
+    else:
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8").replace(
+                "G90",
+                "G90\nICI,ON",
             ),
             encoding="utf-8",
         )

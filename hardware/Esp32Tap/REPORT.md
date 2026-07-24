@@ -113,6 +113,11 @@ enumeration and eye-margin testing.
   unconnected pads, and zero footprint errors. The locked ignored item is the
   intentional silkscreen clipping associated with the off-board antenna
   geometry.
+- The rerouted buck input path from U2 through local C4 to required C3 is
+  4.206 mm total, 0.60 mm wide, and via-free. The bootstrap connection is
+  2.205 mm and its copper loop is 6.592 mm. Independent replay found no
+  remaining prototype-layout blocker; physical ripple, load-step, EMI, and
+  thermal checks remain open.
 - The deterministic archive has exactly 13 expected members, including both
   inner copper layers, Excellon drill data, and Gerber job metadata.
 - Assembly audit binds design, schematic, PCB, DNP flags, BOM, CPL, LCSC code,
