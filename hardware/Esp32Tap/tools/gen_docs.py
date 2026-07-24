@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -156,13 +159,6 @@ def render_netlist() -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_netlist(root: Path = ROOT) -> Path:
-    output = root / "NETLIST.md"
-    output.write_text(render_netlist(), encoding="utf-8")
-    print(f"wrote {output.relative_to(root)}")
-    return output
-
-
 def populated_component(reference: str, component: tuple[Any, ...]) -> bool:
     """Return whether a design component belongs in assembly outputs."""
     return reference not in design.DNP and component[4] != "none"
@@ -197,58 +193,55 @@ def bom_groups() -> dict[tuple[Any, ...], list[str]]:
     return groups
 
 
-def write_bom(root: Path = ROOT) -> Path:
-    output_directory = root / "bom"
-    output_directory.mkdir(parents=True, exist_ok=True)
-    output = output_directory / "BOM.csv"
+def render_bom() -> tuple[str, float]:
+    """Render the assembly BOM without touching its destination."""
+    output = io.StringIO(newline="")
     total = 0.0
-    with output.open("w", newline="", encoding="utf-8") as bom_file:
-        writer = csv.writer(bom_file, lineterminator="\n")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        [
+            "Comment",
+            "Designator",
+            "Footprint",
+            "LCSC Part #",
+            "JLC class",
+            "Qty",
+            "Unit cost (USD)",
+            "Ext cost (USD)",
+            "Description",
+        ]
+    )
+    for key, references in bom_groups().items():
+        (
+            value,
+            _footprint_library,
+            footprint,
+            lcsc,
+            jlc_class,
+            unit_cost,
+            description,
+        ) = key
+        quantity = len(references)
+        extended_cost = quantity * unit_cost
+        total += extended_cost
         writer.writerow(
             [
-                "Comment",
-                "Designator",
-                "Footprint",
-                "LCSC Part #",
-                "JLC class",
-                "Qty",
-                "Unit cost (USD)",
-                "Ext cost (USD)",
-                "Description",
-            ]
-        )
-        for key, references in bom_groups().items():
-            (
                 value,
-                _footprint_library,
+                ",".join(references),
                 footprint,
                 lcsc,
                 jlc_class,
-                unit_cost,
+                quantity,
+                f"{unit_cost:.3f}",
+                f"{extended_cost:.3f}",
                 description,
-            ) = key
-            quantity = len(references)
-            extended_cost = quantity * unit_cost
-            total += extended_cost
-            writer.writerow(
-                [
-                    value,
-                    ",".join(references),
-                    footprint,
-                    lcsc,
-                    jlc_class,
-                    quantity,
-                    f"{unit_cost:.3f}",
-                    f"{extended_cost:.3f}",
-                    description,
-                ]
-            )
-    print(f"wrote {output.relative_to(root)} (parts/board ≈ ${total:.2f})")
-    return output
+            ]
+        )
+    return output.getvalue(), total
 
 
-def write_cpl(root: Path = ROOT) -> Path:
-    """Generate the CPL from the placed board, importing pcbnew lazily."""
+def load_cpl_context(root: Path) -> tuple[Any, list[Any]]:
+    """Import pcbnew and load the board once before rendering any output."""
     import pcbnew
 
     board_path = root / "kicad" / "Esp32Tap.kicad_pcb"
@@ -257,62 +250,161 @@ def write_cpl(root: Path = ROOT) -> Path:
             f"cannot generate CPL; KiCad board does not exist: {board_path}"
         )
     board = pcbnew.LoadBoard(str(board_path))
-    output_directory = root / "bom"
-    output_directory.mkdir(parents=True, exist_ok=True)
-    output = output_directory / "CPL-positions.csv"
+    if board is None:
+        raise RuntimeError(f"pcbnew failed to load KiCad board: {board_path}")
+    try:
+        footprints = list(board.GetFootprints())
+    except (AttributeError, TypeError) as error:
+        raise RuntimeError(
+            f"pcbnew loaded an invalid KiCad board: {board_path}"
+        ) from error
+    return pcbnew, footprints
+
+
+def render_cpl(pcbnew: Any, footprints: list[Any]) -> str:
+    """Render the CPL from a preflighted board without writing it."""
+    output = io.StringIO(newline="")
     auxiliary_origin_x = 100.0
     auxiliary_origin_y = 155.0
-
-    with output.open("w", newline="", encoding="utf-8") as cpl_file:
-        writer = csv.writer(cpl_file, lineterminator="\n")
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow(
+        [
+            "Designator",
+            "Val",
+            "Package",
+            "Mid X",
+            "Mid Y",
+            "Rotation",
+            "Layer",
+        ]
+    )
+    for footprint in sorted(
+        footprints,
+        key=lambda item: item.GetReference(),
+    ):
+        reference = footprint.GetReference()
+        component = design.COMPONENTS.get(reference)
+        if component is None or not populated_component(
+            reference,
+            component,
+        ):
+            continue
+        position = footprint.GetPosition()
+        x_position = pcbnew.ToMM(position.x) - auxiliary_origin_x
+        y_position = auxiliary_origin_y - pcbnew.ToMM(position.y)
         writer.writerow(
             [
-                "Designator",
-                "Val",
-                "Package",
-                "Mid X",
-                "Mid Y",
-                "Rotation",
-                "Layer",
+                reference,
+                footprint.GetValue(),
+                footprint.GetFPID().GetLibItemName(),
+                f"{x_position:.3f}mm",
+                f"{y_position:.3f}mm",
+                f"{footprint.GetOrientationDegrees():.0f}",
+                "Top",
             ]
         )
-        footprints = sorted(
-            board.GetFootprints(),
-            key=lambda footprint: footprint.GetReference(),
+    return output.getvalue()
+
+
+def validate_staged_outputs(
+    staging_directory: Path,
+    include_cpl: bool,
+) -> None:
+    """Validate staged text and CSV shape before replacing destinations."""
+    netlist_bytes = (staging_directory / "NETLIST.md").read_bytes()
+    if b"\r\n" in netlist_bytes:
+        raise ValueError("NETLIST.md must use LF line endings")
+    netlist = netlist_bytes.decode("utf-8")
+    if not netlist.startswith("# Esp32Tap Rev B NETLIST"):
+        raise ValueError("staged NETLIST.md has an invalid heading")
+
+    expected_headers = {
+        Path("bom/BOM.csv"): [
+            "Comment",
+            "Designator",
+            "Footprint",
+            "LCSC Part #",
+            "JLC class",
+            "Qty",
+            "Unit cost (USD)",
+            "Ext cost (USD)",
+            "Description",
+        ],
+    }
+    if include_cpl:
+        expected_headers[Path("bom/CPL-positions.csv")] = [
+            "Designator",
+            "Val",
+            "Package",
+            "Mid X",
+            "Mid Y",
+            "Rotation",
+            "Layer",
+        ]
+    for relative_path, expected_header in expected_headers.items():
+        content_bytes = (staging_directory / relative_path).read_bytes()
+        if b"\r\n" in content_bytes:
+            raise ValueError(f"{relative_path} must use LF line endings")
+        content = content_bytes.decode("utf-8")
+        rows = list(csv.reader(io.StringIO(content)))
+        if not rows or rows[0] != expected_header:
+            raise ValueError(f"{relative_path} has an invalid CSV header")
+
+
+def generate_outputs(root: Path, skip_cpl: bool) -> None:
+    """Preflight, render, stage, validate, then replace intended outputs."""
+    cpl_context = None
+    if not skip_cpl:
+        cpl_context = load_cpl_context(root)
+
+    bom, total = render_bom()
+    outputs = {
+        Path("NETLIST.md"): render_netlist(),
+        Path("bom/BOM.csv"): bom,
+    }
+    if cpl_context is not None:
+        pcbnew, footprints = cpl_context
+        outputs[Path("bom/CPL-positions.csv")] = render_cpl(
+            pcbnew,
+            footprints,
         )
-        for footprint in footprints:
-            reference = footprint.GetReference()
-            component = design.COMPONENTS.get(reference)
-            if component is None or not populated_component(
-                reference,
-                component,
-            ):
-                continue
-            position = footprint.GetPosition()
-            x_position = pcbnew.ToMM(position.x) - auxiliary_origin_x
-            y_position = auxiliary_origin_y - pcbnew.ToMM(position.y)
-            writer.writerow(
-                [
-                    reference,
-                    footprint.GetValue(),
-                    footprint.GetFPID().GetLibItemName(),
-                    f"{x_position:.3f}mm",
-                    f"{y_position:.3f}mm",
-                    f"{footprint.GetOrientationDegrees():.0f}",
-                    "Top",
-                ]
+
+    root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".esp32tap-docs-",
+        dir=root,
+    ) as temporary:
+        staging_directory = Path(temporary)
+        for relative_path, content in outputs.items():
+            staged = staging_directory / relative_path
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_text(
+                content,
+                encoding="utf-8",
+                newline="\n",
             )
-    print(f"wrote {output.relative_to(root)}")
-    return output
+        validate_staged_outputs(
+            staging_directory,
+            include_cpl=not skip_cpl,
+        )
+        for relative_path in outputs:
+            destination = root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(
+                staging_directory / relative_path,
+                destination,
+            )
+
+    print("wrote NETLIST.md")
+    print(f"wrote bom/BOM.csv (parts/board ≈ ${total:.2f})")
+    if not skip_cpl:
+        print("wrote bom/CPL-positions.csv")
 
 
 def main(arguments: list[str] | None = None) -> None:
     args = parse_args(arguments)
     design.validate()
-    write_netlist()
-    write_bom()
-    if not args.skip_cpl:
-        write_cpl()
+    generate_outputs(ROOT, skip_cpl=args.skip_cpl)
 
 
 if __name__ == "__main__":

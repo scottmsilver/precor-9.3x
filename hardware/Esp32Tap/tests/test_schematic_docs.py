@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import re
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,6 +23,19 @@ GENERATED_SCHEMATIC_FILES = (
     "esp32tap.kicad_sym",
     "sym-lib-table",
 )
+DETERMINISTIC_ARTIFACTS = (
+    ("kicad/Esp32Tap.kicad_sch", "kicad/Esp32Tap.kicad_sch"),
+    ("kicad/esp32tap.kicad_sym", "kicad/esp32tap.kicad_sym"),
+    ("kicad/sym-lib-table", "kicad/sym-lib-table"),
+    ("NETLIST.md", "NETLIST.md"),
+    ("bom/BOM.csv", "bom/BOM.csv"),
+)
+ALLOWED_ERC_IGNORED_CHECKS = {
+    "Global label only appears once in the schematic",
+    "Four connection points are joined together",
+    "SPICE model issue",
+    "Assigned footprint doesn't match footprint filters",
+}
 EXPECTED_POWER_FLAGS = {
     "#FLG01": "GND",
     "#FLG02": "VIN",
@@ -28,6 +43,18 @@ EXPECTED_POWER_FLAGS = {
     "#FLG04": "VBUS",
 }
 SEXPR_TOKEN = re.compile(r'\s*(\(|\)|"(?:\\.|[^"\\])*"|[^\s()]+)')
+
+
+def _load_tool_module(path: Path, module_name: str) -> Any:
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    sys.path.insert(0, str(path.parent))
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
 
 
 def _parse_sexpr(source: str) -> list[Any]:
@@ -178,6 +205,12 @@ def test_schematic_components_and_pin_types_exactly_match_design(
         assert _atom(_child(instance, "dnp")[1]) == (
             "yes" if reference in design.DNP else "no"
         )
+        expected_in_bom = (
+            reference not in design.DNP and component[4] != "none"
+        )
+        assert _atom(_child(instance, "in_bom")[1]) == (
+            "yes" if expected_in_bom else "no"
+        )
 
         instance_pads = {
             str(_atom(pin[1]))
@@ -187,6 +220,9 @@ def test_schematic_components_and_pin_types_exactly_match_design(
 
         library_id = str(_atom(_child(instance, "lib_id")[1]))
         assert library_id in libraries
+        assert _atom(_child(libraries[library_id], "in_bom")[1]) == (
+            "yes" if expected_in_bom else "no"
+        )
         library_pins = _library_pins(libraries[library_id])
         assert set(library_pins) == set(pin_names)
         for pad, name in pin_names.items():
@@ -347,6 +383,116 @@ def test_schematic_generation_is_deterministic(
     assert second == first
 
 
+def test_uuid_identity_encoding_cannot_alias_slash_containing_parts(
+    esp32tap_dir: Path,
+) -> None:
+    generator = _load_tool_module(
+        esp32tap_dir / "tools" / "gen_sch.py",
+        "_esp32tap_gen_sch_uuid_test",
+    )
+    assert generator.stable_uuid("label", "A/B", "C") != (
+        generator.stable_uuid("label", "A", "B/C")
+    )
+
+
+def test_schematic_render_rejects_duplicate_uuids(
+    esp32tap_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generator = _load_tool_module(
+        esp32tap_dir / "tools" / "gen_sch.py",
+        "_esp32tap_gen_sch_collision_test",
+    )
+    duplicate = "00000000-0000-5000-8000-000000000000"
+    monkeypatch.setattr(
+        generator,
+        "stable_uuid",
+        lambda *_identity: duplicate,
+    )
+    with pytest.raises(ValueError, match="duplicate schematic UUID"):
+        generator.render_schematic()
+
+
+def _seed_schematic_outputs(output_directory: Path) -> dict[Path, bytes]:
+    output_directory.mkdir(parents=True)
+    sentinels = {
+        output_directory / filename: f"old {filename}\n".encode()
+        for filename in GENERATED_SCHEMATIC_FILES
+    }
+    sentinels[output_directory / "Esp32Tap.kicad_pro"] = (
+        b'{"old": true}\n'
+    )
+    for path, content in sentinels.items():
+        path.write_bytes(content)
+    return sentinels
+
+
+def test_schematic_staging_failure_preserves_every_destination(
+    tmp_path: Path,
+    esp32tap_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generator = _load_tool_module(
+        esp32tap_dir / "tools" / "gen_sch.py",
+        "_esp32tap_gen_sch_stage_failure_test",
+    )
+    output_directory = tmp_path / "kicad"
+    sentinels = _seed_schematic_outputs(output_directory)
+    original_write_text = Path.write_text
+
+    def fail_during_staging(
+        path: Path,
+        data: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> int:
+        if path.name == "sym-lib-table":
+            raise RuntimeError("injected staged render failure")
+        return original_write_text(path, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_during_staging)
+    with pytest.raises(RuntimeError, match="injected staged render failure"):
+        generator.write_outputs(output_directory)
+
+    assert {
+        path: path.read_bytes()
+        for path in sentinels
+    } == sentinels
+
+
+def test_schematic_validation_failure_preserves_every_destination(
+    tmp_path: Path,
+    esp32tap_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generator = _load_tool_module(
+        esp32tap_dir / "tools" / "gen_sch.py",
+        "_esp32tap_gen_sch_validation_failure_test",
+    )
+    output_directory = tmp_path / "kicad"
+    sentinels = _seed_schematic_outputs(output_directory)
+
+    def fail_validation(_staging_directory: Path) -> None:
+        raise RuntimeError("injected KiCad validation failure")
+
+    monkeypatch.setattr(
+        generator,
+        "validate_staged_outputs",
+        fail_validation,
+        raising=False,
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="injected KiCad validation failure",
+    ):
+        generator.write_outputs(output_directory)
+
+    assert {
+        path: path.read_bytes()
+        for path in sentinels
+    } == sentinels
+
+
 def _fake_design_source() -> str:
     return """\
 def part(
@@ -401,6 +547,7 @@ def _docs_sandbox(
     tmp_path: Path,
     esp32tap_dir: Path,
     pcbnew_source: str,
+    design_source: str | None = None,
 ) -> tuple[Path, Path]:
     sandbox = tmp_path / "Esp32Tap"
     tools = sandbox / "tools"
@@ -409,7 +556,7 @@ def _docs_sandbox(
     tools.mkdir()
     shutil.copy2(esp32tap_dir / "tools" / "gen_docs.py", tools)
     (tools / "design.py").write_text(
-        _fake_design_source(),
+        design_source or _fake_design_source(),
         encoding="utf-8",
     )
     (tools / "pcbnew.py").write_text(pcbnew_source, encoding="utf-8")
@@ -428,6 +575,8 @@ def test_skip_cpl_avoids_pcbnew_and_preserves_cpl(
     cpl = sandbox / "bom" / "CPL-positions.csv"
     sentinel = b"existing Rev A CPL must remain byte-identical\n"
     cpl.write_bytes(sentinel)
+    cpl.chmod(0o444)
+    before = cpl.stat()
 
     completed = subprocess.run(
         [sys.executable, "gen_docs.py", "--skip-cpl"],
@@ -439,6 +588,18 @@ def test_skip_cpl_avoids_pcbnew_and_preserves_cpl(
 
     assert completed.returncode == 0, completed.stderr
     assert cpl.read_bytes() == sentinel
+    after = cpl.stat()
+    assert (
+        after.st_mode,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ) == (
+        before.st_mode,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    )
 
 
 def test_gen_docs_rejects_unknown_arguments_clearly(
@@ -503,6 +664,126 @@ def test_bom_keeps_same_value_parts_with_distinct_metadata_separate(
     assert by_reference["R10"]["Footprint"] == "Footprint_B"
     assert by_reference["R11"]["LCSC Part #"] == "C1006"
     assert by_reference["R12"]["LCSC Part #"] == "C1007"
+
+
+def _seed_doc_outputs(sandbox: Path) -> dict[Path, bytes]:
+    sentinels = {
+        sandbox / "NETLIST.md": b"old netlist\n",
+        sandbox / "bom" / "BOM.csv": b"old bom\n",
+        sandbox / "bom" / "CPL-positions.csv": b"old cpl\n",
+    }
+    for path, content in sentinels.items():
+        path.write_bytes(content)
+    return sentinels
+
+
+def _assert_files_unchanged(sentinels: dict[Path, bytes]) -> None:
+    assert {
+        path: path.read_bytes()
+        for path in sentinels
+    } == sentinels
+
+
+def test_default_docs_dependency_failure_is_atomic(
+    tmp_path: Path,
+    esp32tap_dir: Path,
+) -> None:
+    sandbox, tools = _docs_sandbox(
+        tmp_path,
+        esp32tap_dir,
+        'raise RuntimeError("injected pcbnew import failure")\n',
+    )
+    (sandbox / "kicad" / "Esp32Tap.kicad_pcb").write_text(
+        "(kicad_pcb)",
+        encoding="utf-8",
+    )
+    sentinels = _seed_doc_outputs(sandbox)
+
+    completed = subprocess.run(
+        [sys.executable, "gen_docs.py"],
+        cwd=tools,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "injected pcbnew import failure" in completed.stderr
+    _assert_files_unchanged(sentinels)
+
+
+def test_default_docs_invalid_board_is_atomic(
+    tmp_path: Path,
+    esp32tap_dir: Path,
+) -> None:
+    pcbnew_source = """\
+def LoadBoard(_path):
+    return None
+
+
+def ToMM(value):
+    return value
+"""
+    sandbox, tools = _docs_sandbox(
+        tmp_path,
+        esp32tap_dir,
+        pcbnew_source,
+    )
+    (sandbox / "kicad" / "Esp32Tap.kicad_pcb").write_text(
+        "(kicad_pcb)",
+        encoding="utf-8",
+    )
+    sentinels = _seed_doc_outputs(sandbox)
+
+    completed = subprocess.run(
+        [sys.executable, "gen_docs.py"],
+        cwd=tools,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    _assert_files_unchanged(sentinels)
+
+
+def test_docs_render_failure_is_atomic(
+    tmp_path: Path,
+    esp32tap_dir: Path,
+) -> None:
+    design_source = _fake_design_source() + """\
+
+class ExplodingCost:
+    def __rmul__(self, _quantity):
+        raise RuntimeError("injected BOM render failure")
+
+    def __format__(self, _format_spec):
+        raise RuntimeError("injected BOM render failure")
+
+
+component = list(COMPONENTS["R3"])
+component[5] = ExplodingCost()
+COMPONENTS["R3"] = tuple(component)
+"""
+    sandbox, tools = _docs_sandbox(
+        tmp_path,
+        esp32tap_dir,
+        'raise RuntimeError("pcbnew must not be imported")\n',
+        design_source,
+    )
+    sentinels = _seed_doc_outputs(sandbox)
+
+    completed = subprocess.run(
+        [sys.executable, "gen_docs.py", "--skip-cpl"],
+        cwd=tools,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "injected BOM render failure" in completed.stderr
+    _assert_files_unchanged(sentinels)
 
 
 def test_default_docs_generation_filters_dnp_and_testpoints_from_cpl(
@@ -588,6 +869,186 @@ def ToMM(value):
     ) as cpl_file:
         rows = list(csv.DictReader(cpl_file))
     assert [row["Designator"] for row in rows] == ["R1", "R2"]
+
+
+@pytest.fixture
+def generated_tree(
+    tmp_path: Path,
+    esp32tap_dir: Path,
+) -> Path:
+    sandbox = tmp_path / "Esp32Tap"
+    tools = sandbox / "tools"
+    (sandbox / "kicad").mkdir(parents=True)
+    (sandbox / "bom").mkdir()
+    tools.mkdir()
+    for filename in ("design.py", "gen_sch.py", "gen_docs.py"):
+        shutil.copy2(esp32tap_dir / "tools" / filename, tools / filename)
+
+    for command in (
+        [sys.executable, "gen_sch.py"],
+        [sys.executable, "gen_docs.py", "--skip-cpl"],
+    ):
+        completed = subprocess.run(
+            command,
+            cwd=tools,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, (
+            f"{' '.join(command)} failed\n"
+            f"stdout:\n{completed.stdout}\n"
+            f"stderr:\n{completed.stderr}"
+        )
+    return sandbox
+
+
+def test_temp_generation_byte_matches_committed_artifacts(
+    generated_tree: Path,
+    esp32tap_dir: Path,
+) -> None:
+    for generated_relative, committed_relative in DETERMINISTIC_ARTIFACTS:
+        generated = generated_tree / generated_relative
+        committed = esp32tap_dir / committed_relative
+        assert generated.read_bytes() == committed.read_bytes(), (
+            f"committed artifact is stale: {committed_relative}"
+        )
+
+
+def _assert_erc_semantics(report: str) -> None:
+    summary = re.search(
+        r"\*\* ERC messages:\s+(\d+)\s+Errors\s+"
+        r"(\d+)\s+Warnings\s+(\d+)",
+        report,
+    )
+    assert summary is not None, report
+    assert tuple(int(value) for value in summary.groups()) == (0, 0, 0)
+    assert "; excluded" not in report.lower()
+    ignored = {
+        line.strip()[2:]
+        for line in report.splitlines()
+        if line.strip().startswith("- ")
+    }
+    assert ignored == ALLOWED_ERC_IGNORED_CHECKS
+
+
+def test_temp_generation_is_accepted_by_kicad(
+    generated_tree: Path,
+    tmp_path: Path,
+    design: SimpleNamespace,
+) -> None:
+    kicad = generated_tree / "kicad"
+    upgraded_symbols = tmp_path / "validated.kicad_sym"
+    symbol_check = subprocess.run(
+        [
+            "kicad-cli",
+            "sym",
+            "upgrade",
+            "--force",
+            "-o",
+            str(upgraded_symbols),
+            str(kicad / "esp32tap.kicad_sym"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert symbol_check.returncode == 0, symbol_check.stderr
+    assert upgraded_symbols.is_file()
+
+    xml_netlist = tmp_path / "Esp32Tap.xml"
+    netlist_check = subprocess.run(
+        [
+            "kicad-cli",
+            "sch",
+            "export",
+            "netlist",
+            "--format",
+            "kicadxml",
+            "-o",
+            str(xml_netlist),
+            str(kicad / "Esp32Tap.kicad_sch"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert netlist_check.returncode == 0, netlist_check.stderr
+    exported = ET.parse(xml_netlist).getroot()
+    components = exported.find("components")
+    assert components is not None
+    assert {
+        component.attrib["ref"]
+        for component in components
+    } == set(design.COMPONENTS)
+    nets = exported.find("nets")
+    assert nets is not None
+    actual_nets = {
+        net.attrib["name"]: {
+            (node.attrib["ref"], node.attrib["pin"])
+            for node in net.findall("node")
+        }
+        for net in nets
+    }
+    for net, pins in design.NETS.items():
+        assert actual_nets[net] == set(pins)
+
+    erc_report = tmp_path / "erc.rpt"
+    erc_check = subprocess.run(
+        [
+            "kicad-cli",
+            "sch",
+            "erc",
+            "--severity-all",
+            "--exit-code-violations",
+            "-o",
+            str(erc_report),
+            str(kicad / "Esp32Tap.kicad_sch"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert erc_check.returncode == 0, erc_check.stderr
+    _assert_erc_semantics(erc_report.read_text(encoding="utf-8"))
+
+    kicad_bom = tmp_path / "kicad-bom.csv"
+    bom_check = subprocess.run(
+        [
+            "kicad-cli",
+            "sch",
+            "export",
+            "bom",
+            "--fields",
+            "Reference",
+            "--labels",
+            "Reference",
+            "--exclude-dnp",
+            "-o",
+            str(kicad_bom),
+            str(kicad / "Esp32Tap.kicad_sch"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert bom_check.returncode == 0, bom_check.stderr
+    with kicad_bom.open(newline="", encoding="utf-8") as bom_file:
+        rows = list(csv.DictReader(bom_file))
+    assert {row["Reference"] for row in rows} == {
+        reference
+        for reference, component in design.COMPONENTS.items()
+        if reference not in design.DNP and component[4] != "none"
+    }
+
+
+def test_checked_in_erc_has_only_known_project_default_ignores(
+    esp32tap_dir: Path,
+) -> None:
+    report = (esp32tap_dir / "kicad" / "erc.rpt").read_text(
+        encoding="utf-8"
+    )
+    _assert_erc_semantics(report)
 
 
 def _expected_component_line(

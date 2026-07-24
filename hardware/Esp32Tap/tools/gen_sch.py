@@ -10,6 +10,10 @@ the generated connectivity a literal rendering of ``design.NETS`` and
 from __future__ import annotations
 
 import json
+import os
+import re
+import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -40,11 +44,38 @@ POWER_FLAGS = (
     ("#FLG03", "+3V3"),
     ("#FLG04", "VBUS"),
 )
+UUID_PATTERN = re.compile(r'\(uuid "([^"]+)"\)')
 
 
-def stable_uuid(identity: str) -> str:
+def stable_uuid(*identity: object) -> str:
     """Return a project-stable UUID for one generated schematic identity."""
-    return str(uuid.uuid5(UUID_NAMESPACE, identity))
+    encoded_identity = json.dumps(
+        identity,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return str(uuid.uuid5(UUID_NAMESPACE, encoded_identity))
+
+
+def included_in_bom(reference: str, component: tuple[object, ...]) -> bool:
+    """Use the design assembly metadata for schematic BOM membership."""
+    return reference not in design.DNP and component[4] != "none"
+
+
+def validate_uuid_uniqueness(schematic: str) -> None:
+    """Reject invalid or duplicate object UUIDs before writing anything."""
+    seen = set()
+    duplicates = set()
+    for value in UUID_PATTERN.findall(schematic):
+        uuid.UUID(value)
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    if duplicates:
+        raise ValueError(
+            "duplicate schematic UUID(s): "
+            + ", ".join(sorted(duplicates))
+        )
 
 
 def escape(value: object) -> str:
@@ -92,6 +123,7 @@ def symbol_definition(
     symbol_name: str,
     reference: str,
     pins: list[tuple[str, str]],
+    in_bom: bool,
 ) -> str:
     """Render one typed generated symbol definition."""
     height = (len(pins) + 1) * 2.54
@@ -100,7 +132,8 @@ def symbol_definition(
     output = [
         f'    (symbol "esp32tap:{symbol_name}"',
         "      (pin_names (offset 1.016))"
-        " (exclude_from_sim no) (in_bom yes) (on_board yes)",
+        f" (exclude_from_sim no) (in_bom "
+        f"{'yes' if in_bom else 'no'}) (on_board yes)",
         (
             f'      (property "Reference" "{reference_prefix(reference)}" '
             f"(at {body_width / 2:.2f} {half_height + 1.27:.2f} 0) "
@@ -237,7 +270,7 @@ def pin_connectivity() -> tuple[
 
 def render_schematic() -> tuple[str, list[str]]:
     """Render the complete schematic and reusable library definitions."""
-    root_uuid = stable_uuid("schematic/root")
+    root_uuid = stable_uuid("schematic", "root")
     pin_net, no_connects = pin_connectivity()
     placements = component_placements()
     body = []
@@ -256,8 +289,14 @@ def render_schematic() -> tuple[str, list[str]]:
         ) = component
         pins = sorted_pins(pinmap)
         symbol_name = f"SYM_{reference}"
+        assembly_fitted = included_in_bom(reference, component)
         library_symbols.append(
-            symbol_definition(symbol_name, reference, pins)
+            symbol_definition(
+                symbol_name,
+                reference,
+                pins,
+                assembly_fitted,
+            )
         )
         x_position, top = placements[reference]
         half_height = (len(pins) + 1) * 2.54 / 2
@@ -270,11 +309,12 @@ def render_schematic() -> tuple[str, list[str]]:
                     f"(at {x_position:.2f} {y_center:.2f} 0) (unit 1)"
                 ),
                 (
-                    "    (exclude_from_sim no) (in_bom yes) "
+                    "    (exclude_from_sim no) "
+                    f"(in_bom {'yes' if assembly_fitted else 'no'}) "
                     f"(on_board yes) (dnp {dnp})"
                 ),
                 (
-                    f'    (uuid "{stable_uuid(f"component/{reference}")}")'
+                    f'    (uuid "{stable_uuid("component", reference)}")'
                 ),
                 (
                     f'    (property "Reference" "{escape(reference)}" '
@@ -324,7 +364,7 @@ def render_schematic() -> tuple[str, list[str]]:
         for pad, _pin_name in pins:
             body.append(
                 f'    (pin "{escape(pad)}" '
-                f'(uuid "{stable_uuid(f"component/{reference}/pin/{pad}")}"))'
+                f'(uuid "{stable_uuid("component", reference, "pin", pad)}"))'
             )
         body.extend(
             [
@@ -344,7 +384,7 @@ def render_schematic() -> tuple[str, list[str]]:
             if design_pin in no_connects:
                 body.append(
                     f"  (no_connect (at {pin_x:.2f} {pin_y:.2f}) "
-                    f'(uuid "{stable_uuid(f"no-connect/{reference}/{pad}")}"))'
+                    f'(uuid "{stable_uuid("no-connect", reference, pad)}"))'
                 )
                 continue
             net = pin_net[design_pin]
@@ -353,7 +393,7 @@ def render_schematic() -> tuple[str, list[str]]:
                 f"(at {pin_x:.2f} {pin_y:.2f} 180) "
                 "(fields_autoplaced yes) "
                 "(effects (font (size 1.27 1.27)) (justify right)) "
-                f'(uuid "{stable_uuid(f"label/{reference}/{pad}/{net}")}"))'
+                f'(uuid "{stable_uuid("label", reference, pad, net)}"))'
             )
 
     library_symbols.append(power_flag_definition())
@@ -371,7 +411,7 @@ def render_schematic() -> tuple[str, list[str]]:
                     "(on_board no) (dnp no)"
                 ),
                 (
-                    f'    (uuid "{stable_uuid(f"power-flag/{net}")}")'
+                    f'    (uuid "{stable_uuid("power-flag", net)}")'
                 ),
                 (
                     f'    (property "Reference" "{reference}" '
@@ -409,7 +449,7 @@ def render_schematic() -> tuple[str, list[str]]:
                 ),
                 (
                     '    (pin "1" '
-                    f'(uuid "{stable_uuid(f"power-flag/{net}/pin/1")}"))'
+                    f'(uuid "{stable_uuid("power-flag", net, "pin", "1")}"))'
                 ),
                 (
                     f'    (instances (project "{PROJECT}" '
@@ -422,7 +462,7 @@ def render_schematic() -> tuple[str, list[str]]:
                     f"(at {x_position - 2.54:.2f} {y_position:.2f} 180) "
                     "(fields_autoplaced yes) "
                     "(effects (font (size 1.27 1.27)) (justify right)) "
-                    f'(uuid "{stable_uuid(f"power-flag/{net}/label")}"))'
+                    f'(uuid "{stable_uuid("power-flag", net, "label")}"))'
                 ),
             ]
         )
@@ -446,13 +486,12 @@ def render_schematic() -> tuple[str, list[str]]:
         '  (sheet_instances (path "/" (page "1")))',
         ")",
     ]
-    return "\n".join(schematic) + "\n", library_symbols
+    rendered = "\n".join(schematic) + "\n"
+    validate_uuid_uniqueness(rendered)
+    return rendered, library_symbols
 
 
-def write_outputs(output_directory: Path) -> None:
-    schematic, library_symbols = render_schematic()
-    output_directory.mkdir(parents=True, exist_ok=True)
-
+def render_symbol_library(library_symbols: list[str]) -> str:
     library = [
         '(kicad_symbol_lib (version 20231120) '
         '(generator "esp32tap_gen")'
@@ -466,40 +505,143 @@ def write_outputs(output_directory: Path) -> None:
         for symbol in library_symbols
     )
     library.append(")")
-    (output_directory / "esp32tap.kicad_sym").write_text(
-        "\n".join(library) + "\n",
-        encoding="utf-8",
-    )
-    (output_directory / "sym-lib-table").write_text(
+    return "\n".join(library) + "\n"
+
+
+def render_symbol_table() -> str:
+    return (
         "(sym_lib_table\n"
         "  (version 7)\n"
         '  (lib (name "esp32tap")(type "KiCad")'
         '(uri "${KIPRJMOD}/esp32tap.kicad_sym")'
         '(options "")(descr "generated"))\n'
-        ")\n",
-        encoding="utf-8",
+        ")\n"
     )
 
-    project_path = output_directory / "Esp32Tap.kicad_pro"
-    if not project_path.exists():
-        project_path.write_text(
-            json.dumps(
-                {
-                    "meta": {
-                        "filename": "Esp32Tap.kicad_pro",
-                        "version": 3,
-                    },
-                    "sheets": [],
-                    "boards": [],
+
+def render_project() -> str:
+    return (
+        json.dumps(
+            {
+                "meta": {
+                    "filename": "Esp32Tap.kicad_pro",
+                    "version": 3,
                 },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+                "sheets": [],
+                "boards": [],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def run_kicad_validation(command: list[str], label: str) -> None:
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"{label} failed with exit code {completed.returncode}\n"
+            f"stdout:\n{completed.stdout}\n"
+            f"stderr:\n{completed.stderr}"
         )
 
+
+def validate_staged_outputs(staging_directory: Path) -> None:
+    """Have KiCad parse the staged symbol library and schematic."""
+    run_kicad_validation(
+        [
+            "kicad-cli",
+            "sym",
+            "upgrade",
+            "--force",
+            "-o",
+            str(staging_directory / "validated.kicad_sym"),
+            str(staging_directory / "esp32tap.kicad_sym"),
+        ],
+        "KiCad symbol validation",
+    )
+    schematic = staging_directory / "Esp32Tap.kicad_sch"
+    run_kicad_validation(
+        [
+            "kicad-cli",
+            "sch",
+            "export",
+            "netlist",
+            "--format",
+            "kicadxml",
+            "-o",
+            str(staging_directory / "validated.xml"),
+            str(schematic),
+        ],
+        "KiCad schematic parse",
+    )
+    erc_report = staging_directory / "validated-erc.rpt"
+    run_kicad_validation(
+        [
+            "kicad-cli",
+            "sch",
+            "erc",
+            "--severity-all",
+            "--exit-code-violations",
+            "-o",
+            str(erc_report),
+            str(schematic),
+        ],
+        "KiCad ERC",
+    )
+    report = erc_report.read_text(encoding="utf-8")
+    summary = re.search(
+        r"\*\* ERC messages:\s+(\d+)\s+Errors\s+"
+        r"(\d+)\s+Warnings\s+(\d+)",
+        report,
+    )
+    if summary is None or any(int(value) for value in summary.groups()):
+        raise RuntimeError(f"KiCad ERC found violations\n{report}")
+
+
+def write_outputs(output_directory: Path) -> None:
+    """Stage and validate every output before replacing destinations."""
+    schematic, library_symbols = render_schematic()
+    outputs = {
+        "Esp32Tap.kicad_sch": schematic,
+        "esp32tap.kicad_sym": render_symbol_library(library_symbols),
+        "sym-lib-table": render_symbol_table(),
+        "Esp32Tap.kicad_pro": render_project(),
+    }
+    output_directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".esp32tap-sch-",
+        dir=output_directory,
+    ) as temporary:
+        staging_directory = Path(temporary)
+        for filename, content in outputs.items():
+            (staging_directory / filename).write_text(
+                content,
+                encoding="utf-8",
+                newline="\n",
+            )
+        validate_staged_outputs(staging_directory)
+
+        replacements = [
+            "Esp32Tap.kicad_sch",
+            "esp32tap.kicad_sym",
+            "sym-lib-table",
+        ]
+        project_path = output_directory / "Esp32Tap.kicad_pro"
+        if not project_path.exists():
+            replacements.append("Esp32Tap.kicad_pro")
+        for filename in replacements:
+            os.replace(
+                staging_directory / filename,
+                output_directory / filename,
+            )
+
     schematic_path = output_directory / "Esp32Tap.kicad_sch"
-    schematic_path.write_text(schematic, encoding="utf-8")
     print(f"wrote {schematic_path}")
 
 

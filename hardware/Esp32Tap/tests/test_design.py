@@ -266,7 +266,6 @@ EXPECTED_ACTIVE_PIN_TYPES = {
     ("U2", "3"): "power_in",
     ("U2", "4"): "input",
     ("U2", "5"): "input",
-    ("U2", "6"): "power_out",
     ("U3", "1"): "bidirectional",
     ("U3", "2"): "power_in",
     ("U3", "3"): "bidirectional",
@@ -941,8 +940,35 @@ def test_all_non_passive_pin_types_match_independent_contract(
         if pin_type != "passive"
     }
 
-    assert len(EXPECTED_ACTIVE_PIN_TYPES) == 83
+    assert len(EXPECTED_ACTIVE_PIN_TYPES) == 82
     assert actual == EXPECTED_ACTIVE_PIN_TYPES
+
+
+def test_u2_bootstrap_pin_is_passive(
+    design: SimpleNamespace,
+) -> None:
+    assert design.PIN_TYPES[("U2", "6")] == "passive"
+
+
+def test_validate_locks_u2_bootstrap_pin_as_passive(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    pin = ("U2", "6")
+    mutated.PIN_TYPES[pin] = "power_out"
+
+    derived_overrides = dict(mutated._PIN_TYPE_OVERRIDES)
+    derived_overrides[pin] = "power_out"
+    mutated.validate.__globals__["_PIN_TYPE_OVERRIDES"] = (
+        derived_overrides
+    )
+
+    with _assert_design_invalid(
+        mutated,
+        r"PIN_TYPES active lock U2\.6.*"
+        r"actual=power_out.*expected=passive",
+    ):
+        mutated.validate()
 
 
 @pytest.mark.parametrize(

@@ -294,7 +294,7 @@
         (pin input line (at -2.54 -3.81 0) (length 2.54)
           (name "EN" (effects (font (size 1.27 1.27))))
           (number "5" (effects (font (size 1.27 1.27)))))
-        (pin power_out line (at -2.54 -6.35 0) (length 2.54)
+        (pin passive line (at -2.54 -6.35 0) (length 2.54)
           (name "BOOT" (effects (font (size 1.27 1.27))))
           (number "6" (effects (font (size 1.27 1.27)))))
       )
@@ -1518,7 +1518,7 @@
       )
     )
     (symbol "SYM_C13"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "C" (at 10.16 5.08 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_C13" (at 10.16 -5.08 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1536,7 +1536,7 @@
       )
     )
     (symbol "SYM_C14"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "C" (at 10.16 5.08 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_C14" (at 10.16 -5.08 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1680,7 +1680,7 @@
       )
     )
     (symbol "SYM_TP1"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP1" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1695,7 +1695,7 @@
       )
     )
     (symbol "SYM_TP2"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP2" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1710,7 +1710,7 @@
       )
     )
     (symbol "SYM_TP3"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP3" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1725,7 +1725,7 @@
       )
     )
     (symbol "SYM_TP4"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP4" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1740,7 +1740,7 @@
       )
     )
     (symbol "SYM_TP5"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP5" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1755,7 +1755,7 @@
       )
     )
     (symbol "SYM_TP6"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP6" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1770,7 +1770,7 @@
       )
     )
     (symbol "SYM_TP7"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP7" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1785,7 +1785,7 @@
       )
     )
     (symbol "SYM_TP8"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP8" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1800,7 +1800,7 @@
       )
     )
     (symbol "SYM_TP9"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP9" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1815,7 +1815,7 @@
       )
     )
     (symbol "SYM_TP10"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP10" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1830,7 +1830,7 @@
       )
     )
     (symbol "SYM_TP11"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP11" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1845,7 +1845,7 @@
       )
     )
     (symbol "SYM_TP12"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP12" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
@@ -1860,7 +1860,7 @@
       )
     )
     (symbol "SYM_TP13"
-      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom no) (on_board yes)
       (property "Reference" "TP" (at 10.16 3.81 0) (effects (font (size 1.27 1.27))))
       (property "Value" "SYM_TP13" (at 10.16 -3.81 0) (effects (font (size 1.27 1.27))))
       (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
