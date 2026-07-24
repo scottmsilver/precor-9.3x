@@ -1,0 +1,16 @@
+{
+  "evidence_class": "VENDOR",
+  "status": "NOT_REVIEWED",
+  "observations": [],
+  "turnkey_quote": {
+    "status": "NOT_QUOTED",
+    "pcb_fabrication_usd": null,
+    "pcba_usd": null,
+    "harnesses_usd": null,
+    "enclosures_usd": null,
+    "shipping_tax_usd": null,
+    "total_usd": null,
+    "artifact_path": null,
+    "artifact_sha256": null
+  }
+}

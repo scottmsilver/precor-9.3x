@@ -151,6 +151,23 @@ class FabExportError(RuntimeError):
     """Raised when fabrication output cannot be proven complete and coherent."""
 
 
+def _require_rev_c_release() -> None:
+    """Load the optional Rev C evidence gate only when explicitly requested."""
+    sys.path.insert(0, str(ROOT))
+    try:
+        from evidence.schemas import (
+            EvidenceError,
+            load_all,
+            require_release,
+        )
+    except ImportError as error:
+        raise FabExportError(f"Rev C evidence gate is unavailable: {error}") from error
+    try:
+        require_release(load_all(ROOT / "evidence"), "fabrication_release")
+    except EvidenceError as error:
+        raise FabExportError(str(error)) from error
+
+
 def _exact_reference_set(
     label: str,
     expected: set[str],
@@ -1625,6 +1642,11 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="validate the checked-in Gerber directory and deterministic ZIP",
     )
+    parser.add_argument(
+        "--require-rev-c-release",
+        action="store_true",
+        help="also require the shared fail-closed Rev C fabrication gate",
+    )
     return parser
 
 
@@ -1649,6 +1671,8 @@ def _validate_checked_in(
 def main(arguments: Iterable[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     try:
+        if args.require_rev_c_release:
+            _require_rev_c_release()
         if args.audit_only:
             _validate_checked_in(
                 args.output_dir,
