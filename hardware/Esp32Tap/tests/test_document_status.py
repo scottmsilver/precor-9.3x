@@ -16,6 +16,7 @@ STATUS_DOCUMENTS = (
     "AI-HANDOFF.md",
     "PREFAB-ADVICE-FOR-CLAUDE.md",
 )
+FULLY_ARCHIVAL_DOCUMENTS = {"PREFAB-ADVICE-FOR-CLAUDE.md"}
 FORBIDDEN_ACTIVE_CLAIMS = {
     "GO to order": re.compile(r"\bGO\s+to\s+order\b", re.IGNORECASE),
     "order-ready": re.compile(r"\border[- ]ready\b", re.IGNORECASE),
@@ -30,10 +31,13 @@ FORBIDDEN_ACTIVE_CLAIMS = {
     ),
     "Rev A USB power diode": re.compile(r"\bD2\b"),
 }
-SUPERSEDED_BLOCK = re.compile(
-    r"<!--\s*BEGIN SUPERSEDED REV A\s*-->.*?"
+SUPERSEDED_BLOCK_BEGIN = re.compile(
+    r"<!--\s*BEGIN SUPERSEDED REV A\s*-->",
+    re.IGNORECASE,
+)
+SUPERSEDED_BLOCK_END = re.compile(
     r"<!--\s*END SUPERSEDED REV A\s*-->",
-    re.IGNORECASE | re.DOTALL,
+    re.IGNORECASE,
 )
 SUPERSEDED_LINE = re.compile(
     r"(?ix)"
@@ -43,11 +47,27 @@ SUPERSEDED_LINE = re.compile(
 )
 
 
-def _active_text(text: str) -> str:
-    text = SUPERSEDED_BLOCK.sub("", text)
-    active: list[str] = []
+def _active_lines(text: str) -> list[tuple[int, str]]:
+    active: list[tuple[int, str]] = []
     suppressed_heading_level: int | None = None
-    for line in text.splitlines():
+    in_superseded_block = False
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        begins_block = bool(SUPERSEDED_BLOCK_BEGIN.search(line))
+        ends_block = bool(SUPERSEDED_BLOCK_END.search(line))
+        if begins_block:
+            assert not in_superseded_block, (
+                f"nested superseded block at source line {line_number}"
+            )
+            in_superseded_block = not ends_block
+            continue
+        if in_superseded_block:
+            if ends_block:
+                in_superseded_block = False
+            continue
+        assert not ends_block, (
+            f"superseded block ends without a begin at source line {line_number}"
+        )
+
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
             level = len(heading.group(1))
@@ -70,18 +90,42 @@ def _active_text(text: str) -> str:
         if SUPERSEDED_LINE.search(line):
             continue
         if suppressed_heading_level is None:
-            active.append(line)
-    return "\n".join(active)
+            active.append((line_number, line))
+    assert not in_superseded_block, "unterminated superseded Rev A block"
+    return active
+
+
+def _active_text(text: str) -> str:
+    return "\n".join(line for _, line in _active_lines(text))
 
 
 def _line_hits(
-    text: str,
+    lines: list[tuple[int, str]],
     pattern: re.Pattern[str],
 ) -> list[tuple[int, str]]:
     return [
         (line_number, line.strip())
-        for line_number, line in enumerate(text.splitlines(), start=1)
+        for line_number, line in lines
         if pattern.search(line)
+    ]
+
+
+def _hold_violations(filename: str, text: str) -> list[str]:
+    active_lines = _active_lines(text)
+    if not active_lines:
+        if filename in FULLY_ARCHIVAL_DOCUMENTS:
+            return []
+        return [
+            f"{filename} is a current status document and cannot be "
+            "entirely suppressed"
+        ]
+
+    active = "\n".join(line for _, line in active_lines)
+    if re.search(r"\bHOLD\b", active):
+        return []
+    return [
+        f"{filename} must state HOLD until every repository-closeable "
+        "Rev B gate passes"
     ]
 
 
@@ -117,20 +161,44 @@ GO to order.
     assert "GO to order." in active
 
 
+def test_only_archival_document_may_be_wholly_suppressed() -> None:
+    sample = """\
+# Superseded Rev A history
+The old package said GO to order.
+"""
+
+    assert _active_lines(sample) == []
+    assert _hold_violations("README.md", sample) == [
+        "README.md is a current status document and cannot be entirely "
+        "suppressed"
+    ]
+    assert not _hold_violations("PREFAB-ADVICE-FOR-CLAUDE.md", sample)
+
+
+def test_filtered_claims_keep_original_source_line_numbers() -> None:
+    sample = """\
+# Current status
+HOLD
+## Superseded Rev A history
+GO to order.
+## Current evidence
+Still gathering evidence.
+GO to order.
+"""
+
+    assert _line_hits(
+        _active_lines(sample),
+        FORBIDDEN_ACTIVE_CLAIMS["GO to order"],
+    ) == [(7, "GO to order.")]
+
+
 @pytest.mark.parametrize("filename", STATUS_DOCUMENTS)
 def test_active_status_documents_remain_on_hold(
     esp32tap_dir: Path,
     filename: str,
 ) -> None:
     text = (esp32tap_dir / filename).read_text(encoding="utf-8")
-    active = _active_text(text)
-
-    if not active.strip():
-        return
-    assert re.search(r"\bHOLD\b", active), (
-        f"{filename} must state HOLD until every repository-closeable "
-        "Rev B gate passes"
-    )
+    assert not _hold_violations(filename, text)
 
 
 def test_no_active_rev_a_or_release_ready_claims(
@@ -139,9 +207,9 @@ def test_no_active_rev_a_or_release_ready_claims(
     violations: list[str] = []
     for filename in STATUS_DOCUMENTS:
         path = esp32tap_dir / filename
-        active = _active_text(path.read_text(encoding="utf-8"))
+        active_lines = _active_lines(path.read_text(encoding="utf-8"))
         for label, pattern in FORBIDDEN_ACTIVE_CLAIMS.items():
-            for line_number, line in _line_hits(active, pattern):
+            for line_number, line in _line_hits(active_lines, pattern):
                 violations.append(
                     f"{filename}:{line_number}: {label}: {line}"
                 )
