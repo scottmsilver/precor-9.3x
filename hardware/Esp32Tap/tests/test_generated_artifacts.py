@@ -1487,43 +1487,6 @@ def _circle_to_axis_aligned_pad_clearance(
     return math.hypot(dx, dy) - radius
 
 
-def _front_escape_vias(
-    board: dict[str, Any],
-    pad: dict[str, Any],
-) -> list[dict[str, Any]]:
-    tracks = [
-        track
-        for track in board["tracks"]
-        if track["net"] == pad["net"] and track["layer"] == "F.Cu"
-    ]
-    vias = [via for via in board["vias"] if via["net"] == pad["net"]]
-    queue = [pad["at"]]
-    visited_points: list[list[float]] = []
-    visited_tracks: set[str] = set()
-    found: dict[str, dict[str, Any]] = {}
-    while queue:
-        point = queue.pop(0)
-        if any(_distance(point, seen) <= 0.002 for seen in visited_points):
-            continue
-        visited_points.append(point)
-        point_vias = [
-            via for via in vias if _distance(via["at"], point) <= 0.002
-        ]
-        if point_vias and _distance(point, pad["at"]) > 0.002:
-            found.update({via["id"]: via for via in point_vias})
-            continue
-        for track in tracks:
-            if track["id"] in visited_tracks:
-                continue
-            if _distance(track["start"], point) <= 0.002:
-                visited_tracks.add(track["id"])
-                queue.append(track["end"])
-            elif _distance(track["end"], point) <= 0.002:
-                visited_tracks.add(track["id"])
-                queue.append(track["start"])
-    return list(found.values())
-
-
 @pytest.mark.parametrize(
     (
         "escape_ref",
@@ -1556,11 +1519,13 @@ def test_jlc_flagged_smd_pads_keep_clear_of_same_net_vias(
     clearance_pad = board["footprints"][clearance_ref]["pads"][
         clearance_pad_number
     ]
-    escape_vias = _front_escape_vias(board, escape_pad)
-    assert escape_vias, (
-        f"{escape_ref}.{escape_pad_number} lacks a front escape via"
+    same_net_vias = [
+        via for via in board["vias"] if via["net"] == escape_pad["net"]
+    ]
+    assert same_net_vias, (
+        f"{escape_ref}.{escape_pad_number} net lacks any via"
     )
-    for via in escape_vias:
+    for via in same_net_vias:
         clearance = _circle_to_axis_aligned_pad_clearance(
             via["at"],
             via["size_mm"] / 2,
@@ -1571,6 +1536,38 @@ def test_jlc_flagged_smd_pads_keep_clear_of_same_net_vias(
         assert clearance >= 0.15 - 0.002, (
             f"{via['id']} is only {clearance:.3f} mm from "
             f"{clearance_ref}.{clearance_pad_number}"
+        )
+
+
+@pytest.mark.parametrize(
+    ("pad_number", "expected_net"),
+    [
+        ("3", "PIN3"),
+        ("4", "PIN4_PASS"),
+        ("8", "+8V_RAW"),
+    ],
+)
+def test_jlc_flagged_j1_pad_via_escapes_have_vendor_clearance(
+    kicad_report: dict[str, Any],
+    pad_number: str,
+    expected_net: str,
+) -> None:
+    board = _board(kicad_report)
+    pad = board["footprints"]["J1"]["pads"][pad_number]
+    assert pad["net"] == expected_net
+    same_net_vias = [
+        via for via in board["vias"] if via["net"] == expected_net
+    ]
+    assert same_net_vias
+    for via in same_net_vias:
+        clearance = (
+            _distance(via["at"], pad["at"])
+            - 0.750
+            - via["size_mm"] / 2
+        )
+        assert clearance >= 0.20 - 0.002, (
+            f"{via['id']} is only {clearance:.3f} mm from "
+            f"J1.{pad_number}"
         )
 
 
@@ -1682,6 +1679,26 @@ def test_silkscreen_minimums_and_required_markings(
         text.get("height_mm", 0.0) >= 1.0
         for text in critical_labels.values()
     )
+
+
+def test_silkscreen_gerber_strokes_meet_jlc_minimum(
+    esp32tap_dir: Path,
+) -> None:
+    aperture_widths = [
+        float(width)
+        for filename in (
+            "Esp32Tap-F_Silkscreen.gto",
+            "Esp32Tap-B_Silkscreen.gbo",
+        )
+        for width in re.findall(
+            r"%ADD\d+C,([0-9.]+)\*%",
+            (
+                esp32tap_dir / "kicad" / "gerbers" / filename
+            ).read_text(encoding="utf-8"),
+        )
+    ]
+    assert aperture_widths
+    assert min(aperture_widths) >= 0.16
 
 
 def test_project_and_dru_lock_named_usb_geometry(

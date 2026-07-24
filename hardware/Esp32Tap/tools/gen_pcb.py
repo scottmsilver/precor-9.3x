@@ -89,9 +89,13 @@ PLANNED_U6_ESCAPES = {
 }
 # JLC DFM reports same-net pad/via proximity and mask-opening artefacts even
 # when KiCad's electrical DRC accepts them.  Lock only the reported endpoint
-# escapes so the manufacturing geometry stays deterministic without moving
-# the intentional plated-pad/via geometry at J1.
+# escapes so the manufacturing geometry stays deterministic while preserving
+# J1's connector footprint and plated-pad geometry.
 LOCKED_DFM_ESCAPES = {
+    ("C10", "1"): (61.2, 11.2),
+    ("J1", "3"): (11.2, 10.4),
+    ("J1", "4"): (17.2, 12.0),
+    ("J1", "8"): (15.2, 18.4),
     ("R13", "2"): (61.2, 11.2),
     ("C9", "2"): (65.2, 1.2),
     ("R12", "2"): (75.2, 48.8),
@@ -453,6 +457,14 @@ class Generator:
 
     def pads(self, ref: str, number: str) -> list[tuple[float, float]]:
         return [local(pad.GetPosition()) for pad in self.pad_objects[(ref, number)]]
+
+    def normalize_silkscreen_graphics(self) -> None:
+        for footprint in self.footprints.values():
+            for graphic in footprint.GraphicalItems():
+                if graphic.GetLayer() not in (pcbnew.F_SilkS, pcbnew.B_SilkS):
+                    continue
+                if graphic.GetWidth() < MM(0.16):
+                    graphic.SetWidth(MM(0.16))
 
     def add_outline(self) -> None:
         corners = [(0, 0), (BOARD_W, 0), (BOARD_W, BOARD_H), (0, BOARD_H)]
@@ -1533,6 +1545,7 @@ class Generator:
 
     def generate(self) -> None:
         self.add_footprints()
+        self.normalize_silkscreen_graphics()
         self.add_outline()
         self.add_planes_and_keepouts()
         self.add_manual_buck_routes()
