@@ -50,6 +50,30 @@ PHYSICAL_VALUES = {
         "max_abs",
     ),
 }
+PREDECESSOR_PATHS = {
+    "hardware/PiZeroHat/README.md",
+    "hardware/PiZeroHat/kicad/WIRING.md",
+    "hardware/PiZeroHat/kicad/PiZeroHat.kicad_sch",
+    "hardware/PiZeroHat/kicad/PiZeroHat.kicad_pcb",
+    (
+        "docs/superpowers/specs/"
+        "2026-07-24-esp32tap-rev-c-turnkey-compact-design.md"
+    ),
+}
+PREDECESSOR_ALLOWED_ACTIONS = {
+    "connector_selection",
+    "layout",
+    "verification_fabrication",
+    "no_purchase_quote",
+}
+PREDECESSOR_FORBIDDEN_ACTIONS = {
+    "production_release",
+    "deployment",
+    "physical_promotion",
+    "turnkey_status",
+    "TURNKEY_QUOTED",
+}
+REAL_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture()
@@ -144,6 +168,38 @@ def _accepted_vendor_record(
     return vendor
 
 
+def _predecessor_record(repository_root: Path) -> dict[str, object]:
+    artifacts = []
+    for relative in sorted(PREDECESSOR_PATHS):
+        path = repository_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REAL_REPOSITORY_ROOT / relative, path)
+        artifacts.append(
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        )
+    return {
+        "evidence_class": "CONSERVATIVE_PREDECESSOR",
+        "status": "OWNER_AUTHORIZED",
+        "basis": "conservative-predecessor",
+        "owner_authorization_revision": "e4f8ae6294d58cedf0572d123c3a8c88f64cc8f8",
+        "artifacts": artifacts,
+        "constraints": {
+            "total_continuous_current_amps": 2.0,
+            "individual_power_contact_min_amps": 2.0,
+            "individual_ground_contact_min_amps": 2.0,
+            "parallel_sharing_credit": False,
+            "power_ground_wire_awg": 22,
+            "mating_system_min_voltage_volts": 24,
+            "mating_system_min_ambient_celsius": -20,
+            "mating_system_max_ambient_celsius": 85,
+        },
+        "allowed_actions": sorted(PREDECESSOR_ALLOWED_ACTIONS),
+    }
+
+
 def test_committed_evidence_classes_have_disjoint_status_namespaces(
     evidence: dict[str, object],
 ) -> None:
@@ -158,6 +214,79 @@ def test_committed_evidence_classes_have_disjoint_status_namespaces(
         "PARTIAL_PHYSICAL",
         "PHYSICALLY_VALIDATED",
     }
+    assert evidence["predecessor"]["status"] == "OWNER_AUTHORIZED"
+
+
+def test_conservative_predecessor_action_matrix(
+    evidence: dict[str, object],
+) -> None:
+    assert evidence["physical"]["status"] == "NOT_MEASURED"
+    assert evidence["physical"]["treadmill_current_envelope"]["status"] == (
+        "NOT_MEASURED"
+    )
+    assert len(
+        evidence["physical"]["treadmill_current_envelope"]["missing_fields"]
+    ) == 11
+    for action in PREDECESSOR_ALLOWED_ACTIONS:
+        assert release_allowed(
+            evidence,
+            action,
+            basis="conservative-predecessor",
+        )
+    for action in PREDECESSOR_FORBIDDEN_ACTIONS:
+        assert not release_allowed(
+            evidence,
+            action,
+            basis="conservative-predecessor",
+        )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["missing", "tamper", "tamper_rehash", "hash", "path"],
+)
+def test_predecessor_artifact_failures_invalidate_release(
+    evidence: dict[str, object],
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    repository_root = tmp_path / "repository"
+    record = _predecessor_record(repository_root)
+    candidate = copy.deepcopy(evidence)
+    candidate["predecessor"] = record
+    first = record["artifacts"][0]
+    path = repository_root / first["path"]
+    if failure == "missing":
+        path.unlink()
+    elif failure in {"tamper", "tamper_rehash"}:
+        path.write_text("tampered\n", encoding="utf-8")
+        if failure == "tamper_rehash":
+            first["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    elif failure == "hash":
+        first["sha256"] = "0" * 64
+    else:
+        first["path"] = "hardware/Esp32Tap/evidence/model.json"
+
+    with pytest.raises(EvidenceError):
+        release_allowed(
+            candidate,
+            "connector_selection",
+            basis="conservative-predecessor",
+            repository_root=repository_root,
+        )
+
+
+def test_predecessor_constraints_are_exact(
+    tmp_path: Path,
+) -> None:
+    repository_root = tmp_path / "repository"
+    record = _predecessor_record(repository_root)
+
+    assert validate_record(
+        "predecessor",
+        record,
+        repository_root=repository_root,
+    ) == record
 
 
 def test_unknown_fields_are_rejected() -> None:
@@ -753,6 +882,24 @@ def test_denial_reason_names_turnkey_quote_prerequisite(
     assert "actual=NOT_QUOTED" in reason
 
 
+@pytest.mark.parametrize("action", ["production_release", "deployment"])
+def test_new_predecessor_actions_do_not_widen_measured_release_path(
+    evidence: dict[str, object],
+    tmp_path: Path,
+    action: str,
+) -> None:
+    evidence_root = tmp_path / "evidence"
+    candidate = copy.deepcopy(evidence)
+    candidate["physical"] = _measured_physical_record(evidence, evidence_root)
+    candidate["vendor"] = _accepted_vendor_record(evidence, evidence_root)
+
+    assert not release_allowed(
+        candidate,
+        action,
+        evidence_root=evidence_root,
+    )
+
+
 def test_schema_cli_reports_hold_reason(esp32tap_dir: Path) -> None:
     result = subprocess.run(
         [
@@ -769,6 +916,50 @@ def test_schema_cli_reports_hold_reason(esp32tap_dir: Path) -> None:
 
     assert result.returncode != 0
     assert "NOT_MEASURED" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        [
+            "evidence/schemas.py",
+            "--require",
+            "connector-selection",
+            "--basis",
+            "conservative-predecessor",
+        ],
+        [
+            "harness/validate_harnesses.py",
+            "--release",
+            "--action",
+            "connector_selection",
+            "--basis",
+            "conservative-predecessor",
+        ],
+        [
+            "tools/export_fab.py",
+            "--audit-only",
+            "--require-rev-c-release",
+            "--rev-c-action",
+            "verification_fabrication",
+            "--basis",
+            "conservative-predecessor",
+        ],
+    ],
+)
+def test_explicit_predecessor_verification_entry_points_pass(
+    esp32tap_dir: Path,
+    command: list[str],
+) -> None:
+    result = subprocess.run(
+        [sys.executable, *command],
+        cwd=esp32tap_dir,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 
 HERE = Path(__file__).resolve().parent
+REPOSITORY_ROOT = HERE.parents[2]
 
 STATUSES = {
     "model": {"MODELED", "UNSUPPORTED"},
@@ -29,6 +30,7 @@ STATUSES = {
         "PARTIAL_PHYSICAL",
         "PHYSICALLY_VALIDATED",
     },
+    "predecessor": {"OWNER_AUTHORIZED"},
 }
 FIELDS = {
     "model": {"evidence_class", "status", "assertions"},
@@ -43,6 +45,15 @@ FIELDS = {
         "status",
         "treadmill_current_envelope",
         "open_items",
+    },
+    "predecessor": {
+        "evidence_class",
+        "status",
+        "basis",
+        "owner_authorization_revision",
+        "artifacts",
+        "constraints",
+        "allowed_actions",
     },
 }
 ENVELOPE_VALUE_FIELDS = {
@@ -133,6 +144,64 @@ RELEASE_ALIASES = {
     "fabrication_release": "fabrication_release",
     "turnkey_quoted": "turnkey_status",
     "turnkey_status": "turnkey_status",
+    "layout": "layout",
+    "verification_fabrication": "verification_fabrication",
+    "no_purchase_quote": "no_purchase_quote",
+    "production_release": "production_release",
+    "deployment": "deployment",
+    "physical_promotion": "physical_promotion",
+}
+PREDECESSOR_PATHS = {
+    "hardware/PiZeroHat/README.md",
+    "hardware/PiZeroHat/kicad/WIRING.md",
+    "hardware/PiZeroHat/kicad/PiZeroHat.kicad_sch",
+    "hardware/PiZeroHat/kicad/PiZeroHat.kicad_pcb",
+    (
+        "docs/superpowers/specs/"
+        "2026-07-24-esp32tap-rev-c-turnkey-compact-design.md"
+    ),
+}
+PREDECESSOR_SHA256 = {
+    "hardware/PiZeroHat/README.md": (
+        "2a27c38153ea1c30c4d428423cefc3eb0261f6927ced2253702c05341e4ec87f"
+    ),
+    "hardware/PiZeroHat/kicad/WIRING.md": (
+        "7330fa8acadb0b213628712519662774bba5740f9152b6b73c076713b352b937"
+    ),
+    "hardware/PiZeroHat/kicad/PiZeroHat.kicad_sch": (
+        "5f9215e9a8becf99ab6e9cd0827a73de582fe68fcb7c7bbf8e625728149ec7a9"
+    ),
+    "hardware/PiZeroHat/kicad/PiZeroHat.kicad_pcb": (
+        "121264ead80bcea009798fed1b17e449ab4cd8a89abd14e9b5937779a7282709"
+    ),
+    (
+        "docs/superpowers/specs/"
+        "2026-07-24-esp32tap-rev-c-turnkey-compact-design.md"
+    ): "1fef24b6aadec676cd131d895d118750fb8e4a0b35f234ced423d36e24b12b5b",
+}
+PREDECESSOR_ACTIONS = {
+    "connector_selection",
+    "layout",
+    "verification_fabrication",
+    "no_purchase_quote",
+}
+PREDECESSOR_CONSTRAINTS = {
+    "total_continuous_current_amps": 2.0,
+    "individual_power_contact_min_amps": 2.0,
+    "individual_ground_contact_min_amps": 2.0,
+    "parallel_sharing_credit": False,
+    "power_ground_wire_awg": 22,
+    "mating_system_min_voltage_volts": 24,
+    "mating_system_min_ambient_celsius": -20,
+    "mating_system_max_ambient_celsius": 85,
+}
+PREDECESSOR_ARTIFACT_FIELDS = {"path", "sha256"}
+OWNER_AUTHORIZATION_REVISION = "e4f8ae6294d58cedf0572d123c3a8c88f64cc8f8"
+CLASS_NAMES = {
+    "model": "MODEL",
+    "vendor": "VENDOR",
+    "physical": "PHYSICAL",
+    "predecessor": "CONSERVATIVE_PREDECESSOR",
 }
 
 
@@ -561,17 +630,79 @@ def _validate_vendor(record: dict[str, Any], evidence_root: Path) -> None:
         )
 
 
+def _validate_predecessor(
+    record: dict[str, Any],
+    repository_root: Path,
+) -> None:
+    if record["basis"] != "conservative-predecessor":
+        raise EvidenceError("predecessor basis is invalid")
+    if record["owner_authorization_revision"] != OWNER_AUTHORIZATION_REVISION:
+        raise EvidenceError("owner authorization revision is invalid")
+    constraints = record["constraints"]
+    if (
+        not isinstance(constraints, dict)
+        or constraints != PREDECESSOR_CONSTRAINTS
+        or type(constraints["parallel_sharing_credit"]) is not bool
+        or type(constraints["power_ground_wire_awg"]) is not int
+    ):
+        raise EvidenceError("predecessor constraints differ from the fixed basis")
+    actions = record["allowed_actions"]
+    if (
+        not isinstance(actions, list)
+        or set(actions) != PREDECESSOR_ACTIONS
+        or len(actions) != len(PREDECESSOR_ACTIONS)
+    ):
+        raise EvidenceError("predecessor allowed_actions differ from the fixed matrix")
+    artifacts = record["artifacts"]
+    if not isinstance(artifacts, list):
+        raise EvidenceError("predecessor artifacts must be a list")
+    by_path: dict[str, dict[str, Any]] = {}
+    for index, value in enumerate(artifacts):
+        artifact = _exact_fields(
+            f"predecessor artifacts[{index}]",
+            value,
+            PREDECESSOR_ARTIFACT_FIELDS,
+        )
+        path = artifact["path"]
+        if not isinstance(path, str) or path in by_path:
+            raise EvidenceError("predecessor artifact path is blank or repeated")
+        if (
+            not isinstance(artifact["sha256"], str)
+            or not SHA256.fullmatch(artifact["sha256"])
+        ):
+            raise EvidenceError("predecessor artifact sha256 is invalid")
+        by_path[path] = artifact
+    if set(by_path) != PREDECESSOR_PATHS:
+        raise EvidenceError("predecessor artifact paths differ from the exact set")
+    if any(
+        artifact["sha256"] != PREDECESSOR_SHA256[path]
+        for path, artifact in by_path.items()
+    ):
+        raise EvidenceError("predecessor artifact hash differs from the approved set")
+
+    resolved_root = repository_root.resolve()
+    for path, artifact in by_path.items():
+        candidate = (resolved_root / path).resolve()
+        if not candidate.is_relative_to(resolved_root):
+            raise EvidenceError("predecessor artifact escapes repository root")
+        if not candidate.is_file():
+            raise EvidenceError(f"predecessor artifact does not exist: {path}")
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != artifact["sha256"]:
+            raise EvidenceError(f"predecessor artifact SHA-256 mismatch: {path}")
+
+
 def validate_record(
     kind: str,
     record: object,
     *,
     evidence_root: Path | str = HERE,
+    repository_root: Path | str = REPOSITORY_ROOT,
 ) -> dict[str, Any]:
     if kind not in STATUSES:
         raise EvidenceError(f"unknown evidence class {kind!r}")
     if not isinstance(record, dict):
         raise EvidenceError(f"{kind} evidence must be an object")
-    if record.get("evidence_class") != kind.upper():
+    if record.get("evidence_class") != CLASS_NAMES[kind]:
         raise EvidenceError(f"{kind} evidence has the wrong evidence_class")
     if record.get("status") not in STATUSES[kind]:
         raise EvidenceError(f"{kind} evidence has an invalid status")
@@ -580,18 +711,25 @@ def validate_record(
         _validate_model(record, Path(evidence_root))
     elif kind == "vendor":
         _validate_vendor(record, Path(evidence_root))
-    else:
+    elif kind == "physical":
         _validate_physical(record, Path(evidence_root))
+    else:
+        _validate_predecessor(record, Path(repository_root))
     return record
 
 
-def load_all(directory: Path | str = HERE) -> dict[str, dict[str, Any]]:
+def load_all(
+    directory: Path | str = HERE,
+    *,
+    repository_root: Path | str = REPOSITORY_ROOT,
+) -> dict[str, dict[str, Any]]:
     root = Path(directory)
     return {
         kind: validate_record(
             kind,
             json.loads((root / f"{kind}.json").read_text(encoding="utf-8")),
             evidence_root=root,
+            repository_root=repository_root,
         )
         for kind in STATUSES
     }
@@ -622,15 +760,44 @@ def release_allowed(
     action: str,
     *,
     evidence_root: Path | str = HERE,
+    repository_root: Path | str = REPOSITORY_ROOT,
+    basis: str | None = None,
 ) -> bool:
     for kind in STATUSES:
-        validate_record(kind, evidence.get(kind), evidence_root=evidence_root)
+        validate_record(
+            kind,
+            evidence.get(kind),
+            evidence_root=evidence_root,
+            repository_root=repository_root,
+        )
     required = _release_action(action)
+    if basis is not None:
+        if basis != "conservative-predecessor":
+            raise EvidenceError(f"unknown release basis {basis!r}")
+        physical = evidence["physical"]
+        envelope = physical["treadmill_current_envelope"]
+        predecessor_ready = (
+            physical["status"] == "NOT_MEASURED"
+            and envelope["status"] == "NOT_MEASURED"
+            and set(envelope["missing_fields"]) == ENVELOPE_VALUE_FIELDS
+            and not envelope["raw_records"]
+            and evidence["predecessor"]["status"] == "OWNER_AUTHORIZED"
+        )
+        return predecessor_ready and required in PREDECESSOR_ACTIONS
+
     if not _physical_ready(evidence):
         return False
 
-    if required == "connector_selection":
+    if required in {"connector_selection", "layout"}:
         return True
+    if required in {
+        "verification_fabrication",
+        "no_purchase_quote",
+        "physical_promotion",
+        "production_release",
+        "deployment",
+    }:
+        return False
     vendor = evidence["vendor"]
     if vendor["status"] != "VENDOR_ACCEPTED":
         return False
@@ -644,12 +811,25 @@ def release_denial_reason(
     action: str,
     *,
     evidence_root: Path | str = HERE,
+    repository_root: Path | str = REPOSITORY_ROOT,
+    basis: str | None = None,
 ) -> str:
     required = _release_action(action)
     physical = evidence["physical"]
     envelope = physical["treadmill_current_envelope"]
-    if release_allowed(evidence, action, evidence_root=evidence_root):
+    if release_allowed(
+        evidence,
+        action,
+        evidence_root=evidence_root,
+        repository_root=repository_root,
+        basis=basis,
+    ):
         return ""
+    if basis == "conservative-predecessor":
+        return (
+            f"{action} blocked: conservative-predecessor permits only "
+            f"{sorted(PREDECESSOR_ACTIONS)} and requires physical=NOT_MEASURED"
+        )
     if not _physical_ready(evidence):
         missing = ", ".join(envelope["missing_fields"]) or "downstream prerequisites"
         return (
@@ -657,7 +837,10 @@ def release_denial_reason(
             f"treadmill_current_envelope={envelope['status']}; missing={missing}"
         )
     vendor = evidence["vendor"]
-    if required in {"fabrication_release", "turnkey_status"} and (
+    if required in {
+        "fabrication_release",
+        "turnkey_status",
+    } and (
         vendor["status"] != "VENDOR_ACCEPTED"
     ):
         return (
@@ -678,11 +861,15 @@ def require_release(
     action: str,
     *,
     evidence_root: Path | str = HERE,
+    repository_root: Path | str = REPOSITORY_ROOT,
+    basis: str | None = None,
 ) -> None:
     reason = release_denial_reason(
         evidence,
         action,
         evidence_root=evidence_root,
+        repository_root=repository_root,
+        basis=basis,
     )
     if reason:
         raise EvidenceError(reason)
@@ -695,8 +882,18 @@ def _parser() -> argparse.ArgumentParser:
         choices=(
             "connector-selection",
             "fabrication-release",
+            "layout",
+            "verification-fabrication",
+            "no-purchase-quote",
+            "production-release",
+            "deployment",
+            "physical-promotion",
             "turnkey-status",
         ),
+    )
+    parser.add_argument(
+        "--basis",
+        choices=("conservative-predecessor",),
     )
     return parser
 
@@ -706,7 +903,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
     try:
         evidence = load_all()
         if args.require:
-            require_release(evidence, args.require)
+            require_release(evidence, args.require, basis=args.basis)
     except (EvidenceError, OSError, json.JSONDecodeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

@@ -47,6 +47,22 @@ def validate_requirements(record: object) -> dict[str, Any]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release", action="store_true")
+    parser.add_argument(
+        "--action",
+        choices=(
+            "connector_selection",
+            "layout",
+            "verification_fabrication",
+            "no_purchase_quote",
+            "production_release",
+            "deployment",
+            "turnkey_status",
+        ),
+    )
+    parser.add_argument(
+        "--basis",
+        choices=("conservative-predecessor",),
+    )
     return parser
 
 
@@ -58,7 +74,8 @@ def main(arguments: Iterable[str] | None = None) -> int:
         )
         evidence = load_all(ROOT / "evidence")
         if args.release:
-            require_release(evidence, requirements["release_action"])
+            action = args.action or requirements["release_action"]
+            require_release(evidence, action, basis=args.basis)
     except (EvidenceError, OSError, json.JSONDecodeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1

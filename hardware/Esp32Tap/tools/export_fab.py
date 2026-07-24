@@ -151,7 +151,10 @@ class FabExportError(RuntimeError):
     """Raised when fabrication output cannot be proven complete and coherent."""
 
 
-def _require_rev_c_release() -> None:
+def _require_rev_c_release(
+    action: str,
+    basis: str | None,
+) -> None:
     """Load the optional Rev C evidence gate only when explicitly requested."""
     sys.path.insert(0, str(ROOT))
     try:
@@ -163,7 +166,11 @@ def _require_rev_c_release() -> None:
     except ImportError as error:
         raise FabExportError(f"Rev C evidence gate is unavailable: {error}") from error
     try:
-        require_release(load_all(ROOT / "evidence"), "fabrication_release")
+        require_release(
+            load_all(ROOT / "evidence"),
+            action,
+            basis=basis,
+        )
     except EvidenceError as error:
         raise FabExportError(str(error)) from error
 
@@ -1647,6 +1654,15 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also require the shared fail-closed Rev C fabrication gate",
     )
+    parser.add_argument(
+        "--rev-c-action",
+        choices=("fabrication_release", "verification_fabrication"),
+        default="fabrication_release",
+    )
+    parser.add_argument(
+        "--basis",
+        choices=("conservative-predecessor",),
+    )
     return parser
 
 
@@ -1672,7 +1688,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
     args = _parser().parse_args(arguments)
     try:
         if args.require_rev_c_release:
-            _require_rev_c_release()
+            _require_rev_c_release(args.rev_c_action, args.basis)
         if args.audit_only:
             _validate_checked_in(
                 args.output_dir,

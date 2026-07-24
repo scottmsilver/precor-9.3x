@@ -1,0 +1,44 @@
+{
+  "evidence_class": "CONSERVATIVE_PREDECESSOR",
+  "status": "OWNER_AUTHORIZED",
+  "basis": "conservative-predecessor",
+  "owner_authorization_revision": "e4f8ae6294d58cedf0572d123c3a8c88f64cc8f8",
+  "artifacts": [
+    {
+      "path": "docs/superpowers/specs/2026-07-24-esp32tap-rev-c-turnkey-compact-design.md",
+      "sha256": "1fef24b6aadec676cd131d895d118750fb8e4a0b35f234ced423d36e24b12b5b"
+    },
+    {
+      "path": "hardware/PiZeroHat/README.md",
+      "sha256": "2a27c38153ea1c30c4d428423cefc3eb0261f6927ced2253702c05341e4ec87f"
+    },
+    {
+      "path": "hardware/PiZeroHat/kicad/PiZeroHat.kicad_pcb",
+      "sha256": "121264ead80bcea009798fed1b17e449ab4cd8a89abd14e9b5937779a7282709"
+    },
+    {
+      "path": "hardware/PiZeroHat/kicad/PiZeroHat.kicad_sch",
+      "sha256": "5f9215e9a8becf99ab6e9cd0827a73de582fe68fcb7c7bbf8e625728149ec7a9"
+    },
+    {
+      "path": "hardware/PiZeroHat/kicad/WIRING.md",
+      "sha256": "7330fa8acadb0b213628712519662774bba5740f9152b6b73c076713b352b937"
+    }
+  ],
+  "constraints": {
+    "total_continuous_current_amps": 2.0,
+    "individual_power_contact_min_amps": 2.0,
+    "individual_ground_contact_min_amps": 2.0,
+    "parallel_sharing_credit": false,
+    "power_ground_wire_awg": 22,
+    "mating_system_min_voltage_volts": 24,
+    "mating_system_min_ambient_celsius": -20,
+    "mating_system_max_ambient_celsius": 85
+  },
+  "allowed_actions": [
+    "connector_selection",
+    "layout",
+    "no_purchase_quote",
+    "verification_fabrication"
+  ]
+}
