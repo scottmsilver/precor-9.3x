@@ -1,0 +1,122 @@
+Esp32Tap Rev B K1 Q1 D4 drive release and single-fault envelopes
+* ASSUMPTIONS:
+* K1 is G6K-2F-Y-TR DC5, nominal 237 ohm/100 mW. Resistance corners are
+* +/-10 percent (213.3...260.7 ohm), supply corners are 4.9...5.1 V.
+* Omron does not guarantee coil inductance, so 0.1 H, 0.5 H, and 1.0 H
+* are explicit engineering sweep assumptions, not selected-part limits.
+* D4 SMAJ6.0CA is directly across pins 1/8 and uses its 6.67 V low-current
+* breakdown plus dynamic resistance. Dynamic branches treat Q1 as saturated.
+* R9 is the approved Rev B 560 ohm value. A conservative drive branch
+* combines 2.3 V logic, 1.2 V VBE, +1% R9, -1% R10,
+* the 10k base pull-down, 0.7 V maximum data-sheet VCEsat, 4.9 V supply,
+* and the +10% coil-resistance/temperature proxy.
+* NON-CLAIMS:
+* Coil-current decay does not prove K1 contact motion, release time, bounce,
+* transfer sequencing, or the required contact-measured <=10 ms fault result.
+* The fixed saturation branch is not a transistor switching or combined-
+* temperature vendor model. It uses the published forced-beta-10 condition;
+* transistor behavior outside that point remains unsupported.
+
+.include models/behavioral.inc
+
+VCTRL ctrl 0 PULSE(3.3 0 10m 1u 1u 40m 80m)
+
+* 0.1 H / high-current corner.
+V5_LO_L v5_lo_l 0 5.1
+LLO_L v5_lo_l lo_l_r 0.1
+RLO_L lo_l_r lo_l_s 213.3
+VLO_L_COIL_SENSE lo_l_s lo_l_col 0
+SLO_L lo_l_col 0 ctrl 0 ESP_SWITCH
+VLO_L_CLAMP_SENSE v5_lo_l lo_l_cp 0
+XLO_L_CLAMP lo_l_cp lo_l_col ESP_BIDI_TVS params: VCLAMP=6.67 RDYN=0.094
+
+* 0.5 H nominal corner.
+V5_NOM v5_nom 0 5
+LNOM v5_nom nom_r 0.5
+RNOM nom_r nom_s 237
+VNOM_COIL_SENSE nom_s nom_col 0
+SNOM nom_col 0 ctrl 0 ESP_SWITCH
+VNOM_CLAMP_SENSE v5_nom nom_cp 0
+XNOM_CLAMP nom_cp nom_col ESP_BIDI_TVS params: VCLAMP=7.02 RDYN=0.094
+
+* 1.0 H / low-current and high-breakdown corner.
+V5_HI_L v5_hi_l 0 4.9
+LHI_L v5_hi_l hi_l_r 1
+RHI_L hi_l_r hi_l_s 260.7
+VHI_L_COIL_SENSE hi_l_s hi_l_col 0
+SHI_L hi_l_col 0 ctrl 0 ESP_SWITCH
+VHI_L_CLAMP_SENSE v5_hi_l hi_l_cp 0
+XHI_L_CLAMP hi_l_cp hi_l_col ESP_BIDI_TVS params: VCLAMP=7.37 RDYN=0.094
+
+* Ordinary diode comparison at nominal resistance and 0.5 H.
+V5_DIODE v5_diode 0 5
+LDIODE v5_diode diode_r 0.5
+RDIODE diode_r diode_s 237
+VDIODE_COIL_SENSE diode_s diode_col 0
+SDIODE diode_col 0 ctrl 0 ESP_SWITCH
+DDIODE diode_col v5_diode ESP_SIGNAL_DIODE
+
+* R9/Q1 nominal base-drive current proxy at 3.3 V.
+VBASE_DRIVE base_drive 0 3.3
+R9_BASE base_drive base_sense 560
+VBASE_SENSE base_sense base_node 0
+DBASE base_node 0 ESP_SIGNAL_DIODE
+R10_BASE base_node 0 10k
+
+* Conservative BC817-40 drive/saturation margin with resistor tolerances.
+VBASE_CONS base_cons_drive 0 2.3
+R9_BASE_CONS base_cons_drive base_cons 565.6
+R10_BASE_CONS base_cons 0 9.9k
+VBE_CONS base_cons 0 1.2
+V5_CONS v5_cons 0 4.9
+LCONS v5_cons cons_r 0.5
+VCONS_COIL_SENSE cons_r cons_s 0
+RCONS cons_s cons_col 260.7
+VQ1_CONS cons_col 0 0.7
+
+* Single Q1-open fault: only a 1 Gohm diagnostic leakage path remains.
+V5_OPEN v5_open 0 5
+LOPEN v5_open open_r 0.5
+ROPEN open_r open_s 237
+VOPEN_COIL_SENSE open_s open_col 0
+ROPEN_FAULT open_col 0 1g
+
+* Single Q1-short fault with U5 still enabled: expected hazardous current.
+V5_SHORT v5_short 0 5
+LSHORT v5_short short_r 0.5
+RSHORT short_r short_s 237
+VSHORT_COIL_SENSE short_s 0 0
+
+* Q1 short plus U5 disable: C16=4.7 uF supplies the release tail after 10 ms.
+V5_CAP_SOURCE v5_cap_src 0 5
+SCAP_SOURCE v5_cap_src cap_node ctrl 0 ESP_SWITCH
+RCAP_SOURCE cap_node cap_store 2
+C16_FAULT cap_store 0 4.7u
+LCAP_FAULT cap_store cap_r 0.5
+RCAP_FAULT cap_r cap_s 237
+VCAP_COIL_SENSE cap_s 0 0
+DCAP_NEG 0 cap_store ESP_SIGNAL_DIODE
+
+.tran 2u 50m
+
+.meas tran coil_current_max_a AVG i(VLO_L_COIL_SENSE) FROM=8m TO=9m
+.meas tran coil_current_nominal_a AVG i(VNOM_COIL_SENSE) FROM=8m TO=9m
+.meas tran coil_current_min_a AVG i(VHI_L_COIL_SENSE) FROM=8m TO=9m
+.meas tran fast_release_0p1h_s TRIG i(VLO_L_COIL_SENSE) VAL=0.018 FALL=1 TARG i(VLO_L_COIL_SENSE) VAL=0.002 FALL=1
+.meas tran fast_release_0p5h_s TRIG i(VNOM_COIL_SENSE) VAL=0.018 FALL=1 TARG i(VNOM_COIL_SENSE) VAL=0.002 FALL=1
+.meas tran fast_release_1h_s TRIG i(VHI_L_COIL_SENSE) VAL=0.018 FALL=1 TARG i(VHI_L_COIL_SENSE) VAL=0.002 FALL=1
+.meas tran diode_release_0p5h_s TRIG i(VDIODE_COIL_SENSE) VAL=0.018 FALL=1 TARG i(VDIODE_COIL_SENSE) VAL=0.002 FALL=1
+.meas tran q1_collector_peak_v MAX v(hi_l_col) FROM=10m TO=20m
+.meas tran d4_peak_current_a MAX par('-i(VLO_L_CLAMP_SENSE)') FROM=10m TO=20m
+.meas tran d4_energy_j INTEG par('v(hi_l_col,v5_hi_l)*(-i(VHI_L_CLAMP_SENSE))') FROM=10m TO=20m
+.meas tran base_drive_current_a AVG i(VBASE_SENSE) FROM=8m TO=9m
+.meas tran conservative_base_current_a AVG i(VBE_CONS) FROM=8m TO=9m
+.meas tran conservative_coil_current_a AVG i(VCONS_COIL_SENSE) FROM=8m TO=9m
+.meas tran conservative_coil_voltage_v AVG par('v(v5_cons)-v(cons_col)') FROM=8m TO=9m
+.meas tran conservative_q1_vce_v AVG v(cons_col) FROM=8m TO=9m
+.meas tran conservative_forced_beta AVG par('i(VCONS_COIL_SENSE)/i(VBE_CONS)') FROM=8m TO=9m
+.meas tran q1_open_coil_current_a AVG i(VOPEN_COIL_SENSE) FROM=8m TO=9m
+.meas tran q1_short_fault_current_a AVG i(VSHORT_COIL_SENSE) FROM=8m TO=9m
+.meas tran q1_short_u5_off_tail_s TRIG i(VCAP_COIL_SENSE) VAL=0.018 FALL=1 TARG i(VCAP_COIL_SENSE) VAL=0.002 FALL=1
+
+.end

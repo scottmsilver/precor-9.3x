@@ -1,4 +1,4 @@
-// Esp32Tap two-part enclosure — parametric, sized to the rev A board.
+// Esp32Tap two-part enclosure — parametric, sized to the Rev B board.
 // Coordinates follow the PCB: origin = board top-left corner, +X right,
 // +Y toward the bottom edge (the PCB "top edge" carries the antenna
 // overhang).  Board-position parameters below are taken directly from
@@ -8,8 +8,8 @@
 // no conductive finish (2.4 GHz antenna inside).  Orderable as two STLs:
 //   openscad -D part=\"base\" -o esp32tap_base.stl esp32tap_case.scad
 //   openscad -D part=\"lid\"  -o esp32tap_lid.stl  esp32tap_case.scad
-// (openscad CLI was unavailable in the design environment, so STLs are not
-// checked in; the .scad is the deliverable, DIMENSIONS.md is the drawing.)
+// Checked-in STLs are rendered with the immutable OpenSCAD image documented
+// in DIMENSIONS.md and validated by validate_enclosure.py.
 
 part = "both";          // "base" | "lid" | "both" (preview)
 
@@ -18,9 +18,9 @@ board_l      = 100.0;   // X
 board_w      = 55.0;    // Y
 board_t      = 1.6;
 ant_overhang = 6.3;     // module antenna past board Y=0 edge
-ant_x0       = 52.0;    // antenna span in X
-ant_x1       = 72.0;
-ant_air_gap  = 3.0;     // required air to any wall at the antenna end
+ant_x0       = 69.0;    // physical U1 F.Fab antenna span in board X
+ant_x1       = 87.0;
+ant_air_gap  = 15.0;    // plastic/air void from antenna edge to inner wall
 
 // RJ45 jacks on the X=0 wall (Y centers, body width 16.7, height 13.4).
 // Board-relative jack pad-block centerlines, computed from the PCB by
@@ -31,16 +31,21 @@ ant_air_gap  = 3.0;     // required air to any wall at the antenna end
 // a 2026-07-23 "fix" wrongly moved them to 3.555/32.555 (−4.445 instead of
 // +4.445 anchor→body offset) — an 8.89 mm error that would have stopped plugs
 // seating. Caught by an independent review; reverted to the correct centers.
-j1_yc = 12.445;  j2_yc = 41.445;
-rj45_w = 16.7;  rj45_h = 13.4;
+j1_yc = 12.445;
+j2_yc = 41.445;
+rj45_w = 16.7;
+rj45_h = 13.4;
 
 // USB-C on the X=board_l wall.  The receptacle face sits at the board edge,
-// ~4.2 mm behind the exterior wall face (2.2 wall + 2.0 clearance), so the
+// 4.5 mm behind the exterior wall face (2.5 wall + 2.0 clearance), so the
 // wall aperture must pass the CABLE OVERMOLD, not just the plug shell —
 // otherwise no standard cable can mate.  13 x 8 covers typical overmolds
 // (<=12 x 6.5) and doubles as the plug-alignment funnel.
-usb_yc = 36.5;  usb_w = 9.4;  usb_h = 3.4;
-usb_om_w = 13.0;  usb_om_h = 8.0;   // overmold aperture through the wall
+usb_yc = 36.5;
+usb_w = 9.4;
+usb_h = 3.4;
+usb_om_w = 13.0;
+usb_om_h = 8.0;   // overmold aperture through the wall
 
 // M2.5 board mounting holes (X, Y)
 mh = [[2.9, 26.5], [97.0, 3.0], [97.0, 52.0]];
@@ -60,11 +65,11 @@ clr       = 2.0;                     // side clearance board->wall (X=0 side
 bot_clr   = 9.0;                     // bottom-edge (Y=board_w side) clearance:
                                      // widened so the two OD7 lid screw posts
                                      // clear the PCB's bottom corners (board
-                                     // edge to post edge = 2.0 mm)
+                                     // edge to post edge = 2.25 mm)
 standoff  = 3.0;                     // under-board space (THT pins ~2 mm)
 headroom  = 16.5;                    // above-board space; RJ45 = 13.4 tall,
-                                     // leaves 1.5 mm above the jacks even
-                                     // under the 1.6 mm lid lip ring
+                                     // leaves 1.9 mm above the jacks under
+                                     // the 1.2 mm lid registration lip
 lid_t     = 3.0;                     // 2.2→3.0: the lid is a large flat plate;
                                      // 3.0 resists SLA-resin warp (JLC flagged
                                      // 2.5 as thin/deformation-risk)
@@ -73,6 +78,9 @@ lip       = 1.2;                     // 1.8→1.2: shorter lip = less of a thin
                                      // as thin-wall); still registers the lid
 lip_w     = 4.0;                     // 2.0→4.0: much wider band, no longer a
                                      // thin freestanding wall
+post_d = 7.0;
+post_wall_overlap = 0.25;
+post_inset = post_d / 2 - post_wall_overlap;
 
 int_l = board_l + 2*clr;                              // interior X
 int_w = board_w + bot_clr + ant_overhang + ant_air_gap; // interior Y
@@ -87,9 +95,13 @@ bx0 = clr;                            // X of board corner
 by0 = ant_overhang + ant_air_gap;     // Y of board top edge (antenna void above)
 bz0 = wall + standoff;                // Z of board underside
 
-// lid screw post centers (shared by base posts, lid holes, ring cutouts)
-posts = [[wall+3.5, wall+3.5], [out_l-wall-3.5, wall+3.5],
-         [wall+3.5, out_w-wall-3.5], [out_l-wall-3.5, out_w-wall-3.5]];
+// Lid-post disks overlap the inner wall face by post_wall_overlap.  The
+// former wall+post_d/2 centers made the solids exactly tangent and yielded a
+// non-manifold base after tessellation.
+posts = [[wall+post_inset, wall+post_inset],
+         [out_l-wall-post_inset, wall+post_inset],
+         [wall+post_inset, out_w-wall-post_inset],
+         [out_l-wall-post_inset, out_w-wall-post_inset]];
 
 $fn = 32;
 
@@ -117,7 +129,7 @@ module base() {
         cube([wall + bx0 + 4, rj45_w + 1.0, rj45_h + 1.0]);
 
     // USB-C aperture, X = out_l wall — overmold-sized (see parameter note):
-    // the receptacle is recessed ~4.2 mm behind the exterior face, so the
+    // the receptacle is recessed 4.5 mm behind the exterior face, so the
     // opening passes the cable overmold all the way to the board edge.
     translate([out_l - wall - clr - 1,
                wall + by0 + usb_yc - usb_om_w/2,
@@ -144,11 +156,11 @@ module base() {
             [bx0 + 70, by0 + board_w - 1.9]])
     translate([wall + p[0], wall + p[1], wall]) cube([8, 2, standoff]);
   // lid screw posts, M3 self-tap (2.5 mm pilot), inside the 4 corners
-  // (bottom pair clears the PCB bottom edge by 2.0 mm thanks to bot_clr)
+  // (bottom pair clears the PCB bottom edge by 2.25 mm thanks to bot_clr)
   for (p = posts)
     translate([p[0], p[1], wall])
       difference() {
-        cylinder(h = int_h, d = 7.0);
+        cylinder(h = int_h, d = post_d);
         translate([0, 0, int_h - 10]) cylinder(h = 11, d = 2.5);
       }
 }
@@ -173,10 +185,10 @@ module lid() {
           rrect(int_l - 0.3, int_w - 0.3, lip, 2);
           translate([lip_w, lip_w, -1])
             rrect(int_l - 0.3 - 2*lip_w, int_w - 0.3 - 2*lip_w, lip + 2, 2);
-          // clear the four screw posts (OD 7.0 + 0.3 both-sides clearance)
+          // clear the four screw posts (0.3 mm radial clearance)
           for (p = posts)
             translate([p[0] - (wall + 0.15), p[1] - (wall + 0.15), -1])
-              cylinder(h = lip + 2, d = 7.6);
+              cylinder(h = lip + 2, d = post_d + 0.6);
         }
     }
     // M3 clearance holes + countersink over the 4 posts
@@ -198,7 +210,7 @@ module lid() {
         cube([4, 3, lid_t + lip + 2]);
     // (Antenna lid-thinning removed: it left a 1.4 mm-thin patch that tripped
     // JLC3DP's thin-wall DFM, and it served no purpose — resin is already
-    // RF-transparent at 2.4 GHz and the 3 mm air gap is set by by0, not the
+    // RF-transparent at 2.4 GHz and the 15 mm air gap is set by by0, not the
     // lid thickness.  The lid stays full thickness over the antenna.)
   }
 }

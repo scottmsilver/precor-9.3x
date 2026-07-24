@@ -1,147 +1,125 @@
-# Esp32Tap — ESP32-S3 Precor serial-bus tap
+# Esp32Tap Rev B
 
-Single-board replacement for the Pi Zero 2 W + PiZeroHat treadmill interceptor.
-An ESP32-S3-WROOM-1 sits in the middle of the Precor 9.31 console↔motor RJ45
-cable, runs the timing-critical KV serial engine + full safety envelope
-on-device, and exposes FTMS BLE (peripheral), HRM BLE (central) and an
-authenticated WSS/HTTPS control API over WiFi. Architecture and system-split
-rationale: see `firmware/PLAN.md`.
+**Status: HOLD.** The repository design is a treadmill-powered verification
+build. Do not submit fabrication, authorize substitutions, pay, or connect an
+Emulate-capable build to a treadmill until the open vendor, firmware, and bench
+gates are reviewed.
 
-**Status: rev A design.** ERC and DRC pass clean (`kicad-cli` 10.0.1,
-`--severity-all`, 0 violations, 0 unconnected). Not yet fabricated — bench
-bring-up checklist below must run before the board ever touches a treadmill.
+Esp32Tap sits inline between the console and motor-controller RJ45 cables of a
+Precor 9.31. An ESP32-S3 observes the proprietary inverted 9600-baud serial
+traffic. In Proxy mode, the console-to-motor path is a normally closed relay
+contact; it does not depend on software forwarding. Emulate mode transfers that
+path to a hardware-gated ESP32 transmitter.
 
-## What's in this directory
+## Fixed power and safety architecture
 
-| Path | Contents |
-|------|----------|
-| `NETLIST.md` | **Source of truth** — every component, pin and net (generated from `tools/design.py`) |
-| `kicad/` | KiCad 10 project: `Esp32Tap.kicad_sch`, `Esp32Tap.kicad_pcb`, generated symbol lib, ERC/DRC reports, fab gerbers (`Esp32Tap-gerbers.zip`) |
-| `bom/BOM.csv` | Full BOM with LCSC numbers, JLC Basic/Extended class, unit costs |
-| `bom/CPL-positions.csv` | Pick-and-place file (JLC format, bottom-left origin) |
-| `ORDERING.md` | Exact JLCPCB + JLC3DP order walkthrough with cost lines |
-| `enclosure/` | Parametric OpenSCAD two-part case + `DIMENSIONS.md` |
-| `firmware/PLAN.md` | ESP-IDF porting plan, watchdog state machine, test gates |
-| `tools/` | `design.py` (master data) + generators for schematic/board/docs |
+- The treadmill serial cable's nominal +8 V conductors are the board's only
+  power source. They remain direct copper pass-throughs between J1 and J2.
+- The local branch is `+8V_RAW → F1 → D1 → VIN`. D1 provides reverse-polarity
+  protection; D3 clamps protected VIN; U2 converts VIN to +3V3.
+- USB-C carries native USB data and VBUS presence only. It cannot energize VIN,
+  +3V3, +5V_RLY, or K1. Programming needs a USB data cable and current-limited
+  +8 V bench power at the RJ45 power pins.
+- “Data only” does not mean isolated. J3 ground pins and shield connect to
+  board/treadmill ground. Do not attach a treadmill-powered board to a USB
+  host until host-to-treadmill ground potential and connection current have
+  been measured safely and the isolation/bonding approach has been reviewed.
+- U4 monitors protected VIN. Its window output `TREAD_OK` is hardware-ANDed
+  with both `RELAY_CMD` and `TX_ENABLE`.
+- K1 pole A is the serial transfer contact. Pole B reports armature position
+  through `K1_NC_FB` and `K1_NO_FB`; it does not parallel the signal contact
+  and cannot prove pole A is unwelded.
+- U5 supplies the 5 V relay coil only when `RELAY_GATE` is true. U7 keeps the
+  motor TX path high impedance unless `TX_GATE` is true.
+- Loss of power, reset, or loss of `TREAD_OK` removes hardware permission and
+  returns K1 toward its normally closed bypass. Actual contact timing is a
+  bench measurement, not a repository claim.
 
-## Board overview (100 × 55 mm, 2 layer)
+The treadmill safety key remains the independent safety mechanism. This board
+is not a certified functional-safety controller.
 
-```
-      antenna overhangs top edge (Espressif keep-out fully off-board)
-   ┌──────────────────╨╨╨╨╨──────────────────┐
- ┌─┤ J1 RJ45           ESP32-S3-WROOM-1-N8   │
- │ │ CONSOLE   K1 relay      (U1)        SW2 │
- └─┤           G6K-2F-Y                LEDs  ├─┐
- ┌─┤ J2 RJ45   driver     SW1 EN       U3    │ │ J3 USB-C
- │ │ MOTOR                             ESD   ├─┘ (flash/JTAG/console)
- └─┤  8V→3.3V buck: F1 TVS bulk → TPS54202   │
-   └─────────────────────────────────────────┘
-```
+## Package map
 
-* **J1/J2** — same Amphenol 54602-x08 jack family and footprints as the
-  proven `hardware/PiZeroHat/`. RJ45 pins 1 (GND), 2 (+8V), 4 (unknown),
-  5 (**safety interlock**), 7 (GND), 8 (+8V) are pure copper pass-through —
-  they never touch silicon. Pin 3 (motor→console) is bridged through and
-  passively tapped via 4.7 kΩ. Pin 6 (console→motor) is cut through the
-  fail-safe relay.
-* **B.Cu** is a solid GND plane; the pass-through bus runs as short B.Cu
-  verticals between the jacks.
+| Path | Purpose |
+|---|---|
+| `tools/design.py` | Electrical source of truth: parts, pins, nets, DNP state, and invariants |
+| `kicad/Esp32Tap.kicad_sch` | Generated typed schematic |
+| `kicad/Esp32Tap.kicad_pcb` | Generated 100 × 55 mm four-layer PCB |
+| `NETLIST.md` | Generated human-readable connectivity |
+| `bom/BOM.csv` | Populated assembly BOM with exact JLC/LCSC identities |
+| `bom/CPL-positions.csv` | Top-side placement file in JLC coordinates |
+| `kicad/Esp32Tap-gerbers.zip` | Deterministic 13-member fabrication archive |
+| `vendor/JLC-DFM-REVIEW.json` | Sanitized operator record of online DFM, bound to the exact local archive |
+| `sim/` | Seven behavioral ngspice decks, assertions, and dual-engine runner |
+| `enclosure/` | Parametric case, regenerated meshes, and independent fit validator |
+| `firmware/PLAN.md` | Normative production-firmware and bench acceptance contract |
+| `firmware/safety_model.py` | Executable host reference; not flashable firmware |
+| `AI-HANDOFF.md` | Concise continuation instructions for Claude |
+| `ORDERING.md` | Vendor-preview and eventual prototype-order procedure |
 
-## The fail-safe relay (the design's central safety claim)
+Generated artifacts must be changed through `tools/design.py` or the relevant
+generator. Do not repair generated connectivity, BOM rows, or Gerbers by hand.
 
-K1 is an Omron **G6K-2F-Y DC3** DPDT signal relay (LCSC C2153097), wired so
-both poles in parallel switch the pin-6 path:
+## Board facts
 
-| Relay state | Console pin 6 | Motor pin 6 | ESP32 TX |
-|---|---|---|---|
-| **De-energized** (unpowered, boot, crash, watchdog, Proxy) | bridged to motor | bridged to console | **physically disconnected** (sits on NO contacts) |
-| **Energized** (Emulate only) | released (4.7k RX tap only) | driven by ESP32 TX via 100R | connected |
+| Item | Rev B value |
+|---|---|
+| Finished outline | 100.0 × 55.0 mm |
+| Stack | Four copper layers, 1.59 mm modeled finished thickness |
+| Stackup metadata | `JLC04161H-7628`; 0.035 mm outer and 0.0152 mm inner finished copper |
+| Inner reference | One In1.Cu GND zone, continuous below USB except normal antipads; explicit antenna keepout |
+| USB routing | F.Cu-only, no signal vias; 0.2906 mm / 0.2000 mm controlled run plus four short 0.20 mm connector breakouts |
+| MCU | ESP32-S3-WROOM-1-N8 |
+| Relay | Omron G6K-2F-Y-TR DC5, 237 Ω nominal coil |
+| Test access | TP1–TP13, including VIN, +5V_RLY, permission gates, TX, and both feedback contacts |
+| Antenna | Module extends 6.3 mm beyond the board edge; copper keepout on every layer |
 
-Consequences, addressing the review-gate blockers:
+## Reproduce the repository evidence
 
-1. **Unpowered = stock treadmill, verified electrically.** With the board
-   dead, the ESP32's TX pin is open-circuit (relay NO), the RX taps sit
-   behind 4.7 kΩ (worst-case back-feed through the GPIO clamp into the dead
-   rail ≈ 0.3 mA — does not distort bus HIGH levels), and the ESD clamps
-   (PESD3V3L1BA) are GND-referenced bidirectional parts that stay inert.
-2. **Proxy mode is a hardware bridge, not software forwarding.** The MCU
-   only listens in Proxy; bytes flow console→motor through relay contacts
-   with zero latency. This is a deliberate improvement over the Pi (which
-   must software-forward); the auto-proxy/auto-emulate *detection* logic is
-   unchanged. Boot-time TX glitches on the motor line are impossible: the
-   relay only energizes after the UART is configured and Emulate entered.
-3. **Relay driver is glitch-safe**: NPN low-side driver (S8050) with 10 kΩ
-   base pull-down — GPIO21 is Hi-Z during boot/reset, so the relay stays
-   released. `esp_task_wdt` supervises **every task that can hold the relay
-   energized** (serial engine, emulate cycle, interval executor), with
-   `CONFIG_ESP_TASK_WDT_PANIC=y` so a stall panic-resets → GPIO Hi-Z →
-   relay released (see `firmware/PLAN.md`).
-
-## Electrical design notes
-
-* **Serial**: 3.3 V single-ended TTL, 9600 8N1, **inverted polarity**
-  (idle LOW) — handled by hardware UART inversion
-  (`uart_set_line_inverse`), no transceivers (adding RS-485 differential
-  drivers would break the bus).
-* **GPIO map** (no ESP32-S3 strap pins 0/3/45/46, no USB pins 19/20):
-  IO17 = UART1 TX (motor pin 6), IO18 = UART1 RX (console pin 6),
-  IO16 = UART2 RX (pin 3 tap), IO21 = relay, IO38 = status LED.
-* **Power**: treadmill +8 V (RJ45 pins 2/8) → 0.75 A/16 V polyfuse →
-  SMBJ12A TVS → 100 µF/25 V bulk + 4.7 µF/50 V ceramic → SS34 ORing diode →
-  TPS54202 buck → 3.3 V. A second SS34 ORs **USB VBUS** into the buck, so
-  flashing on the bench needs no treadmill. Buck EN sits on a 100k/47k
-  divider from VIN (not a bare pull-up): EN ≈2.6 V at 7.6 V VIN and ≈1.6 V
-  at 4.7 V USB — above the ~1.21 V enable threshold on both sources and
-  safely below the TPS54202's 7 V EN absolute maximum. Budget: ESP32-S3 WiFi TX bursts
-  ~0.35–0.5 A at 3.3 V plus relay coil ~45 mA (Emulate only) — inside the
-  TPS54202's 2 A and far inside the D24V10F5-proven +8 V budget
-  (~0.25 A at 8 V worst case).
-* **USB-C**: HRO TYPE-C-31-M-12 (C165948) on the S3's native USB —
-  flash, JTAG and console over one connector, USBLC6-2SC6 ESD, 5.1 k CC
-  pull-downs. EN/BOOT tactile switches for recovery.
-* **Antenna**: module antenna section overhangs the top board edge, so the
-  entire Espressif keep-out region (no copper any layer) is off-board.
-  Enclosure is plastic with ≥3 mm air gap at the antenna end (see
-  `enclosure/`).
-
-## Bring-up (bench first — never treadmill-first)
-
-1. **Visual + shorts**: check 3V3↔GND, 8V↔GND resistance before power.
-2. **USB power only**: plug USB-C. 3.3 V rail present (TP3 vs TP4), power
-   LED on, enumerate the S3's USB. Flash a hello-world over USB.
-3. **Relay sanity, unpowered**: with the board unpowered, verify J1.6↔J2.6
-   continuity (< 1 Ω) and ESP-TX-to-motor-pin-6 open. Energize GPIO21 in
-   firmware: bridge opens, TX connects. Measure coil current (~45 mA).
-4. **Bench 8 V**: feed 8 V into J1 pins 2/8 (GND 1/7) from a current-limited
-   supply; verify 3.3 V, then both supplies together (ORing diodes share).
-5. **Loopback serial rig**: second USB-UART with inversion, or a Pi running
-   the existing `python/tools/listen.py`, replays captured console bursts
-   into J1.6; verify the parsed KV stream matches `cpp/tests` golden
-   vectors; verify TX emulate cycle timing on a logic analyzer against a
-   Pi capture (M1/M2 gates in `firmware/PLAN.md`).
-6. **Signal-integrity-while-dead test** (gate requirement): with a live
-   bus between two bench UARTs through J1/J2 and the board **unpowered**,
-   scope the pin-6 and pin-3 lines for level distortion.
-7. Treadmill contact ONLY via the **treadmill-contact gate checklist** in
-   `firmware/PLAN.md` — the single authoritative gate: M1–M3 green on the
-   bench rig (they are bench-only by definition), evidence archived, then
-   TC1 (proxy-only observation) before TC2 (first emulate). Belt clear,
-   following the PiZeroHat WIRING-CHECKLIST discipline.
-
-## Regenerating the design
-
-Everything is generated from `tools/design.py` (components/pins/nets):
+From the repository root:
 
 ```bash
-cd hardware/Esp32Tap/tools
-python3 design.py                 # validate net tables
-python3 gen_sch.py                # schematic + symbol lib
-LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 /usr/bin/python3 gen_pcb.py   # board (pcbnew API)
-LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 /usr/bin/python3 gen_docs.py  # NETLIST.md + BOM + CPL
-cd ../kicad
-kicad-cli sch erc --severity-all --exit-code-violations -o erc.rpt Esp32Tap.kicad_sch
-kicad-cli pcb drc --severity-all --exit-code-violations -o drc.rpt Esp32Tap.kicad_pcb
+make -C hardware/Esp32Tap clean-check
+make -C hardware/Esp32Tap check
+git diff --check
 ```
 
-Generators assert netlist parity between `design.py`, the exported schematic
-netlist, and the board's pad-net assignments — the three can never drift.
+`clean-check` regenerates declared artifacts in an isolated directory and
+compares every byte. `check` runs the test suite, reproduction check, host
+ngspice 42 plus pinned Docker ngspice 39, enclosure validation, fabrication
+audit, and the recent official JLC stock snapshot check. These commands are
+offline with respect to treadmill hardware and never drive a belt.
+
+Passing them proves internal consistency under the declared models. It does
+not prove physical power integrity, relay contact behavior, RF performance,
+USB enumeration, production firmware, or vendor manufacturability.
+
+The sanitized JLCDFM file records the result an operator observed after
+uploading the exact archive named by its SHA-256. It is not a vendor-signed
+result or independent proof of upload provenance. It does not approve the
+production stack, controlled impedance, the antenna-overhang carrier, the
+RJ45 assembly fixture/process, BOM/CPL placement, or substitutions.
+
+## Bench bring-up order
+
+1. Inspect assembly polarity, part identity, soldering, and shorts with no
+   cable attached. Confirm J1.6–J2.6 normally closed continuity and TX
+   isolation.
+2. Apply current-limited +8 V from a bench supply to the documented RJ45 power
+   pins. Check VIN, +3V3, +5V_RLY-off, TREAD_OK, and thermal behavior.
+3. Before attaching USB, measure host-to-board ground potential and connection
+   current with a safe bench method and establish the reviewed
+   isolation/bonding setup. Then attach USB data while bench +8 V remains
+   present and verify active-low `VBUS_PRESENT_N`, ROM/reset attach behavior,
+   enumeration, and unplug.
+4. Use an isolated serial fixture and logic analyzer for receive loading,
+   inverted idle level, gap capture, relay transfer, feedback, and complete
+   zero-frame ordering.
+5. Complete the production firmware manifest and all `firmware/PLAN.md`
+   acceptance gates, including 1,000 contact-observed transitions.
+6. First treadmill contact is Proxy-only with relay energization compiled out.
+   Emulate testing is a separate later event with the belt clear and physical
+   safety key immediately accessible.
+
+The build remains on HOLD until the applicable stage-specific gates are
+explicitly closed.

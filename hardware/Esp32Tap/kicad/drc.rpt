@@ -1,6 +1,6 @@
 ** Drc report for Esp32Tap.kicad_pcb **
-** Created on 2026-07-23T12:08:56 **
-** Report includes: Errors, Warnings **
+** Created on 1970-01-01T00:00:00 **
+** Report includes: Errors, Warnings, Exclusions **
 
 ** Found 0 DRC violations **
 
@@ -9,10 +9,6 @@
 ** Found 0 Footprint errors **
 
 ** Ignored checks **
-    - Footprint has no courtyard defined
-    - Track endpoint not centered on via
-    - Tuning profile track geometries
-    - Footprint doesn't match symbol's footprint filters
-    - Footprint component type doesn't match footprint pads
+    - Silkscreen clipped by board edge
 
 ** End of Report **

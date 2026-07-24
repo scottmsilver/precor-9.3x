@@ -1,0 +1,116 @@
+Esp32Tap Rev B TPS3700 window and relay-supply permission corners
+* ASSUMPTIONS:
+* R17/R18 are 150k/10k, R19/R20 are 255k/10k, all 1 percent.
+* C18/C19 are 1 nF. TPS3700 rising threshold is 396...404 mV,
+* falling threshold is 387...400 mV, input bias is +/-25 nA (INA+) or
+* +/-15 nA (INB-), maximum startup is 450 us, and worst fault propagation
+* adds the specified 18 us high-to-low delay.
+* The dynamic block applies the 450 us maximum only after a new safe window;
+* a diode gives prompt fault discharge. +3V3 and VIN sequences are explicit.
+* TPS70950 uses its guaranteed 1.5 ms maximum EN-to-95%-VOUT startup
+* (VOUT > 3.3 V) as a first-order ramp, then a 2 ohm Thevenin output feeding
+* C16=4.7 uF and K1=237 ohm. Disable opens the source so C16 discharges.
+* NON-CLAIMS:
+* This is not a transistor-level TPS3700/TPS70950 model and does not prove
+* regulator current-limit, relay contact motion, treadmill rail quality, or
+* physical brownout timing.
+
+.include models/behavioral.inc
+
+* 1 V/ms triangle traverses every UV and OV threshold corner.
+VRAMP vin_ramp 0 PWL(0 0 12m 12 14m 12 26m 0 28m 0)
+
+* UV rising low/high: resistor and reference worst cases.
+RUV_RISE_LO_TOP vin_ramp uv_rise_lo 148.5k
+RUV_RISE_LO_BOT uv_rise_lo 0 10.1k
+CUV_RISE_LO uv_rise_lo 0 1n
+IUV_RISE_LO 0 uv_rise_lo 25n
+RUV_RISE_HI_TOP vin_ramp uv_rise_hi 151.5k
+RUV_RISE_HI_BOT uv_rise_hi 0 9.9k
+CUV_RISE_HI uv_rise_hi 0 1n
+IUV_RISE_HI uv_rise_hi 0 25n
+
+* UV falling low/high threshold corners.
+RUV_FALL_LO_TOP vin_ramp uv_fall_lo 148.5k
+RUV_FALL_LO_BOT uv_fall_lo 0 10.1k
+CUV_FALL_LO uv_fall_lo 0 1n
+IUV_FALL_LO 0 uv_fall_lo 25n
+RUV_FALL_HI_TOP vin_ramp uv_fall_hi 151.5k
+RUV_FALL_HI_BOT uv_fall_hi 0 9.9k
+CUV_FALL_HI uv_fall_hi 0 1n
+IUV_FALL_HI uv_fall_hi 0 25n
+
+* OV rising and falling corners.
+ROV_RISE_LO_TOP vin_ramp ov_rise_lo 252.45k
+ROV_RISE_LO_BOT ov_rise_lo 0 10.1k
+COV_RISE_LO ov_rise_lo 0 1n
+IOV_RISE_LO 0 ov_rise_lo 15n
+ROV_RISE_HI_TOP vin_ramp ov_rise_hi 257.55k
+ROV_RISE_HI_BOT ov_rise_hi 0 9.9k
+COV_RISE_HI ov_rise_hi 0 1n
+IOV_RISE_HI ov_rise_hi 0 15n
+ROV_FALL_LO_TOP vin_ramp ov_fall_lo 252.45k
+ROV_FALL_LO_BOT ov_fall_lo 0 10.1k
+COV_FALL_LO ov_fall_lo 0 1n
+IOV_FALL_LO 0 ov_fall_lo 15n
+ROV_FALL_HI_TOP vin_ramp ov_fall_hi 257.55k
+ROV_FALL_HI_BOT ov_fall_hi 0 9.9k
+COV_FALL_HI ov_fall_hi 0 1n
+IOV_FALL_HI ov_fall_hi 0 15n
+
+* Relative startup, OV fault/recovery, and power-collapse behavior.
+VDYN vin_dyn 0 PWL(0 0 0.1m 0 0.101m 8 4m 8 4.001m 11.5 6m 11.5 6.001m 8 9m 8 9.001m 0 12m 0)
+* Deliberately make +3V3 valid before the 450 us supervisor corner. This
+* proves the rail alone cannot raise TREAD_OK; startup_ready remains required.
+V3 rail_3v3 0 PWL(0 0 0.15m 0 0.25m 3.3 9.5m 3.3 10.5m 0 12m 0)
+
+RDUV_TOP vin_dyn dyn_uv 150k
+RDUV_BOT dyn_uv 0 10k
+CDUV dyn_uv 0 1n
+RDOV_TOP vin_dyn dyn_ov 255k
+RDOV_BOT dyn_ov 0 10k
+CDOV dyn_ov 0 1n
+
+* Window expression uses nominal 400 mV. RSTART/CSTART gives 450 us to
+* its half-rail decision point. RRESET/CSTART adds the guaranteed 18 us
+* high-to-low propagation corner before an unsafe state clears TREAD_OK.
+BWINDOW window_raw 0 V={3.3*u(v(vin_dyn)-1.8)*u(v(dyn_uv)-0.4)*u(0.4-v(dyn_ov))}
+RSTART window_raw startup_ready 649.213k
+CSTART startup_ready 0 1n
+RRESET startup_ready startup_reset 25.97k
+DRESET startup_reset window_raw ESP_SIGNAL_DIODE
+BTREAD tread_ok 0 V={3.3*u(v(startup_ready)-1.65)*u(v(rail_3v3)-1.65)}
+
+* The 469 us first-order ramp includes the 2 ohm/C16/237 ohm load below;
+* the loaded +5V_RLY node reaches 95% in the 1.5 ms data-sheet maximum.
+BU5_TARGET u5_target 0 V={5*u(v(tread_ok)-1.65)}
+RU5_START u5_target u5_ramp 469k
+CU5_START u5_ramp 0 1n
+DU5_RESET u5_ramp u5_target ESP_SIGNAL_DIODE
+BU5_SOURCE ldo_5v 0 V={v(u5_ramp)}
+SU5 ldo_5v relay_5v tread_ok 0 ESP_SWITCH
+RU5 relay_5v relay_cap 2
+C16 relay_cap 0 4.7u
+RK1 relay_cap 0 237
+
+.tran 2u 28m
+
+.meas tran uv_rise_low_v FIND v(vin_ramp) WHEN v(uv_rise_lo)=0.396 RISE=1
+.meas tran uv_rise_high_v FIND v(vin_ramp) WHEN v(uv_rise_hi)=0.404 RISE=1
+.meas tran uv_fall_low_v FIND v(vin_ramp) WHEN v(uv_fall_lo)=0.387 FALL=1
+.meas tran uv_fall_high_v FIND v(vin_ramp) WHEN v(uv_fall_hi)=0.400 FALL=1
+.meas tran ov_rise_low_v FIND v(vin_ramp) WHEN v(ov_rise_lo)=0.396 RISE=1
+.meas tran ov_rise_high_v FIND v(vin_ramp) WHEN v(ov_rise_hi)=0.404 RISE=1
+.meas tran ov_fall_low_v FIND v(vin_ramp) WHEN v(ov_fall_lo)=0.387 FALL=1
+.meas tran ov_fall_high_v FIND v(vin_ramp) WHEN v(ov_fall_hi)=0.400 FALL=1
+
+.meas tran supervisor_startup_s TRIG v(window_raw) VAL=1.65 RISE=1 TARG v(startup_ready) VAL=1.65 RISE=1
+.meas tran tread_after_3v3_s TRIG v(rail_3v3) VAL=1.65 RISE=1 TARG v(tread_ok) VAL=1.65 RISE=1
+.meas tran ov_disable_s TRIG v(vin_dyn) VAL=10.6 RISE=1 TARG v(tread_ok) VAL=1.65 FALL=1
+.meas tran ov_recover_s TRIG v(vin_dyn) VAL=10.6 FALL=1 TARG v(tread_ok) VAL=1.65 RISE=2
+.meas tran collapse_tread_before_rail_s TRIG v(tread_ok) VAL=1.65 FALL=2 TARG v(rail_3v3) VAL=1.65 FALL=1
+.meas tran u5_enable_s TRIG v(tread_ok) VAL=1.65 RISE=1 TARG v(relay_cap) VAL=4.75 RISE=1
+.meas tran u5_disable_tail_s TRIG v(tread_ok) VAL=1.65 FALL=2 TARG v(relay_cap) VAL=0.5 FALL=2
+.meas tran tread_low_when_rail_absent_v MAX v(tread_ok) FROM=10.6m TO=12m
+
+.end

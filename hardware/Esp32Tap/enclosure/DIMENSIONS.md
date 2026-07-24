@@ -1,34 +1,44 @@
-# Esp32Tap enclosure — dimension drawing (text form)
+# Esp32Tap Rev B enclosure — generated dimensions and validation
 
-The `openscad` CLI was not available in the design environment, so no STL is
-checked in. `esp32tap_case.scad` is fully parametric; export with:
+**Status: HOLD.** The checked-in meshes are repository-validated, but plug
+fit, final material/DFM acceptance, RF performance, and installation clearance
+remain physical or vendor gates.
+
+`esp32tap_case.scad` is the parametric source. Both checked-in STLs were
+rendered with hard warnings using this immutable image:
 
 ```bash
-openscad -D 'part="base"' -o esp32tap_base.stl esp32tap_case.scad
-openscad -D 'part="lid"'  -o esp32tap_lid.stl  esp32tap_case.scad
+openscad/openscad@sha256:147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37
 ```
 
-Every cutout below is also derivable from the parameters at the top of the
-.scad — this file is the human-checkable drawing.
+Reproduce and validate them from `hardware/Esp32Tap/enclosure/`:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  openscad/openscad@sha256:147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37 \
+  openscad --hardwarnings -D 'part="base"' \
+  -o esp32tap_base.stl esp32tap_case.scad
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  openscad/openscad@sha256:147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37 \
+  openscad --hardwarnings -D 'part="lid"' \
+  -o esp32tap_lid.stl esp32tap_case.scad
+python3 validate_enclosure.py
+```
 
 ## Coordinate convention
 
 Same frame as the PCB (`kicad/Esp32Tap.kicad_pcb`): origin = **board
 top-left corner**, +X right (toward USB), +Y toward the board bottom edge.
-The board *top* edge (Y=0) is the antenna end. Enclosure interior origin
-offsets: board corner sits at interior (2.0, 9.3); interior Z of board
-underside = 5.2 (2.2 floor + 3.0 standoffs).
+The board *top* edge (Y=0) is the antenna end. The board corner sits at
+interior (2.0, 21.3), comprising the module's 6.3 mm overhang plus the
+required 15.0 mm antenna void. Board-underside Z is 5.5 mm (2.5 mm floor +
+3.0 mm standoffs).
 
-> ✅ **FIXED 2026-07-23 (was: RJ45 wall cutouts misplaced 8.695 mm in Y).**
-> The `.scad` now uses the measured jack centerlines `j1_yc = 3.555` / `j2_yc = 32.555`;
-> previously `j1_yc = 12.25` / `j2_yc = 41.25` in
-> `esp32tap_case.scad` were set to pin-1 `at`.Y **+ 4.25**, but the jack centerline is
-> pin-1.Y **− 4.445**. Real jack centerlines are board-rel **Y 3.555 (J1)** and **Y 32.555
-> (J2)** opened ~half over solid wall so a plug could not seat. Now `at.Y − 4.445`;
-> re-rendered, re-quoted on JLC3DP (base flag cleared; lid warp-risk accepted). Re-run the
-> fit check before ordering any STL.** Every other feature in this file matches the PCB to
-> 0.000 mm; only the two RJ45 y-centers are wrong. No STL has been printed, so this is free
-> to fix now.
+The corrected RJ45 body centers are **12.445 mm** and **41.445 mm**. They are
+not copied from an old drawing: `validate_enclosure.py` derives each from the
+centroid of pads 1–8 in the versioned KiCad-inspector JSON. The historical
+3.555/32.555 change used the body offset with the wrong sign and is rejected
+by the tests.
 
 > **Delivered board vs. assembly panel.** The board that seats in this enclosure is the
 > KiCad `Edge.Cuts` outline = **100.0 × 55.0 mm** (verified X 100→200, Y 100→155). If
@@ -42,20 +52,21 @@ underside = 5.2 (2.2 floor + 3.0 standoffs).
 | Item | Value |
 |---|---|
 | Board (usable, post-depanel) | 100.0 × 55.0 × 1.6 mm |
-| Interior cavity | 104.0 × 73.3 × 21.1 mm |
-| Outer shell | 109.0 × 78.3 mm; base height 23.6, lid 3.0 (+1.2 lip ring) |
+| Interior cavity | 104.0 × 85.3 × 21.1 mm |
+| Outer shell | 109.0 × 90.3 mm; base height 23.6, lid 3.0 (+1.2 lip ring) |
 | Wall / floor | 2.5 mm; lid 3.0 mm (thickened for JLC3DP resin thin-wall/warp margin) |
 | Under-board clearance | 3.0 mm (THT RJ45 pins ~2 mm) |
-| Above-board headroom | 16.5 mm (tallest part: RJ45 13.4 mm → 1.5 mm clear even under the 1.2 mm lid lip ring) |
-| Bottom-edge clearance | 9.0 mm (board bottom edge to interior wall) so the two Ø7 bottom lid screw posts clear the PCB corners by 2.0 mm |
-| Antenna end | module overhangs board edge 6.3 mm; enclosure leaves a further 3.0 mm air gap. Lid stays FULL thickness over the antenna (the old 1.4 mm thinning was removed — it tripped the resin thin-wall DFM and served no purpose: resin is RF-transparent at 2.4 GHz and the air gap is set by the standoff, not the lid). Plastic only — no conductive finish, antenna end away from the treadmill frame |
+| Above-board headroom | 16.5 mm (tallest part: RJ45 13.4 mm → **1.9 mm** clear under the 1.2 mm lid lip ring) |
+| Bottom-edge clearance | 9.0 mm (board bottom edge to interior wall) so the two Ø7 bottom lid screw posts clear the PCB corners by **2.25 mm** |
+| Antenna end | U1 F.Fab span X=69.0…87.0 mm; module overhangs the board edge 6.3 mm; enclosure leaves a further **15.0 mm** plastic/air void. Lid stays full thickness. Plastic only—no conductive finish, metal-filled resin, or hardware in the RF keepout |
+| Lid posts | Ø7.0 mm, centers derived from `post_inset=3.25`; each post overlaps the inner wall face by 0.25 mm; lid relief Ø7.6 mm |
 
 ## Wall cutouts (board coordinates)
 
 | Cutout | Wall | Center | Aperture (W × H) | Bottom of aperture |
 |---|---|---|---|---|
-| J1 RJ45 (CONSOLE) | X = 0 (left) | Y = 3.555 | 17.7 × 14.4 | board top surface −0.3 |
-| J2 RJ45 (MOTOR) | X = 0 (left) | Y = 32.555 | 17.7 × 14.4 | board top surface −0.3 |
+| J1 RJ45 (CONSOLE) | X = 0 (left) | Y = 12.445 | 17.7 × 14.4 | board top surface −0.3 |
+| J2 RJ45 (MOTOR) | X = 0 (left) | Y = 41.445 | 17.7 × 14.4 | board top surface −0.3 |
 | J3 USB-C | X = 100 (right) | Y = 36.5 | 13.0 × 8.0 (overmold-sized) | connector mid-height − 4.0 |
 | Side vents | both long walls | X = 30…66, five 4 mm slots at 9 mm pitch | 4 × 6 | 8 mm below base rim |
 
@@ -68,7 +79,7 @@ so cables still plug straight in; the snug aperture doubles as strain
 relief, and the two
 exterior ears beside each wall accept a cable zip-tie for additional strain
 relief. The **USB-C receptacle does NOT overhang** — its face is recessed
-~4.2 mm behind the exterior wall face, so its aperture is sized for the
+4.5 mm behind the exterior wall face, so its aperture is sized for the
 **cable overmold** (typical ≤12 × 6.5 mm), not the plug shell; the overmold
 enters the wall and the shell reaches the receptacle at the board edge.
 
@@ -81,7 +92,7 @@ enters the wall and the shell reaches the receptacle at the board edge.
 | EN/reset tool hole (SW1) | (36.0, 5.0) | Ø2.5 |
 | BOOT tool hole (SW2) | (78.0, 17.4) | Ø2.5 |
 | Lid vents | (40…65, 48) | four 4 × 3 slots |
-| Lid screws | 4 corners, (3.5, 3.5) in from each **interior cavity** corner = (5.7, 5.7) from the exterior shell corner | M3 self-tap, Ø3.4 clearance + countersink, into Ø7 posts with Ø2.5 pilot |
+| Lid screws | shell centers X=5.75/103.25, Y=5.75/84.55 mm | M3 self-tap, Ø3.4 clearance + countersink, into Ø7 posts with Ø2.5 pilot |
 | Registration lip | perimeter ring, 4.0 mm wide × 1.2 mm deep | widened/shortened from 2.0×1.6 so it is no longer a thin standing ring; interior open (clears the 13.4 mm RJ45s); Ø7.6 cutouts where the ring meets the four screw posts |
 
 ## Board mounting (base)
@@ -96,15 +107,30 @@ enters the wall and the shell reaches the receptacle at the board edge.
 ## Mounting ears
 
 Four exterior ears (two per long side) at 25% / 75% of the enclosure
-length: 6 × 12 × 4 mm with a 3 × 5 mm slot — zip-tie to the treadmill frame
+length: 8 × 12 × 4 mm with a 3 × 5 mm slot — zip-tie to the treadmill frame
 near the lower board, or #6 self-tap screws. Keep the **antenna end
 pointing away from the metal motor hood**, with a few mm of air behind the
 wall (site-survey the BLE RSSI before final placement — see
 `firmware/PLAN.md` carried-forward unknowns).
 
-## JLC3DP ordering
+## Checked mesh evidence
 
-Upload both STLs; material **LEDO 6060 resin** (or 8001; PA12 MJF if you
-want more toughness — nylon also eliminates the lid warp risk), no post-finish. JLC3DP live quote 2026-07-23: base $3.90 (clean) + lid $2.42 (thin-wall/warp risk accepted) = $6.32 + ~$3.30 shipping. Estimated $6–14 for the pair at 2026
-prices; combine shipping with the PCBA order (JLC3DP supports combined
-parcels — the parcel ships when the slowest item finishes).
+| Mesh | SHA-256 | Welded bodies | Volume | Bounds |
+|---|---|---:|---:|---|
+| `esp32tap_base.stl` | `4ec0ed81e3127cb441fa7fde67e19e435497c6f442c73ff881d35fcdc3162b77` | 1 | 47,294.952 mm³ | −6…117 × 0…90.3 × 0…23.6 mm |
+| `esp32tap_lid.stl` | `b61b33f5d91865cfa4b9e02049225de65f293b3328e116cb94a99d0aae9a3468` | 1 | 30,663.317 mm³ | 0…109 × 0…90.3 × 0…4.2 mm |
+
+The SHA-256 values identify the checked-in ASCII STL bytes. OpenSCAD may
+emit the same triangles in a different facet order on another render, so raw
+byte hashes are not the reproducibility gate. The validator fresh-renders
+both parts with the pinned image and compares canonical geometry digests:
+coordinates are rounded to six decimals and facets are sorted independently
+of emission order.
+
+Both meshes have positive volume, consistent winding, watertightness, and
+exactly two faces incident to every welded edge. The validator also checks
+the cavity boundaries, two RJ45 apertures, USB aperture, board posts, lid
+posts and reliefs, and the 15 mm antenna void against inspector JSON. These
+checks do not authorize an order: obtain current JLC3DP material and DFM
+acceptance, then physically verify both intended RJ45 plugs, USB-C overmold
+access, RF range, and installed clearances.

@@ -1,5 +1,11 @@
 # Esp32Tap firmware plan (ESP-IDF port of cpp/protocol + cpp/engine)
 
+**Status: HOLD.** `safety_model.py` is an executable host reference contract,
+not production ESP-IDF firmware. No Emulate-capable binary exists yet, and no
+repository test substitutes for contact-measured bench evidence. Do not submit
+an order, pay, connect this board to the treadmill, or represent it as safe to
+operate on the strength of the host model.
+
 Platform: **ESP-IDF 5.x, C++20, `-fno-exceptions -fno-rtti`** — matching the
 existing `cpp/` style so `kv_protocol`, `mode_state` and `emulation_engine`
 port nearly verbatim. The pigpio bb_serial / DMA-wave layer is replaced by
@@ -33,13 +39,15 @@ RAM/NVS ring during server outages and replays on reconnect.
 
 ## One deliberate hardware-enabled change: Proxy = relay bridge
 
-On this board, Proxy mode is a **normally-closed relay bridge** — console
+On Rev B, Proxy mode is a **normally-closed relay bridge** — console
 bytes reach the motor through copper, not software forwarding. The engine
 still parses the console stream (for telemetry and auto-emulate/auto-proxy
 detection) but the forwarding path has zero latency and zero firmware
 dependence. Emulate entry = zero speed/incline, energize relay, start
-cycle. Emulate exit / watchdog / crash / power loss = relay releases →
-instant stock treadmill.
+cycle. Emulate exit / watchdog / crash / treadmill-derived power loss
+deasserts the relay command and the independent hardware permission. Actual
+NC-contact closure latency is a production-board measurement, not an
+"instant" software guarantee.
 
 **Task-WDT supervision — scope and action (normative).**
 `esp_task_wdt` subscribes **every task whose stall can leave the relay
@@ -48,7 +56,8 @@ energized**, not just the serial engine: (1) the serial engine task,
 serial task stays healthy), and (3) the interval executor task (1 s tick).
 Any of these stalling while the relay is energized is a state PLAN lists as
 uncharacterized (motor pin-6 silence), so each must independently trip the
-WDT. The WDT **action must actually release the relay**: ESP-IDF's task-WDT
+WDT. The production timeout is **2 s**. The WDT **action must actually release
+the relay**: ESP-IDF's task-WDT
 default merely prints a warning, so `CONFIG_ESP_TASK_WDT_PANIC=y` is
 mandatory (see the sdkconfig list below) — a stall then panics → reset →
 GPIO21 Hi-Z → 10 k base pull-down → relay released. Without that option the
@@ -72,12 +81,29 @@ at the driver base).
   `esp_https_server` (WSS/REST, 1 KB command cap, malformed JSON ignored),
   mDNS, checkpoint buffer/replay.
 * Required sdkconfig (defaults put WiFi/BT on core 0 — must override):
+  `CONFIG_IDF_TARGET="esp32s3"`,
+  `CONFIG_IDF_TARGET_ESP32S3=y`,
   `CONFIG_BT_NIMBLE_PINNED_TO_CORE=1`, WiFi task pinned to core 1, BT
   controller on core 1, `CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y`, WiFi PS
-  `MIN_MODEM`, `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3`, and
-  **`CONFIG_ESP_TASK_WDT_PANIC=y`** (task-WDT stall must panic-reset so the
-  relay releases — the IDF default only logs a warning; see the supervision
-  section above). Residual core-0 ISRs are accepted; the 128-byte UART
+  `MIN_MODEM`, `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3`,
+  `CONFIG_ESP_TASK_WDT_EN=y`, `CONFIG_ESP_TASK_WDT_INIT=y`,
+  `CONFIG_ESP_TASK_WDT_TIMEOUT_S=2`,
+  **`CONFIG_ESP_TASK_WDT_PANIC=y`**,
+  `CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y`,
+  `CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y`,
+  `CONFIG_APPTRACE_DEST_NONE=y`, and
+  `CONFIG_APPTRACE_DEST_UART_NONE=y`. If
+  `CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS` is emitted it must be `0`;
+  a generated silent-reboot sdkconfig may omit that hidden/default key.
+  Core dumps, apptrace destinations, and nonzero panic/core-dump/apptrace
+  waits are forbidden (task-WDT stall must
+  panic-reset promptly so the relay releases—the IDF default only logs a
+  warning). Brownout detection is enabled, with the highest ESP32-S3 threshold
+  strictly below the measured minimum +3V3 of the exact production artifact.
+  Panic halt/print-reboot/GDB-stub, runtime GDB stub, OpenOCD debug stubs, and
+  `CONFIG_ESP_DEBUG_OCDAWARE=y` are forbidden in an Emulate-capable build.
+  Residual core-0 ISRs are accepted;
+  the 128-byte UART
   FIFOs (~133 ms of RX buffering at 9600) absorb scheduler jitter.
 * **Task stack sizing (QEMU-validated constraint)**: `KvPair` is 128 bytes,
   so a single on-stack `KvPair[16]` array is 2 KB — two of them overflow
@@ -88,53 +114,126 @@ at the driver base).
   (`CONFIG_ESP_MAIN_TASK_STACK_SIZE` / `xTaskCreate` depth ≥ buffers +
   8 KB headroom).
 
-## Watchdog / mode state machine (complete matrix — M3 entry gate)
+## Executable safety contract (M3 entry gate)
 
-Sessions have exactly one *controlling liveness source*; the mode engine
-tracks `(mode, program_active, session_source)` where
-`session_source ∈ {NONE, WSS, BLE, EXECUTOR}`.
+`safety_model.py` is the normative host reference for this section. Its tests
+must later run unchanged against the production implementation's adapter. It
+does not drive GPIOs and is not flashable firmware.
 
-Liveness definitions:
-* **WSS session**: any manual speed/incline held via WSS. Heartbeat = any
-  inbound command; 1 Hz client heartbeats; timeout **4 s**
-  (`HEARTBEAT_TIMEOUT_SEC` parity). All-WS-clients-disconnected =
-  immediate reset (Layer-1 parity).
-* **BLE session** (gate fix): an FTMS Control Point connection **is a
-  client of the mode engine**; the BLE **supervision timeout (set ≈4 s)**
-  is its heartbeat. BLE disconnect during a BLE-initiated manual session ⇒
-  same zero + revert-to-proxy as WS-client loss. This restores exact
-  parity with today's ftms-daemon 1 Hz heartbeat, and works with the home
-  server off.
-* **EXECUTOR session**: an on-MCU program is executing. Network/BLE
-  silence does NOT touch the belt; only program completion/stop, an
-  explicit stop command, a console button (auto-proxy), or a safety event
-  ends it.
+### Atomic control lease
 
-Full matrix — cells are the required behavior AND each cell gets a
-regression test (test-first rule) before M3 closes:
+There is exactly one owner:
 
-| Command source ↓ / failure → | RF stall >4 s | client crash / WS drop | BLE drop | MCU reboot | task-WDT stall |
+```text
+(transport, concrete_connection_handle, monotonically_increasing_generation)
+```
+
+`transport` is WSS, BLE, or the local EXECUTOR. A WSS owner uses the concrete
+connection object/handle; a BLE owner uses the concrete `conn_handle`.
+Generation prevents a recycled socket or BLE handle from inheriting an old
+lease. Only the exact owner may mutate speed/incline or renew liveness.
+Non-owner commands, heartbeats, and disconnects are ignored by the motion
+engine. Accepting a higher generation for the same concrete handle first
+invalidates every lower-generation active identity. If a lower generation
+owns the lease, supersession commands zero and Proxy before registering the
+new connection; the new generation remains unowned until an explicit acquire.
+
+WSS and BLE manual ownership use one **4 s total-silence deadline**. There is
+no second timer and no 10 s reconnect grace. Owner disconnect immediately
+commands zero, deasserts relay and TX enables, and releases ownership.
+Reconnect begins unowned at zero and must explicitly acquire a new generation.
+The on-device executor owns a non-network lease; RF loss does not end or
+silently transfer it, but local safety events, reset, and WDT do.
+
+Every public operation carrying a monotonic timestamp advances all due lease,
+console-freshness, and transition deadlines before it may consume or mutate
+state. A command or reentrant request at an exact deadline loses to that
+deadline. In particular, a complete console frame arriving at age 1.5 s is
+rejected before it can replace the stale timestamp.
+
+| Command source ↓ / failure → | 4 s owner silence | WSS drop | BLE drop | reset/brownout | task-WDT |
 |---|---|---|---|---|---|
-| WSS manual session | zero + Proxy (after grace, below) | zero + Proxy (immediate on last client) | n/a | boots to Proxy, relay released | relay released → hardware Proxy |
-| BLE (FTMS CP) manual session | n/a (BLE supervision governs) | n/a | zero + Proxy | boots to Proxy | relay released |
-| Console (physical buttons) | no effect (hardware bridge) | no effect | no effect | bridge never opens | bridge closes |
-| EXECUTOR (program running) | **program continues** | program continues; server re-mirrors on reconnect | program continues (FTMS just stops notifying) | **boots to Proxy, NO program resume** (zero-on-emulate-entry philosophy; resume requires explicit safety-review approval) | relay released → Proxy; program state discarded |
-| Hybrid: WSS/BLE tweak *during* a program | the tweak is folded into the executor (interval override, same as today's `split_for_manual`); the 4 s session watchdog does **not** arm — executor liveness governs; loss of the tweaking client changes nothing | same | same | as EXECUTOR | as EXECUTOR |
+| WSS manual | zero + Proxy | zero + Proxy if exact owner | no effect | hardware Proxy, no resume | hardware Proxy |
+| BLE manual | zero + Proxy | no effect | zero + Proxy if exact owner | hardware Proxy, no resume | hardware Proxy |
+| Console bridge | no effect | no effect | no effect | NC bridge remains/defaults | NC bridge |
+| EXECUTOR | continues if console/safety inputs remain valid | continues | continues | Proxy, program discarded | Proxy, program discarded |
 
-Additional rules:
-* 3 h no-change timeout: unchanged — zeros speed/incline, stays Emulating.
-* Auto-emulate on any speed/incline command; auto-proxy on console
-  hmph/inc value change (prior-value-known rule) — executor abort ordering
-  on console button: mode flips to Proxy first (relay releases), then the
-  executor observes `!is_emulating()` and self-terminates — watchdog reset
-  never depends on cleanly stopping the emulate/executor task (Pi parity).
-* **Reconnect grace (gate fix, explicit accepted behavior):** TLS
-  reconnects commonly take 2–6 s, so a strict 4 s WSS timeout would revert
-  manual sessions on routine RF blips far more often than today's zero
-  occurrences. Manual WSS sessions therefore get a **bounded grace window
-  of 10 s total silence** (speed/incline frozen during grace, then zero +
-  Proxy). This is a documented safety-semantics choice for the safety
-  review; BLE sessions and the executor are unaffected.
+An executor interval override remains executor-owned; a transient WSS/BLE
+client never becomes a second liveness authority. The three-hour no-change
+policy remains separately testable, but it cannot extend a four-second manual
+lease.
+
+### Console freshness and physical STOP limitation
+
+Freshness is the monotonic timestamp of the newest **complete, valid, fully
+parsed** console frame. Partial, corrupt, oversized, or merely received bytes
+do not refresh it. Emulate entry requires a known baseline younger than
+1.5 s. While Emulating, age reaching 1.5 s commands zero and bypass
+immediately.
+
+A console STOP whose encoded value was already zero is not universally
+detectable from value-change parsing unless captures prove a distinct observed
+wire event. Do not claim otherwise. The treadmill's independent physical
+safety key remains authoritative.
+
+### Gap-safe relay transition
+
+Normal Emulate entry is exactly:
+
+1. require TREAD_OK, bypass feedback, a fresh console frame, no latched fault,
+   and current ownership;
+2. command speed/incline zero;
+3. configure inverted 9600 8N1, verify ESP_TX physical idle-low, then assert
+   TX_ENABLE without sending a byte;
+4. wait for a capture-qualified console inter-frame gap, for at most 1 s;
+5. assert RELAY_CMD and require the dry-contact feedback pole to report
+   Emulate continuously for at least 1 ms, with an actual GPIO sample at the
+   end of that interval and before the 10 ms deadline;
+6. only then transmit the first complete zero frame.
+
+If no gap arrives within 1 s, entry aborts without moving K1. Wrong or missing
+feedback releases K1 and latches a fault.
+
+Normal exit is exactly:
+
+1. transmit and finish a complete zero frame;
+2. wait for a capture-qualified gap, for at most 1 s;
+3. deassert RELAY_CMD and require bypass feedback continuously for at least
+   1 ms, with an actual GPIO sample at the end of that interval and before
+   the 10 ms deadline;
+4. deassert TX_ENABLE;
+5. release ownership.
+
+At the normal-exit gap deadline, deassert RELAY_CMD immediately; remaining in
+Emulate is less safe. TREAD_OK loss, stale console, lease expiry, explicit
+emergency stop, brownout, reset, and watchdog action never wait for a gap.
+`BOTH_CLOSED` feedback is an immediate latched fault in every mode and releases
+the relay. `BOTH_OPEN` may be observed as a break-before-make intermediate
+state only while waiting for post-command feedback; it never qualifies a
+transfer. Boot/reset feedback is unknown, not assumed bypass, until an actual
+GPIO sample reports the bypass contact state. A timer tick alone never proves
+the 1 ms feedback interval, and a timer or feedback callback at the exact
+10 ms boundary produces the same fail-closed timeout.
+
+The production acceptance test must perform at least 1,000 normal entry/exit
+cycles and observe MOT6 plus actual K1 contacts. It rejects a byte/frame splice
+or order violation. GPIO-only timing is insufficient. Required measured
+latencies are: TREAD_OK fault to stable NC at most 10 ms; software
+disconnect/lease deadline to stable NC at most 250 ms; injected supervised-task
+stall to stable NC at most 2.25 s with the 2 s WDT.
+
+### USB attach
+
+Rev B is self-powered only from treadmill +8 V; USB VBUS is data/presence only.
+GPIO7 is `VBUS_PRESENT_N`: LOW means VBUS present and HIGH means absent.
+Production code must explicitly invert that signal and must not advertise the
+native-USB D+ pull-up while it is HIGH. Espressif's stock self-powered
+`vbus_monitor_io` path is active-high, so GPIO7 cannot be passed to it without
+an explicit, reviewed inversion/attach strategy. Reset/ROM behavior and
+hot-unplug below 3 ms remain bench gates.
+
+Programming requires **both** a USB data cable and current-limited +8 V bench
+power on the treadmill-power pins. USB alone cannot power or program Rev B.
 
 ## Security (must land before the WSS port is ever enabled)
 
@@ -158,6 +257,42 @@ a measured `heap_caps` budget at M5. Escape hatch: ESP32-S3-WROOM-1-**N8R2**
 (C2913204) is a BOM-only swap (same footprint) if the measured budget
 fails.
 
+## Exact production artifact identity
+
+`build_safety_manifest.py` is a fail-closed, non-flashing tool. It validates
+the exact production `sdkconfig`, hashes the application, bootloader, partition
+table, sdkconfig, host safety model, builder, JSON schema, and this plan, then
+emits one deterministic `bundle_sha256`. The machine-readable contract is
+hashed first; that hash is combined with the four flash/config artifacts so
+there is no circular self-hash.
+
+The build snapshots every input once and fails if any artifact is
+missing/empty, if any two hashed inputs share one filesystem identity, if the
+application/bootloader do not have ESP image headers, if the partition table
+does not have the ESP partition-table form, if its output path or inode aliases
+any hashed input, if the 2 s task WDT is
+not enabled and initialized with panic/reset, if the panic action is not an
+immediate silent reboot, if core dump/apptrace panic work can delay reset, if
+the target is not exactly ESP32-S3, if brownout detection is absent, if any halt/debug
+mode is enabled, or if the configured brownout selector is not the highest
+documented ESP32-S3 threshold below the supplied physical minimum +3V3
+measurement. Validation rechecks selector/voltage/measurement correspondence
+even when a manifest's hashes were recomputed. The selector numbers are
+inverse to voltage: for example, with a measured 3.05 V minimum, level 3
+(approximately 2.98 V), not level 7, is the highest supported threshold below
+the measurement. The exact schema bytes used for validation are the same
+single snapshot recorded in the manifest hash.
+
+The exact sdkconfig gate remains mandatory on every flashed build:
+
+```bash
+grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig
+```
+
+Every bench log, scope/logic-analyzer capture, and contact-timing record names
+the resulting `bundle_sha256`. Rebuilding or changing any covered byte creates
+a different identity and invalidates evidence recorded for the prior bundle.
+
 ## Milestones (each gates the next)
 
 M1–M3 are **bench-only by definition** — no milestone before the
@@ -176,11 +311,13 @@ in TC1/TC2 inside the gate section below.
   the analyzer against a Pi capture, characterizing UART-FIFO pacing on the
   emulate TX path (confirmation, not discovery, given the 128-byte FIFO).
 * **M3 — emulate + full safety envelope on the bench rig (bench).**
-  Zero-on-entry, auto-proxy-on-console-change (driven by replayed
-  captures), 3 h timer, clamps, relay release on task-WDT stall of **each**
-  supervised task (serial engine, emulate cycle, interval executor —
-  stalled one at a time), **the entire watchdog matrix above with one
-  regression test per cell** — all passing on the bench rig.
+  Exact lease identity/generation, 4 s owner silence, 1.5 s complete-frame
+  freshness, gap-safe entry/exit, zero-on-entry, relay-feedback faults,
+  physical STOP limitation, 3 h timer, clamps, active-low USB attach, and
+  relay release on task-WDT stall of **each** supervised task (serial engine,
+  emulate cycle, interval executor — stalled one at a time). The entire matrix
+  above has one regression test per cell and actual-contact timing on the
+  production artifact.
 
 ## Treadmill-contact gate — the single first-contact checklist
 
@@ -200,13 +337,19 @@ requiring M3 before treadmill contact.)
    only logs the stall and never releases the relay, so a build missing this
    flag is silently unsafe even though the board looks alive. The WDT-release
    behavior test in this item must have been run on THAT build's sdkconfig,
-   not a debug build. (This is the specific gap an independent 2026-07-23
+   not a debug build. The manifest builder must pass all other WDT,
+   brownout, and no-halt checks, and the evidence must name its exact
+   `bundle_sha256`. (This is the specific gap an independent 2026-07-23
    review flagged: behavior can pass on one build and regress on the flashed
    one; verify the flag on the artifact, every flash.)
-3. Signal-integrity-while-dead test passed (README bring-up step 6).
-4. +8 V rail sourcing capacity measured per the PiZeroHat WIRING-CHECKLIST
+3. The 1,000-cycle no-splice analyzer gate and 10 ms / 250 ms / 2.25 s
+   contact-timing gates pass on that bundle.
+4. Signal-integrity-while-dead test passed (README bring-up step 6).
+5. +8 V rail sourcing capacity measured per the PiZeroHat WIRING-CHECKLIST
    before first connect (carried-forward unknown).
-5. Belt clear; console e-stop/safety key within reach; PiZeroHat
+6. USB enumeration, active-low VBUS indication, no-pull-up-while-absent,
+   reset/ROM behavior, and hot-unplug pass with current-limited +8 V plus USB.
+7. Belt clear; console e-stop/safety key within reach; PiZeroHat
    WIRING-CHECKLIST discipline followed for the physical hookup.
 
 First contact then proceeds in two still-gated steps:

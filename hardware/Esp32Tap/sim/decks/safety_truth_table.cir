@@ -1,0 +1,71 @@
+Esp32Tap Rev B hardware safety gate complete truth table
+* ASSUMPTIONS:
+* U6 is represented as partial-power-down AND logic. R23/R27 are 10k input
+* pull-downs and R24/R28 are 10k output-node pull-downs. Each 1 ms row
+* enumerates (+3V3,TREAD_OK,RELAY_CMD,TX_ENABLE) in binary order 0...15.
+* NON-CLAIMS:
+* Logic propagation, ESD transients, powered-off leakage, and firmware
+* sequencing are not established by this static truth-table deck.
+
+.include models/behavioral.inc
+
+VTX tx_enable 0 PULSE(0 3.3 1m 1n 1n 1m 2m)
+VCMD relay_cmd 0 PULSE(0 3.3 2m 1n 1n 2m 4m)
+VTREAD tread_ok 0 PULSE(0 3.3 4m 1n 1n 4m 8m)
+VRAIL rail_3v3 0 PULSE(0 3.3 8m 1n 1n 8m 16m)
+
+R23 relay_cmd 0 10k
+R27 tx_enable 0 10k
+XRELAY relay_cmd tread_ok rail_3v3 relay_gate ESP_AND_GATE
+XTX tx_enable tread_ok rail_3v3 tx_gate ESP_AND_GATE
+R24 relay_gate 0 10k
+R28 tx_gate 0 10k
+
+* Separate undriven boot-default nodes exercise the external pull-downs.
+R23_DEFAULT relay_cmd_default 0 10k
+R27_DEFAULT tx_enable_default 0 10k
+XRELAY_DEFAULT relay_cmd_default tread_ok_default rail_default relay_gate_default ESP_AND_GATE
+XTX_DEFAULT tx_enable_default tread_ok_default rail_default tx_gate_default ESP_AND_GATE
+R24_DEFAULT relay_gate_default 0 10k
+R28_DEFAULT tx_gate_default 0 10k
+RLEAK_TREAD tread_ok_default 0 100k
+RLEAK_RAIL rail_default 0 100k
+
+.tran 1u 16m
+
+.meas tran relay_gate_row_00_v FIND v(relay_gate) AT=0.5m
+.meas tran tx_gate_row_00_v FIND v(tx_gate) AT=0.5m
+.meas tran relay_gate_row_01_v FIND v(relay_gate) AT=1.5m
+.meas tran tx_gate_row_01_v FIND v(tx_gate) AT=1.5m
+.meas tran relay_gate_row_02_v FIND v(relay_gate) AT=2.5m
+.meas tran tx_gate_row_02_v FIND v(tx_gate) AT=2.5m
+.meas tran relay_gate_row_03_v FIND v(relay_gate) AT=3.5m
+.meas tran tx_gate_row_03_v FIND v(tx_gate) AT=3.5m
+.meas tran relay_gate_row_04_v FIND v(relay_gate) AT=4.5m
+.meas tran tx_gate_row_04_v FIND v(tx_gate) AT=4.5m
+.meas tran relay_gate_row_05_v FIND v(relay_gate) AT=5.5m
+.meas tran tx_gate_row_05_v FIND v(tx_gate) AT=5.5m
+.meas tran relay_gate_row_06_v FIND v(relay_gate) AT=6.5m
+.meas tran tx_gate_row_06_v FIND v(tx_gate) AT=6.5m
+.meas tran relay_gate_row_07_v FIND v(relay_gate) AT=7.5m
+.meas tran tx_gate_row_07_v FIND v(tx_gate) AT=7.5m
+.meas tran relay_gate_row_08_v FIND v(relay_gate) AT=8.5m
+.meas tran tx_gate_row_08_v FIND v(tx_gate) AT=8.5m
+.meas tran relay_gate_row_09_v FIND v(relay_gate) AT=9.5m
+.meas tran tx_gate_row_09_v FIND v(tx_gate) AT=9.5m
+.meas tran relay_gate_row_10_v FIND v(relay_gate) AT=10.5m
+.meas tran tx_gate_row_10_v FIND v(tx_gate) AT=10.5m
+.meas tran relay_gate_row_11_v FIND v(relay_gate) AT=11.5m
+.meas tran tx_gate_row_11_v FIND v(tx_gate) AT=11.5m
+.meas tran relay_gate_row_12_v FIND v(relay_gate) AT=12.5m
+.meas tran tx_gate_row_12_v FIND v(tx_gate) AT=12.5m
+.meas tran relay_gate_row_13_v FIND v(relay_gate) AT=13.5m
+.meas tran tx_gate_row_13_v FIND v(tx_gate) AT=13.5m
+.meas tran relay_gate_row_14_v FIND v(relay_gate) AT=14.5m
+.meas tran tx_gate_row_14_v FIND v(tx_gate) AT=14.5m
+.meas tran relay_gate_row_15_v FIND v(relay_gate) AT=15.5m
+.meas tran tx_gate_row_15_v FIND v(tx_gate) AT=15.5m
+.meas tran relay_gate_default_v MAX v(relay_gate_default) FROM=0 TO=16m
+.meas tran tx_gate_default_v MAX v(tx_gate_default) FROM=0 TO=16m
+
+.end

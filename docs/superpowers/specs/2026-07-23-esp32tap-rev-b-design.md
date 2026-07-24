@@ -205,8 +205,8 @@ U6, SN74LVC2G08DCTR (`C352973`), computes:
 RELAY_GATE = RELAY_CMD AND TREAD_OK
 ```
 
-`RELAY_GATE` enables U5 and drives Q1 through the existing 1 kΩ base
-resistor. It also gets its own 10 kΩ pull-down, placed at U5.EN, because the
+`RELAY_GATE` enables U5 and drives Q1 through a 560 Ω base resistor. It also
+gets its own 10 kΩ pull-down, placed at U5.EN, because the
 TPS709 EN pin defaults enabled if allowed to float. The existing 10 kΩ
 base-to-ground resistor remains. This makes U5 and Q1 series control
 elements: a Q1 collector-emitter short is still blocked by disabled U5, and
@@ -214,12 +214,12 @@ a failed-on U5 is still blocked by Q1. U6 is powered from +3V3, decoupled
 locally, and has partial-power-down `Ioff` behavior.
 
 Q1 changes to Nexperia BC817-40,215, LCSC `C52801`, with 45 V VCEO and the
-same SOT-23 B/E/C pad assignment. Nominal base current is approximately
-2.4 mA; even with a conservative 2.3 V U6 output it remains approximately
-1.3 mA. Against the 18.8 mA to 24.0 mA coil-current corners this is a forced
-beta of approximately 10 nominal and 18 at the conservative logic-output
-bound. Worst specified Q1 saturation drop must still leave at least the
-relay's 4.0 V must-operate voltage.
+same SOT-23 B/E/C pad assignment. In the conservative behavioral corner
+(2.3 V U6 output, 1.2 V base-emitter drop, resistor tolerances), modeled base
+current is 1.82 mA and modeled coil current is 16.11 mA, for forced beta 8.83.
+That case leaves 4.20 V across the high-resistance coil, above the relay's
+4.0 V must-operate voltage. These are behavioral margins, not a substitute
+for bench measurements with production parts.
 
 The Rev A ordinary flyback diode is replaced because a low-voltage diode
 clamp can lengthen magnetic release. D4 becomes Littelfuse SMAJ6.0CA, LCSC
