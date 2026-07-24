@@ -103,7 +103,7 @@ def validate_geometry(board: dict[str, Any]) -> None:
     )
     outline = board["outline"]
     require(near(outline["width_mm"], 95.0), "board width is not 95 mm")
-    require(near(outline["height_mm"], 55.0), "board height is not 55 mm")
+    require(near(outline["height_mm"], 58.0), "board height is not 58 mm")
 
     stackup = board["stackup"]
     require(
@@ -146,9 +146,9 @@ def validate_geometry(board: dict[str, Any]) -> None:
     )
     origin = outline["min"]
     mounting = {
-        "MH1": [2.9, 26.5],
-        "MH2": [97.0, 3.0],
-        "MH3": [97.0, 52.0],
+        "MH1": [20.0, 6.0],
+        "MH2": [48.0, 6.0],
+        "MH3": [92.0, 55.0],
     }
     for reference, local_position in mounting.items():
         footprint = footprints[reference]
@@ -165,8 +165,8 @@ def validate_geometry(board: dict[str, Any]) -> None:
     antenna = board["antenna"]
     require(antenna["reference"] == "U1", "antenna reference is not U1")
     require(
-        near(origin[1] - antenna["physical_edge_y_mm"], 6.3),
-        "antenna overhang is not 6.3 mm",
+        near(antenna["physical_edge_y_mm"] - origin[1], 3.3),
+        "antenna edge clearance is not 3.3 mm",
     )
     require(
         all(
@@ -374,7 +374,7 @@ def main() -> int:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
     print(
-        "PASS: Rev B board, stackup, routing, parity, assembly, "
+        "PASS: Rev C board, stackup, routing, parity, assembly, "
         "and fabrication artifacts are internally consistent"
     )
     return 0

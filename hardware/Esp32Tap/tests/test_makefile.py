@@ -168,8 +168,9 @@ def test_test_target_runs_only_local_pytest_suite() -> None:
 def test_generation_and_single_gate_targets_use_pinned_local_tools() -> None:
     text = _makefile_text()
     expected = {
-        "generate": [
-            "python3 tools/gen_sch.py",
+            "generate": [
+                "python3 tools/gen_footprints.py",
+                "python3 tools/gen_sch.py",
             "/usr/bin/python3 tools/gen_pcb.py",
             "/usr/bin/python3 tools/gen_docs.py",
         ],

@@ -98,7 +98,7 @@ JOB_POLARITIES = {
     for filename in JOB_FUNCTIONS
 }
 REQUIRED_GENERAL_SPECS = {
-    "Size": {"X": 95.1, "Y": 55.1},
+    "Size": {"X": 95.1, "Y": 58.1},
     "LayerNumber": 4,
     "BoardThickness": 1.59,
     "Finish": "ENIG",
@@ -120,6 +120,7 @@ KICAD_PROJECT_FILES = {
 KICAD_FOOTPRINT_DIRECTORIES = {
     "Connector_Molex.pretty",
     "Button_Switch_SMD.pretty",
+    "RF_Module.pretty",
 }
 EXPECTED_FAB_FILES = set(GERBER_FUNCTIONS) | {
     "Esp32Tap-job.gbrjob",
@@ -986,8 +987,8 @@ def _validate_profile_geometry(payload: str) -> None:
             segments.add(tuple(sorted((position, point))))
         position = point
 
-    top_left = (100.0, -100.0)
-    top_right = (195.0, -100.0)
+    top_left = (100.0, -97.0)
+    top_right = (195.0, -97.0)
     bottom_left = (100.0, -155.0)
     bottom_right = (195.0, -155.0)
     expected_segments = {
@@ -999,7 +1000,7 @@ def _validate_profile_geometry(payload: str) -> None:
     if segments != expected_segments:
         raise FabExportError(
             "Esp32Tap-Edge_Cuts.gm1 profile must be the closed "
-            "95.0 x 55.0 mm Rev C rectangle"
+            "95.0 x 58.0 mm Rev C rectangle"
         )
 
 

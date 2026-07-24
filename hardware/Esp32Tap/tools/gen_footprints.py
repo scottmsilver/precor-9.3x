@@ -3,20 +3,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-KICAD_FOOTPRINTS = Path("/usr/share/kicad/footprints")
+PINNED_SOURCES = ROOT / "tools" / "footprint_sources"
 
 MOLEX_FOOTPRINTS = {
-    "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal": (
-        "Molex_Micro-Fit_3.0_43045-0810_2x04-1MP_P3.00mm_Horizontal"
-    ),
-    "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal": (
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal"
-    ),
+    "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal":
+        "ff2f1200a5a71b525549f42a2bdb2fd4a07e9937e46b6c30b0daf40974c2d5f6",
+    "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal":
+        "cf8ae212da9c7bf802d8f6d50b3ce33b33be66af8403e0a02e18f569aa87a16f",
+}
+RF_MODULE_FOOTPRINTS = {
+    "ESP32-S3-WROOM-1":
+        "b7f7c0eb5ecd56a08d127f464d0b0ffb5dc5e2b685bb493de1d731654e57bbd3",
 }
 
 SWITCH = """(footprint "SW_SPST_SKRPACE010"
@@ -67,6 +70,7 @@ TABLE = """(fp_lib_table
   (version 7)
   (lib (name "Connector_Molex")(type "KiCad")(uri "${KIPRJMOD}/Connector_Molex.pretty")(options "")(descr "Esp32Tap qualified Molex footprints"))
   (lib (name "Button_Switch_SMD")(type "KiCad")(uri "${KIPRJMOD}/Button_Switch_SMD.pretty")(options "")(descr "Esp32Tap qualified switch footprints"))
+  (lib (name "RF_Module")(type "KiCad")(uri "${KIPRJMOD}/RF_Module.pretty")(options "")(descr "Esp32Tap pinned ESP32 module footprint"))
 )
 """
 
@@ -80,19 +84,29 @@ def atomic_write(path: Path, content: str) -> None:
 
 def main() -> None:
     molex_directory = ROOT / "kicad" / "Connector_Molex.pretty"
-    for target, source in MOLEX_FOOTPRINTS.items():
-        source_path = (
-            KICAD_FOOTPRINTS
-            / "Connector_Molex.pretty"
-            / f"{source}.kicad_mod"
-        )
+    for target, expected_digest in MOLEX_FOOTPRINTS.items():
+        source_path = PINNED_SOURCES / f"{target}.kicad_mod"
+        observed_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        if observed_digest != expected_digest:
+            raise ValueError(
+                f"pinned footprint digest mismatch for {source_path.name}: "
+                f"{observed_digest}"
+            )
         content = source_path.read_text(encoding="utf-8")
-        content = content.replace(
-            f'(footprint "{source}"',
-            f'(footprint "{target}"',
-            1,
-        )
         atomic_write(molex_directory / f"{target}.kicad_mod", content)
+    rf_directory = ROOT / "kicad" / "RF_Module.pretty"
+    for target, expected_digest in RF_MODULE_FOOTPRINTS.items():
+        source_path = PINNED_SOURCES / f"{target}.kicad_mod"
+        observed_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        if observed_digest != expected_digest:
+            raise ValueError(
+                f"pinned footprint digest mismatch for {source_path.name}: "
+                f"{observed_digest}"
+            )
+        atomic_write(
+            rf_directory / f"{target}.kicad_mod",
+            source_path.read_text(encoding="utf-8"),
+        )
     atomic_write(
         ROOT / "kicad" / "Button_Switch_SMD.pretty"
         / "SW_SPST_SKRPACE010.kicad_mod",
