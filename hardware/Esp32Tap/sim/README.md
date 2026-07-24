@@ -1,8 +1,8 @@
-# Esp32Tap Rev B behavioral simulations
+# Esp32Tap Rev C behavioral simulations
 
-These seven ngspice decks are repository evidence for the declared Rev B
-behavioral assumptions. They are not a product certification and they do not
-replace production-hardware measurements.
+These eight ngspice decks retain the Rev B behavioral regression evidence and
+add the Rev C harness current-sharing model. They are not a product
+certification and they do not replace production-hardware measurements.
 
 ## Reproduce
 
@@ -43,6 +43,7 @@ Fresh runs on 2026-07-24 produced the same declared values on ngspice 42 and
 | `vbus_present` | active-low `VBUS_PRESENT_N` is 1.65 mV with VBUS and 3.3 V absent; true slow hot-plug corner reaches LOW in 4.083 µs; worst unplug-to-HIGH = 1.912 ms, strictly below 3 ms; modeled dead-rail/GPIO injection = 0 |
 | `buck_averaged` | 90% startup = 4.495 ms; 450 mA step minimum = 3.233 V; worst modeled VIN = 6.865 V; input/load energies = 12.95/5.38 mJ |
 | `uart_taps` | 10–90% rise = 1.110 µs versus a 104.167 µs bit; one/two-tap unpowered injection = 0.286/0.572 mA |
+| `harness_supply_drop` | both exact Rev C board connectors and both rails use the predecessor-authorized 1.35/0.65 A unequal case; opening each individual new-board power or ground contact leaves 2.0 A in its surviving Micro-Fit contact; doubling each 10 mΩ Micro-Fit contact in turn produces a 1.333333 A maximum branch current |
 
 The machine-readable limits, not this table, decide PASS or failure.
 
@@ -89,6 +90,20 @@ The machine-readable limits, not this table, decide PASS or failure.
   5 ms soft-start and selected 3.3 V network only as an averaged envelope.
   The declared source impedance, capacitor derating, and 82–90% efficiency
   proxies are engineering assumptions.
+- The harness deck binds its only numeric current assertions to the
+  owner-authorized, field-working PiZeroHat predecessor basis: 2.0 A total,
+  explicit 1.35/0.65 A unequal sharing, and no credit for parallel contacts
+  in an individual-open 430450809 or 430451010 board-connector case. The
+  doubled-contact sweep uses the selected Micro-Fit system's published 10 mΩ
+  initial contact-resistance limit. Alpha Wire 3051 conductor resistance is
+  calculated from its 16.2 Ω/1000 ft maximum at 20 °C and the modeled 180/240
+  mm harness lengths. `harness/electrical_limits.json` is the fail-closed
+  machine-readable source for these inputs.
+- The complete harness topology includes both harnesses, four RJ45
+  terminations, both exact board connectors, PCB copper/vias, a local-load
+  probe, source-impedance probe, and USB-ground-path probe. Unmeasured
+  elements use zero-volt or zero-current topology probes, not invented
+  physical resistance, voltage, load, or USB-current defaults.
 
 ## Explicitly unsupported
 
@@ -106,6 +121,10 @@ Important open gates include:
 - BC817 switching dynamics and a guaranteed combined-temperature saturation
   model;
 - RF behavior and all physical enclosure effects.
+- RJ45 single-open 2.0 A capability, minimum treadmill VIN, treadmill source
+  impedance, installed ambient/thermal behavior, transient response, complete
+  installed supply-plus-return drop, and USB return current;
+- harness ESD, RF, and switching-loop behavior.
 
 In particular, coil-current decay is not evidence of relay contact motion,
 and the zero VBUS-to-dead-domain result follows from the isolated-gate model.

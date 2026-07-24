@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Generate the Esp32Tap Rev B four-layer PCB from ``design.py``.
+"""Generate the Esp32Tap Rev C four-layer PCB from ``design.py``.
 
 Critical current loops, feedback, and USB are explicit routes.  Remaining
 low-speed nets use a deterministic two-routing-layer grid search: vertical
@@ -24,6 +24,7 @@ from typing import Any, Iterable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import design
+import power_intent
 import pcbnew
 from pcbnew import FromMM as MM
 from pcbnew import VECTOR2I
@@ -35,7 +36,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / "kicad" / "Esp32Tap.kicad_pcb"
 FPLIB = Path(design.FPLIB)
 OX, OY = 100.0, 100.0
-BOARD_W, BOARD_H = 100.0, 55.0
+BOARD_W, BOARD_H, BOARD_TOP = 95.0, 55.0, -3.0
 F = pcbnew.F_Cu
 IN1 = pcbnew.In1_Cu
 IN2 = pcbnew.In2_Cu
@@ -43,8 +44,53 @@ B = pcbnew.B_Cu
 ROUTING_LAYERS = (IN2, B)
 GRID = 0.4
 CLEARANCE = 0.20
-ANTENNA_KEEPOUT = (68.0, 0.0, 88.5, 4.2)
-FIXTURE_KEEPOUT = (52.0, 33.8, 82.0, 38.2)
+U1_PROFILE_SHIFT_Y = 6.6
+USB_ROUTE_SHIFT_Y = 6.6
+U1_COUPLED_REFS = (
+    "U1",
+    "R7",
+    "R8",
+    "R13",
+    "R15",
+    "R16",
+    "C8",
+    "C9",
+    "C10",
+    "C13",
+    "C14",
+)
+U1_COUPLED_ESCAPE_KEYS = {
+    ("C10", "1"),
+    ("R13", "2"),
+    ("C9", "2"),
+    ("R8", "2"),
+}
+SAFETY_RELAY_PRIORITY = (
+    "CONS6",
+    "MOT6",
+    "TX_DRV",
+    "TX_BUF",
+    "TREAD_OK",
+    "RELAY_CMD",
+    "RELAY_GATE",
+    "RELAY_SW",
+    "TX_ENABLE",
+    "TX_GATE",
+    "K1_NC_FB",
+    "K1_NO_FB",
+    "PIN3",
+    "PIN3_RX",
+    "PIN5_SAFETY",
+    "PIN4_PASS",
+    "CONS_RX",
+)
+ANTENNA_KEEPOUT = (
+    68.0,
+    U1_PROFILE_SHIFT_Y,
+    88.5,
+    4.2 + U1_PROFILE_SHIFT_Y,
+)
+FIXTURE_KEEPOUT = (47.0, 33.8, 77.0, 38.2)
 USB_NETS = {
     "USB_DN",
     "USB_DP",
@@ -56,8 +102,11 @@ USB_NETS = {
 USB_CONTROLLED_WIDTH = 0.2906
 USB_EDGE_GAP = 0.2000
 USB_CENTER_SPACING = USB_CONTROLLED_WIDTH + USB_EDGE_GAP
+USB_UNRELATED_CLEARANCE = 0.80
+ROUTER_VIA_RADIUS = 0.30
 MANUAL_NETS = USB_NETS | {
     "GND",
+    "+8V_RAW",
     "+8V_F",
     "SW_NODE",
     "BST",
@@ -67,7 +116,20 @@ MANUAL_NETS = USB_NETS | {
     "CC1",
     "CC2",
     "VBUS",
+    "CONS6",
+    "VBUS_PRESENT_N",
 }
+U1_CLUSTER_PRIORITY = tuple(
+    net
+    for net, endpoints in design.NETS.items()
+    if any(
+        ref == "U1" or ref in U1_COUPLED_REFS
+        for ref, _ in endpoints
+    )
+    and net not in MANUAL_NETS
+    and net not in SAFETY_RELAY_PRIORITY
+    and net not in {"+8V_RAW", "+8V_F", "VIN", "+3V3"}
+)
 WIDTHS = {
     "+8V_RAW": 0.60,
     "+8V_F": 0.80,
@@ -82,7 +144,7 @@ PLANNED_U6_ESCAPES = {
     "2": ((44.0, 21.6), "TREAD_OK"),
     "3": ((44.8, 22.4), "TX_GATE"),
     "4": ((44.0, 23.2), "GND"),
-    "5": ((52.0, 23.2), "TX_ENABLE"),
+    "5": ((50.0, 23.2), "TX_ENABLE"),
     "6": ((51.2, 22.4), "TREAD_OK"),
     "7": ((52.0, 21.6), "RELAY_GATE"),
     "8": ((51.2, 20.8), "+3V3"),
@@ -93,9 +155,6 @@ PLANNED_U6_ESCAPES = {
 # J1's connector footprint and plated-pad geometry.
 LOCKED_DFM_ESCAPES = {
     ("C10", "1"): (61.2, 11.2),
-    ("J1", "3"): (11.2, 10.4),
-    ("J1", "4"): (17.2, 12.0),
-    ("J1", "8"): (15.2, 18.4),
     ("R13", "2"): (61.2, 11.2),
     ("C9", "2"): (65.2, 1.2),
     ("R12", "2"): (75.2, 48.8),
@@ -103,7 +162,23 @@ LOCKED_DFM_ESCAPES = {
     ("R8", "2"): (64.4, 9.2),
     ("L1", "2"): (67.2, 51.2),
     ("R30", "2"): (81.6, 44.0),
-    ("R26", "2"): (32.4, 31.2),
+}
+
+CUSTOM_FOOTPRINT_SOURCES = {
+    (
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
+    ): (
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-0810_2x04-1MP_P3.00mm_Horizontal",
+    ),
+    (
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+    ): (
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+    ),
 }
 
 
@@ -111,28 +186,28 @@ LOCKED_DFM_ESCAPES = {
 # the RJ45/enclosure geometry, keep RF/USB clear of power, and make the
 # supervisor, relay, and converter loops probeable.
 PLACE = {
-    "J1": (12.5, 8.0, 270),
-    "J2": (12.5, 37.0, 270),
+    "J1": (12.5, 11.0, 90),
+    "J2": (12.5, 37.0, 90),
     "J3": (96.2, 36.5, 90),
     "U1": (78.0, 6.45, 0),
-    "K1": (27.0, 26.0, 0),
+    "K1": (30.2, 23.0, 0),
     "U2": (60.0, 48.5, 180),
     "U3": (87.0, 35.0, 180),
     "U4": (35.0, 42.0, 0),
     "U5": (37.0, 25.0, 0),
     "U6": (48.0, 22.0, 0),
     "U7": (58.0, 24.0, 0),
-    "Q1": (35.0, 19.0, 0),
+    "Q1": (35.0, 15.5, 0),
     "Q2": (84.0, 46.5, 0),
     "D1": (27.5, 52.5, 180),
     "D3": (35.0, 52.0, 0),
-    "D4": (27.0, 17.5, 0),
-    "D5": (20.0, 15.0, 270),
-    "D6": (20.0, 43.0, 270),
-    "D7": (19.0, 38.0, 270),
+    "D4": (30.0, 11.5, 0),
+    "D5": (27.0, 15.0, 270),
+    "D6": (29.0, 47.0, 270),
+    "D7": (38.0, 38.0, 270),
     "LED1": (93.0, 10.0, 180),
     "LED2": (77.0, 50.0, 0),
-    "SW1": (55.0, 4.0, 0),
+    "SW1": (42.0, 4.0, 0),
     "SW2": (94.0, 17.0, 0),
     "F1": (20.5, 52.5, 0),
     "L1": (65.0, 48.5, 0),
@@ -160,13 +235,13 @@ PLACE = {
     "R22": (45.0, 42.0, 0),
     "R23": (47.0, 27.0, 0),
     "R24": (47.0, 30.0, 0),
-    "R25": (33.5, 29.0, 90),
-    "R26": (33.5, 33.0, 90),
+    "R25": (33.5, 31.0, 90),
+    "R26": (35.2, 35.0, 90),
     "R27": (52.0, 27.0, 0),
     "R28": (52.0, 30.0, 0),
     "R29": (80.0, 48.0, 0),
     "R30": (80.0, 45.0, 0),
-    "R31": (90.0, 15.0, 90),
+    "R31": (90.0, 13.0, 90),
     "C1": (43.5, 49.5, 0),
     "C2": (50.0, 52.0, 0),
     "C3": (63.5, 43.5, 0),
@@ -188,8 +263,8 @@ PLACE = {
     "C19": (38.0, 45.0, 0),
     "C20": (48.0, 19.5, 0),
     "C21": (58.0, 21.5, 0),
-    "TP1": (92.0, 5.0, 0),
-    "TP2": (92.0, 8.0, 0),
+    "TP1": (35.0, 3.0, 0),
+    "TP2": (35.0, 6.0, 0),
     "TP3": (74.0, 43.0, 0),
     "TP4": (77.0, 43.0, 0),
     "TP5": (54.0, 36.0, 0),
@@ -202,6 +277,67 @@ PLACE = {
     "TP12": (76.4, 36.0, 0),
     "TP13": (79.6, 36.0, 0),
 }
+
+COMPACT_X_DELTAS = {
+    "J3": -5.0,
+    "U3": -5.0,
+    "SW2": -3.0,
+    **{f"TP{number}": -5.0 for number in range(5, 14)},
+}
+
+# Preserve every qualified Rev B coordinate that already fits the compact
+# outline. Only footprints whose physical bounds cross the new edge move.
+PLACE = {
+    ref: (
+        x + COMPACT_X_DELTAS.get(ref, 0.0),
+        y,
+        rotation,
+    )
+    for ref, (x, y, rotation) in PLACE.items()
+}
+PLACE = {
+    ref: (
+        x,
+        y + (U1_PROFILE_SHIFT_Y if ref in U1_COUPLED_REFS else 0.0),
+        rotation,
+    )
+    for ref, (x, y, rotation) in PLACE.items()
+}
+LOCKED_DFM_ESCAPES = {
+    key: (
+        point[0],
+        round(
+            math.floor(
+                (
+                    point[1]
+                    + (
+                        U1_PROFILE_SHIFT_Y
+                        if key in U1_COUPLED_ESCAPE_KEYS
+                        else 0.0
+                    )
+                )
+                / GRID
+            )
+            * GRID,
+            6,
+        ),
+    )
+    for key, point in LOCKED_DFM_ESCAPES.items()
+}
+# R8.2 must escape toward the antenna-side channel.  The directly translated
+# grid cell is consumed deterministically by the earlier RELAY_CMD route.
+LOCKED_DFM_ESCAPES[("R8", "2")] = (64.4, 14.8)
+LOCKED_DFM_ESCAPES[("R13", "2")] = (60.0, 16.0)
+LOCKED_DFM_ESCAPES[("C10", "1")] = (60.0, 16.0)
+# The fixture corridor forbids B.Cu and through vias through y=33.8..38.2.
+# Reserve TX_GATE immediately above it so the safety route is not displaced
+# by the later U1 cluster or the shifted USB pair.
+LOCKED_DFM_ESCAPES[("TP10", "1")] = (63.2, 39.2)
+
+
+def usb_edge_x(x: float) -> float:
+    """Translate routing geometry tied to the compacted USB-edge cluster."""
+    return x - 5.0
 
 
 def local(point: Any) -> tuple[float, float]:
@@ -221,6 +357,30 @@ def grid_index(value: float) -> int:
 
 def grid_point(index: tuple[int, int]) -> tuple[float, float]:
     return (round(index[0] * GRID, 6), round(index[1] * GRID, 6))
+
+
+def slow_net_order() -> list[str]:
+    priority = {net: index for index, net in enumerate(SAFETY_RELAY_PRIORITY)}
+    cluster = {net: index for index, net in enumerate(U1_CLUSTER_PRIORITY)}
+    power = {"+8V_RAW", "+8V_F", "VIN", "+3V3"}
+    nets = [net for net in design.NETS if net not in MANUAL_NETS]
+    nets.sort(
+        key=lambda net: (
+            (
+                0
+                if net in priority
+                else 1
+                if net in cluster
+                else 2
+                if net in power
+                else 3
+            ),
+            priority.get(net, cluster.get(net, len(priority))),
+            -len(design.NETS[net]),
+            net,
+        )
+    )
+    return nets
 
 
 def point_segment_distance(
@@ -326,7 +486,7 @@ class Generator:
         settings.m_MinTrackWidth = MM(0.20)
         title = self.board.GetTitleBlock()
         title.SetTitle("Esp32Tap - ESP32-S3 Precor serial-bus tap")
-        title.SetRevision("B")
+        title.SetRevision("C")
         title.SetCompany("precor-9.3x")
         title.SetComment(0, "STACKUP: JLC04161H-7628")
         title.SetComment(
@@ -364,6 +524,9 @@ class Generator:
             tuple[tuple[float, float], tuple[float, float], str, float, int]
         ] = []
         self.via_records: list[tuple[tuple[float, float], str]] = []
+        self.via_geometry: dict[
+            tuple[tuple[float, float], str], tuple[float, float]
+        ] = {}
         self.pad_objects: dict[tuple[str, str], list[Any]] = defaultdict(list)
         self.occupied: dict[int, dict[tuple[int, int], set[str]]] = {
             IN2: defaultdict(set),
@@ -377,6 +540,71 @@ class Generator:
             tuple[float, float, float, float, str]
         ] = []
 
+    def custom_switch_footprint(self, name: str) -> Any:
+        """Build the exact Alps SKRP land pattern from the official drawing."""
+        footprint = pcbnew.FootprintLoad(
+            str(FPLIB / "Button_Switch_SMD.pretty"),
+            "SW_Push_1P1T_NO_CK_KMR2",
+        )
+        if footprint is None:
+            raise ValueError("cannot load deterministic SKRP footprint base")
+        footprint.SetFPIDAsString(f"Button_Switch_SMD:{name}")
+
+        # Official SKRP land pattern: 5.2 x 2.8 mm outside span and
+        # 3.1 x 1.5 mm inside span. This yields 1.05 x 0.65 mm lands
+        # centred at (+/-2.075, +/-1.075) mm.
+        pad_data = iter(
+            (
+                ("1", -2.075, -1.075),
+                ("1", -2.075, 1.075),
+                ("2", 2.075, -1.075),
+                ("2", 2.075, 1.075),
+            )
+        )
+        for pad, (number, x, y) in zip(footprint.Pads(), pad_data):
+            pad.SetNumber(number)
+            pad.SetSize(VECTOR2I(MM(1.05), MM(0.65)))
+            pad.SetPosition(VECTOR2I(MM(x), MM(y)))
+        for graphic in list(footprint.GraphicalItems()):
+            if graphic.GetLayer() == pcbnew.F_Fab:
+                footprint.Remove(graphic)
+        body = (
+            (-2.05, -1.55),
+            (2.05, -1.55),
+            (2.05, 1.55),
+            (-2.05, 1.55),
+        )
+        for start, end in zip(body, (*body[1:], body[0])):
+            segment = pcbnew.PCB_SHAPE(footprint)
+            segment.SetShape(pcbnew.SHAPE_T_SEGMENT)
+            segment.SetLayer(pcbnew.F_Fab)
+            segment.SetStart(VECTOR2I(MM(start[0]), MM(start[1])))
+            segment.SetEnd(VECTOR2I(MM(end[0]), MM(end[1])))
+            segment.SetWidth(MM(0.10))
+            footprint.Add(segment)
+        return footprint
+
+    def load_footprint(self, library: str, name: str) -> Any:
+        local_library = ROOT / "kicad" / f"{library}.pretty"
+        if (local_library / f"{name}.kicad_mod").is_file():
+            footprint = pcbnew.FootprintLoad(str(local_library), name)
+            if footprint is not None:
+                footprint.SetFPIDAsString(f"{library}:{name}")
+                return footprint
+        if name == "SW_SPST_SKRPACE010":
+            return self.custom_switch_footprint(name)
+        source_library, source_name = CUSTOM_FOOTPRINT_SOURCES.get(
+            (library, name),
+            (library, name),
+        )
+        footprint = pcbnew.FootprintLoad(
+            str(FPLIB / f"{source_library}.pretty"),
+            source_name,
+        )
+        if footprint is not None:
+            footprint.SetFPIDAsString(f"{library}:{name}")
+        return footprint
+
     def add_footprints(self) -> None:
         missing = set(design.COMPONENTS) - set(PLACE)
         extra = set(PLACE) - set(design.COMPONENTS)
@@ -389,10 +617,7 @@ class Generator:
             value, library, name, lcsc, jlc_class, cost, description, _ = (
                 component
             )
-            footprint = pcbnew.FootprintLoad(
-                str(FPLIB / f"{library}.pretty"),
-                name,
-            )
+            footprint = self.load_footprint(library, name)
             if footprint is None:
                 raise ValueError(f"cannot load {library}:{name}")
             footprint.SetFPIDAsString(f"{library}:{name}")
@@ -426,9 +651,9 @@ class Generator:
                 self.pad_objects[(ref, number)].append(pad)
 
         for reference, position in (
-            ("MH1", (2.9, 26.5)),
-            ("MH2", (97.0, 3.0)),
-            ("MH3", (97.0, 52.0)),
+            ("MH1", (20.0, 3.0)),
+            ("MH2", (48.0, 3.0)),
+            ("MH3", (92.0, 52.0)),
         ):
             footprint = pcbnew.FootprintLoad(
                 str(FPLIB / "MountingHole.pretty"),
@@ -467,7 +692,12 @@ class Generator:
                     graphic.SetWidth(MM(0.16))
 
     def add_outline(self) -> None:
-        corners = [(0, 0), (BOARD_W, 0), (BOARD_W, BOARD_H), (0, BOARD_H)]
+        corners = [
+            (0, BOARD_TOP),
+            (BOARD_W, BOARD_TOP),
+            (BOARD_W, BOARD_H),
+            (0, BOARD_H),
+        ]
         for start, end in zip(corners, corners[1:] + corners[:1]):
             segment = pcbnew.PCB_SHAPE(self.board)
             segment.SetShape(pcbnew.SHAPE_T_SEGMENT)
@@ -519,6 +749,7 @@ class Generator:
         via.SetNet(self.nets[net])
         self.board.Add(via)
         self.via_records.append((point, net))
+        self.via_geometry[(point, net)] = (size, drill)
 
     def add_zone(
         self,
@@ -573,7 +804,12 @@ class Generator:
         self.board.Add(area)
 
     def add_planes_and_keepouts(self) -> None:
-        outline = [(0.5, 0.5), (99.5, 0.5), (99.5, 54.5), (0.5, 54.5)]
+        outline = [
+            (0.5, 0.5),
+            (BOARD_W - 0.5, 0.5),
+            (BOARD_W - 0.5, BOARD_H - 0.5),
+            (0.5, BOARD_H - 0.5),
+        ]
         self.add_zone(IN1, "GND", outline, "IN1_SOLID_GND_REFERENCE")
         self.add_zone(B, "GND", outline, "BOTTOM_GND_FILL")
         ax0, ay0, ax1, ay1 = ANTENNA_KEEPOUT
@@ -600,7 +836,12 @@ class Generator:
         )
         self.add_rule_area(
             "USB_90R_CONTROLLED_CORRIDOR",
-            [(69.5, 23.3), (83.5, 23.3), (83.5, 25.2), (69.5, 25.2)],
+            [
+                (69.5, 23.3 + USB_ROUTE_SHIFT_Y),
+                (usb_edge_x(83.5), 23.3 + USB_ROUTE_SHIFT_Y),
+                (usb_edge_x(83.5), 25.2 + USB_ROUTE_SHIFT_Y),
+                (69.5, 25.2 + USB_ROUTE_SHIFT_Y),
+            ],
             (F,),
             footprints=False,
             pads=False,
@@ -729,31 +970,40 @@ class Generator:
         a7, b7 = self.pad("J3", "A7"), self.pad("J3", "B7")
         a6, b6 = self.pad("J3", "A6"), self.pad("J3", "B6")
         u31, u33 = self.pad("U3", "1"), self.pad("U3", "3")
-        dn_x = 93.4
+        dn_x = usb_edge_x(93.4)
         self.add_track([a7, (dn_x, a7[1])], "USB_DN", 0.20)
         self.add_track([b7, (dn_x, b7[1])], "USB_DN", 0.20)
         self.add_track(
             [
                 (dn_x, a7[1]),
                 (dn_x, b7[1]),
-                (89.8, b7[1]),
-                (89.8, u31[1]),
+            ],
+            "USB_DN",
+            USB_CONTROLLED_WIDTH,
+        )
+        self.add_track(
+            [
+                (dn_x, b7[1]),
+                (90.0, b7[1]),
+                (90.0, 42.0),
+                (83.8, 42.0),
+                (83.8, u31[1]),
                 u31,
             ],
             "USB_DN",
             USB_CONTROLLED_WIDTH,
         )
-        dp_x = 90.9
+        dp_x = usb_edge_x(90.9)
         self.add_track([a6, (dp_x, a6[1])], "USB_DP", 0.20)
         self.add_track([b6, (dp_x, b6[1])], "USB_DP", 0.20)
         self.add_track(
             [
                 (dp_x, a6[1]),
                 (dp_x, b6[1]),
-                (90.4, b6[1]),
-                (90.4, 34.6),
-                (89.6, 34.6),
-                (89.6, u33[1]),
+                (usb_edge_x(90.4), b6[1]),
+                (usb_edge_x(90.4), 34.6),
+                (usb_edge_x(89.6), 34.6),
+                (usb_edge_x(89.6), u33[1]),
                 u33,
             ],
             "USB_DP",
@@ -765,14 +1015,15 @@ class Generator:
         # edge gap gives 0.4906 mm centre-to-centre separation.
         u36, u34 = self.pad("U3", "6"), self.pad("U3", "4")
         r151, r161 = self.pad("R15", "1"), self.pad("R16", "1")
-        dp_y, dn_y = 24.000, 24.000 + USB_CENTER_SPACING
-        dp_outer_x = 83.2 + USB_CENTER_SPACING
-        dp_inner_x = 69.5 + USB_CENTER_SPACING
+        dp_y = 24.000 + USB_ROUTE_SHIFT_Y
+        dn_y = dp_y + USB_CENTER_SPACING
+        dp_outer_x = usb_edge_x(83.2 + USB_CENTER_SPACING)
         self.add_track(
             [
                 u36,
-                (83.2, u36[1]),
-                (83.2, dn_y),
+                (usb_edge_x(83.2), u36[1]),
+                (usb_edge_x(83.2), dn_y),
+                (76.0, dn_y),
                 (69.5, dn_y),
                 (61.99, dn_y),
                 (61.99, r151[1]),
@@ -786,10 +1037,24 @@ class Generator:
                 u34,
                 (dp_outer_x, u34[1]),
                 (dp_outer_x, dp_y),
-                (dp_inner_x, dp_y),
-                (dp_inner_x, 22.0),
-                (71.67, 22.0),
-                (71.67, dp_y),
+                (usb_edge_x(83.2), dp_y),
+                (76.0, dp_y),
+                (76.0, 27.515),
+                (75.2, 27.515),
+                (75.2, 29.8),
+                (74.4, 29.8),
+                (74.4, 27.515),
+                (73.6, 27.515),
+                (73.6, 29.8),
+                (72.8, 29.8),
+                (72.8, 27.515),
+                (72.0, 27.515),
+                (72.0, 29.8),
+                (71.2, 29.8),
+                (71.2, 27.515),
+                (70.4, 27.515),
+                (70.4, dp_y),
+                (69.5, dp_y),
                 (62.483742, dp_y),
                 (62.483742, r161[1]),
                 r161,
@@ -824,14 +1089,14 @@ class Generator:
         # VBUS is only sensed by U3.  Bring both reversible connector contact
         # groups down to In2 immediately so they do not cut across the USB
         # pair fan-out on the front layer.
-        vbus_lower = (90.4, 33.2)
-        vbus_upper = (90.4, 39.6)
-        vbus_esd = (85.2, self.pad("U3", "5")[1])
+        vbus_lower = (usb_edge_x(90.4), 33.2)
+        vbus_upper = (usb_edge_x(90.4), 39.6)
+        vbus_esd = (usb_edge_x(85.2), self.pad("U3", "5")[1])
         self.add_track(
             [
                 self.pad("J3", "A9"),
-                (90.4, self.pad("J3", "A9")[1]),
-                (90.4, vbus_lower[1]),
+                (usb_edge_x(90.4), self.pad("J3", "A9")[1]),
+                (usb_edge_x(90.4), vbus_lower[1]),
                 vbus_lower,
             ],
             "VBUS",
@@ -840,8 +1105,8 @@ class Generator:
         self.add_track(
             [
                 self.pad("J3", "A4"),
-                (90.4, self.pad("J3", "A4")[1]),
-                (90.4, vbus_upper[1]),
+                (usb_edge_x(90.4), self.pad("J3", "A4")[1]),
+                (usb_edge_x(90.4), vbus_upper[1]),
                 vbus_upper,
             ],
             "VBUS",
@@ -861,14 +1126,14 @@ class Generator:
             (
                 "CC1",
                 self.pad("J3", "A5"),
-                (90.5, 38.2),
+                (usb_edge_x(90.5), 38.2),
                 self.pad("R4", "1"),
                 (92.4, self.pad("R4", "1")[1]),
             ),
             (
                 "CC2",
                 self.pad("J3", "B5"),
-                (93.4, self.pad("J3", "B5")[1]),
+                (usb_edge_x(93.4), self.pad("J3", "B5")[1]),
                 self.pad("R5", "1"),
                 (92.4, self.pad("R5", "1")[1]),
             ),
@@ -887,11 +1152,18 @@ class Generator:
             self.add_via(contact_via, net)
             self.add_via(resistor_via, net)
             inner_points = [contact_via, resistor_via]
-            if net == "CC2":
+            if net == "CC1":
                 inner_points = [
                     contact_via,
-                    (89.0, contact_via[1]),
-                    (89.0, resistor_via[1]),
+                    (86.0, contact_via[1]),
+                    (86.0, resistor_via[1]),
+                    resistor_via,
+                ]
+            else:
+                inner_points = [
+                    contact_via,
+                    (90.0, contact_via[1]),
+                    (90.0, resistor_via[1]),
                     resistor_via,
                 ]
             self.add_track(inner_points, net, 0.20, B)
@@ -911,6 +1183,90 @@ class Generator:
             "VBUS",
             0.30,
             B,
+        )
+
+    def add_shifted_u1_bus_route(self) -> None:
+        """Preserve the qualified CONS6 tree after the coupled U1 shift."""
+        escapes = {
+            ("J1", "6"): (16.0, 12.4),
+            ("D5", "1"): (27.2, 13.2),
+            ("K1", "2"): (25.6, 22.4),
+            ("R7", "1"): (62.0, 19.6),
+        }
+        for endpoint, via in escapes.items():
+            self.add_track([self.pad(*endpoint), via], "CONS6", 0.20)
+            self.add_via(via, "CONS6")
+        junction = (31.2, 18.0)
+        self.add_track(
+            [
+                escapes[("J1", "6")],
+                (20.0, 16.0),
+                junction,
+                escapes[("R7", "1")],
+            ],
+            "CONS6",
+            0.20,
+            IN2,
+        )
+        self.add_track(
+            [escapes[("D5", "1")], junction],
+            "CONS6",
+            0.20,
+            IN2,
+        )
+        self.add_track(
+            [escapes[("K1", "2")], junction],
+            "CONS6",
+            0.20,
+            IN2,
+        )
+
+    def add_two_amp_power_routes(self) -> None:
+        """Emit only the exact, reviewable redundant power-copper intent."""
+        layer_ids = {"F.Cu": F, "B.Cu": B}
+        for route in power_intent.ROUTES:
+            self.add_track(
+                route["points"],
+                route["net"],
+                route["width_mm"],
+                layer_ids[route["layer"]],
+            )
+        for via in power_intent.VIAS:
+            self.add_via(
+                via["at"],
+                via["net"],
+                size=via["size_mm"],
+                drill=via["drill_mm"],
+            )
+
+    def add_vbus_present_route(self) -> None:
+        escapes = {
+            ("U1", "7"): (
+                (70.8, 15.6),
+                [self.pad("U1", "7"), (70.8, 15.41), (70.8, 15.6)],
+            ),
+            ("R30", "2"): (
+                (81.6, 44.0),
+                [self.pad("R30", "2"), (81.6, 44.0)],
+            ),
+            ("Q2", "3"): (
+                (86.0, 46.4),
+                [self.pad("Q2", "3"), (86.0, 46.5), (86.0, 46.4)],
+            ),
+        }
+        for via, dogleg in escapes.values():
+            self.add_track(dogleg, "VBUS_PRESENT_N", 0.20)
+            self.add_via(via, "VBUS_PRESENT_N")
+        self.add_track(
+            [
+                escapes[("U1", "7")][0],
+                (70.0, 40.0),
+                escapes[("R30", "2")][0],
+                escapes[("Q2", "3")][0],
+            ],
+            "VBUS_PRESENT_N",
+            0.20,
+            IN2,
         )
 
     def outward_escape(
@@ -947,7 +1303,15 @@ class Generator:
                     f"{ref}.{pad.GetNumber()} {net} at {target}: {checks}"
                 )
             return target, [point, target]
-        if ref == "U6":
+        if (ref, str(pad.GetNumber())) == ("J1", "3"):
+            desired = (16.4, 12.8)
+        elif (ref, str(pad.GetNumber())) == ("R26", "2"):
+            desired = (35.2, 32.8)
+        elif (ref, str(pad.GetNumber())) == ("U1", "5"):
+            desired = (68.4, 18.0 + U1_PROFILE_SHIFT_Y)
+        elif (ref, str(pad.GetNumber())) == ("U1", "7"):
+            desired = (70.8, 15.6)
+        elif ref == "U6":
             desired = PLANNED_U6_ESCAPES[str(pad.GetNumber())][0]
         elif ref.startswith("TP") and 5 <= int(ref[2:]) <= 13:
             desired = (point[0], 32.8)
@@ -1034,15 +1398,24 @@ class Generator:
             distance = math.dist(point, existing)
             if distance < 1e-6 and existing_net == net:
                 continue
-            if distance < 0.80:
+            existing_size, existing_drill = self.via_geometry[
+                (existing, existing_net)
+            ]
+            if distance < max(
+                0.30 + existing_size / 2 + CLEARANCE,
+                0.15 + existing_drill / 2 + 0.25,
+            ):
                 return False
 
         for start, end, track_net, width, layer in self.track_records:
-            if layer != F or track_net == net:
+            if layer != F:
                 continue
-            if point_segment_distance(point, start, end) < (
-                0.30 + width / 2 + CLEARANCE
-            ):
+            distance = point_segment_distance(point, start, end)
+            if track_net == net:
+                if 1e-6 < distance < 0.30 + width / 2:
+                    return False
+                continue
+            if distance < 0.30 + width / 2 + CLEARANCE:
                 return False
         return True
 
@@ -1086,8 +1459,9 @@ class Generator:
         for via, via_net in self.via_records:
             if via_net == net:
                 continue
+            via_size, _ = self.via_geometry[(via, via_net)]
             if point_segment_distance(via, start, end) < (
-                0.30 + width / 2 + CLEARANCE
+                via_size / 2 + width / 2 + CLEARANCE
             ):
                 return False
         return True
@@ -1220,18 +1594,29 @@ class Generator:
             elif (
                 layer == F
                 and net in USB_NETS
-                and min(start[0], end[0]) >= 69.5
+                and max(start[0], end[0]) >= 69.5
             ):
+                # The low-speed router places 0.60 mm vias on this grid.
+                # Reserve the complete USB-to-via centre distance required by
+                # the 0.8 mm unrelated-copper rule, not merely the USB trace
+                # width.  Without the via radius here, a grid node can be
+                # legal to A* yet fail the final board DRC.
                 self.mark_segment(
                     start,
                     end,
                     width,
                     ROUTING_LAYERS,
                     net,
-                    extra=0.0,
+                    extra=USB_UNRELATED_CLEARANCE + ROUTER_VIA_RADIUS,
                 )
         for point, net in self.via_records:
-            self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+            size, _ = self.via_geometry[(point, net)]
+            self.mark_circle(
+                point,
+                size / 2 + CLEARANCE,
+                ROUTING_LAYERS,
+                net,
+            )
 
     def endpoint_nodes(
         self,
@@ -1423,48 +1808,12 @@ class Generator:
             remaining.remove(endpoint)
 
     def route_slow_nets(self) -> None:
-        fanout_order = {
-            net: index
-            for index, net in enumerate(
-                (
-                    "TX_ENABLE",
-                    "RELAY_GATE",
-                    "TX_GATE",
-                    "RELAY_CMD",
-                    "ESP_TX",
-                    "TX_BUF",
-                    "PIN3_RX",
-                    "CONS_RX",
-                    "TREAD_OK",
-                    "K1_NC_FB",
-                    "K1_NO_FB",
-                    "VBUS_PRESENT_N",
-                    "STATUS_LED",
-                    "IO0",
-                    "U0TXD",
-                    "U0RXD",
-                )
-            )
-        }
-        nets = [
-            net
-            for net in design.NETS
-            if net not in MANUAL_NETS
-        ]
-        nets.sort(
-            key=lambda net: (
-                0 if net in {"+8V_RAW", "+8V_F", "VIN", "+3V3"} else 1,
-                fanout_order.get(net, len(fanout_order)),
-                -len(design.NETS[net]),
-                net,
-            )
-        )
-        for net in nets:
+        for net in slow_net_order():
             self.route_net(net)
 
     def add_ground_connections(self) -> None:
         for ref, number in design.NETS["GND"]:
-            if ref == "J3":
+            if ref in {"J1", "J2", "J3"}:
                 continue
             for pad in self.pad_objects[(ref, number)]:
                 if pad.GetAttribute() == pcbnew.PAD_ATTRIB_PTH:
@@ -1497,21 +1846,21 @@ class Generator:
             self.board.Add(item)
 
         text(6.5, 22.5, "CONSOLE", 1.0)
-        text(6.5, 31.0, "MOTOR", 1.0)
-        text(45.0, 2.0, "Esp32Tap rev B", 1.2)
+        text(21.0, 37.0, "MOTOR", 1.0)
+        text(58.0, 3.0, "Esp32Tap rev C", 1.2)
         # Placement locks keep every fabrication label at least 0.5 mm from
         # the nominal installed component bodies as well as mask openings.
-        text(24.0, 12.0, "BYPASS", 1.0)
-        text(30.0, 13.0, "NC", 1.0)
-        text(28.0, 35.0, "EMULATE", 1.0)
-        text(34.0, 36.5, "NO", 1.0)
-        text(90.0, 47.8, "USB DATA ONLY", 1.0, 90.0)
-        text(7.5, 3.0, "PIN 1", 1.0)
-        text(26.0, 48.0, "D1 K", 1.0)
+        text(42.0, 10.0, "BYPASS", 1.0)
+        text(36.0, 10.0, "NC", 1.0)
+        text(29.5, 37.0, "EMULATE", 1.0)
+        text(42.0, 35.0, "NO", 1.0)
+        text(50.0, 8.0, "USB DATA ONLY", 1.0)
+        text(19.5, 15.5, "PIN 1", 1.0)
+        text(26.5, 48.0, "D1 K", 1.0, 90.0)
         text(35.0, 48.0, "K D3", 1.0)
         text(43.0, 44.4, "+ C1", 1.0)
-        text(19.0, 22.2, "K1 P1", 1.0)
-        text(93.5, 12.0, "LED1 K", 1.0)
+        text(22.5, 19.2, "K1 P1", 1.0)
+        text(91.0, 21.0, "LED1 K", 1.0)
         text(77.0, 53.0, "K LED2", 1.0)
 
     def fill_and_save(self) -> None:
@@ -1563,6 +1912,9 @@ class Generator:
         self.add_planes_and_keepouts()
         self.add_manual_buck_routes()
         self.add_usb_routes()
+        self.add_shifted_u1_bus_route()
+        self.add_two_amp_power_routes()
+        self.add_vbus_present_route()
         self.initialise_router_obstacles()
         self.add_ground_connections()
         self.route_slow_nets()

@@ -22,6 +22,7 @@ DECK_NAMES = {
     "vbus_present",
     "buck_averaged",
     "uart_taps",
+    "harness_supply_drop",
 }
 DOCKER_IMAGE_ID = (
     "sha256:6cb6c92d8ddfedc8857bec3884eb9dea6af1a28fac3524446abbc8bef4c1d0ae"
@@ -46,7 +47,7 @@ def _manifest() -> dict[str, object]:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
-def test_simulation_layout_has_exactly_seven_committed_decks() -> None:
+def test_simulation_layout_has_exactly_eight_committed_decks() -> None:
     assert RUNNER_PATH.is_file()
     assert MANIFEST_PATH.is_file()
     assert MODEL_PATH.is_file()
@@ -54,6 +55,88 @@ def test_simulation_layout_has_exactly_seven_committed_decks() -> None:
     assert {
         path.stem for path in (SIM_DIR / "decks").glob("*.cir")
     } == DECK_NAMES
+
+
+def test_harness_supply_manifest_limits_only_predecessor_supported_claims() -> None:
+    scenario = _manifest()["scenarios"]["harness_supply_drop"]
+    assertions = scenario["assertions"]
+
+    normal = {
+        f"normal_{interface}_{rail}_{branch}_a"
+        for interface in ("console", "motor")
+        for rail in ("power", "ground")
+        for branch in ("high", "low")
+    }
+    open_contacts = {
+        f"{interface}_{rail}_{opened}_open_survivor_a"
+        for interface in ("console", "motor")
+        for rail in ("power", "ground")
+        for opened in ("a", "b")
+    }
+    doubled_contacts = {
+        f"{interface}_{rail}_{doubled}_doubled_max_a"
+        for interface in ("console", "motor")
+        for rail in ("power", "ground")
+        for doubled in ("a", "b")
+    }
+    assert set(assertions) == normal | open_contacts | doubled_contacts
+    for name in normal:
+        expected = 1.35 if name.endswith("_high_a") else 0.65
+        assert assertions[name]["expected"] == expected
+    for name in open_contacts:
+        assert assertions[name]["expected"] == 2.0
+    for name in doubled_contacts:
+        assert assertions[name]["max"] <= 1.5
+
+    unsupported = {
+        entry["claim"].lower(): entry["reason"].lower()
+        for entry in scenario["unsupported"]
+    }
+    for claim_fragment in (
+        "rj45 single-open 2.0 a",
+        "minimum vin",
+        "source impedance",
+        "ambient and thermal",
+        "transient response",
+        "complete installed supply-plus-return drop",
+        "usb return current",
+        "esd",
+        "rf",
+        "switching-loop",
+    ):
+        assert any(claim_fragment in claim for claim in unsupported)
+    assert all(
+        "unsupported" in reason
+        or "not measured" in reason
+        or "not characterized" in reason
+        or "physical" in reason
+        for reason in unsupported.values()
+    )
+
+
+def test_harness_deck_names_every_required_physical_element() -> None:
+    text = (
+        SIM_DIR / "decks" / "harness_supply_drop.cir"
+    ).read_text(encoding="utf-8")
+    upper = text.upper()
+    for token in (
+        "CONSOLE HARNESS",
+        "MOTOR HARNESS",
+        "FOUR RJ45 TERMINATIONS",
+        "430450809",
+        "430451010",
+        "PCB COPPER",
+        "PCB VIA",
+        "LOCAL LOAD",
+        "USB GROUND PATH",
+        "SOURCE IMPEDANCE",
+        "1.35 A / 0.65 A",
+    ):
+        assert token in upper
+    assert "ASSUMPTIONS:" in upper
+    assert "NON-CLAIMS:" in upper
+    assert ".MEAS" in upper
+    assert ".END" in upper
 
 
 def test_manifest_locks_engines_repeats_and_rev_b_values() -> None:

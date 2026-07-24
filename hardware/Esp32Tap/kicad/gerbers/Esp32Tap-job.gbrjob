@@ -11,11 +11,11 @@
     "ProjectId": {
       "Name": "Esp32Tap",
       "GUID": "45737033-3254-4617-902e-6b696361645f",
-      "Revision": "B"
+      "Revision": "C"
     },
     "Size": {
-      "X": 100.1,
-      "Y": 55.1
+      "X": 95.1,
+      "Y": 58.1
     },
     "LayerNumber": 4,
     "BoardThickness": 1.59,

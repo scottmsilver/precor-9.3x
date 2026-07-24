@@ -1,136 +1,103 @@
-# Esp32Tap Rev B enclosure — generated dimensions and validation
+# Esp32Tap Rev C enclosure dimensions and modeled validation
 
-**Status: HOLD.** The checked-in meshes are repository-validated, but plug
-fit, final material/DFM acceptance, RF performance, and installation clearance
-remain physical or vendor gates.
+**Status: HOLD.** The CAD and checked-in meshes pass deterministic model
+validation. Actual board/connector fit, delivered-harness strain relief,
+wrong-mating attempts, installed bend clearance, RF performance, material
+acceptance, and enclosure supply remain physical or vendor gates.
 
-`esp32tap_case.scad` is the parametric source. Both checked-in STLs were
-rendered with hard warnings using this immutable image:
+The source is `esp32tap_case.scad`. Both meshes are rendered with hard
+warnings using the immutable image:
 
-```bash
+```text
 openscad/openscad@sha256:147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37
 ```
 
-Reproduce and validate them from `hardware/Esp32Tap/enclosure/`:
+Run `python3 validate_enclosure.py` from this directory to inspect the live
+KiCad board, render both parts again, compare canonical triangle hashes, and
+run the mesh and functional probes.
 
-```bash
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  openscad/openscad@sha256:147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37 \
-  openscad --hardwarnings -D 'part="base"' \
-  -o esp32tap_base.stl esp32tap_case.scad
-docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
-  openscad/openscad@sha256:147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37 \
-  openscad --hardwarnings -D 'part="lid"' \
-  -o esp32tap_lid.stl esp32tap_case.scad
-python3 validate_enclosure.py
-```
+## Inspector-bound geometry
 
-## Coordinate convention
+Coordinates use the PCB outline minimum as `(0, 0)`.
 
-Same frame as the PCB (`kicad/Esp32Tap.kicad_pcb`): origin = **board
-top-left corner**, +X right (toward USB), +Y toward the board bottom edge.
-The board *top* edge (Y=0) is the antenna end. The board corner sits at
-interior (2.0, 21.3), comprising the module's 6.3 mm overhang plus the
-required 15.0 mm antenna void. Board-underside Z is 5.5 mm (2.5 mm floor +
-3.0 mm standoffs).
-
-The corrected RJ45 body centers are **12.445 mm** and **41.445 mm**. They are
-not copied from an old drawing: `validate_enclosure.py` derives each from the
-centroid of pads 1–8 in the versioned KiCad-inspector JSON. The historical
-3.555/32.555 change used the body offset with the wrong sign and is rejected
-by the tests.
-
-> **Delivered board vs. assembly panel.** The board that seats in this enclosure is the
-> KiCad `Edge.Cuts` outline = **100.0 × 55.0 mm** (verified X 100→200, Y 100→155). If
-> JLC's Standard PCBA service panelizes the board with breakaway edge rails as a fab aid,
-> those rails **ship attached** and must be snapped/dressed off first — after depanel the
-> usable board is 100 × 55 mm, which is what the cavity below is sized for. No 100 × 71 mm
-> ("board + rails") panel dimension is a delivered-product dimension.
-
-## Overall
-
-| Item | Value |
+| Item | Inspector-derived value |
 |---|---|
-| Board (usable, post-depanel) | 100.0 × 55.0 × 1.6 mm |
-| Interior cavity | 104.0 × 85.3 × 21.1 mm |
-| Outer shell | 109.0 × 90.3 mm; base height 23.6, lid 3.0 (+1.2 lip ring) |
-| Wall / floor | 2.5 mm; lid 3.0 mm (thickened for JLC3DP resin thin-wall/warp margin) |
-| Under-board clearance | 3.0 mm (THT RJ45 pins ~2 mm) |
-| Above-board headroom | 16.5 mm (tallest part: RJ45 13.4 mm → **1.9 mm** clear under the 1.2 mm lid lip ring) |
-| Bottom-edge clearance | 9.0 mm (board bottom edge to interior wall) so the two Ø7 bottom lid screw posts clear the PCB corners by **2.25 mm** |
-| Antenna end | U1 F.Fab span X=69.0…87.0 mm; module overhangs the board edge 6.3 mm; enclosure leaves a further **15.0 mm** plastic/air void. Lid stays full thickness. Plastic only—no conductive finish, metal-filled resin, or hardware in the RF keepout |
-| Lid posts | Ø7.0 mm, centers derived from `post_inset=3.25`; each post overlaps the inner wall face by 0.25 mm; lid relief Ø7.6 mm |
+| Board | 95.0 × 58.0 × 1.6 mm |
+| J1 footprint anchor / body width | (12.5, 14.0) / 15.75 mm |
+| J2 footprint anchor / body width | (12.5, 40.0) / 18.75 mm |
+| J3 USB-C center | (91.2, 39.5) mm |
+| SW1 / SW2 centers | (42.0, 7.0) / (91.0, 20.0) mm |
+| U1 physical antenna edge | 3.3 mm inside board Y=0 |
+| U1 antenna span | X=69.0…87.0 mm |
+| Mounting centers | (20.0, 6.0), (48.0, 6.0), (92.0, 55.0) mm |
 
-## Wall cutouts (board coordinates)
+The mounting locations reproduce the versioned inspection report exactly;
+this is modeled geometry, not delivered fit evidence.
 
-| Cutout | Wall | Center | Aperture (W × H) | Bottom of aperture |
-|---|---|---|---|---|
-| J1 RJ45 (CONSOLE) | X = 0 (left) | Y = 12.445 | 17.7 × 14.4 | board top surface −0.3 |
-| J2 RJ45 (MOTOR) | X = 0 (left) | Y = 41.445 | 17.7 × 14.4 | board top surface −0.3 |
-| J3 USB-C | X = 100 (right) | Y = 36.5 | 13.0 × 8.0 (overmold-sized) | connector mid-height − 4.0 |
-| Side vents | both long walls | X = 30…66, five 4 mm slots at 9 mm pitch | 4 × 6 | 8 mm below base rim |
+## Shell and access geometry
 
-RJ45 jack faces sit ~1.5 mm proud of the board edge (F.Fab-measured 1.53 mm
-— the ~2 mm the walls were sized for was slightly optimistic), so the mating
-face ends up ~0.5 mm inboard of the interior wall face and ~2.7 mm behind
-the exterior face. The apertures are through the 2.5 mm wall plus the
-2.0 mm interior clearance, and an 8P8C plug body is far longer than 2.7 mm,
-so cables still plug straight in; the snug aperture doubles as strain
-relief, and the two
-exterior ears beside each wall accept a cable zip-tie for additional strain
-relief. The **USB-C receptacle does NOT overhang** — its face is recessed
-4.5 mm behind the exterior wall face, so its aperture is sized for the
-**cable overmold** (typical ≤12 × 6.5 mm), not the plug shell; the overmold
-enters the wall and the shell reaches the receptacle at the board edge.
+| Item | Modeled value |
+|---|---|
+| Interior cavity | 99.0 × 78.7 × 21.1 mm |
+| Outer shell | 104.0 × 83.7 × 23.6 mm |
+| Lid | 104.0 × 83.7 × 3.0 mm, plus 1.2 mm registration lip |
+| Wall / floor | 2.5 mm |
+| PCB under-clearance / headroom | 3.0 / 16.5 mm |
+| Antenna void | 15.0 mm plastic/air from the physical antenna edge |
+| USB overmold aperture | 13.0 × 8.0 mm |
+| Switch access | Ø2.5 mm tool openings at exact SW1/SW2 centers |
+| Connector latch clearance | 6.0 mm modeled straight-access depth |
+| Exterior cable bend service envelope | 18.0 mm minimum radius |
+| Strain relief | Integrated zip-tie bridges for 5.0 mm jackets |
+| Closure | Tool-less snap latches; optional supplied M3 fasteners/posts |
 
-## Lid features (board coordinates)
+The enclosure contains no metal in the antenna void. The external 18 mm
+bend envelope is a production routing requirement; it is not represented as
+proof that a delivered harness fits an installed treadmill.
 
-| Feature | Position | Size |
-|---|---|---|
-| Light pipe, status LED (green, LED1) | (79.0, 12.97) | Ø3.2 |
-| Light pipe, power LED (red, LED2) | (32.5, 44.5) | Ø3.2 |
-| EN/reset tool hole (SW1) | (36.0, 5.0) | Ø2.5 |
-| BOOT tool hole (SW2) | (78.0, 17.4) | Ø2.5 |
-| Lid vents | (40…65, 48) | four 4 × 3 slots |
-| Lid screws | shell centers X=5.75/103.25, Y=5.75/84.55 mm | M3 self-tap, Ø3.4 clearance + countersink, into Ø7 posts with Ø2.5 pilot |
-| Registration lip | perimeter ring, 4.0 mm wide × 1.2 mm deep | widened/shortened from 2.0×1.6 so it is no longer a thin standing ring; interior open (clears the 13.4 mm RJ45s); Ø7.6 cutouts where the ring meets the four screw posts |
+## Keyed harness apertures
 
-## Board mounting (base)
+The selected collar body is 15.6 × 13.6 mm. Each opening is 16.6 × 14.0 mm,
+giving 0.5 mm modeled collar clearance per side. A 3.0 mm rib enters a 3.4 × 2.2 mm
+slot. Console and Motor slots are offset −5.0 mm and +5.0 mm respectively.
+The 10.0 mm separation leaves a 6.6 mm modeled wrong-mating collision margin.
 
-| Post | Board hole | Size |
-|---|---|---|
-| MH1 | (2.9, 26.5) | Ø6 post, Ø2.0 pilot, M2.5 self-tap |
-| MH2 | (97.0, 3.0) | same |
-| MH3 | (97.0, 52.0) | same |
-| Edge ledges | (50, 0), (20, 53.1), (70, 53.1) | 8 × 2 × 3 support ribs |
+These dimensions encode geometric rejection in CAD. Delivered wrong-harness
+attempts remain open physical evidence.
 
-## Mounting ears
+## Mated connector and pigtail service envelopes
 
-Four exterior ears (two per long side) at 25% / 75% of the enclosure
-length: 8 × 12 × 4 mm with a 3 × 5 mm slot — zip-tie to the treadmill frame
-near the lower board, or #6 self-tap screws. Keep the **antenna end
-pointing away from the metal motor hood**, with a few mm of air behind the
-wall (site-survey the BLE RSSI before final placement — see
-`firmware/PLAN.md` carried-forward unknowns).
+The receptacle envelopes are taken from the official Molex
+`430250000-SD` Rev A customer drawing for the selected `43025-0800`
+(`430250800`) and `43025-1000` (`430251000`) housings:
+
+| Item | 8-circuit J1 | 10-circuit J2 |
+|---|---:|---:|
+| Nominal housing width A | 12.85 mm | 15.85 mm |
+| Maximum modeled width (including 0.25 mm drawing tolerance) | 13.10 mm | 16.10 mm |
+| Maximum modeled height | 11.06 mm | 11.06 mm |
+| Maximum modeled housing depth | 17.81 mm | 17.81 mm |
+| Maximum modeled mated 43025/43020 depth | 25.02 mm | 25.02 mm |
+| Straight latch/extraction clearance beyond mated envelope | 6.0 mm | 6.0 mm |
+
+The shared 16.6 mm aperture leaves 0.25 mm on each side of the maximum J2
+housing envelope. Both service volumes point toward enclosure X-min:
+the factory harness pigtails exit outward, then retain an 18 mm minimum bend
+radius for 22 AWG conductors before the integrated 5 mm jacket strain relief.
+The service-volume geometry is model evidence only; delivered housing,
+latch, extraction, and installed pigtail checks remain physical gates.
+
+Official drawing:
+<https://www.molex.com/content/dam/molex/molex-dot-com/products/automated/en-us/salesdrawingpdf/430/43025/430251600_sd.pdf>
 
 ## Checked mesh evidence
 
-| Mesh | SHA-256 | Welded bodies | Volume | Bounds |
-|---|---|---:|---:|---|
-| `esp32tap_base.stl` | `4ec0ed81e3127cb441fa7fde67e19e435497c6f442c73ff881d35fcdc3162b77` | 1 | 47,294.952 mm³ | −6…117 × 0…90.3 × 0…23.6 mm |
-| `esp32tap_lid.stl` | `b61b33f5d91865cfa4b9e02049225de65f293b3328e116cb94a99d0aae9a3468` | 1 | 30,663.317 mm³ | 0…109 × 0…90.3 × 0…4.2 mm |
+| Mesh | Byte SHA-256 | Canonical geometry SHA-256 | Volume | Bounds |
+|---|---|---|---:|---|
+| `esp32tap_base.stl` | `097558cfea5cbc591866f01aae818b1784ca18bfc82a1d21fced37697424d9aa` | `590c8b310cf560c0b337cc2d632e28c96e0bff94f7ae37a5c448508331119b45` | 43,792.682 mm³ | −6…112 × −1.2…83.7 × 0…23.6 mm |
+| `esp32tap_lid.stl` | `ccf89dc86528bf850dc80a7aceadf61193741d3e6fecf37d9ca385cc4c513e73` | `cd9d13dd46ca09035dad29a626d7c18d2688f8a468ebfe559381c19ba7149160` | 27,060.858 mm³ | 0…104 × 0…83.7 × 0…4.2 mm |
 
-The SHA-256 values identify the checked-in ASCII STL bytes. OpenSCAD may
-emit the same triangles in a different facet order on another render, so raw
-byte hashes are not the reproducibility gate. The validator fresh-renders
-both parts with the pinned image and compares canonical geometry digests:
-coordinates are rounded to six decimals and facets are sorted independently
-of emission order.
-
-Both meshes have positive volume, consistent winding, watertightness, and
-exactly two faces incident to every welded edge. The validator also checks
-the cavity boundaries, two RJ45 apertures, USB aperture, board posts, lid
-posts and reliefs, and the 15 mm antenna void against inspector JSON. These
-checks do not authorize an order: obtain current JLC3DP material and DFM
-acceptance, then physically verify both intended RJ45 plugs, USB-C overmold
-access, RF range, and installed clearances.
+Both meshes are single positive-volume, watertight, winding-consistent
+manifolds with exactly two faces per welded edge. Ninety-three occupancy and
+boundary probes cover the cavity, keyed apertures, strain relief, USB,
+switches, mounting posts, lid posts, snap receivers, and antenna void.

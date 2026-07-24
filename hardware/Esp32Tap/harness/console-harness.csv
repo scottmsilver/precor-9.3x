@@ -1,0 +1,9 @@
+rj45_pin,board_position,net,wire_mpn,wire_awg,color,label,board_header,board_housing,terminal,rj45_assembly,strain_relief,continuity_test
+1,1,GND_A,Alpha-Wire-3051-BK005,22,black,C-P1,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"
+2,2,+8V_A,Alpha-Wire-3051-RD005,22,red,C-P2,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"
+3,3,DATA_A,Alpha-Wire-3051-BL005,22,blue,C-P3,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"
+4,4,DATA_B,Alpha-Wire-3051-GR005,22,green,C-P4,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"
+5,5,DATA_C,Alpha-Wire-3051-OR005,22,orange,C-P5,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"
+6,6,DATA_D,Alpha-Wire-3051-YL005,22,yellow,C-P6,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"
+7,7,GND_B,Alpha-Wire-3051-BR005,22,brown,C-P7,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"
+8,8,+8V_B,Alpha-Wire-3051-WH005,22,white,C-P8,430450809,430250800,430300001,TE-1932219-1-carrier-PENDING-FIRM-QUOTE,HellermannTyton-151-00745,"<=100mOhm,end-to-end"

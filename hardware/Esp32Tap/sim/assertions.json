@@ -654,6 +654,47 @@
           "reason": "the line and clamp are first-order behavioral corners"
         }
       ]
+    },
+    "harness_supply_drop": {
+      "deck": "decks/harness_supply_drop.cir",
+      "assertions": {
+        "normal_console_power_high_a": {"unit": "A", "expected": 1.35, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "normal_console_power_low_a": {"unit": "A", "expected": 0.65, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "normal_console_ground_high_a": {"unit": "A", "expected": 1.35, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "normal_console_ground_low_a": {"unit": "A", "expected": 0.65, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "normal_motor_power_high_a": {"unit": "A", "expected": 1.35, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "normal_motor_power_low_a": {"unit": "A", "expected": 0.65, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "normal_motor_ground_high_a": {"unit": "A", "expected": 1.35, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "normal_motor_ground_low_a": {"unit": "A", "expected": 0.65, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "console_power_a_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "console_power_b_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "console_ground_a_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "console_ground_b_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "motor_power_a_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "motor_power_b_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "motor_ground_a_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "motor_ground_b_open_survivor_a": {"unit": "A", "expected": 2.0, "assert_tolerance": 1e-09, "abs_tolerance": 1e-10, "rel_tolerance": 1e-09},
+        "console_power_a_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "console_power_b_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "console_ground_a_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "console_ground_b_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "motor_power_a_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "motor_power_b_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "motor_ground_a_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06},
+        "motor_ground_b_doubled_max_a": {"unit": "A", "min": 1.333, "max": 1.334, "abs_tolerance": 1e-07, "rel_tolerance": 1e-06}
+      },
+      "unsupported": [
+        {"claim": "RJ45 single-open 2.0 A capability", "reason": "physical qualification is open and the selected termination is published for only 1.5 A per contact"},
+        {"claim": "minimum VIN", "reason": "the treadmill source-voltage envelope is not measured"},
+        {"claim": "source impedance", "reason": "the treadmill source impedance is not measured"},
+        {"claim": "ambient and thermal behavior", "reason": "installed ambient, airflow, bundling, and temperature rise are not measured"},
+        {"claim": "transient response", "reason": "the treadmill transient current and duration are not measured"},
+        {"claim": "complete installed supply-plus-return drop", "reason": "RJ45, PCB copper/via, solder-joint, and installed path resistances require physical measurement"},
+        {"claim": "USB return current", "reason": "USB ground potential and degraded-ground current are not measured"},
+        {"claim": "ESD performance", "reason": "ESD is unsupported by this DC lumped model"},
+        {"claim": "RF performance", "reason": "RF is unsupported by this DC lumped model"},
+        {"claim": "switching-loop behavior", "reason": "switching-loop parasitics are unsupported by this DC lumped model"}
+      ]
     }
   }
 }

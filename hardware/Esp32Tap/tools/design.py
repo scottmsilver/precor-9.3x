@@ -21,13 +21,15 @@ FPLIB = "/usr/share/kicad/footprints"
 COMPONENTS = {
     # --- Connectors -------------------------------------------------------
     "J1": (
-        "RJ45_Console_54602-908LF",
-        "Connector_RJ",
-        "RJ45_Amphenol_54602-x08_Horizontal",
-        "C2847314",
-        "Extended-THT",
-        0.38,
-        "RJ45 jack, unshielded, THT — console-side cable (same jack family as PiZeroHat)",
+        "430450809",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
+        "C240838",
+        "Extended",
+        2.14,
+        "Molex Micro-Fit 3.0 8-circuit right-angle SMT header — console "
+        "interface; mates only with 430250800 housing using 430300001 "
+        "terminals; PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
         {
             str(i): n
             for i, n in enumerate(
@@ -36,17 +38,32 @@ COMPONENTS = {
         },
     ),
     "J2": (
-        "RJ45_Motor_54602-908LF",
-        "Connector_RJ",
-        "RJ45_Amphenol_54602-x08_Horizontal",
-        "C2847314",
-        "Extended-THT",
-        0.38,
-        "RJ45 jack, unshielded, THT — motor-side cable",
+        "430451010",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+        "C563827",
+        "Extended",
+        2.58,
+        "Molex Micro-Fit 3.0 10-circuit right-angle SMT header — motor "
+        "interface; mates only with 430251000 housing using 430300001 "
+        "terminals; pads 9/10 NC; "
+        "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
         {
             str(i): n
             for i, n in enumerate(
-                ["GND_A", "P8V_A", "PIN3", "PIN4", "PIN5_SAFETY", "PIN6_MOTOR", "GND_B", "P8V_B"], start=1
+                [
+                    "GND_A",
+                    "P8V_A",
+                    "PIN3",
+                    "PIN4",
+                    "PIN5_SAFETY",
+                    "PIN6_MOTOR",
+                    "GND_B",
+                    "P8V_B",
+                    "NC",
+                    "NC",
+                ],
+                start=1,
             )
         },
     ),
@@ -309,23 +326,25 @@ COMPONENTS = {
         {"1": "K", "2": "A"},
     ),
     "SW1": (
-        "KMR2-EN",
+        "SKRPACE010",
         "Button_Switch_SMD",
-        "SW_Push_1P1T_NO_CK_KMR2",
-        "C72443",
+        "SW_SPST_SKRPACE010",
+        "C139797",
         "Extended",
-        0.10,
-        "Reset (EN) tactile switch",
+        0.06,
+        "ALPSALPINE SKRPACE010 reel SMD tactile switch — reset (EN); "
+        "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
         {"1": "A", "2": "B"},
     ),
     "SW2": (
-        "KMR2-BOOT",
+        "SKRPACE010",
         "Button_Switch_SMD",
-        "SW_Push_1P1T_NO_CK_KMR2",
-        "C72443",
+        "SW_SPST_SKRPACE010",
+        "C139797",
         "Extended",
-        0.10,
-        "Boot (IO0) tactile switch",
+        0.06,
+        "ALPSALPINE SKRPACE010 reel SMD tactile switch — boot (IO0); "
+        "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
         {"1": "A", "2": "B"},
     ),
     "F1": (
@@ -1070,7 +1089,13 @@ NC = [
         "38",
         "39",
     ]
-] + [("J3", "A8"), ("J3", "B8"), ("U5", "4")]
+] + [
+    ("J2", "9"),
+    ("J2", "10"),
+    ("J3", "A8"),
+    ("J3", "B8"),
+    ("U5", "4"),
+]
 
 DNP = {"C13", "C14"}
 
@@ -1229,6 +1254,8 @@ _ACTIVE_PIN_TYPE_LOCKS = MappingProxyType({
     ("Q1", "3"): "open_collector",
     ("Q2", "1"): "input",
     ("Q2", "3"): "open_collector",
+    ("J2", "9"): "no_connect",
+    ("J2", "10"): "no_connect",
     ("J3", "A8"): "no_connect",
     ("J3", "B8"): "no_connect",
 })
@@ -1241,6 +1268,61 @@ PIN_TYPES = {
 
 _TWO_PIN_LOCK = {"1": "1", "2": "2"}
 _PART_LOCKS = {
+    "J1": (
+        "430450809",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
+        "C240838",
+        {
+            "1": "GND_A",
+            "2": "P8V_A",
+            "3": "PIN3",
+            "4": "PIN4",
+            "5": "PIN5_SAFETY",
+            "6": "PIN6_CONSOLE",
+            "7": "GND_B",
+            "8": "P8V_B",
+        },
+    ),
+    "J2": (
+        "430451010",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+        "C563827",
+        {
+            "1": "GND_A",
+            "2": "P8V_A",
+            "3": "PIN3",
+            "4": "PIN4",
+            "5": "PIN5_SAFETY",
+            "6": "PIN6_MOTOR",
+            "7": "GND_B",
+            "8": "P8V_B",
+            "9": "NC",
+            "10": "NC",
+        },
+    ),
+    "U1": (
+        "ESP32-S3-WROOM-1-N8",
+        "RF_Module",
+        "ESP32-S3-WROOM-1",
+        "C2913198",
+        COMPONENTS["U1"][7],
+    ),
+    "SW1": (
+        "SKRPACE010",
+        "Button_Switch_SMD",
+        "SW_SPST_SKRPACE010",
+        "C139797",
+        {"1": "A", "2": "B"},
+    ),
+    "SW2": (
+        "SKRPACE010",
+        "Button_Switch_SMD",
+        "SW_SPST_SKRPACE010",
+        "C139797",
+        {"1": "A", "2": "B"},
+    ),
     "F1": ("1812L075/24DR", "Fuse", "Fuse_1812_4532Metric", "C207065", _TWO_PIN_LOCK),
     "D3": ("SMBJ10A", "Diode_SMD", "D_SMB", "C151250", {"1": "K", "2": "A"}),
     "D4": ("SMAJ6.0CA", "Diode_SMD", "D_SMA", "C80275", {"1": "K", "2": "A"}),

@@ -1,0 +1,100 @@
+{
+  "evidence_class": "PHYSICAL",
+  "status": "NOT_MEASURED",
+  "treadmill_current_envelope": {
+    "status": "NOT_MEASURED",
+    "source_voltage_minimum_volts": null,
+    "source_voltage_maximum_volts": null,
+    "source_impedance_ohms": null,
+    "maximum_continuous_current_amps": null,
+    "transient_peak_amps": null,
+    "transient_duration_ms": null,
+    "installed_ambient_celsius": null,
+    "installed_airflow": null,
+    "installed_conductor_bundling": null,
+    "usb_ground_potential_volts": null,
+    "usb_ground_connection_current_amps": null,
+    "raw_records": [],
+    "missing_fields": [
+      "source_voltage_minimum_volts",
+      "source_voltage_maximum_volts",
+      "source_impedance_ohms",
+      "maximum_continuous_current_amps",
+      "transient_peak_amps",
+      "transient_duration_ms",
+      "installed_ambient_celsius",
+      "installed_airflow",
+      "installed_conductor_bundling",
+      "usb_ground_potential_volts",
+      "usb_ground_connection_current_amps"
+    ]
+  },
+  "open_items": [
+    {
+      "field": "source_voltage_minimum_volts",
+      "instrument": "calibrated isolated oscilloscope or logging DMM",
+      "fixture": "installed treadmill across the complete operating duty cycle",
+      "data_required": "timestamped raw minimum +8 V source waveform/data"
+    },
+    {
+      "field": "source_voltage_maximum_volts",
+      "instrument": "calibrated isolated oscilloscope or logging DMM",
+      "fixture": "installed treadmill across the complete operating duty cycle",
+      "data_required": "timestamped raw maximum +8 V source waveform/data"
+    },
+    {
+      "field": "source_impedance_ohms",
+      "instrument": "calibrated oscilloscope and known switched load",
+      "fixture": "installed treadmill source at worst-case operating state",
+      "data_required": "raw loaded and unloaded voltage/current records"
+    },
+    {
+      "field": "maximum_continuous_current_amps",
+      "instrument": "calibrated current probe or shunt plus isolated oscilloscope",
+      "fixture": "installed treadmill at worst-case continuous duty",
+      "data_required": "one-hour timestamped raw current record"
+    },
+    {
+      "field": "transient_peak_amps",
+      "instrument": "calibrated current probe and oscilloscope",
+      "fixture": "installed treadmill during startup and all operating transitions",
+      "data_required": "raw current waveform containing the worst peak"
+    },
+    {
+      "field": "transient_duration_ms",
+      "instrument": "calibrated current probe and oscilloscope",
+      "fixture": "installed treadmill during startup and all operating transitions",
+      "data_required": "raw waveform timebase and measured peak duration"
+    },
+    {
+      "field": "installed_ambient_celsius",
+      "instrument": "calibrated thermocouple logger",
+      "fixture": "closed production enclosure installed under the motor hood",
+      "data_required": "timestamped worst-case motor-hood ambient record"
+    },
+    {
+      "field": "installed_airflow",
+      "instrument": "calibrated anemometer",
+      "fixture": "closed production enclosure installed under the motor hood",
+      "data_required": "timestamped local airflow magnitude and direction"
+    },
+    {
+      "field": "installed_conductor_bundling",
+      "instrument": "camera with measurement scale and asset identification",
+      "fixture": "production-equivalent installed harness routing",
+      "data_required": "raw photographs and bundle dimensions/materials"
+    },
+    {
+      "field": "usb_ground_potential_volts",
+      "instrument": "calibrated high-impedance DMM or differential probe",
+      "fixture": "installed treadmill and intended USB host before attachment",
+      "data_required": "raw host-to-treadmill ground potential records"
+    },
+    {
+      "field": "usb_ground_connection_current_amps",
+      "instrument": "calibrated current probe or ammeter",
+      "fixture": "installed treadmill with USB attached, including degraded ground contact",
+      "data_required": "raw USB shield/host-ground connection current records"
+    }
+  ]
+}

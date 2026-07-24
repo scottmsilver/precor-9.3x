@@ -1,26 +1,28 @@
 {
   "schema_version": 1,
   "status": "HOLD",
-  "scope_status": "OPERATOR_OBSERVED_EXACT_ARCHIVE_ONLINE_DFM",
-  "evidence_scope": "An operator observed JLCDFM complete in the browser and transcribed the displayed counts. This record is SHA-bound to the local archive but is not a vendor-signed result or independent proof of upload provenance; production CAM acceptance remains open.",
+  "scope_status": "NOT_REVIEWED_EXACT_ARCHIVE",
+  "evidence_scope": "The regenerated exact Rev C archive has not been uploaded or reviewed by a vendor. The retained category counts are explicitly bound to a superseded archive and are not release evidence for this archive or order configuration.",
   "checked_at_utc": "2026-07-24T12:02:04Z",
   "archive": {
     "path": "kicad/Esp32Tap-gerbers.zip",
-    "sha256": "d768bb9a57c9d905c51c2cc6d3dcfcbb78cf1efbf972fec8cb65f85152ad5ddd"
+    "sha256": "219562b21c51bf71e11474c5ea3fae9b698c56b279ad1a41950b440381507ed5"
   },
   "parsed_board": {
     "copper_layers": 4,
-    "height_mm": 55.0,
-    "width_mm": 100.0
+    "height_mm": 58.0,
+    "width_mm": 95.0
   },
   "external_actions": {
     "added_to_cart": false,
     "order_submitted": false,
     "payment_authorized": false,
     "production_files_approved": false,
-    "uploaded_for_analysis": true
+    "uploaded_for_analysis": false
   },
   "analysis": {
+    "status": "SUPERSEDED_ARCHIVE_NOT_APPLICABLE",
+    "archive_sha256": "d768bb9a57c9d905c51c2cc6d3dcfcbb78cf1efbf972fec8cb65f85152ad5ddd",
     "actionable_danger_count": 0,
     "categories": [
       {
@@ -283,6 +285,7 @@
     "controlled_impedance_production_confirmation",
     "mixed_smt_tht_fixture_and_process",
     "pcba_bom_cpl_placement_preview",
+    "pth_barrel_minimum_20um",
     "production_cam_acceptance",
     "substitution_review"
   ],

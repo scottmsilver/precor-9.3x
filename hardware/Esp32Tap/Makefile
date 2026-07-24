@@ -1,9 +1,10 @@
 .PHONY: test generate erc drc sim enclosure fab stock check clean-check
 
 test:
-	python3 -m pytest -q tests
+	PYTHONPATH=../.. python3 -m pytest -q tests
 
 generate:
+	python3 tools/gen_footprints.py
 	python3 tools/gen_sch.py
 	/usr/bin/python3 tools/gen_pcb.py
 	/usr/bin/python3 tools/gen_docs.py
@@ -27,7 +28,7 @@ stock:
 	python3 tools/check_jlc_stock.py
 
 check:
-	python3 -m pytest -q tests
+	PYTHONPATH=../.. python3 -m pytest -q tests
 	python3 tools/repro_check.py
 	python3 sim/run_simulations.py
 	python3 enclosure/validate_enclosure.py

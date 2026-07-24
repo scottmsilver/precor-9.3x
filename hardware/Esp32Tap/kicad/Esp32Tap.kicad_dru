@@ -17,6 +17,6 @@
 
 (rule "USB_90R_JLC04161H unrelated-copper exclusion"
     (layer "F.Cu")
-    (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.NetClass == 'USB_90R_JLC04161H' && B.NetClass != 'USB_90R_JLC04161H' && B.NetName != 'GND'")
+    (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.Type == 'Track' && A.NetClass == 'USB_90R_JLC04161H' && B.NetClass != 'USB_90R_JLC04161H' && B.NetName != 'GND'")
     (constraint clearance (min 0.8mm))
 )

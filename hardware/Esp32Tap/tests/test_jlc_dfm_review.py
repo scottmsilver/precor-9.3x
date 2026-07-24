@@ -34,12 +34,9 @@ def test_jlc_dfm_review_is_bound_to_the_exact_archive(
 
     assert review["schema_version"] == 1
     assert review["status"] == "HOLD"
-    assert (
-        review["scope_status"]
-        == "OPERATOR_OBSERVED_EXACT_ARCHIVE_ONLINE_DFM"
-    )
-    assert "operator observed" in review["evidence_scope"].lower()
-    assert "not a vendor-signed result" in review["evidence_scope"]
+    assert review["scope_status"] == "NOT_REVIEWED_EXACT_ARCHIVE"
+    assert "not been uploaded" in review["evidence_scope"].lower()
+    assert "not release evidence" in review["evidence_scope"].lower()
     assert review["archive"]["path"] == "kicad/Esp32Tap-gerbers.zip"
     archive = esp32tap_dir / review["archive"]["path"]
     assert review["archive"]["sha256"] == hashlib.sha256(
@@ -55,8 +52,8 @@ def test_jlc_dfm_review_is_bound_to_the_exact_archive(
     parsed = review["parsed_board"]
     assert parsed == {
         "copper_layers": 4,
-        "height_mm": 55.0,
-        "width_mm": 100.0,
+        "height_mm": 58.0,
+        "width_mm": 95.0,
     }
 
     actions = review["external_actions"]
@@ -65,10 +62,12 @@ def test_jlc_dfm_review_is_bound_to_the_exact_archive(
         "order_submitted": False,
         "payment_authorized": False,
         "production_files_approved": False,
-        "uploaded_for_analysis": True,
+        "uploaded_for_analysis": False,
     }
 
     analysis = review["analysis"]
+    assert analysis["status"] == "SUPERSEDED_ARCHIVE_NOT_APPLICABLE"
+    assert analysis["archive_sha256"] != review["archive"]["sha256"]
     assert analysis["actionable_danger_count"] == 0
     categories = analysis["categories"]
     assert categories
@@ -105,6 +104,7 @@ def test_jlc_dfm_review_is_bound_to_the_exact_archive(
         "controlled_impedance_production_confirmation",
         "mixed_smt_tht_fixture_and_process",
         "pcba_bom_cpl_placement_preview",
+        "pth_barrel_minimum_20um",
     } <= set(review["open_vendor_gates"])
     assert len(review["official_sources"]) >= 2
     assert all(

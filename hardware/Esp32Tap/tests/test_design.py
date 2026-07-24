@@ -24,6 +24,103 @@ class PartLock:
 
 TWO_PIN_PASSIVE = {"1": "1", "2": "2"}
 EXPECTED_PARTS = {
+    "J1": PartLock(
+        "430450809",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
+        "C240838",
+        {
+            "1": "GND_A",
+            "2": "P8V_A",
+            "3": "PIN3",
+            "4": "PIN4",
+            "5": "PIN5_SAFETY",
+            "6": "PIN6_CONSOLE",
+            "7": "GND_B",
+            "8": "P8V_B",
+        },
+    ),
+    "J2": PartLock(
+        "430451010",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+        "C563827",
+        {
+            "1": "GND_A",
+            "2": "P8V_A",
+            "3": "PIN3",
+            "4": "PIN4",
+            "5": "PIN5_SAFETY",
+            "6": "PIN6_MOTOR",
+            "7": "GND_B",
+            "8": "P8V_B",
+            "9": "NC",
+            "10": "NC",
+        },
+    ),
+    "U1": PartLock(
+        "ESP32-S3-WROOM-1-N8",
+        "RF_Module",
+        "ESP32-S3-WROOM-1",
+        "C2913198",
+        {
+            "1": "GND",
+            "2": "3V3",
+            "3": "EN",
+            "4": "IO4",
+            "5": "IO5",
+            "6": "IO6",
+            "7": "IO7",
+            "8": "IO15",
+            "9": "IO16",
+            "10": "IO17",
+            "11": "IO18",
+            "12": "IO8",
+            "13": "IO19/USB_D-",
+            "14": "IO20/USB_D+",
+            "15": "IO3",
+            "16": "IO46",
+            "17": "IO9",
+            "18": "IO10",
+            "19": "IO11",
+            "20": "IO12",
+            "21": "IO13",
+            "22": "IO14",
+            "23": "IO21",
+            "24": "IO47",
+            "25": "IO48",
+            "26": "IO45",
+            "27": "IO0",
+            "28": "IO35",
+            "29": "IO36",
+            "30": "IO37",
+            "31": "IO38",
+            "32": "IO39",
+            "33": "IO40",
+            "34": "IO41",
+            "35": "IO42",
+            "36": "RXD0/IO44",
+            "37": "TXD0/IO43",
+            "38": "IO2",
+            "39": "IO1",
+            "40": "GND",
+            "41": "GND_EPAD",
+        },
+    ),
+    "SW1": PartLock(
+        "SKRPACE010",
+        "Button_Switch_SMD",
+        "SW_SPST_SKRPACE010",
+        "C139797",
+        {"1": "A", "2": "B"},
+    ),
+    "SW2": PartLock(
+        "SKRPACE010",
+        "Button_Switch_SMD",
+        "SW_SPST_SKRPACE010",
+        "C139797",
+        {"1": "A", "2": "B"},
+    ),
     "F1": PartLock(
         "1812L075/24DR",
         "Fuse",
@@ -310,6 +407,8 @@ EXPECTED_ACTIVE_PIN_TYPES = {
     ("Q1", "3"): "open_collector",
     ("Q2", "1"): "input",
     ("Q2", "3"): "open_collector",
+    ("J2", "9"): "no_connect",
+    ("J2", "10"): "no_connect",
     ("J3", "A8"): "no_connect",
     ("J3", "B8"): "no_connect",
 }
@@ -417,6 +516,73 @@ def test_populated_parts_use_current_official_jlc_assembly_classes(
             f"{ref} ({lcsc}) is currently {actual_class}; "
             f"official assembly class is {OFFICIAL_JLC_ASSEMBLY_CLASSES[lcsc]}"
         )
+
+
+def test_every_populated_rev_c_part_has_an_smt_assembly_class(
+    design: SimpleNamespace,
+) -> None:
+    populated = {
+        ref: component
+        for ref, component in design.COMPONENTS.items()
+        if ref not in design.DNP and component[4] != "none"
+    }
+    assert populated
+    assert {
+        ref: component[4]
+        for ref, component in populated.items()
+        if component[4] not in {"Basic", "Extended"}
+    } == {}
+
+
+def test_rev_c_treadmill_interfaces_are_physically_incompatible(
+    design: SimpleNamespace,
+) -> None:
+    console = _component(design, "J1")
+    motor = _component(design, "J2")
+
+    assert console[0:4] == (
+        "430450809",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
+        "C240838",
+    )
+    assert motor[0:4] == (
+        "430451010",
+        "Connector_Molex",
+        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+        "C563827",
+    )
+    assert console[2] != motor[2]
+    assert set(console[7]) == {str(pin) for pin in range(1, 9)}
+    assert set(motor[7]) == {str(pin) for pin in range(1, 11)}
+
+
+def test_rev_c_preserves_rj45_signal_mapping_and_marks_spares_nc(
+    design: SimpleNamespace,
+) -> None:
+    expected = {
+        "1": "GND",
+        "2": "+8V_RAW",
+        "3": "PIN3",
+        "4": "PIN4_PASS",
+        "5": "PIN5_SAFETY",
+        "7": "GND",
+        "8": "+8V_RAW",
+    }
+    for ref, pin6_net in (("J1", "CONS6"), ("J2", "MOT6")):
+        actual = {
+            pad: _net_for(design, ref, pad)
+            for pad in expected
+        }
+        assert actual == expected
+        assert _net_for(design, ref, "6") == pin6_net
+
+    assert {("J2", "9"), ("J2", "10")} <= set(design.NC)
+    assert all(
+        ("J2", spare) not in pins
+        for pins in design.NETS.values()
+        for spare in ("9", "10")
+    )
 
 
 def _u6_equations(
@@ -547,7 +713,7 @@ def test_rj45_power_and_ground_pass_throughs_remain_direct(
     EXPECTED_PARTS.items(),
     ids=EXPECTED_PARTS,
 )
-def test_exact_rev_b_part_footprint_and_pad_locks(
+def test_exact_rev_c_part_footprint_and_pad_locks(
     design: SimpleNamespace,
     ref: str,
     expected: PartLock,
@@ -974,7 +1140,7 @@ def test_all_non_passive_pin_types_match_independent_contract(
         if pin_type != "passive"
     }
 
-    assert len(EXPECTED_ACTIVE_PIN_TYPES) == 82
+    assert len(EXPECTED_ACTIVE_PIN_TYPES) == 84
     assert actual == EXPECTED_ACTIVE_PIN_TYPES
 
 

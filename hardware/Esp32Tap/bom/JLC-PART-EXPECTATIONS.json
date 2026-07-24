@@ -5,6 +5,11 @@
       "model": "CC0603KRX7R8BB105",
       "package": "0603"
     },
+    "C139797": {
+      "footprint": "Button_Switch_SMD:SW_SPST_SKRPACE010",
+      "model": "SKRPACE010",
+      "package": "SMD-4P,4.2x3.2mm"
+    },
     "C14663": {
       "footprint": "Capacitor_SMD:C_0603_1608Metric",
       "model": "CC0603KRX7R9BB104",
@@ -90,6 +95,11 @@
       "model": "0603WAF2553T5E",
       "package": "0603"
     },
+    "C240838": {
+      "footprint": "Connector_Molex:Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
+      "model": "430450809",
+      "package": "SMD,P=3mm,Surface Mount，Right Angle"
+    },
     "C25803": {
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "model": "0603WAF1003T5E",
@@ -104,11 +114,6 @@
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "model": "0603WAF4702T5E",
       "package": "0603"
-    },
-    "C2847314": {
-      "footprint": "Connector_RJ:RJ45_Amphenol_54602-x08_Horizontal",
-      "model": "54602-908LF",
-      "package": "Plugin"
     },
     "C2913198": {
       "footprint": "RF_Module:ESP32-S3-WROOM-1",
@@ -170,10 +175,10 @@
       "model": "BC817-40,215",
       "package": "SOT-23"
     },
-    "C72443": {
-      "footprint": "Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2",
-      "model": "KMR221GLFS",
-      "package": "SMD,4.6x2.8mm"
+    "C563827": {
+      "footprint": "Connector_Molex:Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+      "model": "430451010",
+      "package": "SMD,P=3mm,Surface Mount，Right Angle"
     },
     "C72477": {
       "footprint": "Capacitor_SMD:CP_Elec_6.3x7.7",

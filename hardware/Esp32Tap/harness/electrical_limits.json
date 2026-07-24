@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "basis": "CONSERVATIVE_PREDECESSOR",
+  "total_current_a": 2.0,
+  "normal_unequal_branch_current_a": [
+    1.35,
+    0.65
+  ],
+  "new_board_connectors": {
+    "console": {
+      "mpn": "430450809",
+      "contact_resistance_ohm": 0.01,
+      "doubled_contact_resistance_ohm": 0.02
+    },
+    "motor": {
+      "mpn": "430451010",
+      "contact_resistance_ohm": 0.01,
+      "doubled_contact_resistance_ohm": 0.02
+    }
+  },
+  "wire": {
+    "mpn": "Alpha Wire 3051",
+    "awg": 22,
+    "dc_resistance_ohm_per_1000ft_at_20c": 16.2,
+    "harness_length_mm": {
+      "console": 180,
+      "motor": 240
+    },
+    "calculated_conductor_resistance_ohm": {
+      "console": 0.009566929133858268,
+      "motor": 0.012755905511811024
+    }
+  },
+  "rj45": {
+    "mpn": "TE 1932219-1",
+    "termination_count": 4,
+    "published_max_current_per_contact_a": 1.5,
+    "contact_resistance_ohm": null,
+    "single_open_2a_status": "UNSUPPORTED_OPEN_PHYSICAL_GATE"
+  },
+  "pcb": {
+    "copper_via_resistance_ohm": null
+  },
+  "source": {
+    "minimum_vin_v": null,
+    "impedance_ohm": null
+  },
+  "local_load": {
+    "current_a": null
+  },
+  "usb_ground": {
+    "return_current_a": null
+  },
+  "unsupported": [
+    "RJ45_SINGLE_OPEN_2A",
+    "MINIMUM_VIN",
+    "SOURCE_IMPEDANCE",
+    "AMBIENT_THERMAL",
+    "TRANSIENT_RESPONSE",
+    "COMPLETE_INSTALLED_DROP",
+    "USB_RETURN_CURRENT",
+    "ESD",
+    "RF",
+    "SWITCHING_LOOP"
+  ]
+}

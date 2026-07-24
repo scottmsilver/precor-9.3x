@@ -160,16 +160,19 @@ def test_makefile_declares_canonical_phony_targets() -> None:
 
 def test_test_target_runs_only_local_pytest_suite() -> None:
     assert _rule(_makefile_text(), "test").recipe == (
-        "python3 -m pytest -q tests",
+        "PYTHONPATH=../.. python3 -m pytest -q tests",
     )
-    assert _dry_run(MAKEFILE, "test") == ["python3 -m pytest -q tests"]
+    assert _dry_run(MAKEFILE, "test") == [
+        "PYTHONPATH=../.. python3 -m pytest -q tests"
+    ]
 
 
 def test_generation_and_single_gate_targets_use_pinned_local_tools() -> None:
     text = _makefile_text()
     expected = {
-        "generate": [
-            "python3 tools/gen_sch.py",
+            "generate": [
+                "python3 tools/gen_footprints.py",
+                "python3 tools/gen_sch.py",
             "/usr/bin/python3 tools/gen_pcb.py",
             "/usr/bin/python3 tools/gen_docs.py",
         ],
@@ -191,7 +194,7 @@ def test_generation_and_single_gate_targets_use_pinned_local_tools() -> None:
 def test_check_runs_every_repository_safe_gate_without_mutating_sources() -> None:
     commands = _dry_run(MAKEFILE, "check")
     assert commands == [
-        "python3 -m pytest -q tests",
+        "PYTHONPATH=../.. python3 -m pytest -q tests",
         "python3 tools/repro_check.py",
         "python3 sim/run_simulations.py",
         "python3 enclosure/validate_enclosure.py",

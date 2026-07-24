@@ -1,0 +1,203 @@
+Esp32Tap Rev C harness supply path and degraded new-board-contact corners
+* ASSUMPTIONS:
+* The predecessor-authorized verification envelope is 2.0 A total. Normal
+* unequal sharing is explicitly 1.35 A / 0.65 A on power and ground.
+* Both production harness lengths use Alpha Wire 3051 22 AWG maximum DCR at
+* 20 C. The exact Molex 430450809 and 430451010 new-board connectors use the
+* published 10 milliohm initial contact-resistance limit; the degraded sweep
+* doubles one such contact to 20 milliohms.
+* The complete topology below names both harnesses, four RJ45 terminations,
+* PCB copper, PCB via, source impedance, local load, and USB ground path.
+* Zero-volt/zero-current elements are topology probes for unmeasured physical
+* values, not resistance, voltage-drop, or USB-current defaults.
+* NON-CLAIMS:
+* Minimum VIN, treadmill source impedance, ambient/thermal behavior, transient
+* response, complete installed voltage drop, RJ45 single-open 2 A capability,
+* USB return current, ESD, RF, and switching-loop behavior are unsupported.
+
+.include models/behavioral.inc
+
+* Complete pass-through topology. No voltage-drop measurement is asserted.
+VMAIN source_raw 0 8
+VSOURCE_IMPEDANCE source_p source_raw 0
+
+* Console harness power paths; two RJ45 termination probes per harness.
+VC_RJ45_PA_1 source_p cpa_1 0
+VC_RJ45_PA_2 cpa_1 cpa_2 0
+RC_WIRE_PA cpa_2 cpa_3 9.566929133858268m
+RC_430450809_PA cpa_3 pcb_p_pre 10m
+VC_RJ45_PB_1 source_p cpb_1 0
+VC_RJ45_PB_2 cpb_1 cpb_2 0
+RC_WIRE_PB cpb_2 cpb_3 9.566929133858268m
+RC_430450809_PB cpb_3 pcb_p_pre 10m
+
+* PCB copper and PCB via topology probes.
+VPCB_COPPER_P pcb_p_pre pcb_p_copper 0
+VPCB_VIA_P pcb_p_copper pcb_p 0
+
+* Motor harness power paths; exact 430451010 board connector.
+RM_430451010_PA pcb_p mpa_1 10m
+RM_WIRE_PA mpa_1 mpa_2 12.755905511811024m
+VM_RJ45_PA_1 mpa_2 mpa_3 0
+VM_RJ45_PA_2 mpa_3 load_p 0
+RM_430451010_PB pcb_p mpb_1 10m
+RM_WIRE_PB mpb_1 mpb_2 12.755905511811024m
+VM_RJ45_PB_1 mpb_2 mpb_3 0
+VM_RJ45_PB_2 mpb_3 load_p 0
+
+* The predecessor verification load is 2 A. The local-load probe is zero
+* because its physical current is not measured and must not become a default.
+ILOAD load_p load_g 2
+ILOCAL_LOAD pcb_p pcb_g 0
+
+* Motor then Console harness ground-return paths.
+VM_RJ45_GA_2 load_g mga_3 0
+VM_RJ45_GA_1 mga_3 mga_2 0
+RM_WIRE_GA mga_2 mga_1 12.755905511811024m
+RM_430451010_GA mga_1 pcb_g_pre 10m
+VM_RJ45_GB_2 load_g mgb_3 0
+VM_RJ45_GB_1 mgb_3 mgb_2 0
+RM_WIRE_GB mgb_2 mgb_1 12.755905511811024m
+RM_430451010_GB mgb_1 pcb_g_pre 10m
+VPCB_VIA_G pcb_g_pre pcb_g_via 0
+VPCB_COPPER_G pcb_g_via pcb_g 0
+RC_430450809_GA pcb_g cga_3 10m
+RC_WIRE_GA cga_3 cga_2 9.566929133858268m
+VC_RJ45_GA_2 cga_2 cga_1 0
+VC_RJ45_GA_1 cga_1 0 0
+RC_430450809_GB pcb_g cgb_3 10m
+RC_WIRE_GB cgb_3 cgb_2 9.566929133858268m
+VC_RJ45_GB_2 cgb_2 cgb_1 0
+VC_RJ45_GB_1 cgb_1 0 0
+
+* USB ground path is present as a zero-current topology probe only.
+IUSB_GROUND_PATH pcb_g usb_host_ground 0
+RUSB_HOST_REFERENCE usb_host_ground 0 1G
+
+* Normal predecessor-supported unequal branch-current fixtures.
+VNCPH ncph 0 1
+INCPH ncph 0 1.35
+VNCPL ncpl 0 1
+INCPL ncpl 0 0.65
+VNCGH ncgh 0 1
+INCGH ncgh 0 1.35
+VNCGL ncgl 0 1
+INCGL ncgl 0 0.65
+VNMPH nmph 0 1
+INMPH nmph 0 1.35
+VNMPL nmpl 0 1
+INMPL nmpl 0 0.65
+VNMGH nmgh 0 1
+INMGH nmgh 0 1.35
+VNMGL nmgl 0 1
+INMGL nmgl 0 0.65
+
+* Each individual open new-board +8 V or ground contact. These assertions
+* prove only that the surviving Micro-Fit contact carries the 2 A envelope;
+* the coincident RJ45 single-contact condition remains explicitly unsupported.
+VCPAO cpao_s 0 1
+RCPAO cpao_s cpao_l 10m
+ICPAO cpao_l 0 2
+VCPBO cpbo_s 0 1
+RCPBO cpbo_s cpbo_l 10m
+ICPBO cpbo_l 0 2
+VCGAO cgao_s 0 1
+RCGAO cgao_s cgao_l 10m
+ICGAO cgao_l 0 2
+VCGBO cgbo_s 0 1
+RCGBO cgbo_s cgbo_l 10m
+ICGBO cgbo_l 0 2
+VMPAO mpao_s 0 1
+RMPAO mpao_s mpao_l 10m
+IMPAO mpao_l 0 2
+VMPBO mpbo_s 0 1
+RMPBO mpbo_s mpbo_l 10m
+IMPBO mpbo_l 0 2
+VMGAO mgao_s 0 1
+RMGAO mgao_s mgao_l 10m
+IMGAO mgao_l 0 2
+VMGBO mgbo_s 0 1
+RMGBO mgbo_s mgbo_l 10m
+IMGBO mgbo_l 0 2
+
+* Doubled new-board contact resistance: 20 mOhm versus the parallel 10 mOhm
+* contact gives a conservative 1.333... A maximum branch current at 2 A total.
+VCPAD cpad_s 0 1
+VCPAD_A cpad_s cpad_a 0
+RCPAD_A cpad_a cpad_l 20m
+VCPAD_B cpad_s cpad_b 0
+RCPAD_B cpad_b cpad_l 10m
+ICPAD cpad_l 0 2
+VCPBD cpbd_s 0 1
+VCPBD_A cpbd_s cpbd_a 0
+RCPBD_A cpbd_a cpbd_l 10m
+VCPBD_B cpbd_s cpbd_b 0
+RCPBD_B cpbd_b cpbd_l 20m
+ICPBD cpbd_l 0 2
+VCGAD cgad_s 0 1
+VCGAD_A cgad_s cgad_a 0
+RCGAD_A cgad_a cgad_l 20m
+VCGAD_B cgad_s cgad_b 0
+RCGAD_B cgad_b cgad_l 10m
+ICGAD cgad_l 0 2
+VCGBD cgbd_s 0 1
+VCGBD_A cgbd_s cgbd_a 0
+RCGBD_A cgbd_a cgbd_l 10m
+VCGBD_B cgbd_s cgbd_b 0
+RCGBD_B cgbd_b cgbd_l 20m
+ICGBD cgbd_l 0 2
+VMPAD mpad_s 0 1
+VMPAD_A mpad_s mpad_a 0
+RMPAD_A mpad_a mpad_l 20m
+VMPAD_B mpad_s mpad_b 0
+RMPAD_B mpad_b mpad_l 10m
+IMPAD mpad_l 0 2
+VMPBD mpbd_s 0 1
+VMPBD_A mpbd_s mpbd_a 0
+RMPBD_A mpbd_a mpbd_l 10m
+VMPBD_B mpbd_s mpbd_b 0
+RMPBD_B mpbd_b mpbd_l 20m
+IMPBD mpbd_l 0 2
+VMGAD mgad_s 0 1
+VMGAD_A mgad_s mgad_a 0
+RMGAD_A mgad_a mgad_l 20m
+VMGAD_B mgad_s mgad_b 0
+RMGAD_B mgad_b mgad_l 10m
+IMGAD mgad_l 0 2
+VMGBD mgbd_s 0 1
+VMGBD_A mgbd_s mgbd_a 0
+RMGBD_A mgbd_a mgbd_l 10m
+VMGBD_B mgbd_s mgbd_b 0
+RMGBD_B mgbd_b mgbd_l 20m
+IMGBD mgbd_l 0 2
+
+.tran 0.1u 2u
+
+.meas tran normal_console_power_high_a AVG par('-i(VNCPH)') FROM=1u TO=2u
+.meas tran normal_console_power_low_a AVG par('-i(VNCPL)') FROM=1u TO=2u
+.meas tran normal_console_ground_high_a AVG par('-i(VNCGH)') FROM=1u TO=2u
+.meas tran normal_console_ground_low_a AVG par('-i(VNCGL)') FROM=1u TO=2u
+.meas tran normal_motor_power_high_a AVG par('-i(VNMPH)') FROM=1u TO=2u
+.meas tran normal_motor_power_low_a AVG par('-i(VNMPL)') FROM=1u TO=2u
+.meas tran normal_motor_ground_high_a AVG par('-i(VNMGH)') FROM=1u TO=2u
+.meas tran normal_motor_ground_low_a AVG par('-i(VNMGL)') FROM=1u TO=2u
+
+.meas tran console_power_a_open_survivor_a AVG par('-i(VCPAO)') FROM=1u TO=2u
+.meas tran console_power_b_open_survivor_a AVG par('-i(VCPBO)') FROM=1u TO=2u
+.meas tran console_ground_a_open_survivor_a AVG par('-i(VCGAO)') FROM=1u TO=2u
+.meas tran console_ground_b_open_survivor_a AVG par('-i(VCGBO)') FROM=1u TO=2u
+.meas tran motor_power_a_open_survivor_a AVG par('-i(VMPAO)') FROM=1u TO=2u
+.meas tran motor_power_b_open_survivor_a AVG par('-i(VMPBO)') FROM=1u TO=2u
+.meas tran motor_ground_a_open_survivor_a AVG par('-i(VMGAO)') FROM=1u TO=2u
+.meas tran motor_ground_b_open_survivor_a AVG par('-i(VMGBO)') FROM=1u TO=2u
+
+.meas tran console_power_a_doubled_max_a AVG par('i(VCPAD_B)') FROM=1u TO=2u
+.meas tran console_power_b_doubled_max_a AVG par('i(VCPBD_A)') FROM=1u TO=2u
+.meas tran console_ground_a_doubled_max_a AVG par('i(VCGAD_B)') FROM=1u TO=2u
+.meas tran console_ground_b_doubled_max_a AVG par('i(VCGBD_A)') FROM=1u TO=2u
+.meas tran motor_power_a_doubled_max_a AVG par('i(VMPAD_B)') FROM=1u TO=2u
+.meas tran motor_power_b_doubled_max_a AVG par('i(VMPBD_A)') FROM=1u TO=2u
+.meas tran motor_ground_a_doubled_max_a AVG par('i(VMGAD_B)') FROM=1u TO=2u
+.meas tran motor_ground_b_doubled_max_a AVG par('i(VMGBD_A)') FROM=1u TO=2u
+
+.end

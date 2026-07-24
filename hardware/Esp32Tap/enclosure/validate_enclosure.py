@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Rev B case against versioned PCB geometry and welded STLs."""
+"""Validate the Rev C case against versioned PCB geometry and welded STLs."""
 
 from __future__ import annotations
 
@@ -23,8 +23,15 @@ OPENSCAD_IMAGE = (
     "openscad/openscad@sha256:"
     "147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37"
 )
-EXPECTED_RJ45_CENTERS = (12.445, 41.445)
-EXPECTED_MOUNTING_HOLES = ((2.9, 26.5), (97.0, 3.0), (97.0, 52.0))
+EXPECTED_CONNECTOR_CENTERS = ((12.5, 14.0), (12.5, 40.0))
+EXPECTED_CONNECTOR_BODY_WIDTHS = (15.75, 18.75)
+EXPECTED_USB_CENTER = (91.2, 39.5)
+EXPECTED_SWITCH_CENTERS = ((42.0, 7.0), (91.0, 20.0))
+EXPECTED_MOUNTING_HOLES = ((20.0, 6.0), (48.0, 6.0), (92.0, 55.0))
+MOLEX_HOUSING_WIDTHS = (12.85, 15.85)
+MOLEX_HOUSING_HEIGHT = 10.81
+MOLEX_HOUSING_DEPTH = 17.56
+MOLEX_MATED_DEPTH = 24.77
 REQUIRED_SCALARS = (
     "board_l",
     "board_w",
@@ -35,6 +42,27 @@ REQUIRED_SCALARS = (
     "ant_air_gap",
     "j1_yc",
     "j2_yc",
+    "j1_body_w",
+    "j2_body_w",
+    "j1_housing_w",
+    "j2_housing_w",
+    "housing_h",
+    "housing_depth",
+    "mated_depth",
+    "housing_dim_tolerance",
+    "pigtail_exit_direction",
+    "collar_body_w",
+    "collar_body_h",
+    "collar_aperture_w",
+    "collar_aperture_h",
+    "key_rib_w",
+    "key_slot_w",
+    "key_slot_d",
+    "j1_key_offset",
+    "j2_key_offset",
+    "latch_clearance",
+    "cable_bend_radius",
+    "strain_relief_diameter",
     "rj45_w",
     "rj45_h",
     "usb_yc",
@@ -51,6 +79,7 @@ REQUIRED_SCALARS = (
     "lip_w",
     "post_d",
     "post_wall_overlap",
+    "snap_clearance",
 )
 
 
@@ -111,6 +140,54 @@ def _numeric_pairs(source: str, name: str) -> tuple[tuple[float, float], ...]:
     if not pairs or residual.strip(" \t\r\n,"):
         raise ValidationError(f"SCAD {name} must contain only numeric [x, y] pairs")
     return pairs
+
+
+def _numeric_pair(source: str, name: str) -> tuple[float, float]:
+    number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+    assignment = re.search(
+        rf"(?m)^\s*{re.escape(name)}\s*=\s*"
+        rf"\[\s*({number})\s*,\s*({number})\s*\]\s*;",
+        source,
+    )
+    if not assignment:
+        raise ValidationError(f"SCAD {name} must contain one numeric [x, y] pair")
+    return float(assignment.group(1)), float(assignment.group(2))
+
+
+def validate_keyed_apertures(
+    *,
+    collar_body_width: float,
+    aperture_width: float,
+    key_rib_width: float,
+    key_slot_width: float,
+    console_offset: float,
+    motor_offset: float,
+) -> dict[str, float]:
+    values = (
+        collar_body_width,
+        aperture_width,
+        key_rib_width,
+        key_slot_width,
+        console_offset,
+        motor_offset,
+    )
+    if any(not math.isfinite(value) for value in values):
+        raise ValidationError("keyed aperture dimensions must be finite")
+    if min(collar_body_width, aperture_width, key_rib_width, key_slot_width) <= 0:
+        raise ValidationError("keyed aperture dimensions must be positive")
+    matching_clearance = (aperture_width - collar_body_width) / 2
+    rib_clearance = (key_slot_width - key_rib_width) / 2
+    separation = abs(motor_offset - console_offset)
+    collision_margin = separation - key_slot_width
+    if matching_clearance < 0.2 - 1e-9 or rib_clearance < 0.2 - 1e-9:
+        raise ValidationError("matching keyed collar lacks 0.2 mm clearance")
+    if collision_margin <= 0:
+        raise ValidationError("wrong harness is not geometrically rejected")
+    return {
+        "matching_clearance_mm": matching_clearance,
+        "key_rib_clearance_mm": rib_clearance,
+        "wrong_mating_collision_margin_mm": collision_margin,
+    }
 
 
 def expected_dimensions(parameters: dict[str, float]) -> dict[str, float]:
@@ -190,6 +267,24 @@ def _rj45_center_y(
     return sum(position[1] for position in positions) / 8 - origin_y
 
 
+def _fabrication_body_size(
+    footprints: dict[str, Any],
+    reference: str,
+) -> tuple[float, float]:
+    footprint = footprints.get(reference)
+    if not isinstance(footprint, dict):
+        raise ValidationError(f"inspector report is missing {reference}")
+    body = footprint.get("fabrication_body_bbox")
+    if not isinstance(body, dict) or set(body) != {"min", "max"}:
+        raise ValidationError(f"{reference}.fabrication_body_bbox is incomplete")
+    minimum = _xy(body["min"], f"{reference}.fabrication_body_bbox.min")
+    maximum = _xy(body["max"], f"{reference}.fabrication_body_bbox.max")
+    size = maximum[0] - minimum[0], maximum[1] - minimum[1]
+    if min(size) <= 0:
+        raise ValidationError(f"{reference} fabrication body is non-positive")
+    return size
+
+
 def _antenna_geometry(
     board: dict[str, Any],
 ) -> tuple[float, tuple[float, float]]:
@@ -242,11 +337,29 @@ def derive_board_geometry(report: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(footprints, dict):
         raise ValidationError("inspector report is missing board.footprints")
 
-    rj45_centers = tuple(
-        _rj45_center_y(footprints, reference, origin[1])
+    connector_centers = tuple(
+        tuple(
+            coordinate - origin[index]
+            for index, coordinate in enumerate(
+                _footprint_at(footprints, reference)
+            )
+        )
         for reference in ("J1", "J2")
     )
     usb = _footprint_at(footprints, "J3")
+    switches = tuple(
+        tuple(
+            coordinate - origin[index]
+            for index, coordinate in enumerate(
+                _footprint_at(footprints, reference)
+            )
+        )
+        for reference in ("SW1", "SW2")
+    )
+    connector_body_widths = tuple(
+        _fabrication_body_size(footprints, reference)[1]
+        for reference in ("J1", "J2")
+    )
     mounting = tuple(
         tuple(
             coordinate - origin[index]
@@ -260,8 +373,12 @@ def derive_board_geometry(report: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "board_size_mm": size,
-        "rj45_centers_y_mm": rj45_centers,
+        "connector_centers_mm": connector_centers,
+        "connector_body_widths_mm": connector_body_widths,
+        "rj45_centers_y_mm": tuple(center[1] for center in connector_centers),
+        "usb_center_mm": (usb[0] - origin[0], usb[1] - origin[1]),
         "usb_center_y_mm": usb[1] - origin[1],
+        "switch_centers_mm": switches,
         "mounting_holes_mm": mounting,
         "antenna_overhang_mm": origin[1] - antenna_edge,
         "antenna_span_x_mm": (
@@ -285,10 +402,44 @@ def validate_fit(
 ) -> None:
     _close(parameters["board_l"], geometry["board_size_mm"][0], "board X", 0.01)
     _close(parameters["board_w"], geometry["board_size_mm"][1], "board Y", 0.01)
-    for index, expected in enumerate(geometry["rj45_centers_y_mm"], start=1):
-        _close(parameters[f"j{index}_yc"], expected, f"J{index} center", 0.01)
-        _close(expected, EXPECTED_RJ45_CENTERS[index - 1], f"J{index} PCB", 0.01)
+    for index, expected in enumerate(geometry["connector_centers_mm"], start=1):
+        _close(
+            parameters[f"j{index}_yc"], expected[1], f"J{index} center", 0.01
+        )
+        for axis, actual in enumerate(expected):
+            _close(
+                actual,
+                EXPECTED_CONNECTOR_CENTERS[index - 1][axis],
+                f"J{index} PCB axis {axis}",
+                0.01,
+            )
+        _close(
+            parameters[f"j{index}_body_w"],
+            geometry["connector_body_widths_mm"][index - 1],
+            f"J{index} body width",
+            0.01,
+        )
+        _close(
+            parameters[f"j{index}_body_w"],
+            EXPECTED_CONNECTOR_BODY_WIDTHS[index - 1],
+            f"J{index} expected body width",
+            0.01,
+        )
+    for axis, actual in enumerate(geometry["usb_center_mm"]):
+        _close(actual, EXPECTED_USB_CENTER[axis], f"J3 PCB axis {axis}", 0.01)
     _close(parameters["usb_yc"], geometry["usb_center_y_mm"], "J3 center", 0.01)
+    for index, (actual, expected) in enumerate(
+        zip(
+            geometry["switch_centers_mm"],
+            EXPECTED_SWITCH_CENTERS,
+            strict=True,
+        ),
+        start=1,
+    ):
+        scad = _numeric_pair(source, f"sw{index}")
+        for axis in range(2):
+            _close(scad[axis], actual[axis], f"SW{index} SCAD axis {axis}", 0.01)
+            _close(actual[axis], expected[axis], f"SW{index} PCB axis {axis}", 0.01)
     _close(
         parameters["ant_overhang"],
         geometry["antenna_overhang_mm"],
@@ -309,6 +460,83 @@ def validate_fit(
     )
     if parameters["ant_air_gap"] < 15.0:
         raise ValidationError("antenna wall void is less than 15 mm")
+    keyed = validate_keyed_apertures(
+        collar_body_width=parameters["collar_body_w"],
+        aperture_width=parameters["collar_aperture_w"],
+        key_rib_width=parameters["key_rib_w"],
+        key_slot_width=parameters["key_slot_w"],
+        console_offset=parameters["j1_key_offset"],
+        motor_offset=parameters["j2_key_offset"],
+    )
+    if keyed["wrong_mating_collision_margin_mm"] < 6.6 - 1e-9:
+        raise ValidationError("wrong-harness collision margin is below 6.6 mm")
+    _close(parameters["collar_body_h"], 13.6, "collar body height", 1e-6)
+    _close(parameters["collar_aperture_h"], 14.0, "collar aperture height", 1e-6)
+    for index, width in enumerate(MOLEX_HOUSING_WIDTHS, start=1):
+        _close(
+            parameters[f"j{index}_housing_w"],
+            width,
+            f"J{index} Molex housing width",
+            1e-6,
+        )
+    _close(
+        parameters["housing_h"],
+        MOLEX_HOUSING_HEIGHT,
+        "Molex housing height",
+        1e-6,
+    )
+    _close(
+        parameters["housing_depth"],
+        MOLEX_HOUSING_DEPTH,
+        "Molex housing depth",
+        1e-6,
+    )
+    _close(
+        parameters["mated_depth"],
+        MOLEX_MATED_DEPTH,
+        "Molex mated depth",
+        1e-6,
+    )
+    _close(
+        parameters["housing_dim_tolerance"],
+        0.25,
+        "Molex drawing envelope tolerance",
+        1e-6,
+    )
+    _close(
+        parameters["pigtail_exit_direction"],
+        -1.0,
+        "outward pigtail direction",
+        1e-6,
+    )
+    widest_housing_max = max(MOLEX_HOUSING_WIDTHS) + parameters[
+        "housing_dim_tolerance"
+    ]
+    if parameters["collar_aperture_w"] - widest_housing_max < 0.5 - 1e-9:
+        raise ValidationError(
+            "keyed aperture does not clear the maximum Molex housing "
+            "envelope by 0.25 mm per side"
+        )
+    _close(parameters["key_slot_d"], 2.2, "key slot depth", 1e-6)
+    if parameters["latch_clearance"] < 6.0:
+        raise ValidationError("connector latch clearance is below 6 mm")
+    if parameters["cable_bend_radius"] < 18.0:
+        raise ValidationError("external cable bend service radius is below 18 mm")
+    _close(
+        parameters["strain_relief_diameter"],
+        5.0,
+        "strain-relief cable diameter",
+        1e-6,
+    )
+    _close(parameters["snap_clearance"], 0.3, "snap-latch clearance", 1e-6)
+    for module_name in (
+        "keyed_harness_aperture",
+        "mated_housing_service_envelope",
+        "strain_relief_bridge",
+        "snap_latch",
+    ):
+        if f"module {module_name}" not in source:
+            raise ValidationError(f"SCAD is missing {module_name}")
     _close(parameters["post_d"], 7.0, "lid post diameter", 1e-6)
     _close(
         parameters["post_wall_overlap"],
@@ -576,8 +804,8 @@ def validate_functional_geometry(
     probe_count += len(cavity_points)
 
     rj45_centers: list[list[float]] = []
-    aperture_width = parameters["rj45_w"] + 1.0
-    aperture_height = parameters["rj45_h"] + 1.0
+    aperture_width = parameters["collar_aperture_w"]
+    aperture_height = parameters["collar_aperture_h"]
     aperture_z = board_z + parameters["board_t"] - 0.3
     for index, center_y in enumerate(
         geometry["rj45_centers_y_mm"],
@@ -621,6 +849,33 @@ def validate_functional_geometry(
             f"J{index} RJ45 aperture",
         )
         probe_count += len(points)
+
+        key_offset = parameters[f"j{index}_key_offset"]
+        other_offset = parameters[f"j{2 if index == 1 else 1}_key_offset"]
+        key_z = aperture_z + parameters["collar_aperture_h"] + 0.5
+        keyed_points = [
+            [wall / 2, shell_y + key_offset, key_z],
+            [wall / 2, shell_y + other_offset, key_z],
+        ]
+        _expect_occupancy(
+            base,
+            keyed_points,
+            [False, True],
+            f"J{index} keyed collar slot",
+        )
+        probe_count += len(keyed_points)
+
+        strain_points = [
+            [-2.0, shell_y, wall + 2.0],
+            [-2.0, shell_y + 8.0, wall + 2.0],
+        ]
+        _expect_occupancy(
+            base,
+            strain_points,
+            [False, True],
+            f"J{index} strain-relief bridge",
+        )
+        probe_count += len(strain_points)
 
     usb_y = board_y + geometry["usb_center_y_mm"]
     usb_z = (
@@ -674,6 +929,24 @@ def validate_functional_geometry(
     )
     probe_count += len(usb_points)
 
+    for index, (switch_x, switch_y) in enumerate(
+        geometry["switch_centers_mm"],
+        start=1,
+    ):
+        center_x = board_x + switch_x
+        center_y = board_y + switch_y
+        switch_points = [
+            [center_x, center_y, parameters["lid_t"] / 2],
+            [center_x + 2.0, center_y, parameters["lid_t"] / 2],
+        ]
+        _expect_occupancy(
+            lid,
+            switch_points,
+            [False, True],
+            f"SW{index} tool access",
+        )
+        probe_count += len(switch_points)
+
     antenna_x = (
         board_x
         + sum(geometry["antenna_span_x_mm"]) / 2
@@ -711,10 +984,11 @@ def validate_functional_geometry(
             [False, True, False],
             f"MH{index} mounting post",
         )
+        inward = 1.0 if mount_x < parameters["board_l"] / 2 else -1.0
         _expect_vertices(
             base,
             [
-                [center[0] + radius, center[1], z]
+                [center[0] + inward * radius, center[1], z]
                 for radius in (1.0, 3.0)
                 for z in (wall, wall + parameters["standoff"])
             ],
@@ -812,6 +1086,32 @@ def validate_functional_geometry(
         )
         probe_count += len(base_points) + len(lid_points)
 
+    snap_points_base = [
+        [outer_length / 2, -0.6, base_height - 1.5],
+        [outer_length / 2, outer_width - wall / 2, base_height - 1.5],
+    ]
+    _expect_occupancy(
+        base,
+        snap_points_base,
+        [True, True],
+        "tool-less base latches",
+    )
+    snap_points_lid = [
+        [outer_length / 2, wall - parameters["snap_clearance"], 1.0],
+        [
+            outer_length / 2,
+            outer_width - wall + parameters["snap_clearance"],
+            1.0,
+        ],
+    ]
+    _expect_occupancy(
+        lid,
+        snap_points_lid,
+        [False, False],
+        "tool-less lid receivers",
+    )
+    probe_count += len(snap_points_base) + len(snap_points_lid)
+
     return {
         "probe_count": probe_count,
         "rj45_aperture_centers_shell_mm": rj45_centers,
@@ -822,6 +1122,52 @@ def validate_functional_geometry(
         ],
         "mounting_post_centers_shell_mm": mounting_centers,
         "antenna_inner_wall_to_edge_mm": antenna_edge_y - wall,
+        "keyed_apertures": validate_keyed_apertures(
+            collar_body_width=parameters["collar_body_w"],
+            aperture_width=parameters["collar_aperture_w"],
+            key_rib_width=parameters["key_rib_w"],
+            key_slot_width=parameters["key_slot_w"],
+            console_offset=parameters["j1_key_offset"],
+            motor_offset=parameters["j2_key_offset"],
+        ),
+        "external_cable_bend_service_radius_mm": parameters["cable_bend_radius"],
+        "connector_latch_clearance_mm": parameters["latch_clearance"],
+        "molex_mated_housing_envelopes_mm": [
+            {
+                "mpn": "430250800",
+                "width_max": parameters["j1_housing_w"]
+                + parameters["housing_dim_tolerance"],
+                "height_max": parameters["housing_h"]
+                + parameters["housing_dim_tolerance"],
+                "housing_depth_max": parameters["housing_depth"]
+                + parameters["housing_dim_tolerance"],
+                "mated_depth_max": parameters["mated_depth"]
+                + parameters["housing_dim_tolerance"],
+                "extraction_clearance": parameters["latch_clearance"],
+                "pigtail_exit_direction_x": parameters[
+                    "pigtail_exit_direction"
+                ],
+            },
+            {
+                "mpn": "430251000",
+                "width_max": parameters["j2_housing_w"]
+                + parameters["housing_dim_tolerance"],
+                "height_max": parameters["housing_h"]
+                + parameters["housing_dim_tolerance"],
+                "housing_depth_max": parameters["housing_depth"]
+                + parameters["housing_dim_tolerance"],
+                "mated_depth_max": parameters["mated_depth"]
+                + parameters["housing_dim_tolerance"],
+                "extraction_clearance": parameters["latch_clearance"],
+                "pigtail_exit_direction_x": parameters[
+                    "pigtail_exit_direction"
+                ],
+            },
+        ],
+        "strain_relief_cable_diameter_mm": parameters[
+            "strain_relief_diameter"
+        ],
+        "closure": "TOOL_LESS_SNAP_LATCH_WITH_OPTIONAL_SUPPLIED_M3",
     }
 
 

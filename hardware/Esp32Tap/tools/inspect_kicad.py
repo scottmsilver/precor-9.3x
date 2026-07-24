@@ -9,12 +9,15 @@ pcbnew (or test-only geometry packages).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+import power_intent
 
 try:
     import pcbnew
@@ -27,6 +30,60 @@ COPPER_LAYER_IDS = (pcbnew.F_Cu, pcbnew.In1_Cu, pcbnew.In2_Cu, pcbnew.B_Cu)
 USB_MINUS = {"USB_DN", "USB_DN_MCU", "USB_DN_R"}
 USB_PLUS = {"USB_DP", "USB_DP_MCU", "USB_DP_R"}
 USB_NETS = USB_MINUS | USB_PLUS
+POWER_DATUM = (100.0, 100.0)
+PAD_SHAPES = {
+    pcbnew.PAD_SHAPE_CIRCLE: "circle",
+    pcbnew.PAD_SHAPE_RECT: "rect",
+    pcbnew.PAD_SHAPE_OVAL: "oval",
+    pcbnew.PAD_SHAPE_TRAPEZOID: "trapezoid",
+    pcbnew.PAD_SHAPE_ROUNDRECT: "roundrect",
+    pcbnew.PAD_SHAPE_CHAMFERED_RECT: "chamfered_rect",
+    pcbnew.PAD_SHAPE_CUSTOM: "custom",
+}
+DRILL_SHAPES = {
+    pcbnew.PAD_DRILL_SHAPE_UNDEFINED: "none",
+    pcbnew.PAD_DRILL_SHAPE_CIRCLE: "circle",
+    pcbnew.PAD_DRILL_SHAPE_OBLONG: "oblong",
+}
+
+
+def _track_signature(
+    net: str,
+    layer: str,
+    width_mm: float,
+    start: Iterable[float],
+    end: Iterable[float],
+) -> tuple[object, ...]:
+    endpoints = tuple(
+        sorted(
+            (
+                tuple(round(value, 6) for value in start),
+                tuple(round(value, 6) for value in end),
+            )
+        )
+    )
+    return (net, layer, round(width_mm, 6), *endpoints)
+
+
+POWER_TRACK_INTENT = {
+    _track_signature(
+        segment["net"],
+        segment["layer"],
+        segment["width_mm"],
+        segment["start"],
+        segment["end"],
+    ): segment["intent_id"]
+    for segment in power_intent.track_segments(POWER_DATUM)
+}
+POWER_VIA_INTENT = {
+    (
+        via["net"],
+        tuple(via["at"]),
+        via["size_mm"],
+        via["drill_mm"],
+    ): via["id"]
+    for via in power_intent.via_signatures(POWER_DATUM)
+}
 
 
 def mm(value: int) -> float:
@@ -347,6 +404,7 @@ def inspect(path: Path) -> dict[str, Any]:
 
     footprints: dict[str, Any] = {}
     pad_items: dict[str, tuple[str, str]] = {}
+    logical_pad_seen: set[tuple[str, str]] = set()
     all_items: dict[str, Any] = {}
     footprint_silkscreen_graphic_count = 0
     fabrication_body_bboxes: list[
@@ -389,7 +447,29 @@ def inspect(path: Path) -> dict[str, Any]:
                 "min": [mm(body_bounds[0]), mm(body_bounds[1])],
                 "max": [mm(body_bounds[2]), mm(body_bounds[3])],
             }
+        courtyard_shapes = [
+            graphic
+            for graphic in footprint.GraphicalItems()
+            if graphic.GetLayer() in (pcbnew.F_CrtYd, pcbnew.B_CrtYd)
+        ]
+        courtyard_bbox: dict[str, list[float]] | None = None
+        if courtyard_shapes:
+            boxes = [
+                graphic.GetBoundingBox()
+                for graphic in courtyard_shapes
+            ]
+            courtyard_bbox = {
+                "min": [
+                    mm(min(box.GetLeft() for box in boxes)),
+                    mm(min(box.GetTop() for box in boxes)),
+                ],
+                "max": [
+                    mm(max(box.GetRight() for box in boxes)),
+                    mm(max(box.GetBottom() for box in boxes)),
+                ],
+            }
         pads: dict[str, Any] = {}
+        pad_occurrences: list[dict[str, Any]] = []
         for pad in sorted(
             footprint.Pads(),
             key=lambda item: (
@@ -398,19 +478,81 @@ def inspect(path: Path) -> dict[str, Any]:
                 item.GetPosition().y,
             ),
         ):
-            number = str(pad.GetNumber())
-            if not number:
-                continue
-            pads[number] = {
+            number = str(pad.GetNumber()) or "mount"
+            attribute = {
+                pcbnew.PAD_ATTRIB_SMD: "smd",
+                pcbnew.PAD_ATTRIB_PTH: "pth",
+                pcbnew.PAD_ATTRIB_NPTH: "npth",
+                pcbnew.PAD_ATTRIB_CONN: "connector",
+            }[pad.GetAttribute()]
+            size = pad.GetSize()
+            drill = pad.GetDrillSize()
+            pad_record = {
+                "occurrence_id": (
+                    f"{reference}:{number}:"
+                    f"{len(pad_occurrences):02d}"
+                ),
+                "number": number,
                 "net": pad.GetNetname(),
                 "at": xy(pad.GetPosition()),
                 "layers": [
                     board.GetLayerName(layer)
                     for layer in pad.GetLayerSet().Seq()
                 ],
+                "attribute": attribute,
+                "shape": PAD_SHAPES[pad.GetShape()],
+                "drill_shape": DRILL_SHAPES[pad.GetDrillShape()],
+                "size_mm": [mm(size.x), mm(size.y)],
+                "drill_mm": [mm(drill.x), mm(drill.y)],
             }
-            pad_items[item_uuid(pad)] = (reference, number)
+            pad_occurrences.append(pad_record)
+            pads[number] = {
+                key: value
+                for key, value in pad_record.items()
+                if key not in {"occurrence_id", "number"}
+            }
+            logical_pad = (reference, number)
+            if logical_pad not in logical_pad_seen:
+                pad_items[item_uuid(pad)] = logical_pad
+                logical_pad_seen.add(logical_pad)
             all_items[item_uuid(pad)] = pad
+        manufacturer_keepouts = []
+        if reference == "U1":
+            source_path = (
+                Path(__file__).resolve().parents[1]
+                / "tools"
+                / "footprint_sources"
+                / "ESP32-S3-WROOM-1.kicad_mod"
+            )
+            source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            for index, zone in enumerate(footprint.Zones()):
+                if not zone.GetIsRuleArea():
+                    continue
+                manufacturer_keepouts.append(
+                    {
+                        "id": f"U1:manufacturer_keepout:{index:02d}",
+                        "source_file": (
+                            "tools/footprint_sources/"
+                            "ESP32-S3-WROOM-1.kicad_mod"
+                        ),
+                        "source_sha256": source_sha256,
+                        "layers": [
+                            board.GetLayerName(layer)
+                            for layer in COPPER_LAYER_IDS
+                            if zone.IsOnLayer(layer)
+                        ],
+                        "outline": polygon(zone),
+                        "forbid_footprints": (
+                            zone.GetDoNotAllowFootprints()
+                        ),
+                        "forbid_pads": zone.GetDoNotAllowPads(),
+                        "forbid_tracks": zone.GetDoNotAllowTracks(),
+                        "forbid_vias": zone.GetDoNotAllowVias(),
+                        "forbid_zone_fills": (
+                            zone.GetDoNotAllowZoneFills()
+                        ),
+                    }
+                )
         footprints[reference] = {
             "footprint": footprint.GetFPIDAsString(),
             "layer": board.GetLayerName(footprint.GetLayer()),
@@ -420,8 +562,11 @@ def inspect(path: Path) -> dict[str, Any]:
             "excluded_from_bom": footprint.IsExcludedFromBOM(),
             "board_only": footprint.IsBoardOnly(),
             "bbox": bbox_dict(footprint.GetBoundingBox()),
+            "courtyard_bbox": courtyard_bbox,
             "fabrication_body_bbox": fabrication_body_bbox,
             "pads": pads,
+            "pad_occurrences": pad_occurrences,
+            "manufacturer_keepouts": manufacturer_keepouts,
         }
 
     track_objects: list[Any] = []
@@ -447,14 +592,30 @@ def inspect(path: Path) -> dict[str, Any]:
         identifier = f"track:{index:04d}"
         copper_ids[item_uuid(item)] = identifier
         all_items[item_uuid(item)] = item
+        net = item.GetNetname()
+        layer = board.GetLayerName(item.GetLayer())
+        width = mm(item.GetWidth())
+        start = xy(item.GetStart())
+        end = xy(item.GetEnd())
+        power_intent_id = POWER_TRACK_INTENT.get(
+            _track_signature(net, layer, width, start, end)
+        )
         tracks.append(
             {
                 "id": identifier,
-                "net": item.GetNetname(),
-                "layer": board.GetLayerName(item.GetLayer()),
-                "width_mm": mm(item.GetWidth()),
-                "start": xy(item.GetStart()),
-                "end": xy(item.GetEnd()),
+                "net": net,
+                "layer": layer,
+                "width_mm": width,
+                "start": start,
+                "end": end,
+                **(
+                    {
+                        "role": "PASS_THROUGH_2A",
+                        "power_intent_id": power_intent_id,
+                    }
+                    if power_intent_id is not None
+                    else {}
+                ),
             }
         )
 
@@ -471,18 +632,33 @@ def inspect(path: Path) -> dict[str, Any]:
         identifier = f"via:{index:04d}"
         copper_ids[item_uuid(item)] = identifier
         all_items[item_uuid(item)] = item
+        net = item.GetNetname()
+        size = mm(item.GetWidth(pcbnew.F_Cu))
+        drill = mm(item.GetDrillValue())
+        position = xy(item.GetPosition())
+        power_intent_id = POWER_VIA_INTENT.get(
+            (net, tuple(position), size, drill)
+        )
         vias.append(
             {
                 "id": identifier,
-                "net": item.GetNetname(),
+                "net": net,
                 "layers": [
                     board.GetLayerName(layer)
                     for layer in COPPER_LAYER_IDS
                     if board.IsLayerEnabled(layer) and item.IsOnLayer(layer)
                 ],
-                "at": xy(item.GetPosition()),
-                "size_mm": mm(item.GetWidth(pcbnew.F_Cu)),
-                "drill_mm": mm(item.GetDrillValue()),
+                "at": position,
+                "size_mm": size,
+                "drill_mm": drill,
+                **(
+                    {
+                        "role": "PASS_THROUGH_2A",
+                        "power_intent_id": power_intent_id,
+                    }
+                    if power_intent_id is not None
+                    else {}
+                ),
             }
         )
 
@@ -734,6 +910,7 @@ def inspect(path: Path) -> dict[str, Any]:
                 "max": [max_x, max_y],
                 "width_mm": round(max_x - min_x, 6),
                 "height_mm": round(max_y - min_y, 6),
+                "area_mm2": round((max_x - min_x) * (max_y - min_y), 6),
             },
             "footprints": footprints,
             "footprint_silkscreen_graphic_count": (
