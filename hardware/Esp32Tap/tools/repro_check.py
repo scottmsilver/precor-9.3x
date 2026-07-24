@@ -272,22 +272,62 @@ def compare_generated(expected_root: Path, actual_root: Path) -> None:
     """Compare every declared generated path byte-for-byte."""
     problems: list[str] = []
     allowed_files = set(SOURCE_PATHS) | set(GENERATED_PATHS)
-    actual_files = {
-        path.relative_to(actual_root)
-        for path in actual_root.rglob("*")
-        if path.is_file()
+    allowed_directories = {
+        parent
+        for relative in allowed_files
+        for parent in relative.parents
+        if parent != Path(".")
     }
-    undeclared = sorted(actual_files - allowed_files)
+    entries = list(actual_root.rglob("*"))
+    symlinks = sorted(
+        path.relative_to(actual_root)
+        for path in entries
+        if path.is_symlink()
+    )
+    if symlinks:
+        problems.append(
+            "isolated regeneration emitted symlinks: "
+            + ", ".join(str(path) for path in symlinks)
+        )
+    undeclared = sorted(
+        path.relative_to(actual_root)
+        for path in entries
+        if path.relative_to(actual_root)
+        not in allowed_files | allowed_directories
+    )
     if undeclared:
         problems.append(
-            "isolated regeneration emitted undeclared files: "
+            "isolated regeneration emitted undeclared entries: "
             + ", ".join(str(path) for path in undeclared)
+        )
+    wrong_types = sorted(
+        path.relative_to(actual_root)
+        for path in entries
+        if not path.is_symlink()
+        and (
+            (
+                path.relative_to(actual_root) in allowed_files
+                and not path.is_file()
+            )
+            or (
+                path.relative_to(actual_root) in allowed_directories
+                and not path.is_dir()
+            )
+        )
+    )
+    if wrong_types:
+        problems.append(
+            "isolated regeneration emitted wrong entry types: "
+            + ", ".join(str(path) for path in wrong_types)
         )
     for relative in GENERATED_PATHS:
         expected = expected_root / relative
         actual = actual_root / relative
-        if not expected.is_file():
+        if expected.is_symlink() or not expected.is_file():
             problems.append(f"{relative}: checked-in file missing")
+            continue
+        if actual.is_symlink():
+            problems.append(f"{relative}: regenerated file is a symlink")
             continue
         if not actual.is_file():
             problems.append(f"{relative}: regenerated file missing")

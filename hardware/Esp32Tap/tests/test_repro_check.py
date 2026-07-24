@@ -200,3 +200,33 @@ def test_compare_generated_reports_missing_extra_and_changed_files(
     extra.write_text("unexpected output\n", encoding="utf-8")
     with pytest.raises(repro_tool.ReproError, match="undeclared"):
         repro_tool.compare_generated(expected, actual)
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_compare_generated_rejects_generated_symlinks(
+    repro_tool: SimpleNamespace,
+    tmp_path: Path,
+    broken: bool,
+) -> None:
+    expected = tmp_path / "expected"
+    actual = tmp_path / "actual"
+    expected.mkdir()
+    actual.mkdir()
+    paths = tuple(repro_tool.GENERATED_PATHS)
+    for path in paths:
+        (expected / path).parent.mkdir(parents=True, exist_ok=True)
+        (actual / path).parent.mkdir(parents=True, exist_ok=True)
+        (expected / path).write_bytes(f"same:{path}\n".encode())
+        (actual / path).write_bytes(f"same:{path}\n".encode())
+
+    target = actual / paths[0]
+    target.unlink()
+    if broken:
+        target.symlink_to(actual / "missing-output")
+    else:
+        external = tmp_path / "external-output"
+        external.write_bytes((expected / paths[0]).read_bytes())
+        target.symlink_to(external)
+
+    with pytest.raises(repro_tool.ReproError, match="symlink"):
+        repro_tool.compare_generated(expected, actual)

@@ -596,20 +596,21 @@ def validate_stage(
     require_normalized: bool = False,
 ) -> None:
     """Fail closed unless the directory is the exact Rev B four-layer package."""
-    if not directory.is_dir():
+    if directory.is_symlink() or not directory.is_dir():
         raise FabExportError(f"fabrication stage is not a directory: {directory}")
-    actual = {
+    entries = list(directory.iterdir())
+    actual = {path.name for path in entries}
+    invalid = sorted(
         path.name
-        for path in directory.iterdir()
-        if path.is_file()
-    }
-    directories = [path.name for path in directory.iterdir() if path.is_dir()]
-    if directories or actual != EXPECTED_FAB_FILES:
+        for path in entries
+        if path.is_symlink() or not path.is_file()
+    )
+    if invalid or actual != EXPECTED_FAB_FILES:
         missing = sorted(EXPECTED_FAB_FILES - actual)
         extra = sorted(actual - EXPECTED_FAB_FILES)
         raise FabExportError(
             "fabrication member set is not exact: "
-            f"missing={missing}, extra={extra}, directories={sorted(directories)}"
+            f"missing={missing}, extra={extra}, invalid={invalid}"
         )
 
     for filename, expected_function in GERBER_FUNCTIONS.items():
@@ -623,7 +624,12 @@ def validate_stage(
                 f"{filename} must have exactly one FileFunction "
                 f"{expected_function}; actual={functions}"
             )
-        if not payload.rstrip().endswith("M02*"):
+        commands = [
+            line.strip()
+            for line in payload.splitlines()
+            if line.strip()
+        ]
+        if commands.count("M02*") != 1 or commands[-1] != "M02*":
             raise FabExportError(
                 f"{filename} Gerber end marker is missing or not final"
             )
@@ -657,10 +663,15 @@ def validate_stage(
             "Esp32Tap.drl must have exactly one drill FileFunction spanning "
             f"copper layers 1 through 4; actual={drill_functions}"
         )
+    drill_commands = [
+        line.strip()
+        for line in drill.splitlines()
+        if line.strip()
+    ]
     if (
         len(re.findall(r"(?m)^M48\s*$", drill)) != 1
-        or len(re.findall(r"(?m)^M30\s*$", drill)) != 1
-        or not drill.rstrip().endswith("M30")
+        or drill_commands.count("M30") != 1
+        or drill_commands[-1] != "M30"
     ):
         raise FabExportError("Esp32Tap.drl is not a complete Excellon drill file")
     if require_normalized:

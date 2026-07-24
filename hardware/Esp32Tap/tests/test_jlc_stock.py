@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import runpy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -295,6 +296,9 @@ def test_snapshot_metadata_fails_closed(
         ("out-of-stock", "stock"),
         ("wrong-refs", "references"),
         ("insufficient", "stock"),
+        ("negative-presale", "negative"),
+        ("negative-assembly", "negative"),
+        ("extra-field", "schema"),
     ],
 )
 def test_snapshot_records_fail_closed(
@@ -321,12 +325,57 @@ def test_snapshot_records_fail_closed(
         records[0]["overseas_stock_count"] = 0
     elif mutation == "wrong-refs":
         records[0]["references"] = ["U1"]
-    else:
+    elif mutation == "insufficient":
         records[0]["overseas_stock_count"] = 3
+    elif mutation == "negative-presale":
+        records[0]["can_presale_number"] = -1
+    elif mutation == "negative-assembly":
+        records[0]["overseas_stock_count"] = -1
+    else:
+        records[0]["authenticated_api_probe"] = "PASS"
 
     with pytest.raises(stock_tool.StockError, match=message):
         stock_tool.validate_records(
             records=copy.deepcopy(records),
             requirements=copy.deepcopy(requirements),
             expected_parts=_expected_parts(),
+        )
+
+
+def test_saved_snapshot_rejects_undeclared_top_level_evidence(
+    stock_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    _write_design_and_bom(tmp_path)
+    expectations = tmp_path / "bom" / "JLC-PART-EXPECTATIONS.json"
+    expectations.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "parts": _expected_parts(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    record = _record()
+    record["references"] = ["U1"]
+    record["required_qty"] = 2
+    snapshot = _snapshot_metadata(
+        stock_tool,
+        "2026-07-24T07:00:00Z",
+    )
+    snapshot["bom_sha256"] = stock_tool._bom_digest(
+        tmp_path / "bom" / "BOM.csv"
+    )
+    snapshot["parts"] = [record]
+    snapshot["authenticated_api_probe"] = "PASS"
+    snapshot_path = tmp_path / "bom" / "snapshot.json"
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    with pytest.raises(stock_tool.StockError, match="schema"):
+        stock_tool.validate_snapshot(
+            root=tmp_path,
+            expectations_path=expectations,
+            snapshot_path=snapshot_path,
+            now=datetime(2026, 7, 24, 8, 0, tzinfo=timezone.utc),
         )

@@ -61,6 +61,35 @@ LIBRARY_CLASSES = {
     "base": "Basic",
     "expand": "Extended",
 }
+RECORD_FIELDS = frozenset(
+    {
+        "lcsc",
+        "model",
+        "package",
+        "library_type",
+        "jlc_class",
+        "overseas_stock_count",
+        "can_presale_number",
+        "source_url",
+        "references",
+        "required_qty",
+        "status",
+    }
+)
+SNAPSHOT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "catalog_status",
+        "checked_at_utc",
+        "source",
+        "source_template",
+        "stock_field",
+        "catalog_access",
+        "build_quantity",
+        "bom_sha256",
+        "parts",
+    }
+)
 
 
 class StockError(RuntimeError):
@@ -96,7 +125,7 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     value: dict[str, Any] = {}
     for key, item in pairs:
         if key in value:
-            raise StockError(f"componentInfo has duplicate JSON key {key}")
+            raise StockError(f"JSON has duplicate key {key}")
         value[key] = item
     return value
 
@@ -323,6 +352,7 @@ def _load_expected_parts(path: Path) -> dict[str, dict[str, str]]:
         raise StockError(f"cannot load part expectations {path}: {error}") from error
     if (
         not isinstance(value, dict)
+        or set(value) != {"schema_version", "parts"}
         or value.get("schema_version") != 1
         or not isinstance(value.get("parts"), dict)
     ):
@@ -352,6 +382,8 @@ def validate_records(
 ) -> None:
     by_code: dict[str, dict[str, Any]] = {}
     for record in records:
+        if not isinstance(record, dict) or set(record) != RECORD_FIELDS:
+            raise StockError("snapshot record schema is not exact")
         code = record.get("lcsc")
         if not isinstance(code, str) or code in by_code:
             raise StockError(f"snapshot repeats or omits code {code!r}")
@@ -419,6 +451,8 @@ def validate_records(
             or not isinstance(assembly_stock, int)
         ):
             raise StockError(f"{code}: stock quantities are UNKNOWN")
+        if presale < 0 or assembly_stock < 0:
+            raise StockError(f"{code}: stock quantities cannot be negative")
         if assembly_stock < requirement["required_qty"]:
             raise StockError(
                 f"{code}: public assembly stock is insufficient "
@@ -576,11 +610,15 @@ def validate_snapshot(
     max_age_hours: float = DEFAULT_MAX_AGE_HOURS,
 ) -> dict[str, Any]:
     try:
-        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        snapshot = json.loads(
+            snapshot_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (OSError, json.JSONDecodeError, StockError) as error:
         raise StockError(f"cannot load stock snapshot {snapshot_path}: {error}") from error
     if (
         not isinstance(snapshot, dict)
+        or set(snapshot) != SNAPSHOT_FIELDS
         or snapshot.get("schema_version") != 1
         or snapshot.get("catalog_status") != "PASS"
         or snapshot.get("source_template") != SOURCE_TEMPLATE

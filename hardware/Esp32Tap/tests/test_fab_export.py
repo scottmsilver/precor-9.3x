@@ -249,7 +249,11 @@ def test_normalization_fails_if_required_creation_date_is_missing(
         ("wrong-drill-span", "drill FileFunction"),
         ("extra-drill-function", "drill FileFunction"),
         ("gerber-trailing-garbage", "end marker"),
+        ("gerber-terminal-camouflage", "end marker"),
         ("drill-trailing-garbage", "complete Excellon"),
+        ("drill-terminal-camouflage", "complete Excellon"),
+        ("expected-member-symlink", "member set"),
+        ("broken-symlink", "member set"),
         ("job-omits-inner", "Gerber job"),
         ("job-duplicate-entry", "Gerber job"),
         ("job-omits-layer-count", "GeneralSpecs"),
@@ -324,12 +328,32 @@ def test_stage_validation_fails_closed(
             gerber.read_text(encoding="utf-8") + "G04 AFTER END*\n",
             encoding="utf-8",
         )
+    elif mutation == "gerber-terminal-camouflage":
+        gerber = stage / "Esp32Tap-F_Cu.gtl"
+        gerber.write_text(
+            gerber.read_text(encoding="utf-8") + "G04 AFTER M02*\n",
+            encoding="utf-8",
+        )
     elif mutation == "drill-trailing-garbage":
         drill = stage / "Esp32Tap.drl"
         drill.write_text(
             drill.read_text(encoding="utf-8") + "X000001Y000001\n",
             encoding="utf-8",
         )
+    elif mutation == "drill-terminal-camouflage":
+        drill = stage / "Esp32Tap.drl"
+        drill.write_text(
+            drill.read_text(encoding="utf-8") + "XM30\n",
+            encoding="utf-8",
+        )
+    elif mutation == "expected-member-symlink":
+        gerber = stage / "Esp32Tap-F_Cu.gtl"
+        external = tmp_path / "external.gtl"
+        external.write_bytes(gerber.read_bytes())
+        gerber.unlink()
+        gerber.symlink_to(external)
+    elif mutation == "broken-symlink":
+        (stage / "undeclared.gtl").symlink_to(tmp_path / "missing.gtl")
     elif mutation == "job-omits-inner":
         job_path = stage / "Esp32Tap-job.gbrjob"
         job = json.loads(job_path.read_text(encoding="utf-8"))
