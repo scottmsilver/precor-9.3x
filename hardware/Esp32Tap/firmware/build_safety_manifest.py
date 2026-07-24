@@ -48,13 +48,18 @@ BROWNOUT_THRESHOLDS = {
     "CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7": 2.44,
 }
 REQUIRED_SDKCONFIG = {
+    "CONFIG_IDF_TARGET": '"esp32s3"',
+    "CONFIG_IDF_TARGET_ARCH_XTENSA": "y",
+    "CONFIG_IDF_TARGET_ESP32S3": "y",
     "CONFIG_ESP_TASK_WDT_EN": "y",
     "CONFIG_ESP_TASK_WDT_INIT": "y",
     "CONFIG_ESP_TASK_WDT_TIMEOUT_S": "2",
     "CONFIG_ESP_TASK_WDT_PANIC": "y",
     "CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT": "y",
-    "CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS": "0",
     "CONFIG_ESP_BROWNOUT_DET": "y",
+    "CONFIG_ESP_COREDUMP_ENABLE_TO_NONE": "y",
+    "CONFIG_APPTRACE_DEST_NONE": "y",
+    "CONFIG_APPTRACE_DEST_UART_NONE": "y",
 }
 FORBIDDEN_ENABLED_SDKCONFIG = (
     "CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT",
@@ -63,7 +68,39 @@ FORBIDDEN_ENABLED_SDKCONFIG = (
     "CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME",
     "CONFIG_ESP_DEBUG_OCDAWARE",
     "CONFIG_ESP_DEBUG_STUBS_ENABLE",
+    "CONFIG_ESP_COREDUMP_ENABLE",
+    "CONFIG_APPTRACE_SV_ENABLE",
+    "CONFIG_APPTRACE_GCOV_ENABLE",
 )
+PANIC_SELECTORS = (
+    "CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT",
+    "CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT",
+    "CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT",
+    "CONFIG_ESP_SYSTEM_PANIC_GDBSTUB",
+)
+COREDUMP_SELECTORS = (
+    "CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH",
+    "CONFIG_ESP_COREDUMP_ENABLE_TO_UART",
+    "CONFIG_ESP_COREDUMP_ENABLE_TO_NONE",
+)
+APPTRACE_PRIMARY_SELECTORS = (
+    "CONFIG_APPTRACE_DEST_JTAG",
+    "CONFIG_APPTRACE_DEST_NONE",
+)
+APPTRACE_UART_SELECTORS = (
+    "CONFIG_APPTRACE_DEST_UART0",
+    "CONFIG_APPTRACE_DEST_UART1",
+    "CONFIG_APPTRACE_DEST_UART2",
+    "CONFIG_APPTRACE_DEST_USB_CDC",
+    "CONFIG_APPTRACE_DEST_UART_NONE",
+)
+OPTIONAL_ZERO_SDKCONFIG = (
+    "CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS",
+    "CONFIG_ESP_COREDUMP_UART_DELAY",
+    "CONFIG_APPTRACE_ONPANIC_HOST_FLUSH_TMO",
+)
+ESP_IMAGE_HEADER_BYTES = 24
+PARTITION_TABLE_BYTES = 0xC00
 
 
 class ManifestError(RuntimeError):
@@ -110,6 +147,27 @@ def _artifact(path: Path, payload: bytes) -> dict[str, Any]:
     }
 
 
+def _validate_artifact_roles(payloads: dict[str, bytes]) -> None:
+    for label in ("application", "bootloader"):
+        payload = payloads[label]
+        if (
+            len(payload) < ESP_IMAGE_HEADER_BYTES
+            or payload[0] != 0xE9
+            or not 1 <= payload[1] <= 16
+        ):
+            raise ManifestError(
+                f"{label} is not an ESP image with a valid header"
+            )
+    partition = payloads["partition_table"]
+    if (
+        len(partition) != PARTITION_TABLE_BYTES
+        or not partition.startswith(b"\xaa\x50")
+    ):
+        raise ManifestError(
+            "partition_table is not a 0xC00-byte ESP partition table"
+        )
+
+
 def _parse_sdkconfig(payload: bytes) -> dict[str, str]:
     text = payload.decode("utf-8", errors="strict")
     values: dict[str, str] = {}
@@ -126,6 +184,20 @@ def _parse_sdkconfig(payload: bytes) -> dict[str, str]:
             raise ManifestError(f"duplicate sdkconfig key: {key}")
         values[key] = value
     return values
+
+
+def _require_exact_selector(
+    values: dict[str, str],
+    *,
+    choices: Iterable[str],
+    expected: str,
+    label: str,
+) -> None:
+    enabled = sorted(key for key in choices if values.get(key) == "y")
+    if enabled != [expected]:
+        raise ManifestError(
+            f"unsafe sdkconfig: {label} must select only {expected}"
+        )
 
 
 def _validate_power_evidence(
@@ -198,6 +270,50 @@ def _validate_sdkconfig(
     for key in FORBIDDEN_ENABLED_SDKCONFIG:
         if values.get(key) == "y":
             raise ManifestError(f"unsafe sdkconfig: {key}=y is forbidden")
+    for key in OPTIONAL_ZERO_SDKCONFIG:
+        if key in values and values[key] != "0":
+            raise ManifestError(
+                f"unsafe sdkconfig: {key} must be absent or zero"
+            )
+
+    target_selectors = [
+        key
+        for key, value in values.items()
+        if (
+            key.startswith("CONFIG_IDF_TARGET_")
+            and not key.startswith("CONFIG_IDF_TARGET_ARCH_")
+            and value == "y"
+        )
+    ]
+    if target_selectors != ["CONFIG_IDF_TARGET_ESP32S3"]:
+        raise ManifestError(
+            "unsafe sdkconfig: target selector must be exactly "
+            "CONFIG_IDF_TARGET_ESP32S3"
+        )
+    _require_exact_selector(
+        values,
+        choices=PANIC_SELECTORS,
+        expected="CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT",
+        label="panic behavior",
+    )
+    _require_exact_selector(
+        values,
+        choices=COREDUMP_SELECTORS,
+        expected="CONFIG_ESP_COREDUMP_ENABLE_TO_NONE",
+        label="core-dump destination",
+    )
+    _require_exact_selector(
+        values,
+        choices=APPTRACE_PRIMARY_SELECTORS,
+        expected="CONFIG_APPTRACE_DEST_NONE",
+        label="primary apptrace destination",
+    )
+    _require_exact_selector(
+        values,
+        choices=APPTRACE_UART_SELECTORS,
+        expected="CONFIG_APPTRACE_DEST_UART_NONE",
+        label="UART apptrace destination",
+    )
 
     enabled_selectors = [
         key for key in BROWNOUT_THRESHOLDS if values.get(key) == "y"
@@ -242,23 +358,29 @@ def _bundle_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _load_schema() -> dict[str, Any]:
+def _load_schema(payload: bytes | None = None) -> dict[str, Any]:
+    if payload is None:
+        payload = _read_nonempty(SCHEMA_PATH, "safety_schema")
     try:
         schema = json.loads(
-            SCHEMA_PATH.read_text(encoding="utf-8"),
+            payload.decode("utf-8", errors="strict"),
             object_pairs_hook=_json_no_duplicates,
         )
-    except (OSError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ManifestError(f"cannot load safety schema: {error}") from error
     jsonschema.Draft202012Validator.check_schema(schema)
     return schema
 
 
-def validate_manifest(manifest: dict[str, Any]) -> None:
+def validate_manifest(
+    manifest: dict[str, Any],
+    *,
+    schema_payload: bytes | None = None,
+) -> None:
     try:
         jsonschema.validate(
             instance=manifest,
-            schema=_load_schema(),
+            schema=_load_schema(schema_payload),
             cls=jsonschema.Draft202012Validator,
         )
     except jsonschema.ValidationError as error:
@@ -276,6 +398,34 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     expected_bundle = _digest(_bundle_payload(manifest))
     if manifest["bundle_sha256"] != expected_bundle:
         raise ManifestError("bundle_sha256 does not match content")
+
+
+def _filesystem_identity(
+    path: object,
+    *,
+    label: str,
+) -> tuple[int, int] | None:
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return None
+    try:
+        status = os.stat(path)
+    except OSError as error:
+        raise ManifestError(f"cannot stat {label} {path}: {error}") from error
+    return (status.st_dev, status.st_ino)
+
+
+def _reject_input_aliases(paths: dict[str, object]) -> None:
+    seen: dict[tuple[int, int], str] = {}
+    for label, path in paths.items():
+        identity = _filesystem_identity(path, label=label)
+        if identity is None:
+            continue
+        prior = seen.get(identity)
+        if prior is not None:
+            raise ManifestError(
+                f"hashed inputs {prior} and {label} share one file identity"
+            )
+        seen[identity] = label
 
 
 def build_manifest(
@@ -297,10 +447,12 @@ def build_manifest(
         "safety_schema": SCHEMA_PATH,
         "firmware_plan": FIRMWARE_DIR / "PLAN.md",
     }
+    _reject_input_aliases(paths)
     payloads = {
         label: _read_nonempty(path, label)
         for label, path in paths.items()
     }
+    _validate_artifact_roles(payloads)
     selector = _validate_sdkconfig(
         payloads["sdkconfig"],
         measured_min_3v3=measured_min_3v3,
@@ -349,7 +501,10 @@ def build_manifest(
         _contract_payload(manifest)
     )
     manifest["bundle_sha256"] = _digest(_bundle_payload(manifest))
-    validate_manifest(manifest)
+    validate_manifest(
+        manifest,
+        schema_payload=payloads["safety_schema"],
+    )
     return manifest
 
 
@@ -399,6 +554,18 @@ def _reject_output_alias(
         if input_path.expanduser().resolve(strict=False) == output_target:
             raise ManifestError(
                 f"output aliases hashed input artifact: {input_path}"
+            )
+        try:
+            aliases_existing_input = os.path.samefile(output, input_path)
+        except FileNotFoundError:
+            aliases_existing_input = False
+        except OSError as error:
+            raise ManifestError(
+                f"cannot compare output and hashed input {input_path}: {error}"
+            ) from error
+        if aliases_existing_input:
+            raise ManifestError(
+                f"output shares file identity with hashed input: {input_path}"
             )
 
 

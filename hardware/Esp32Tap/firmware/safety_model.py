@@ -32,6 +32,7 @@ class Mode(str, Enum):
 class Feedback(str, Enum):
     """Decoded state of K1's grounded dry-contact feedback pole."""
 
+    UNKNOWN = "UNKNOWN"
     BYPASS = "NC_CLOSED_NO_OPEN"
     EMULATE = "NC_OPEN_NO_CLOSED"
     BOTH_CLOSED = "NC_CLOSED_NO_CLOSED"
@@ -127,7 +128,7 @@ class Controller:
         self.speed_tenths = 0
         self.incline_half_percent = 0
         self.tread_ok = True
-        self.feedback = Feedback.BYPASS
+        self.feedback = Feedback.UNKNOWN
         self.fault_latched = False
         self.relay_cmd = False
         self.tx_enable = False
@@ -156,6 +157,18 @@ class Controller:
         if connection.generation <= highest:
             self.events.append("connection_rejected:stale_generation")
             return False
+        superseded = {
+            active
+            for active in self._active_connections
+            if active.connection_key == key
+        }
+        self._active_connections.difference_update(superseded)
+        if (
+            self.owner is not None
+            and self.owner.connection_key == key
+            and self.owner.generation < connection.generation
+        ):
+            self.emergency_stop(reason="owner_superseded", now=0.0)
         self._highest_generation[key] = connection.generation
         self._active_connections.add(connection)
         self.events.append(
@@ -165,7 +178,7 @@ class Controller:
         return True
 
     def acquire(self, connection: ConnectionIdentity, *, now: float) -> bool:
-        self._expire_manual_lease(now=now)
+        self._enforce_due_safety(now=now)
         if self._lease is not None:
             self.events.append("lease_rejected:already_owned")
             return False
@@ -204,7 +217,7 @@ class Controller:
         now: float,
         ignored_event: str,
     ) -> bool:
-        if self._expire_manual_lease(now=now):
+        if self._enforce_due_safety(now=now):
             return False
         if not self._is_owner(connection):
             self.events.append(ignored_event)
@@ -260,6 +273,7 @@ class Controller:
         *,
         now: float,
     ) -> bool:
+        self._enforce_due_safety(now=now)
         self._active_connections.discard(connection)
         if not self._is_owner(connection):
             self.events.append("ignored_non_owner_disconnect")
@@ -268,6 +282,7 @@ class Controller:
         return True
 
     def disconnect_transport(self, transport: Transport, *, now: float) -> bool:
+        self._enforce_due_safety(now=now)
         self._active_connections = {
             connection
             for connection in self._active_connections
@@ -285,6 +300,8 @@ class Controller:
     def observe_console_bytes(self, data: bytes, *, now: float) -> int:
         """Consume bytes and timestamp only syntactically complete KV frames."""
 
+        if self._enforce_due_safety(now=now):
+            return 0
         complete = 0
         for byte in data:
             if byte == ord("["):
@@ -371,12 +388,9 @@ class Controller:
         return True
 
     def observe_interframe_gap(self, *, now: float) -> bool:
-        if self._enforce_immediate_safety(now=now):
+        if self._enforce_due_safety(now=now):
             return False
         if self._phase_deadline is None:
-            return False
-        if now >= self._phase_deadline - self._TIME_EPSILON:
-            self.tick(now=now)
             return False
         if self.mode is Mode.ENTRY_WAIT_GAP:
             if self.feedback is not Feedback.BYPASS:
@@ -462,23 +476,20 @@ class Controller:
         no_high: bool,
         now: float,
     ) -> Feedback:
-        if self._enforce_immediate_safety(now=now):
-            return Feedback.from_gpio(nc_high, no_high)
+        self._enforce_due_safety(now=now)
         feedback = Feedback.from_gpio(nc_high, no_high)
         self.feedback = feedback
+        if feedback is Feedback.BOTH_CLOSED:
+            self.fault_latched = True
+            self.emergency_stop(
+                reason="relay_feedback_both_closed",
+                now=now,
+            )
+            return feedback
 
         expected = self._feedback_expected()
         if expected is not None:
-            if (
-                self._phase_deadline is None
-                or now >= self._phase_deadline - self._TIME_EPSILON
-            ):
-                self.fault_latched = True
-                self.emergency_stop(
-                    reason="feedback_after_deadline",
-                    now=now,
-                )
-            elif feedback is expected:
+            if feedback is expected:
                 if self._feedback_candidate_since is None:
                     self._feedback_candidate_since = now
                     self.events.append("feedback_candidate")
@@ -518,8 +529,6 @@ class Controller:
             ignored_event="exit_rejected:not_owner",
         ):
             return False
-        if self._enforce_immediate_safety(now=now):
-            return False
         if self.mode is not Mode.EMULATING:
             self.events.append("exit_rejected:not_emulating")
             return False
@@ -537,6 +546,7 @@ class Controller:
         return True
 
     def set_tread_ok(self, value: bool, *, now: float) -> None:
+        self._enforce_due_safety(now=now)
         self.tread_ok = bool(value)
         if not self.tread_ok and (
             self.mode is not Mode.PROXY
@@ -556,26 +566,36 @@ class Controller:
         )
 
     def tick(self, *, now: float) -> None:
-        if self._enforce_immediate_safety(now=now):
-            return
+        self._enforce_due_safety(now=now)
 
-        if self._qualify_feedback(now=now):
-            return
+    def _enforce_due_safety(self, *, now: float) -> bool:
+        """Advance every due safety deadline before accepting timed input."""
 
+        if self._expire_manual_lease(now=now):
+            return True
+        if self.mode is not Mode.PROXY:
+            if not self.tread_ok:
+                self.emergency_stop(reason="tread_not_ok", now=now)
+                return True
+            if not self._console_is_fresh(now):
+                self.emergency_stop(reason="console_stale", now=now)
+                return True
         if (
             self._phase_deadline is None
             or now < self._phase_deadline - self._TIME_EPSILON
         ):
-            return
+            return False
         if self.mode is Mode.ENTRY_WAIT_GAP:
             self.emergency_stop(reason="entry_no_gap", now=now)
             self.events.append("entry_abort:no_gap")
+            return True
         elif self.mode is Mode.ENTRY_WAIT_FEEDBACK:
             self.fault_latched = True
             self.emergency_stop(
                 reason="entry_feedback_timeout",
                 now=now,
             )
+            return True
         elif self.mode is Mode.EXIT_WAIT_GAP:
             self.events.append("exit_gap_timeout")
             self.relay_cmd = False
@@ -583,23 +603,13 @@ class Controller:
             self._phase_deadline = now + self.RELAY_FEEDBACK_DEADLINE_SECONDS
             self._feedback_candidate_since = None
             self.events.append("relay_cmd_off")
+            return False
         elif self.mode is Mode.EXIT_WAIT_FEEDBACK:
             self.fault_latched = True
             self.emergency_stop(
                 reason="exit_feedback_timeout",
                 now=now,
             )
-
-    def _enforce_immediate_safety(self, *, now: float) -> bool:
-        if self._expire_manual_lease(now=now):
-            return True
-        if self.mode is Mode.PROXY:
-            return False
-        if not self.tread_ok:
-            self.emergency_stop(reason="tread_not_ok", now=now)
-            return True
-        if not self._console_is_fresh(now):
-            self.emergency_stop(reason="console_stale", now=now)
             return True
         return False
 
@@ -631,7 +641,7 @@ class Controller:
         self._active_connections.clear()
         self._console_candidate.clear()
         self.last_complete_console_frame_at = None
-        self.feedback = Feedback.BYPASS
+        self.feedback = Feedback.UNKNOWN
         self.usb_pullup_enabled = False
 
 

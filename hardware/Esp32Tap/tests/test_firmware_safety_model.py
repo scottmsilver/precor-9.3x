@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,11 @@ def identity(
 
 def connected_controller(owner: ConnectionIdentity) -> Controller:
     controller = Controller()
+    controller.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.0,
+    )
     assert controller.connect(owner)
     assert controller.acquire(owner, now=0.0)
     return controller
@@ -54,7 +60,11 @@ def enter_emulate(
         no_high=False,
         now=now + 0.105,
     )
-    controller.tick(now=now + 0.106)
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=now + 0.106,
+    )
     assert controller.mode is Mode.EMULATING
 
 
@@ -131,6 +141,20 @@ def test_manual_lease_cannot_be_renewed_at_or_after_its_deadline() -> None:
     assert controller.events[-1] == "emergency:lease_expired"
 
 
+def test_unrelated_transport_drop_still_enforces_exact_lease_deadline() -> None:
+    owner = identity(Transport.BLE, 23, 1)
+    controller = connected_controller(owner)
+    enter_emulate(controller, owner)
+    for now in (1.4, 2.8, 3.9):
+        controller.observe_console_bytes(b"[loop:5550]", now=now)
+
+    assert not controller.disconnect_transport(Transport.WSS, now=4.0)
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert not controller.relay_cmd
+    assert "emergency:lease_expired" in controller.events
+
+
 def test_wss_owner_requires_the_same_concrete_handle_object() -> None:
     class EqualHandle:
         def __eq__(self, other: object) -> bool:
@@ -191,6 +215,21 @@ def test_reconnect_and_handle_reuse_cannot_inherit_an_old_lease() -> None:
     assert not controller.heartbeat(old, now=0.4)
 
 
+def test_new_generation_invalidates_and_safely_stops_superseded_owner() -> None:
+    old = identity(Transport.BLE, 23, 10)
+    controller = connected_controller(old)
+    enter_emulate(controller, old)
+
+    fresh = identity(Transport.BLE, 23, 11)
+    assert controller.connect(fresh)
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
+    assert not controller.acquire(old, now=0.2)
+    assert controller.acquire(fresh, now=0.2)
+
+
 def test_executor_owns_locally_and_network_loss_does_not_renew_or_end_it() -> None:
     executor = identity(Transport.EXECUTOR, "program-17", 3)
     wss = identity()
@@ -199,10 +238,10 @@ def test_executor_owns_locally_and_network_loss_does_not_renew_or_end_it() -> No
     enter_emulate(controller, executor)
 
     assert controller.lease_expires_at is None
-    assert not controller.heartbeat(wss, now=100.0)
-    assert not controller.disconnect(wss, now=100.1)
-    controller.observe_console_bytes(b"[loop:5550]", now=9_999.9)
-    controller.tick(now=10_000.0)
+    assert not controller.heartbeat(wss, now=0.5)
+    assert not controller.disconnect(wss, now=0.6)
+    controller.observe_console_bytes(b"[loop:5550]", now=0.7)
+    controller.tick(now=0.8)
     assert controller.owner == executor
     assert controller.mode is Mode.EMULATING
 
@@ -232,7 +271,8 @@ def test_network_failure_matrix(
     enter_emulate(controller, owner)
 
     if failure == "silence":
-        controller.observe_console_bytes(b"[loop:5550]", now=3.9)
+        for now in (1.4, 2.8, 3.9):
+            controller.observe_console_bytes(b"[loop:5550]", now=now)
         controller.tick(now=4.0)
     elif failure == "wss_drop":
         controller.disconnect_transport(Transport.WSS, now=1.0)
@@ -291,7 +331,7 @@ def test_console_source_is_hardware_bridge_and_network_failures_do_nothing() -> 
     controller.disconnect_transport(Transport.BLE, now=2.0)
     controller.tick(now=100.0)
     assert controller.mode is Mode.PROXY
-    assert controller.feedback is Feedback.BYPASS
+    assert controller.feedback is Feedback.UNKNOWN
     assert not controller.relay_cmd
 
 
@@ -307,6 +347,18 @@ def test_console_freshness_requires_a_complete_valid_frame() -> None:
     assert controller.last_complete_console_frame_at == pytest.approx(0.25)
     controller.observe_console_bytes(b"[inc:0000]", now=1.0)
     assert controller.last_complete_console_frame_at == pytest.approx(1.0)
+
+
+def test_late_console_frame_cannot_overwrite_missed_freshness_deadline() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    enter_emulate(controller, owner)
+
+    assert controller.observe_console_bytes(b"[loop:5550]", now=1.5) == 0
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert controller.last_complete_console_frame_at == pytest.approx(0.0)
+    assert controller.events[-1] == "emergency:console_stale"
 
 
 @pytest.mark.parametrize("age", (1.500001, 20.0))
@@ -335,6 +387,24 @@ def test_exactly_one_point_five_seconds_is_stale() -> None:
     assert controller.mode is Mode.PROXY
 
 
+def test_motion_command_at_console_deadline_cannot_refresh_or_mutate() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    enter_emulate(controller, owner)
+
+    assert not controller.command_motion(
+        owner,
+        speed_tenths=60,
+        incline_half_percent=10,
+        now=1.5,
+    )
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert controller.speed_tenths == 0
+    assert controller.incline_half_percent == 0
+    assert controller.events[-1] == "emergency:console_stale"
+
+
 def test_entry_order_and_first_zero_frame_follow_settled_transfer() -> None:
     owner = identity()
     controller = connected_controller(owner)
@@ -359,7 +429,11 @@ def test_entry_order_and_first_zero_frame_follow_settled_transfer() -> None:
         now=0.205,
     )
     assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
-    controller.tick(now=0.206)
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.206,
+    )
     assert controller.events[-2:] == [
         "feedback_emulate_stable",
         "send_first_complete_zero_frame",
@@ -439,15 +513,35 @@ def test_reentrant_entry_request_cannot_rewind_an_active_transfer() -> None:
 
     assert not controller.request_emulate(
         owner,
-        now=0.2,
+        now=0.105,
         uart_idle_low=True,
     )
     assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
-    controller.tick(now=0.210)
+    controller.tick(now=0.110)
     assert controller.mode is Mode.PROXY
     assert controller.owner is None
     assert not controller.relay_cmd
     assert not controller.tx_enable
+
+
+def test_reentrant_entry_request_enforces_feedback_deadline_first() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    assert controller.observe_interframe_gap(now=0.1)
+
+    assert not controller.request_emulate(
+        owner,
+        now=0.110,
+        uart_idle_low=True,
+    )
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert controller.fault_latched
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
+    assert controller.events[-1] == "emergency:entry_feedback_timeout"
 
 
 def test_entry_feedback_timeout_releases_and_latches_fault() -> None:
@@ -466,7 +560,7 @@ def test_entry_feedback_timeout_releases_and_latches_fault() -> None:
 
 @pytest.mark.parametrize(
     ("nc_high", "no_high"),
-    ((False, True), (False, False), (True, True)),
+    ((False, True), (True, True)),
 )
 def test_entry_feedback_mismatch_releases_and_latches_fault(
     nc_high: bool,
@@ -511,7 +605,11 @@ def test_complete_normal_exit_order() -> None:
         now=0.705,
     )
     assert controller.mode is Mode.EXIT_WAIT_FEEDBACK
-    controller.tick(now=0.706)
+    controller.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.706,
+    )
     assert controller.events[-3:] == [
         "feedback_bypass_stable",
         "tx_enable_off",
@@ -549,7 +647,7 @@ def test_gap_event_at_exit_deadline_cannot_leave_relay_energized() -> None:
 
 @pytest.mark.parametrize(
     ("nc_high", "no_high"),
-    ((True, False), (False, False), (True, True)),
+    ((True, False), (True, True)),
 )
 def test_exit_feedback_mismatch_releases_and_latches_fault(
     nc_high: bool,
@@ -617,7 +715,11 @@ def test_console_staleness_never_waits_for_a_transition_deadline(
             no_high=False,
             now=0.105,
         )
-        controller.tick(now=0.106)
+        controller.observe_relay_feedback(
+            nc_high=True,
+            no_high=False,
+            now=0.106,
+        )
         assert controller.request_normal_exit(owner, now=0.6)
     if mode is Mode.EXIT_WAIT_FEEDBACK:
         assert controller.observe_interframe_gap(now=1.495)
@@ -661,6 +763,12 @@ def test_matching_feedback_requires_temporal_stability() -> None:
     controller.tick(now=0.101999)
     assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
     controller.tick(now=0.102)
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.102,
+    )
     assert controller.mode is Mode.EMULATING
     assert controller.events[-2:] == [
         "feedback_emulate_stable",
@@ -687,9 +795,87 @@ def test_transition_feedback_may_pass_through_both_open_before_settling() -> Non
         no_high=False,
         now=0.105,
     )
-    controller.tick(now=0.106)
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.106,
+    )
     assert controller.mode is Mode.EMULATING
     assert not controller.fault_latched
+
+
+def test_both_closed_feedback_faults_immediately_during_transfer() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    assert controller.observe_interframe_gap(now=0.1)
+
+    controller.observe_relay_feedback(
+        nc_high=False,
+        no_high=False,
+        now=0.101,
+    )
+
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert controller.fault_latched
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
+    assert controller.events[-1] == "emergency:relay_feedback_both_closed"
+
+
+def test_feedback_qualification_requires_a_sample_at_stability_time() -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    assert controller.observe_interframe_gap(now=0.1)
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.105,
+    )
+
+    controller.tick(now=0.106)
+    assert controller.mode is Mode.ENTRY_WAIT_FEEDBACK
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.106,
+    )
+    assert controller.mode is Mode.EMULATING
+
+
+@pytest.mark.parametrize("deadline_method", ("tick", "feedback"))
+def test_feedback_at_exact_deadline_always_fails_closed(
+    deadline_method: str,
+) -> None:
+    owner = identity()
+    controller = connected_controller(owner)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.0)
+    assert controller.request_emulate(owner, now=0.0, uart_idle_low=True)
+    assert controller.observe_interframe_gap(now=0.1)
+    controller.observe_relay_feedback(
+        nc_high=True,
+        no_high=False,
+        now=0.108,
+    )
+
+    if deadline_method == "tick":
+        controller.tick(now=0.110)
+    else:
+        controller.observe_relay_feedback(
+            nc_high=True,
+            no_high=False,
+            now=0.110,
+        )
+
+    assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert controller.fault_latched
+    assert not controller.relay_cmd
+    assert not controller.tx_enable
 
 
 @pytest.mark.parametrize("failure", ("brownout", "watchdog"))
@@ -797,6 +983,34 @@ def test_native_usb_attach_is_active_low_and_defaults_detached() -> None:
     assert not controller.usb_pullup_enabled
 
 
+def test_reset_requires_an_actual_bypass_feedback_sample_before_entry() -> None:
+    old = identity()
+    controller = connected_controller(old)
+    enter_emulate(controller, old)
+    controller.reset(now=0.5)
+
+    assert controller.feedback is Feedback.UNKNOWN
+    fresh = identity(generation=2)
+    assert controller.connect(fresh)
+    assert controller.acquire(fresh, now=0.6)
+    controller.observe_console_bytes(b"[hmph:0000]", now=0.6)
+    assert not controller.request_emulate(
+        fresh,
+        now=0.6,
+        uart_idle_low=True,
+    )
+    controller.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.7,
+    )
+    assert controller.request_emulate(
+        fresh,
+        now=0.7,
+        uart_idle_low=True,
+    )
+
+
 def test_model_constants_are_the_normative_deadlines() -> None:
     assert Controller.MANUAL_LEASE_SECONDS == 4.0
     assert Controller.CONSOLE_FRESH_SECONDS == 1.5
@@ -812,6 +1026,9 @@ def test_model_constants_are_the_normative_deadlines() -> None:
 
 def _safe_sdkconfig() -> str:
     return """\
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_IDF_TARGET_ARCH_XTENSA=y
+CONFIG_IDF_TARGET_ESP32S3=y
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=2
@@ -821,6 +1038,9 @@ CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0
 CONFIG_ESP_BROWNOUT_DET=y
 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_3=y
 CONFIG_ESP_BROWNOUT_DET_LVL=3
+CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+CONFIG_APPTRACE_DEST_NONE=y
+CONFIG_APPTRACE_DEST_UART_NONE=y
 # CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT is not set
 # CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT is not set
 # CONFIG_ESP_SYSTEM_PANIC_GDBSTUB is not set
@@ -828,6 +1048,14 @@ CONFIG_ESP_BROWNOUT_DET_LVL=3
 # CONFIG_ESP_DEBUG_OCDAWARE is not set
 # CONFIG_ESP_DEBUG_STUBS_ENABLE is not set
 """
+
+
+def _esp_image_payload(label: str) -> bytes:
+    return b"\xe9\x01" + (b"\0" * 22) + label.encode("ascii")
+
+
+def _partition_table_payload() -> bytes:
+    return b"\xaa\x50" + (b"\xff" * (0xC00 - 2))
 
 
 def _manifest_inputs(tmp_path: Path) -> dict[str, Path]:
@@ -838,11 +1066,13 @@ def _manifest_inputs(tmp_path: Path) -> dict[str, Path]:
         "sdkconfig": tmp_path / "sdkconfig",
     }
     for label, path in paths.items():
-        path.write_bytes(
-            _safe_sdkconfig().encode("utf-8")
-            if label == "sdkconfig"
-            else f"{label}-payload".encode("ascii")
-        )
+        payload = {
+            "application": _esp_image_payload("application"),
+            "bootloader": _esp_image_payload("bootloader"),
+            "partition_table": _partition_table_payload(),
+            "sdkconfig": _safe_sdkconfig().encode("utf-8"),
+        }[label]
+        path.write_bytes(payload)
     return paths
 
 
@@ -930,6 +1160,24 @@ def test_safety_manifest_is_deterministic_and_hashes_every_artifact(
     assert len(manifest["bundle_sha256"]) == 64
 
 
+def test_manifest_accepts_generated_silent_reboot_without_delay_key(
+    tmp_path: Path,
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    sdkconfig = paths["sdkconfig"]
+    sdkconfig.write_text(
+        sdkconfig.read_text(encoding="utf-8").replace(
+            "CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_manifest(tmp_path, paths)
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_bundle_digest_depends_on_every_artifact_record(
     tmp_path: Path,
 ) -> None:
@@ -1013,6 +1261,81 @@ def test_manifest_rejects_unsafe_sdkconfig(
 
 
 @pytest.mark.parametrize(
+    "unsafe_change",
+    (
+        (
+            'CONFIG_IDF_TARGET="esp32s3"',
+            'CONFIG_IDF_TARGET="esp32"',
+        ),
+        (
+            "CONFIG_IDF_TARGET_ESP32S3=y",
+            "CONFIG_IDF_TARGET_ESP32=y",
+        ),
+        (
+            "CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y",
+            "CONFIG_ESP_COREDUMP_ENABLE_TO_UART=y\n"
+            "CONFIG_ESP_COREDUMP_UART_DELAY=5000",
+        ),
+        (
+            "CONFIG_APPTRACE_DEST_NONE=y",
+            "CONFIG_APPTRACE_DEST_JTAG=y\n"
+            "CONFIG_APPTRACE_ONPANIC_HOST_FLUSH_TMO=-1",
+        ),
+    ),
+)
+def test_manifest_rejects_wrong_target_or_delayed_panic_paths(
+    tmp_path: Path,
+    unsafe_change: tuple[str, str],
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    sdkconfig = paths["sdkconfig"]
+    sdkconfig.write_text(
+        sdkconfig.read_text(encoding="utf-8").replace(*unsafe_change),
+        encoding="utf-8",
+    )
+
+    result = _run_manifest(tmp_path, paths)
+
+    assert result.returncode != 0
+    assert not (tmp_path / "safety-manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("label", "wrong_payload"),
+    (
+        ("application", _partition_table_payload()),
+        ("bootloader", _partition_table_payload()),
+        ("partition_table", _esp_image_payload("not-a-partition-table")),
+    ),
+)
+def test_manifest_rejects_artifact_with_wrong_binary_role(
+    tmp_path: Path,
+    label: str,
+    wrong_payload: bytes,
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    paths[label].write_bytes(wrong_payload)
+
+    result = _run_manifest(tmp_path, paths)
+
+    assert result.returncode != 0
+    assert not (tmp_path / "safety-manifest.json").exists()
+
+
+def test_manifest_refuses_hardlinked_input_identities(
+    tmp_path: Path,
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    paths["bootloader"].unlink()
+    os.link(paths["application"], paths["bootloader"])
+
+    result = _run_manifest(tmp_path, paths)
+
+    assert result.returncode != 0
+    assert not (tmp_path / "safety-manifest.json").exists()
+
+
+@pytest.mark.parametrize(
     "input_label",
     ("application", "bootloader", "partition_table", "sdkconfig"),
 )
@@ -1031,6 +1354,21 @@ def test_manifest_refuses_output_aliasing_an_input(
 
     assert result.returncode != 0
     assert paths[input_label].read_bytes() == before
+
+
+def test_manifest_refuses_output_hardlink_aliasing_an_input(
+    tmp_path: Path,
+) -> None:
+    paths = _manifest_inputs(tmp_path)
+    output = tmp_path / "safety-manifest.json"
+    os.link(paths["application"], output)
+    before = paths["application"].read_bytes()
+
+    result = _run_manifest(tmp_path, paths)
+
+    assert result.returncode != 0
+    assert paths["application"].read_bytes() == before
+    assert output.read_bytes() == before
 
 
 def test_manifest_snapshots_sdkconfig_once(
@@ -1068,6 +1406,51 @@ def test_manifest_snapshots_sdkconfig_once(
     assert sdkconfig.read_count == 1
     assert manifest["artifacts"]["sdkconfig"]["sha256"] == hashlib.sha256(
         _safe_sdkconfig().encode("utf-8")
+    ).hexdigest()
+
+
+def test_manifest_snapshots_schema_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_schema = (
+        FIRMWARE_DIR / "safety_manifest.schema.json"
+    ).read_bytes()
+
+    class ChangingSchema:
+        name = "safety_manifest.schema.json"
+
+        def __init__(self) -> None:
+            self.read_count = 0
+
+        def read_bytes(self) -> bytes:
+            self.read_count += 1
+            return original_schema
+
+        def read_text(self, *, encoding: str) -> str:
+            assert encoding == "utf-8"
+            self.read_count += 1
+            return "{}"
+
+        def __str__(self) -> str:
+            return "<changing-schema>"
+
+    paths = _manifest_inputs(tmp_path)
+    schema = ChangingSchema()
+    monkeypatch.setattr(manifest_builder, "SCHEMA_PATH", schema)
+
+    manifest = manifest_builder.build_manifest(
+        application=paths["application"],
+        bootloader=paths["bootloader"],
+        partition_table=paths["partition_table"],
+        sdkconfig=paths["sdkconfig"],
+        measured_min_3v3=3.05,
+        brownout_threshold=2.98,
+    )
+
+    assert schema.read_count == 1
+    assert manifest["artifacts"]["safety_schema"]["sha256"] == hashlib.sha256(
+        original_schema
     ).hexdigest()
 
 

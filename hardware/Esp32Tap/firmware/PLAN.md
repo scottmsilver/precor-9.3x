@@ -81,14 +81,22 @@ at the driver base).
   `esp_https_server` (WSS/REST, 1 KB command cap, malformed JSON ignored),
   mDNS, checkpoint buffer/replay.
 * Required sdkconfig (defaults put WiFi/BT on core 0 — must override):
+  `CONFIG_IDF_TARGET="esp32s3"`,
+  `CONFIG_IDF_TARGET_ESP32S3=y`,
   `CONFIG_BT_NIMBLE_PINNED_TO_CORE=1`, WiFi task pinned to core 1, BT
   controller on core 1, `CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y`, WiFi PS
   `MIN_MODEM`, `CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3`,
   `CONFIG_ESP_TASK_WDT_EN=y`, `CONFIG_ESP_TASK_WDT_INIT=y`,
   `CONFIG_ESP_TASK_WDT_TIMEOUT_S=2`,
   **`CONFIG_ESP_TASK_WDT_PANIC=y`**,
-  `CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y`, and
-  `CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0` (task-WDT stall must
+  `CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y`,
+  `CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y`,
+  `CONFIG_APPTRACE_DEST_NONE=y`, and
+  `CONFIG_APPTRACE_DEST_UART_NONE=y`. If
+  `CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS` is emitted it must be `0`;
+  a generated silent-reboot sdkconfig may omit that hidden/default key.
+  Core dumps, apptrace destinations, and nonzero panic/core-dump/apptrace
+  waits are forbidden (task-WDT stall must
   panic-reset promptly so the relay releases—the IDF default only logs a
   warning). Brownout detection is enabled, with the highest ESP32-S3 threshold
   strictly below the measured minimum +3V3 of the exact production artifact.
@@ -125,7 +133,10 @@ connection object/handle; a BLE owner uses the concrete `conn_handle`.
 Generation prevents a recycled socket or BLE handle from inheriting an old
 lease. Only the exact owner may mutate speed/incline or renew liveness.
 Non-owner commands, heartbeats, and disconnects are ignored by the motion
-engine.
+engine. Accepting a higher generation for the same concrete handle first
+invalidates every lower-generation active identity. If a lower generation
+owns the lease, supersession commands zero and Proxy before registering the
+new connection; the new generation remains unowned until an explicit acquire.
 
 WSS and BLE manual ownership use one **4 s total-silence deadline**. There is
 no second timer and no 10 s reconnect grace. Owner disconnect immediately
@@ -133,6 +144,12 @@ commands zero, deasserts relay and TX enables, and releases ownership.
 Reconnect begins unowned at zero and must explicitly acquire a new generation.
 The on-device executor owns a non-network lease; RF loss does not end or
 silently transfer it, but local safety events, reset, and WDT do.
+
+Every public operation carrying a monotonic timestamp advances all due lease,
+console-freshness, and transition deadlines before it may consume or mutate
+state. A command or reentrant request at an exact deadline loses to that
+deadline. In particular, a complete console frame arriving at age 1.5 s is
+rejected before it can replace the stale timestamp.
 
 | Command source ↓ / failure → | 4 s owner silence | WSS drop | BLE drop | reset/brownout | task-WDT |
 |---|---|---|---|---|---|
@@ -170,8 +187,8 @@ Normal Emulate entry is exactly:
    TX_ENABLE without sending a byte;
 4. wait for a capture-qualified console inter-frame gap, for at most 1 s;
 5. assert RELAY_CMD and require the dry-contact feedback pole to report
-   Emulate continuously for at least 1 ms, completing qualification within
-   10 ms;
+   Emulate continuously for at least 1 ms, with an actual GPIO sample at the
+   end of that interval and before the 10 ms deadline;
 6. only then transmit the first complete zero frame.
 
 If no gap arrives within 1 s, entry aborts without moving K1. Wrong or missing
@@ -182,13 +199,21 @@ Normal exit is exactly:
 1. transmit and finish a complete zero frame;
 2. wait for a capture-qualified gap, for at most 1 s;
 3. deassert RELAY_CMD and require bypass feedback continuously for at least
-   1 ms, completing qualification within 10 ms;
+   1 ms, with an actual GPIO sample at the end of that interval and before
+   the 10 ms deadline;
 4. deassert TX_ENABLE;
 5. release ownership.
 
 At the normal-exit gap deadline, deassert RELAY_CMD immediately; remaining in
 Emulate is less safe. TREAD_OK loss, stale console, lease expiry, explicit
 emergency stop, brownout, reset, and watchdog action never wait for a gap.
+`BOTH_CLOSED` feedback is an immediate latched fault in every mode and releases
+the relay. `BOTH_OPEN` may be observed as a break-before-make intermediate
+state only while waiting for post-command feedback; it never qualifies a
+transfer. Boot/reset feedback is unknown, not assumed bypass, until an actual
+GPIO sample reports the bypass contact state. A timer tick alone never proves
+the 1 ms feedback interval, and a timer or feedback callback at the exact
+10 ms boundary produces the same fail-closed timeout.
 
 The production acceptance test must perform at least 1,000 normal entry/exit
 cycles and observe MOT6 plus actual K1 contacts. It rejects a byte/frame splice
@@ -242,16 +267,21 @@ hashed first; that hash is combined with the four flash/config artifacts so
 there is no circular self-hash.
 
 The build snapshots every input once and fails if any artifact is
-missing/empty, if its output aliases any hashed input, if the 2 s task WDT is
+missing/empty, if any two hashed inputs share one filesystem identity, if the
+application/bootloader do not have ESP image headers, if the partition table
+does not have the ESP partition-table form, if its output path or inode aliases
+any hashed input, if the 2 s task WDT is
 not enabled and initialized with panic/reset, if the panic action is not an
-immediate silent reboot, if brownout detection is absent, if any halt/debug
+immediate silent reboot, if core dump/apptrace panic work can delay reset, if
+the target is not exactly ESP32-S3, if brownout detection is absent, if any halt/debug
 mode is enabled, or if the configured brownout selector is not the highest
 documented ESP32-S3 threshold below the supplied physical minimum +3V3
 measurement. Validation rechecks selector/voltage/measurement correspondence
 even when a manifest's hashes were recomputed. The selector numbers are
 inverse to voltage: for example, with a measured 3.05 V minimum, level 3
 (approximately 2.98 V), not level 7, is the highest supported threshold below
-the measurement.
+the measurement. The exact schema bytes used for validation are the same
+single snapshot recorded in the manifest hash.
 
 The exact sdkconfig gate remains mandatory on every flashed build:
 
