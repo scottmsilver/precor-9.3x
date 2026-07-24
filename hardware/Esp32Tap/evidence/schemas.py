@@ -10,12 +10,12 @@ import json
 import math
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
 
 STATUSES = {
     "model": {"MODELED", "UNSUPPORTED"},
@@ -72,17 +72,18 @@ RAW_RECORD_FIELDS = {
     "sha256",
     "instrument",
     "fixture",
-    "captured_at_utc",
-    "fields",
+    "capture_started_at_utc",
+    "capture_ended_at_utc",
+    "bindings",
 }
-RAW_MEASUREMENT_FIELDS = {
+RAW_MEASUREMENT_FIELDS = (
     "timestamp_utc",
-    "instrument_id",
-    "fixture",
-    "field",
+    "measurement",
     "unit",
     "value",
-}
+)
+BINDING_FIELDS = {"field", "measurement", "unit", "aggregation"}
+AGGREGATIONS = {"min", "max", "max_abs", "measurement"}
 PHYSICAL_UNITS = {
     "source_voltage_minimum_volts": "V",
     "source_voltage_maximum_volts": "V",
@@ -110,6 +111,7 @@ VENDOR_OBSERVATION_FIELDS = {
     "observed_at_utc",
     "artifact_path",
     "artifact_sha256",
+    "supports",
 }
 QUOTE_COST_FIELDS = {
     "pcb_fabrication_usd",
@@ -125,6 +127,13 @@ QUOTE_FIELDS = QUOTE_COST_FIELDS | {
     "artifact_sha256",
 }
 SHA256 = re.compile(r"[0-9a-f]{64}")
+RELEASE_ALIASES = {
+    "connector_selection": "connector_selection",
+    "fabrication_export": "fabrication_release",
+    "fabrication_release": "fabrication_release",
+    "turnkey_quoted": "turnkey_status",
+    "turnkey_status": "turnkey_status",
+}
 
 
 class EvidenceError(ValueError):
@@ -155,8 +164,13 @@ def _verified_artifact(
     if not isinstance(relative_path, str) or not relative_path.strip():
         raise EvidenceError(f"{label} path is blank")
     path_value = Path(relative_path)
-    approved = (evidence_root / approved_directory).resolve()
-    candidate = (evidence_root / path_value).resolve()
+    resolved_root = evidence_root.resolve()
+    approved = (resolved_root / approved_directory).resolve()
+    if not approved.is_relative_to(resolved_root):
+        raise EvidenceError(
+            f"approved {approved_directory} directory escapes evidence root"
+        )
+    candidate = (resolved_root / path_value).resolve()
     if path_value.is_absolute() or not candidate.is_relative_to(approved):
         raise EvidenceError(
             f"{label} is outside the approved {approved_directory} directory"
@@ -167,6 +181,39 @@ def _verified_artifact(
     if actual != expected_sha256:
         raise EvidenceError(f"{label} SHA-256 mismatch")
     return candidate
+
+
+def _utc_timestamp(value: object, label: str) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise EvidenceError(f"{label} must be an ISO-8601 UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise EvidenceError(f"{label} must be an ISO-8601 UTC timestamp") from error
+    return parsed
+
+
+def _aggregate(
+    *,
+    aggregation: str,
+    values: list[float | str],
+    numeric: bool,
+    label: str,
+) -> float | str:
+    if aggregation == "measurement":
+        if len(values) != 1:
+            raise EvidenceError(f"{label} measurement aggregation requires one row")
+        return values[0]
+    if not numeric:
+        raise EvidenceError(f"{label} text data requires measurement aggregation")
+    numeric_values = [float(value) for value in values]
+    if aggregation == "min":
+        return min(numeric_values)
+    if aggregation == "max":
+        return max(numeric_values)
+    if aggregation == "max_abs":
+        return max(abs(value) for value in numeric_values)
+    raise EvidenceError(f"{label} has an invalid aggregation")
 
 
 def _validate_raw_measurement(
@@ -184,23 +231,69 @@ def _validate_raw_measurement(
         expected_sha256=record["sha256"],
         label=label,
     )
-    fields = record["fields"]
+    started = _utc_timestamp(
+        record["capture_started_at_utc"],
+        f"{label}.capture_started_at_utc",
+    )
+    ended = _utc_timestamp(
+        record["capture_ended_at_utc"],
+        f"{label}.capture_ended_at_utc",
+    )
+    if ended < started:
+        raise EvidenceError(f"{label} capture end precedes capture start")
+
+    bindings_value = record["bindings"]
     if (
-        not isinstance(fields, list)
-        or not fields
-        or any(field not in ENVELOPE_VALUE_FIELDS for field in fields)
-        or len(set(fields)) != len(fields)
+        not isinstance(bindings_value, list)
+        or not bindings_value
     ):
-        raise EvidenceError(f"{label}.fields must name unique physical fields")
+        raise EvidenceError(f"{label}.bindings must be a nonempty list")
+    bindings: list[dict[str, Any]] = []
+    for binding_index, value in enumerate(bindings_value):
+        binding = _exact_fields(
+            f"{label}.bindings[{binding_index}]",
+            value,
+            BINDING_FIELDS,
+        )
+        field = binding["field"]
+        if field not in ENVELOPE_VALUE_FIELDS:
+            raise EvidenceError(f"{label}.bindings[{binding_index}] field is unknown")
+        if envelope[field] is None:
+            raise EvidenceError(
+                f"{label} binding references null physical datum: {field}"
+            )
+        if (
+            not isinstance(binding["measurement"], str)
+            or not binding["measurement"].strip()
+        ):
+            raise EvidenceError(
+                f"{label}.bindings[{binding_index}] measurement is blank"
+            )
+        if binding["unit"] != PHYSICAL_UNITS[field]:
+            raise EvidenceError(f"{label}.bindings[{binding_index}] has the wrong unit")
+        if binding["aggregation"] not in AGGREGATIONS:
+            raise EvidenceError(
+                f"{label}.bindings[{binding_index}] aggregation is invalid"
+            )
+        bindings.append(binding)
+    fields = [binding["field"] for binding in bindings]
+    if len(set(fields)) != len(fields):
+        raise EvidenceError(f"{label}.bindings repeat a physical field")
+
     try:
         with path.open(encoding="utf-8", newline="") as raw_file:
             reader = csv.DictReader(raw_file)
-            if reader.fieldnames is None or set(reader.fieldnames) != (
-                RAW_MEASUREMENT_FIELDS
-            ):
+            if reader.fieldnames is None:
                 raise EvidenceError(
                     f"{label} lacks exact raw measurement columns "
-                    f"{sorted(RAW_MEASUREMENT_FIELDS)}"
+                    f"{list(RAW_MEASUREMENT_FIELDS)}"
+                )
+            if len(reader.fieldnames) != len(set(reader.fieldnames)):
+                raise EvidenceError(f"{label} has duplicate CSV headers")
+            if reader.fieldnames != list(RAW_MEASUREMENT_FIELDS):
+                raise EvidenceError(
+                    f"{label} lacks exact raw measurement columns "
+                    f"{list(RAW_MEASUREMENT_FIELDS)}"
                 )
             rows = list(reader)
     except UnicodeDecodeError as error:
@@ -208,51 +301,78 @@ def _validate_raw_measurement(
     if not rows:
         raise EvidenceError(f"{label} contains no raw measurement rows")
 
-    rows_by_field: dict[str, list[dict[str, str]]] = {}
+    measurements = {binding["measurement"] for binding in bindings}
+    rows_by_measurement: dict[str, list[float | str]] = {}
     for row_number, row in enumerate(rows, start=2):
-        if (
-            row["timestamp_utc"] != record["captured_at_utc"]
-            or row["instrument_id"] != record["instrument"]
-            or row["fixture"] != record["fixture"]
-        ):
+        if set(row) != set(RAW_MEASUREMENT_FIELDS) or None in row:
+            raise EvidenceError(f"{label} row {row_number} has extra CSV columns")
+        if any(value is None for value in row.values()):
+            raise EvidenceError(f"{label} row {row_number} has missing CSV columns")
+        timestamp = _utc_timestamp(
+            row["timestamp_utc"],
+            f"{label} row {row_number} timestamp_utc",
+        )
+        if timestamp < started or timestamp > ended:
+            raise EvidenceError(f"{label} row {row_number} is outside capture time")
+        measurement = row["measurement"]
+        if measurement not in measurements:
             raise EvidenceError(
-                f"{label} row {row_number} provenance does not match its binding"
+                f"{label} row {row_number} is not bound to its measurement"
             )
-        field = row["field"]
-        if field not in fields:
-            raise EvidenceError(f"{label} row {row_number} is not bound to its field")
-        rows_by_field.setdefault(field, []).append(row)
-
-    for field in fields:
-        field_rows = rows_by_field.get(field, [])
-        if not field_rows:
-            raise EvidenceError(f"{label} claimed field has no raw row: {field}")
-        for row in field_rows:
-            if row["unit"] != PHYSICAL_UNITS[field]:
-                raise EvidenceError(f"{label} {field} has the wrong unit")
-            if field in ENVELOPE_NUMERIC_FIELDS:
-                try:
-                    value = float(row["value"])
-                except ValueError as error:
-                    raise EvidenceError(
-                        f"{label} {field} value is not numeric"
-                    ) from error
-                if (
-                    not math.isfinite(value)
-                    or not math.isclose(
-                        value,
-                        float(envelope[field]),
-                        rel_tol=1e-9,
-                        abs_tol=1e-12,
-                    )
-                ):
-                    raise EvidenceError(
-                        f"{label} {field} does not match the envelope datum"
-                    )
-            elif row["value"] != envelope[field]:
+        matching = [
+            binding
+            for binding in bindings
+            if binding["measurement"] == measurement
+        ]
+        expected_units = {binding["unit"] for binding in matching}
+        if row["unit"] not in expected_units or len(expected_units) != 1:
+            raise EvidenceError(f"{label} row {row_number} has the wrong unit")
+        numeric = all(
+            binding["field"] in ENVELOPE_NUMERIC_FIELDS
+            for binding in matching
+        )
+        value: float | str
+        if numeric:
+            try:
+                value = float(row["value"])
+            except ValueError as error:
                 raise EvidenceError(
-                    f"{label} {field} does not match the envelope datum"
-                )
+                    f"{label} row {row_number} value is not numeric"
+                ) from error
+            if not math.isfinite(value):
+                raise EvidenceError(f"{label} row {row_number} value is not finite")
+        else:
+            if not row["value"].strip():
+                raise EvidenceError(f"{label} row {row_number} value is blank")
+            value = row["value"]
+        rows_by_measurement.setdefault(measurement, []).append(value)
+
+    for binding in bindings:
+        field = binding["field"]
+        values = rows_by_measurement.get(binding["measurement"], [])
+        if not values:
+            raise EvidenceError(f"{label} binding has no raw rows: {field}")
+        summary = _aggregate(
+            aggregation=binding["aggregation"],
+            values=values,
+            numeric=field in ENVELOPE_NUMERIC_FIELDS,
+            label=f"{label} {field}",
+        )
+        expected = envelope[field]
+        matches = (
+            math.isclose(
+                float(summary),
+                float(expected),
+                rel_tol=1e-9,
+                abs_tol=1e-12,
+            )
+            if field in ENVELOPE_NUMERIC_FIELDS
+            else summary == expected
+        )
+        if not matches:
+            raise EvidenceError(
+                f"{label} {field} aggregate does not match the envelope datum"
+            )
     return set(fields)
 
 
@@ -291,7 +411,7 @@ def _validate_physical(
         ):
             raise EvidenceError(f"raw_records[{index}].sha256 is not bound")
         for field in RAW_RECORD_FIELDS - {"sha256"}:
-            if field == "fields":
+            if field == "bindings":
                 continue
             if not isinstance(bound[field], str) or not bound[field].strip():
                 raise EvidenceError(f"raw_records[{index}].{field} is blank")
@@ -342,6 +462,9 @@ def _validate_hash_bound_items(
     label: str,
     items: object,
     fields: set[str],
+    *,
+    evidence_root: Path,
+    approved_directory: str,
 ) -> None:
     if not isinstance(items, list):
         raise EvidenceError(f"{label} must be a list")
@@ -351,16 +474,37 @@ def _validate_hash_bound_items(
             bound["artifact_sha256"]
         ):
             raise EvidenceError(f"{label}[{index}].artifact_sha256 is not bound")
-        for field in fields - {"artifact_sha256"}:
+        for field in fields - {"artifact_sha256", "supports"}:
             if not isinstance(bound[field], str) or not bound[field].strip():
                 raise EvidenceError(f"{label}[{index}].{field} is blank")
+        if "supports" in fields:
+            supports = bound["supports"]
+            if (
+                not isinstance(supports, list)
+                or not supports
+                or any(
+                    action not in {"fabrication_release", "turnkey_status"}
+                    for action in supports
+                )
+                or len(set(supports)) != len(supports)
+            ):
+                raise EvidenceError(f"{label}[{index}].supports is invalid")
+        _verified_artifact(
+            evidence_root=evidence_root,
+            relative_path=bound["artifact_path"],
+            approved_directory=approved_directory,
+            expected_sha256=bound["artifact_sha256"],
+            label=f"{label}[{index}] artifact",
+        )
 
 
-def _validate_model(record: dict[str, Any]) -> None:
+def _validate_model(record: dict[str, Any], evidence_root: Path) -> None:
     _validate_hash_bound_items(
         "assertions",
         record.get("assertions"),
         MODEL_ASSERTION_FIELDS,
+        evidence_root=evidence_root,
+        approved_directory="model",
     )
 
 
@@ -369,7 +513,18 @@ def _validate_vendor(record: dict[str, Any], evidence_root: Path) -> None:
         "observations",
         record.get("observations"),
         VENDOR_OBSERVATION_FIELDS,
+        evidence_root=evidence_root,
+        approved_directory="vendor",
     )
+    if record["status"] == "VENDOR_ACCEPTED" and not record["observations"]:
+        raise EvidenceError("VENDOR_ACCEPTED requires a verified observation")
+    if record["status"] == "VENDOR_ACCEPTED" and not any(
+        "fabrication_release" in observation["supports"]
+        for observation in record["observations"]
+    ):
+        raise EvidenceError(
+            "VENDOR_ACCEPTED requires a fabrication_release observation"
+        )
     quote = _exact_fields(
         "turnkey_quote",
         record.get("turnkey_quote"),
@@ -422,7 +577,7 @@ def validate_record(
         raise EvidenceError(f"{kind} evidence has an invalid status")
     _exact_fields(f"{kind} evidence", record, FIELDS[kind])
     if kind == "model":
-        _validate_model(record)
+        _validate_model(record, Path(evidence_root))
     elif kind == "vendor":
         _validate_vendor(record, Path(evidence_root))
     else:
@@ -442,6 +597,26 @@ def load_all(directory: Path | str = HERE) -> dict[str, dict[str, Any]]:
     }
 
 
+def _release_action(action: str) -> str:
+    normalized = action.lower().replace("-", "_")
+    if normalized not in RELEASE_ALIASES:
+        raise EvidenceError(f"unknown release action {action!r}")
+    return RELEASE_ALIASES[normalized]
+
+
+def _physical_ready(evidence: dict[str, dict[str, Any]]) -> bool:
+    physical = evidence["physical"]
+    envelope = physical["treadmill_current_envelope"]
+    return (
+        physical["status"] == "PHYSICALLY_VALIDATED"
+        and envelope["status"] == "MEASURED"
+        and not envelope["missing_fields"]
+        and not physical["open_items"]
+        and all(envelope[field] is not None for field in ENVELOPE_VALUE_FIELDS)
+        and bool(envelope["raw_records"])
+    )
+
+
 def release_allowed(
     evidence: dict[str, dict[str, Any]],
     action: str,
@@ -450,31 +625,10 @@ def release_allowed(
 ) -> bool:
     for kind in STATUSES:
         validate_record(kind, evidence.get(kind), evidence_root=evidence_root)
-    normalized = action.lower().replace("-", "_")
-    aliases = {
-        "connector_selection": "connector_selection",
-        "fabrication_export": "fabrication_release",
-        "fabrication_release": "fabrication_release",
-        "turnkey_quoted": "turnkey_status",
-        "turnkey_status": "turnkey_status",
-    }
-    if normalized not in aliases:
-        raise EvidenceError(f"unknown release action {action!r}")
-
-    physical = evidence["physical"]
-    envelope = physical["treadmill_current_envelope"]
-    physical_ready = (
-        physical["status"] == "PHYSICALLY_VALIDATED"
-        and envelope["status"] == "MEASURED"
-        and not envelope["missing_fields"]
-        and not physical["open_items"]
-        and all(envelope[field] is not None for field in ENVELOPE_VALUE_FIELDS)
-        and bool(envelope["raw_records"])
-    )
-    if not physical_ready:
+    required = _release_action(action)
+    if not _physical_ready(evidence):
         return False
 
-    required = aliases[normalized]
     if required == "connector_selection":
         return True
     vendor = evidence["vendor"]
@@ -491,15 +645,32 @@ def release_denial_reason(
     *,
     evidence_root: Path | str = HERE,
 ) -> str:
+    required = _release_action(action)
     physical = evidence["physical"]
     envelope = physical["treadmill_current_envelope"]
-    if not release_allowed(evidence, action, evidence_root=evidence_root):
+    if release_allowed(evidence, action, evidence_root=evidence_root):
+        return ""
+    if not _physical_ready(evidence):
         missing = ", ".join(envelope["missing_fields"]) or "downstream prerequisites"
         return (
             f"{action} blocked: physical={physical['status']}, "
             f"treadmill_current_envelope={envelope['status']}; missing={missing}"
         )
-    return ""
+    vendor = evidence["vendor"]
+    if required in {"fabrication_release", "turnkey_status"} and (
+        vendor["status"] != "VENDOR_ACCEPTED"
+    ):
+        return (
+            f"{action} blocked: requires vendor.status=VENDOR_ACCEPTED; "
+            f"actual={vendor['status']}"
+        )
+    quote_status = vendor["turnkey_quote"]["status"]
+    if required == "turnkey_status" and quote_status != "TURNKEY_QUOTED":
+        return (
+            f"{action} blocked: requires "
+            f"turnkey_quote.status=TURNKEY_QUOTED; actual={quote_status}"
+        )
+    return f"{action} blocked: unmet release prerequisite"
 
 
 def require_release(
