@@ -1450,14 +1450,16 @@ def test_project_and_dru_lock_named_usb_geometry(
         assert token in dru
 
 
-def test_drc_and_schematic_parity_reports_are_clean(
+def test_combined_drc_and_schematic_parity_report_is_clean(
     esp32tap_dir: Path,
 ) -> None:
-    for name in ("drc.rpt", "drc-parity.rpt"):
-        report = (esp32tap_dir / "kicad" / name).read_text(encoding="utf-8")
-        assert re.search(r"Found 0 DRC violations", report)
-        assert re.search(r"Found 0 unconnected pads", report)
-        assert re.search(r"Found 0 Footprint errors", report)
+    report = (esp32tap_dir / "kicad" / "drc.rpt").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(r"Found 0 DRC violations", report)
+    assert re.search(r"Found 0 unconnected pads", report)
+    assert re.search(r"Found 0 Footprint errors", report)
+    assert not (esp32tap_dir / "kicad" / "drc-parity.rpt").exists()
 
 
 def test_default_python_validator_passes(

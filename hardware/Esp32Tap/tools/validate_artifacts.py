@@ -333,26 +333,26 @@ def validate_assembly(board: dict[str, Any]) -> None:
 
 
 def validate_reports_and_fab() -> None:
-    for name in ("drc.rpt", "drc-parity.rpt"):
-        report = (KICAD / name).read_text(encoding="utf-8")
-        for marker in (
-            "Found 0 DRC violations",
-            "Found 0 unconnected pads",
-            "Found 0 Footprint errors",
-        ):
-            require(marker in report, f"{name} is not clean: missing {marker}")
-        ignored_section = report.partition("** Ignored checks **")[2].partition(
-            "** End of Report **"
-        )[0]
-        ignored = {
-            line.strip().removeprefix("- ")
-            for line in ignored_section.splitlines()
-            if line.strip().startswith("- ")
-        }
-        require(
-            ignored == {"Silkscreen clipped by board edge"},
-            f"{name} has unexpected ignored checks: {sorted(ignored)}",
-        )
+    name = "drc.rpt"
+    report = (KICAD / name).read_text(encoding="utf-8")
+    for marker in (
+        "Found 0 DRC violations",
+        "Found 0 unconnected pads",
+        "Found 0 Footprint errors",
+    ):
+        require(marker in report, f"{name} is not clean: missing {marker}")
+    ignored_section = report.partition("** Ignored checks **")[2].partition(
+        "** End of Report **"
+    )[0]
+    ignored = {
+        line.strip().removeprefix("- ")
+        for line in ignored_section.splitlines()
+        if line.strip().startswith("- ")
+    }
+    require(
+        ignored == {"Silkscreen clipped by board edge"},
+        f"{name} has unexpected ignored checks: {sorted(ignored)}",
+    )
 
     gerber_dir = KICAD / "gerbers"
     actual = {path.name for path in gerber_dir.iterdir() if path.is_file()}

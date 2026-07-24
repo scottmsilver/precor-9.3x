@@ -109,6 +109,55 @@ def test_report_timestamp_normalization_is_narrow_and_deterministic(
 
 
 @pytest.mark.parametrize(
+    ("kind", "report"),
+    [
+        (
+            "erc",
+            "** ERC messages: 0  Errors 0  Warnings 0\n",
+        ),
+        (
+            "erc",
+            "ERC report (2026-07-24T00:18:39, Encoding UTF8)\n"
+            "ERC report (2026-07-24T00:18:40, Encoding UTF8)\n"
+            "** ERC messages: 0  Errors 0  Warnings 0\n",
+        ),
+        (
+            "drc",
+            "** Drc report for Esp32Tap.kicad_pcb **\n"
+            "** Found 0 DRC violations **\n"
+            "** Found 0 unconnected pads **\n"
+            "** Found 0 Footprint errors **\n",
+        ),
+        (
+            "drc",
+            "** Drc report for Esp32Tap.kicad_pcb **\n"
+            "** Drc report for Esp32Tap.kicad_pcb **\n"
+            "** Created on 2026-07-23T12:08:56 **\n"
+            "** Found 0 DRC violations **\n"
+            "** Found 0 unconnected pads **\n"
+            "** Found 0 Footprint errors **\n",
+        ),
+        (
+            "drc",
+            "** Drc report for Esp32Tap.kicad_pcb **\n"
+            "** Created on 2026-07-23T12:08:56 **\n"
+            "** Created on 2026-07-23T12:08:57 **\n"
+            "** Found 0 DRC violations **\n"
+            "** Found 0 unconnected pads **\n"
+            "** Found 0 Footprint errors **\n",
+        ),
+    ],
+)
+def test_report_normalization_requires_one_exact_header_and_timestamp(
+    repro_tool: SimpleNamespace,
+    kind: str,
+    report: str,
+) -> None:
+    with pytest.raises(repro_tool.ReproError, match="header"):
+        repro_tool.normalize_report(kind, report)
+
+
+@pytest.mark.parametrize(
     ("kind", "report", "message"),
     [
         (

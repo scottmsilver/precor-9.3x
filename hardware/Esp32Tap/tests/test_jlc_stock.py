@@ -182,6 +182,22 @@ def test_catalog_parser_extracts_exact_identity_class_and_stock(
             ),
             "overseasStockCount",
         ),
+        (
+            _catalog_html().replace(
+                '\\"componentLibraryType\\":\\"expand\\"',
+                '\\"malformed\\":NaN,'
+                '\\"componentLibraryType\\":\\"expand\\"',
+            ),
+            "non-finite",
+        ),
+        (
+            _catalog_html()
+            + _catalog_html().replace(
+                '\\"componentSpecificationEn\\":\\"SOT-23\\",',
+                "",
+            ),
+            "componentSpecificationEn",
+        ),
         (_catalog_html(library_type="mystery"), "library type"),
     ],
 )
@@ -202,6 +218,21 @@ def test_snapshot_records_bind_bom_identity_quantity_and_model(
         requirements=_requirements(),
         expected_parts=_expected_parts(),
     )
+
+
+def test_part_expectations_reject_nonfinite_json(
+    stock_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    expectations = tmp_path / "expectations.json"
+    expectations.write_text(
+        '{"schema_version":1,"parts":'
+        '{"C123":{"model":NaN,"package":"SOT-23"}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(stock_tool.StockError, match="non-finite"):
+        stock_tool._load_expected_parts(expectations)
 
 
 def test_public_assembly_stock_does_not_require_presale_inventory(

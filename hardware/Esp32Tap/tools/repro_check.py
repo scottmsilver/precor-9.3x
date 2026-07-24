@@ -95,16 +95,32 @@ def _run(command: list[str], *, cwd: Path, label: str) -> None:
 def normalize_report(kind: str, report: str) -> str:
     """Replace only the volatile timestamp line in a KiCad check report."""
     if kind == "erc":
+        pattern = r"(?m)^ERC report \([^,\r\n]+,\s*Encoding UTF8\)$"
+        if len(re.findall(pattern, report)) != 1:
+            raise ReproError(
+                "ERC report header/timestamp must appear exactly once"
+            )
         return re.sub(
-            r"(?m)^ERC report \([^,\r\n]+,\s*Encoding UTF8\)$",
+            pattern,
             f"ERC report ({NORMALIZED_REPORT_DATE}, Encoding UTF8)",
             report,
+            count=1,
         )
     if kind == "drc":
+        title = r"(?m)^\*\* Drc report for Esp32Tap\.kicad_pcb \*\*$"
+        pattern = r"(?m)^\*\* Created on [^*\r\n]+ \*\*$"
+        if (
+            len(re.findall(title, report)) != 1
+            or len(re.findall(pattern, report)) != 1
+        ):
+            raise ReproError(
+                "DRC report title/header timestamp must each appear exactly once"
+            )
         return re.sub(
-            r"(?m)^\*\* Created on [^*\r\n]+ \*\*$",
+            pattern,
             f"** Created on {NORMALIZED_REPORT_DATE} **",
             report,
+            count=1,
         )
     raise ReproError(f"unknown report kind: {kind}")
 

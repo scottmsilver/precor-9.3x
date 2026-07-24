@@ -130,6 +130,10 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
+def _reject_json_constant(value: str) -> None:
+    raise StockError(f"JSON contains non-finite constant {value}")
+
+
 def _string_field(record: dict[str, Any], field: str) -> str:
     value = record.get(field)
     if not isinstance(value, str) or not value:
@@ -168,6 +172,7 @@ def parse_catalog_page(source: str, expected_code: str) -> dict[str, Any]:
             record = json.loads(
                 block,
                 object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_json_constant,
             )
         except (json.JSONDecodeError, StockError) as error:
             candidate_errors.append(
@@ -217,9 +222,9 @@ def parse_catalog_page(source: str, expected_code: str) -> dict[str, Any]:
             )
         except StockError as error:
             candidate_errors.append(error)
+    if candidate_errors:
+        raise candidate_errors[-1]
     if not candidates:
-        if candidate_errors:
-            raise candidate_errors[-1]
         raise StockError(
             f"official catalog page did not yield exact identity {expected_code}"
         )
@@ -231,7 +236,11 @@ def parse_catalog_page(source: str, expected_code: str) -> dict[str, Any]:
         raise StockError(
             f"{expected_code}: ambiguous componentInfo records disagree"
         )
-    return json.loads(next(iter(unique)))
+    return json.loads(
+        next(iter(unique)),
+        object_pairs_hook=_unique_json_object,
+        parse_constant=_reject_json_constant,
+    )
 
 
 def _load_design(root: Path) -> Any:
@@ -347,8 +356,12 @@ def build_requirements(
 
 def _load_expected_parts(path: Path) -> dict[str, dict[str, str]]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (OSError, json.JSONDecodeError, StockError) as error:
         raise StockError(f"cannot load part expectations {path}: {error}") from error
     if (
         not isinstance(value, dict)
@@ -613,6 +626,7 @@ def validate_snapshot(
         snapshot = json.loads(
             snapshot_path.read_text(encoding="utf-8"),
             object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
         )
     except (OSError, json.JSONDecodeError, StockError) as error:
         raise StockError(f"cannot load stock snapshot {snapshot_path}: {error}") from error
