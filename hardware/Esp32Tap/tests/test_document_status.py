@@ -30,21 +30,20 @@ FORBIDDEN_ACTIVE_CLAIMS = {
     ),
     "Rev A USB power diode": re.compile(r"\bD2\b"),
 }
-WHOLE_DOCUMENT_SUPERSEDED = re.compile(
-    r"(?im)^(?:\*\*)?status(?:\*\*)?\s*:\s*"
-    r"[^\n]*\bsuperseded\b[^\n]*\brev(?:ision)?\s+A\b"
-)
 SUPERSEDED_BLOCK = re.compile(
     r"<!--\s*BEGIN SUPERSEDED REV A\s*-->.*?"
     r"<!--\s*END SUPERSEDED REV A\s*-->",
     re.IGNORECASE | re.DOTALL,
 )
+SUPERSEDED_LINE = re.compile(
+    r"(?ix)"
+    r"(?:^(?:\*\*)?status(?:\*\*)?\s*:"
+    r"[^\n]*\bsuperseded\b[^\n]*\brev(?:ision)?\s+A\b)"
+    r"|(?:<!--\s*SUPERSEDED REV A LINE\s*-->)"
+)
 
 
 def _active_text(text: str) -> str:
-    if WHOLE_DOCUMENT_SUPERSEDED.search(text[:3000]):
-        return ""
-
     text = SUPERSEDED_BLOCK.sub("", text)
     active: list[str] = []
     suppressed_heading_level: int | None = None
@@ -68,6 +67,8 @@ def _active_text(text: str) -> str:
                 and level <= suppressed_heading_level
             ):
                 suppressed_heading_level = None
+        if SUPERSEDED_LINE.search(line):
+            continue
         if suppressed_heading_level is None:
             active.append(line)
     return "\n".join(active)
@@ -100,6 +101,20 @@ Rev B remains on HOLD.
     assert "two-layer" not in active
     assert "order-ready" not in active
     assert "Rev B remains on HOLD." in active
+
+
+def test_early_superseded_status_does_not_hide_later_active_claims() -> None:
+    sample = """\
+# Audit retained for traceability
+**Status:** Superseded Rev A audit
+
+## Current ordering status
+GO to order.
+"""
+    active = _active_text(sample)
+
+    assert "Superseded Rev A audit" not in active
+    assert "GO to order." in active
 
 
 @pytest.mark.parametrize("filename", STATUS_DOCUMENTS)

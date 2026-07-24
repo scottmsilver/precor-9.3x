@@ -112,6 +112,18 @@ def _pads(report: dict[str, Any], ref: str) -> dict[str, str]:
     return pads
 
 
+def _nodes_on_net(
+    report: dict[str, Any],
+    net: str,
+) -> set[tuple[str, str]]:
+    return {
+        (ref, pad)
+        for ref, footprint in _board(report)["footprints"].items()
+        for pad, pad_net in footprint["pads"].items()
+        if pad_net == net
+    }
+
+
 def test_system_python_inspector_emits_versioned_json(
     esp32tap_dir: Path,
 ) -> None:
@@ -164,6 +176,16 @@ def test_checked_in_board_contains_exact_rev_b_footprints(
         if f'(footprint "{footprint}"' not in pcb
     }
     assert not missing
+
+
+def test_checked_in_board_has_no_d2_vbus_to_vin_bridge(
+    esp32tap_dir: Path,
+) -> None:
+    pcb = (
+        esp32tap_dir / "kicad" / "Esp32Tap.kicad_pcb"
+    ).read_text(encoding="utf-8")
+
+    assert not re.search(r'\(property "Reference"\s+"D2"', pcb)
 
 
 def test_checked_in_usb_copper_has_no_vias_or_back_layer_segments(
@@ -331,6 +353,24 @@ def test_inspected_usb_pair_is_front_copper_only(
     assert {item.get("layer") for item in tracks} == {"F.Cu"}
     assert all(item.get("width_mm") == pytest.approx(0.285) for item in tracks)
     assert not vias
+    j3 = _pads(kicad_report, "J3")
+    assert {
+        pad: j3[pad]
+        for pad in ("A6", "B6", "A7", "B7")
+    } == {
+        "A6": "USB_DP",
+        "B6": "USB_DP",
+        "A7": "USB_DN",
+        "B7": "USB_DN",
+    }
+    assert _pads(kicad_report, "U3") == {
+        "1": "USB_DN",
+        "2": "GND",
+        "3": "USB_DP",
+        "4": "USB_DP_MCU",
+        "5": "VBUS",
+        "6": "USB_DN_MCU",
+    }
     assert _pads(kicad_report, "R15") == {
         "1": "USB_DN_MCU",
         "2": "USB_DN_R",
@@ -339,6 +379,33 @@ def test_inspected_usb_pair_is_front_copper_only(
         "1": "USB_DP_MCU",
         "2": "USB_DP_R",
     }
+    u1 = _pads(kicad_report, "U1")
+    assert u1["13"] == "USB_DN_R"
+    assert u1["14"] == "USB_DP_R"
+
+
+def test_inspected_vbus_cannot_reach_vin(
+    kicad_report: dict[str, Any],
+) -> None:
+    footprints = _board(kicad_report)["footprints"]
+    assert "D2" not in footprints
+    assert _nodes_on_net(kicad_report, "VBUS") == {
+        ("J3", "A4"),
+        ("J3", "A9"),
+        ("J3", "B4"),
+        ("J3", "B9"),
+        ("U3", "5"),
+        ("C11", "1"),
+        ("R29", "1"),
+        ("Q2", "1"),
+    }
+
+    vbus_to_vin_bridges = {
+        ref
+        for ref, footprint in footprints.items()
+        if {"VBUS", "VIN"} <= set(footprint["pads"].values())
+    }
+    assert not vbus_to_vin_bridges
 
 
 def test_inspected_title_and_silkscreen_are_rev_b(

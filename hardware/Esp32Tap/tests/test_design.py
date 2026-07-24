@@ -247,6 +247,27 @@ def _terminal_nets(design: SimpleNamespace, ref: str) -> set[str]:
     return {_net_for(design, ref, pad) for pad in component[7]}
 
 
+def _u6_equations(
+    design: SimpleNamespace,
+) -> dict[str, frozenset[str]]:
+    assert _net_for(design, "U6", "8") == "+3V3"
+    assert _net_for(design, "U6", "4") == "GND"
+
+    equations: dict[str, frozenset[str]] = {}
+    for input_a, input_b, output in (("1", "2", "7"), ("5", "6", "3")):
+        output_net = _net_for(design, "U6", output)
+        assert output_net not in equations, (
+            f"both U6 channels cannot drive {output_net}"
+        )
+        equations[output_net] = frozenset(
+            {
+                _net_for(design, "U6", input_a),
+                _net_for(design, "U6", input_b),
+            }
+        )
+    return equations
+
+
 def _file_state(path: Path) -> tuple[int, int, str]:
     stat = path.stat()
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -340,13 +361,13 @@ def test_rj45_power_and_ground_pass_throughs_remain_direct(
         for connector in ("J1", "J2")
         for pad in ("1", "7")
     } == {"GND"}
-    assert {
+    assert _pins(design, "+8V_RAW") == {
         ("J1", "2"),
         ("J1", "8"),
         ("J2", "2"),
         ("J2", "8"),
         ("F1", "1"),
-    } <= _pins(design, "+8V_RAW")
+    }
 
 
 @pytest.mark.parametrize(
@@ -510,21 +531,9 @@ def test_supervisor_and_both_hardware_and_gate_equations(
         ("R28", "1"),
         ("TP10", "1"),
     }
-    equations = {
-        (
-            frozenset(
-                {
-                    _net_for(design, "U6", input_a),
-                    _net_for(design, "U6", input_b),
-                }
-            ),
-            _net_for(design, "U6", output),
-        )
-        for input_a, input_b, output in (("1", "2", "7"), ("5", "6", "3"))
-    }
-    assert equations == {
-        (frozenset({"RELAY_CMD", "TREAD_OK"}), "RELAY_GATE"),
-        (frozenset({"TX_ENABLE", "TREAD_OK"}), "TX_GATE"),
+    assert _u6_equations(design) == {
+        "RELAY_GATE": frozenset({"RELAY_CMD", "TREAD_OK"}),
+        "TX_GATE": frozenset({"TX_ENABLE", "TREAD_OK"}),
     }
 
 
@@ -569,6 +578,17 @@ def test_d4_is_connected_directly_across_the_relay_coil(
 def test_k1_uses_one_transfer_pole_and_one_dry_feedback_pole(
     design: SimpleNamespace,
 ) -> None:
+    assert _pins(design, "CONS6") == {
+        ("J1", "6"),
+        ("K1", "2"),
+        ("R7", "1"),
+        ("D5", "1"),
+    }
+    assert _pins(design, "MOT6") == {
+        ("J2", "6"),
+        ("K1", "3"),
+        ("D6", "1"),
+    }
     assert {
         pad: _net_for(design, "K1", pad)
         for pad in ("2", "3", "4")
@@ -705,13 +725,30 @@ def test_rev_b_validation_test_pads(
     itertools.product((False, True), repeat=4),
 )
 def test_required_hardware_gate_truth_table(
+    design: SimpleNamespace,
     rail_3v3: bool,
     tread_ok: bool,
     relay_cmd: bool,
     tx_enable: bool,
 ) -> None:
-    relay_gate = all((rail_3v3, tread_ok, relay_cmd))
-    tx_gate = all((rail_3v3, tread_ok, tx_enable))
+    equations = _u6_equations(design)
+    assert equations == {
+        "RELAY_GATE": frozenset({"RELAY_CMD", "TREAD_OK"}),
+        "TX_GATE": frozenset({"TX_ENABLE", "TREAD_OK"}),
+    }
+    inputs = {
+        "RELAY_CMD": relay_cmd,
+        "TREAD_OK": tread_ok,
+        "TX_ENABLE": tx_enable,
+    }
+
+    def evaluate(output: str) -> bool:
+        channel_inputs = equations[output]
+        assert channel_inputs <= inputs.keys()
+        return rail_3v3 and all(inputs[net] for net in channel_inputs)
+
+    relay_gate = evaluate("RELAY_GATE")
+    tx_gate = evaluate("TX_GATE")
 
     assert relay_gate == (rail_3v3 and tread_ok and relay_cmd)
     assert tx_gate == (rail_3v3 and tread_ok and tx_enable)
