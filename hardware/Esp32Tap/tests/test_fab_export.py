@@ -108,9 +108,12 @@ def _write_valid_stage(directory: Path) -> None:
                 "D10*",
                 "X100000000Y-100000000D02*",
                 "X200000000Y-100000000D01*",
-                "X200000000Y-155000000D01*",
-                "X100000000Y-155000000D01*",
+                "X100000000Y-155000000D02*",
                 "X100000000Y-100000000D01*",
+                "X200000000Y-100000000D02*",
+                "X200000000Y-155000000D01*",
+                "X200000000Y-155000000D02*",
+                "X100000000Y-155000000D01*",
             ]
         else:
             artwork = [
@@ -340,13 +343,18 @@ def test_normalization_fails_if_required_creation_date_is_missing(
         ("job-wrong-polarity", "Gerber job"),
         ("job-extra-attribute", "Gerber job"),
         ("job-duplicate-key", "duplicate JSON key"),
+        ("job-nonfinite-json", "non-standard JSON constant"),
         ("job-omits-layer-count", "GeneralSpecs"),
         ("job-wrong-size", "GeneralSpecs"),
         ("job-wrong-thickness", "GeneralSpecs"),
         ("job-wrong-finish", "GeneralSpecs"),
         ("job-wrong-impedance", "GeneralSpecs"),
         ("geometry-free-copper", "artwork"),
+        ("bare-d01-is-not-artwork", "artwork"),
         ("open-edge-profile", "profile"),
+        ("extra-profile-flash", "profile"),
+        ("extra-profile-aperture", "profile"),
+        ("profile-region", "profile"),
         ("drill-no-tools", "drill"),
         ("drill-no-plated-hit", "Plated"),
         ("drill-no-npth-hit", "NonPlated"),
@@ -523,6 +531,16 @@ def test_stage_validation_fails_closed(
             ),
             encoding="utf-8",
         )
+    elif mutation == "job-nonfinite-json":
+        job_path = stage / "Esp32Tap-job.gbrjob"
+        job_path.write_text(
+            job_path.read_text(encoding="utf-8").replace(
+                "{\n",
+                '{"Adversarial": NaN,\n',
+                1,
+            ),
+            encoding="utf-8",
+        )
     elif mutation == "job-omits-layer-count":
         job_path = stage / "Esp32Tap-job.gbrjob"
         job = json.loads(job_path.read_text(encoding="utf-8"))
@@ -549,12 +567,49 @@ def test_stage_validation_fails_closed(
             ),
             encoding="utf-8",
         )
+    elif mutation == "bare-d01-is-not-artwork":
+        copper = stage / "Esp32Tap-F_Cu.gtl"
+        copper.write_text(
+            re.sub(
+                r"(?m)^X[-0-9]+Y[-0-9]+D03\*\n",
+                "D01*\n",
+                copper.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
     elif mutation == "open-edge-profile":
         profile = stage / "Esp32Tap-Edge_Cuts.gm1"
         profile.write_text(
             profile.read_text(encoding="utf-8").replace(
-                "X100000000Y-100000000D01*\nM02*",
+                "X100000000Y-155000000D01*\nM02*",
                 "M02*",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "extra-profile-flash":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "M02*",
+                "X150000000Y-127500000D03*\nM02*",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "extra-profile-aperture":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "%ADD10C,0.100000*%",
+                "%ADD10C,0.100000*%\n%ADD11C,1.000000*%",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "profile-region":
+        profile = stage / "Esp32Tap-Edge_Cuts.gm1"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "M02*",
+                "G36*\nG37*\nM02*",
             ),
             encoding="utf-8",
         )
@@ -711,6 +766,120 @@ def test_runner_rejects_failed_kicad_commands(
             "KiCad Gerber export",
             cwd=tmp_path,
         )
+
+
+def test_netlist_export_uses_disposable_same_basename_project(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "Esp32Tap"
+    kicad_dir = root / "kicad"
+    kicad_dir.mkdir(parents=True)
+    schematic = kicad_dir / "Esp32Tap.kicad_sch"
+    schematic.write_text("schematic source\n", encoding="utf-8")
+    (kicad_dir / "Esp32Tap.kicad_pro").write_text(
+        "project source\n",
+        encoding="utf-8",
+    )
+    sentinel = kicad_dir / "Esp32Tap.kicad_prl"
+    sentinel.write_bytes(b"user preferences must survive\n")
+    seen_sources: list[Path] = []
+
+    def fake_run(
+        command: list[str],
+        label: str,
+        *,
+        cwd: Path,
+    ) -> None:
+        assert label == "KiCad schematic netlist export"
+        source = Path(command[-1])
+        output = Path(command[command.index("--output") + 1])
+        assert source.name == schematic.name
+        assert source.parent == cwd
+        assert source != schematic
+        assert (source.parent / "Esp32Tap.kicad_pro").is_file()
+        assert not (source.parent / "Esp32Tap.kicad_prl").exists()
+        (source.parent / "Esp32Tap.kicad_prl").write_bytes(b"KiCad sidecar\n")
+        output.write_text(
+            "<export><components><comp ref=\"U1\">"
+            "<value>PART</value><footprint>Lib:FP</footprint>"
+            "<property name=\"LCSC\" value=\"C1\"/>"
+            "<property name=\"JLC Class\" value=\"Basic\"/>"
+            "</comp></components></export>",
+            encoding="utf-8",
+        )
+        seen_sources.append(source)
+
+    monkeypatch.setitem(
+        fab_tool._load_schematic_records.__globals__,
+        "run_kicad",
+        fake_run,
+    )
+    records = fab_tool._load_schematic_records(root)
+
+    assert records["U1"]["lcsc"] == "C1"
+    assert sentinel.read_bytes() == b"user preferences must survive\n"
+    assert len(seen_sources) == 1
+    assert not seen_sources[0].parent.exists()
+
+
+def test_fab_export_uses_disposable_same_basename_project(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kicad_dir = tmp_path / "kicad"
+    kicad_dir.mkdir()
+    board = kicad_dir / "Esp32Tap.kicad_pcb"
+    board.write_text("board source\n", encoding="utf-8")
+    (kicad_dir / "Esp32Tap.kicad_pro").write_text(
+        "project source\n",
+        encoding="utf-8",
+    )
+    (kicad_dir / "Esp32Tap.kicad_dru").write_text(
+        "rules source\n",
+        encoding="utf-8",
+    )
+    sentinel = kicad_dir / "Esp32Tap.kicad_prl"
+    sentinel.write_bytes(b"user preferences must survive\n")
+    stage = tmp_path / "stage"
+    seen_sources: list[Path] = []
+
+    def fake_run(
+        command: list[str],
+        label: str,
+        *,
+        cwd: Path,
+    ) -> None:
+        assert label in {"KiCad Gerber export", "KiCad drill export"}
+        source = Path(command[-1])
+        assert source.name == board.name
+        assert source.parent == cwd
+        assert source != board
+        assert (source.parent / "Esp32Tap.kicad_pro").is_file()
+        assert (source.parent / "Esp32Tap.kicad_dru").is_file()
+        (source.parent / "Esp32Tap.kicad_prl").write_bytes(b"KiCad sidecar\n")
+        seen_sources.append(source)
+
+    globals_dict = fab_tool.export_to_stage.__globals__
+    monkeypatch.setitem(globals_dict, "run_kicad", fake_run)
+    monkeypatch.setitem(
+        globals_dict,
+        "validate_stage",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setitem(
+        globals_dict,
+        "normalize_stage",
+        lambda *args, **kwargs: None,
+    )
+    fab_tool.export_to_stage(board, stage, kicad_cli="kicad-cli")
+
+    assert sentinel.read_bytes() == b"user preferences must survive\n"
+    assert len(seen_sources) == 2
+    assert seen_sources[0] == seen_sources[1]
+    assert not seen_sources[0].parent.exists()
 
 
 def test_cli_publish_paths_are_confined_to_the_board_kicad_directory(

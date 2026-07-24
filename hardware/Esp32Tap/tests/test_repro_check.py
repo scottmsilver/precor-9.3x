@@ -215,6 +215,75 @@ def test_report_validation_fails_closed(
         repro_tool.validate_report(kind, report)
 
 
+@pytest.mark.parametrize("kind", ["erc", "drc"])
+def test_report_render_uses_disposable_same_basename_project(
+    repro_tool: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+) -> None:
+    root = tmp_path / "Esp32Tap"
+    kicad_dir = root / "kicad"
+    kicad_dir.mkdir(parents=True)
+    suffix = "kicad_sch" if kind == "erc" else "kicad_pcb"
+    source = kicad_dir / f"Esp32Tap.{suffix}"
+    source.write_text(f"{kind} source\n", encoding="utf-8")
+    for filename in ("Esp32Tap.kicad_pro", "Esp32Tap.kicad_dru"):
+        (kicad_dir / filename).write_text(
+            f"{filename} source\n",
+            encoding="utf-8",
+        )
+    sentinel = kicad_dir / "Esp32Tap.kicad_prl"
+    sentinel.write_bytes(b"user preferences must survive\n")
+    seen_sources: list[Path] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path,
+        label: str,
+    ) -> None:
+        isolated_source = Path(command[-1])
+        output = Path(command[command.index("--output") + 1])
+        assert isolated_source.name == source.name
+        assert isolated_source.parent == cwd
+        assert isolated_source != source
+        assert not (cwd / "Esp32Tap.kicad_prl").exists()
+        (cwd / "Esp32Tap.kicad_prl").write_bytes(b"KiCad sidecar\n")
+        if kind == "erc":
+            report = (
+                "ERC report (2026-07-24T00:18:39, Encoding UTF8)\n"
+                "** ERC messages: 0  Errors 0  Warnings 0\n"
+            )
+        else:
+            report = (
+                "** Drc report for Esp32Tap.kicad_pcb **\n"
+                "** Created on 2026-07-23T12:08:56 **\n"
+                "** Found 0 DRC violations **\n"
+                "** Found 0 unconnected pads **\n"
+                "** Found 0 Footprint errors **\n"
+            )
+        output.write_text(report, encoding="utf-8")
+        seen_sources.append(isolated_source)
+
+    monkeypatch.setitem(repro_tool.render_report.__globals__, "_run", fake_run)
+    report = repro_tool.render_report(root, kind)
+
+    repro_tool.validate_report(kind, report)
+    assert sentinel.read_bytes() == b"user preferences must survive\n"
+    assert len(seen_sources) == 1
+    assert not seen_sources[0].parent.exists()
+
+
+def test_reproducer_disables_bytecode_before_importing_fab_tool(
+    repro_tool: SimpleNamespace,
+) -> None:
+    source = Path(repro_tool.__file__).read_text(encoding="utf-8")
+    assert source.index("sys.dont_write_bytecode = True") < source.index(
+        "from export_fab import"
+    )
+
+
 def test_compare_generated_reports_missing_extra_and_changed_files(
     repro_tool: SimpleNamespace,
     tmp_path: Path,

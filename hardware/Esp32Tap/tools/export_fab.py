@@ -24,8 +24,9 @@ import sys
 import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
 HERE = Path(__file__).resolve().parent
@@ -104,6 +105,14 @@ REQUIRED_GENERAL_SPECS = {
 EMPTY_ARTWORK_LAYERS = {
     "Esp32Tap-B_Paste.gbp",
     "Esp32Tap-B_Silkscreen.gbo",
+}
+KICAD_PROJECT_FILES = {
+    "Esp32Tap.kicad_sch",
+    "Esp32Tap.kicad_pcb",
+    "Esp32Tap.kicad_pro",
+    "Esp32Tap.kicad_dru",
+    "esp32tap.kicad_sym",
+    "sym-lib-table",
 }
 EXPECTED_FAB_FILES = set(GERBER_FUNCTIONS) | {
     "Esp32Tap-job.gbrjob",
@@ -489,6 +498,43 @@ def _run_stdout(
     return completed.stdout
 
 
+@contextmanager
+def isolated_kicad_project(source: Path) -> Iterator[Path]:
+    """Yield a same-basename project copy so KiCad sidecars stay disposable."""
+    source = Path(os.path.abspath(source))
+    if source.is_symlink() or not source.is_file():
+        raise FabExportError(
+            f"KiCad project source must be a regular non-symlink file: {source}"
+        )
+    source_directory = source.parent.resolve()
+    if source.resolve().parent != source_directory:
+        raise FabExportError(
+            f"KiCad project source resolves outside its directory: {source}"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="esp32tap-kicad-project-",
+    ) as temporary:
+        isolated_directory = Path(temporary)
+        filenames = set(KICAD_PROJECT_FILES) | {source.name}
+        for filename in sorted(filenames):
+            candidate = source_directory / filename
+            if not candidate.exists():
+                continue
+            if candidate.is_symlink() or not candidate.is_file():
+                raise FabExportError(
+                    "KiCad project companion must be a regular "
+                    f"non-symlink file: {candidate}"
+                )
+            shutil.copy2(candidate, isolated_directory / filename)
+        isolated_source = isolated_directory / source.name
+        if not isolated_source.is_file():
+            raise FabExportError(
+                f"failed to isolate KiCad project source: {source}"
+            )
+        yield isolated_source
+
+
 def _load_design(root: Path) -> Any:
     path = root / "tools" / "design.py"
     spec = importlib.util.spec_from_file_location(
@@ -508,8 +554,8 @@ def _load_design(root: Path) -> Any:
 
 def _load_schematic_records(root: Path) -> dict[str, dict[str, str]]:
     schematic = root / "kicad" / "Esp32Tap.kicad_sch"
-    with tempfile.TemporaryDirectory(prefix="esp32tap-netlist-") as temporary:
-        output = Path(temporary) / "Esp32Tap.xml"
+    with isolated_kicad_project(schematic) as isolated_schematic:
+        output = isolated_schematic.parent / "Esp32Tap.xml"
         run_kicad(
             [
                 "kicad-cli",
@@ -520,10 +566,10 @@ def _load_schematic_records(root: Path) -> dict[str, dict[str, str]]:
                 "kicadxml",
                 "--output",
                 str(output),
-                str(schematic),
+                str(isolated_schematic),
             ],
             "KiCad schematic netlist export",
-            cwd=root,
+            cwd=isolated_schematic.parent,
         )
         try:
             xml_root = ET.parse(output).getroot()
@@ -675,12 +721,22 @@ def _validate_profile_geometry(payload: str) -> None:
         raise FabExportError(
             "Esp32Tap-Edge_Cuts.gm1 profile must use exact 4.6 metric format"
         )
+    apertures = re.findall(r"(?m)^%ADD[^%\r\n]+\*%$", payload)
     if (
-        payload.count("%ADD10C,0.100000*%") != 1
+        apertures != ["%ADD10C,0.100000*%"]
         or len(re.findall(r"(?m)^D10\*$", payload)) != 1
     ):
         raise FabExportError(
             "Esp32Tap-Edge_Cuts.gm1 profile must use one 0.100 mm aperture"
+        )
+    if re.search(
+        r"(?m)^(?:G0[23]\*|G3[67]\*|D0[123]\*|"
+        r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D03\*)$",
+        payload,
+    ):
+        raise FabExportError(
+            "Esp32Tap-Edge_Cuts.gm1 profile contains unsupported extra "
+            "flash, arc, region, or modal geometry"
         )
 
     position: tuple[float, float] | None = None
@@ -691,6 +747,19 @@ def _validate_profile_geometry(payload: str) -> None:
         r"(?m)^X([+-]?\d+)Y([+-]?\d+)D0([12])\*$",
         payload,
     )
+    all_coordinate_commands = re.findall(
+        r"(?m)^(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|"
+        r"Y[+-]?\d+)D0[123]\*$",
+        payload,
+    )
+    if (
+        len(coordinate_commands) != 8
+        or len(all_coordinate_commands) != len(coordinate_commands)
+    ):
+        raise FabExportError(
+            "Esp32Tap-Edge_Cuts.gm1 profile must contain exactly four "
+            "moves and four straight edge draws"
+        )
     for raw_x, raw_y, operation in coordinate_commands:
         point = (int(raw_x) / 1_000_000, int(raw_y) / 1_000_000)
         if operation == "1":
@@ -784,6 +853,12 @@ def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _reject_json_constant(value: str) -> Any:
+    raise FabExportError(
+        f"Gerber job contains non-standard JSON constant {value!r}"
+    )
+
+
 def validate_stage(
     directory: Path,
     *,
@@ -836,7 +911,8 @@ def validate_stage(
                 f"{filename} must have exactly one LPD and no LPC"
             )
         artwork = re.findall(
-            r"(?m)^(?:X[+-]?\d+)?(?:Y[+-]?\d+)?D0[13]\*$",
+            r"(?m)^(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|"
+            r"Y[+-]?\d+)D0[13]\*$",
             payload,
         )
         if filename not in EMPTY_ARTWORK_LAYERS and not artwork:
@@ -918,6 +994,7 @@ def validate_stage(
         job = json.loads(
             job_text,
             object_pairs_hook=_strict_json_object,
+            parse_constant=_reject_json_constant,
         )
     except json.JSONDecodeError as error:
         raise FabExportError(f"Gerber job JSON is invalid: {error}") from error
@@ -1141,47 +1218,48 @@ def export_to_stage(board: Path, stage: Path, *, kicad_cli: str) -> None:
     if not board.is_file():
         raise FabExportError(f"board source does not exist: {board}")
     stage.mkdir(parents=True, exist_ok=False)
-    run_kicad(
-        [
-            kicad_cli,
-            "pcb",
-            "export",
-            "gerbers",
-            "--output",
-            str(stage),
-            "--layers",
-            ",".join(LAYERS),
-            "--precision",
-            "6",
-            "--check-zones",
-            str(board),
-        ],
-        "KiCad Gerber export",
-        cwd=board.parent,
-    )
-    run_kicad(
-        [
-            kicad_cli,
-            "pcb",
-            "export",
-            "drill",
-            "--output",
-            str(stage),
-            "--format",
-            "excellon",
-            "--drill-origin",
-            "absolute",
-            "--excellon-zeros-format",
-            "decimal",
-            "--excellon-oval-format",
-            "route",
-            "--excellon-units",
-            "mm",
-            str(board),
-        ],
-        "KiCad drill export",
-        cwd=board.parent,
-    )
+    with isolated_kicad_project(board) as isolated_board:
+        run_kicad(
+            [
+                kicad_cli,
+                "pcb",
+                "export",
+                "gerbers",
+                "--output",
+                str(stage),
+                "--layers",
+                ",".join(LAYERS),
+                "--precision",
+                "6",
+                "--check-zones",
+                str(isolated_board),
+            ],
+            "KiCad Gerber export",
+            cwd=isolated_board.parent,
+        )
+        run_kicad(
+            [
+                kicad_cli,
+                "pcb",
+                "export",
+                "drill",
+                "--output",
+                str(stage),
+                "--format",
+                "excellon",
+                "--drill-origin",
+                "absolute",
+                "--excellon-zeros-format",
+                "decimal",
+                "--excellon-oval-format",
+                "route",
+                "--excellon-units",
+                "mm",
+                str(isolated_board),
+            ],
+            "KiCad drill export",
+            cwd=isolated_board.parent,
+        )
     validate_stage(stage)
     normalize_stage(stage)
     validate_stage(stage, require_normalized=True)

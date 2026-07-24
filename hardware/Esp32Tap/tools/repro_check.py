@@ -18,10 +18,15 @@ from typing import Iterable
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 SYSTEM_PYTHON = Path("/usr/bin/python3")
+sys.dont_write_bytecode = True
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from export_fab import EXPECTED_FAB_FILES  # noqa: E402
+from export_fab import (  # noqa: E402
+    EXPECTED_FAB_FILES,
+    FabExportError,
+    isolated_kicad_project,
+)
 
 
 SOURCE_PATHS = (
@@ -163,7 +168,7 @@ def validate_report(kind: str, report: str) -> None:
     raise ReproError(f"unknown report kind: {kind}")
 
 
-def _report_command(kind: str, root: Path, output: Path) -> list[str]:
+def _report_command(kind: str, source: Path, output: Path) -> list[str]:
     if kind == "erc":
         return [
             "kicad-cli",
@@ -173,7 +178,7 @@ def _report_command(kind: str, root: Path, output: Path) -> list[str]:
             "--exit-code-violations",
             "--output",
             str(output),
-            str(root / "kicad" / "Esp32Tap.kicad_sch"),
+            str(source),
         ]
     if kind == "drc":
         return [
@@ -186,27 +191,37 @@ def _report_command(kind: str, root: Path, output: Path) -> list[str]:
             "--exit-code-violations",
             "--output",
             str(output),
-            str(root / "kicad" / "Esp32Tap.kicad_pcb"),
+            str(source),
         ]
     raise ReproError(f"unknown report kind: {kind}")
 
 
 def render_report(root: Path, kind: str) -> str:
     """Run KiCad into a temporary file and return normalized checked output."""
-    with tempfile.TemporaryDirectory(
-        prefix=f".esp32tap-{kind}-",
-        dir=root / "kicad",
-    ) as temporary:
-        output = Path(temporary) / f"{kind}.rpt"
-        _run(
-            _report_command(kind, root, output),
-            cwd=root,
-            label=f"KiCad {kind.upper()}",
-        )
-        try:
-            report = output.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as error:
-            raise ReproError(f"cannot read {kind.upper()} report: {error}") from error
+    filename = (
+        "Esp32Tap.kicad_sch"
+        if kind == "erc"
+        else "Esp32Tap.kicad_pcb"
+    )
+    source = root / "kicad" / filename
+    try:
+        with isolated_kicad_project(source) as isolated_source:
+            output = isolated_source.parent / f"{kind}.rpt"
+            _run(
+                _report_command(kind, isolated_source, output),
+                cwd=isolated_source.parent,
+                label=f"KiCad {kind.upper()}",
+            )
+            try:
+                report = output.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as error:
+                raise ReproError(
+                    f"cannot read {kind.upper()} report: {error}"
+                ) from error
+    except FabExportError as error:
+        raise ReproError(
+            f"cannot isolate KiCad {kind.upper()} project: {error}"
+        ) from error
     normalized = normalize_report(kind, report)
     validate_report(kind, normalized)
     return normalized
