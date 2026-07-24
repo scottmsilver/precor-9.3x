@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import json
+import csv
 import hashlib
+import json
 import math
 import re
 import sys
@@ -58,7 +59,6 @@ ENVELOPE_VALUE_FIELDS = {
     "usb_ground_connection_current_amps",
 }
 ENVELOPE_TEXT_FIELDS = {
-    "installed_airflow",
     "installed_conductor_bundling",
 }
 ENVELOPE_NUMERIC_FIELDS = ENVELOPE_VALUE_FIELDS - ENVELOPE_TEXT_FIELDS
@@ -73,6 +73,28 @@ RAW_RECORD_FIELDS = {
     "instrument",
     "fixture",
     "captured_at_utc",
+    "fields",
+}
+RAW_MEASUREMENT_FIELDS = {
+    "timestamp_utc",
+    "instrument_id",
+    "fixture",
+    "field",
+    "unit",
+    "value",
+}
+PHYSICAL_UNITS = {
+    "source_voltage_minimum_volts": "V",
+    "source_voltage_maximum_volts": "V",
+    "source_impedance_ohms": "ohm",
+    "maximum_continuous_current_amps": "A",
+    "transient_peak_amps": "A",
+    "transient_duration_ms": "ms",
+    "installed_ambient_celsius": "degC",
+    "installed_airflow": "m/s",
+    "installed_conductor_bundling": "description",
+    "usb_ground_potential_volts": "V",
+    "usb_ground_connection_current_amps": "A",
 }
 OPEN_ITEM_FIELDS = {"field", "instrument", "fixture", "data_required"}
 MODEL_ASSERTION_FIELDS = {
@@ -122,7 +144,122 @@ def _exact_fields(label: str, value: object, fields: set[str]) -> dict[str, Any]
     return value
 
 
-def _validate_physical(record: dict[str, Any]) -> None:
+def _verified_artifact(
+    *,
+    evidence_root: Path,
+    relative_path: object,
+    approved_directory: str,
+    expected_sha256: object,
+    label: str,
+) -> Path:
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        raise EvidenceError(f"{label} path is blank")
+    path_value = Path(relative_path)
+    approved = (evidence_root / approved_directory).resolve()
+    candidate = (evidence_root / path_value).resolve()
+    if path_value.is_absolute() or not candidate.is_relative_to(approved):
+        raise EvidenceError(
+            f"{label} is outside the approved {approved_directory} directory"
+        )
+    if not candidate.is_file():
+        raise EvidenceError(f"{label} does not exist: {relative_path}")
+    actual = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    if actual != expected_sha256:
+        raise EvidenceError(f"{label} SHA-256 mismatch")
+    return candidate
+
+
+def _validate_raw_measurement(
+    *,
+    record: dict[str, Any],
+    envelope: dict[str, Any],
+    evidence_root: Path,
+    index: int,
+) -> set[str]:
+    label = f"raw_records[{index}]"
+    path = _verified_artifact(
+        evidence_root=evidence_root,
+        relative_path=record["path"],
+        approved_directory="raw",
+        expected_sha256=record["sha256"],
+        label=label,
+    )
+    fields = record["fields"]
+    if (
+        not isinstance(fields, list)
+        or not fields
+        or any(field not in ENVELOPE_VALUE_FIELDS for field in fields)
+        or len(set(fields)) != len(fields)
+    ):
+        raise EvidenceError(f"{label}.fields must name unique physical fields")
+    try:
+        with path.open(encoding="utf-8", newline="") as raw_file:
+            reader = csv.DictReader(raw_file)
+            if reader.fieldnames is None or set(reader.fieldnames) != (
+                RAW_MEASUREMENT_FIELDS
+            ):
+                raise EvidenceError(
+                    f"{label} lacks exact raw measurement columns "
+                    f"{sorted(RAW_MEASUREMENT_FIELDS)}"
+                )
+            rows = list(reader)
+    except UnicodeDecodeError as error:
+        raise EvidenceError(f"{label} is not UTF-8 measurement data") from error
+    if not rows:
+        raise EvidenceError(f"{label} contains no raw measurement rows")
+
+    rows_by_field: dict[str, list[dict[str, str]]] = {}
+    for row_number, row in enumerate(rows, start=2):
+        if (
+            row["timestamp_utc"] != record["captured_at_utc"]
+            or row["instrument_id"] != record["instrument"]
+            or row["fixture"] != record["fixture"]
+        ):
+            raise EvidenceError(
+                f"{label} row {row_number} provenance does not match its binding"
+            )
+        field = row["field"]
+        if field not in fields:
+            raise EvidenceError(f"{label} row {row_number} is not bound to its field")
+        rows_by_field.setdefault(field, []).append(row)
+
+    for field in fields:
+        field_rows = rows_by_field.get(field, [])
+        if not field_rows:
+            raise EvidenceError(f"{label} claimed field has no raw row: {field}")
+        for row in field_rows:
+            if row["unit"] != PHYSICAL_UNITS[field]:
+                raise EvidenceError(f"{label} {field} has the wrong unit")
+            if field in ENVELOPE_NUMERIC_FIELDS:
+                try:
+                    value = float(row["value"])
+                except ValueError as error:
+                    raise EvidenceError(
+                        f"{label} {field} value is not numeric"
+                    ) from error
+                if (
+                    not math.isfinite(value)
+                    or not math.isclose(
+                        value,
+                        float(envelope[field]),
+                        rel_tol=1e-9,
+                        abs_tol=1e-12,
+                    )
+                ):
+                    raise EvidenceError(
+                        f"{label} {field} does not match the envelope datum"
+                    )
+            elif row["value"] != envelope[field]:
+                raise EvidenceError(
+                    f"{label} {field} does not match the envelope datum"
+                )
+    return set(fields)
+
+
+def _validate_physical(
+    record: dict[str, Any],
+    evidence_root: Path,
+) -> None:
     envelope = _exact_fields(
         "treadmill_current_envelope",
         record.get("treadmill_current_envelope"),
@@ -146,6 +283,7 @@ def _validate_physical(record: dict[str, Any]) -> None:
             raise EvidenceError(f"{field} must be nonblank text or null")
     if not isinstance(envelope["raw_records"], list):
         raise EvidenceError("raw_records must be a list")
+    bound_fields: set[str] = set()
     for index, raw in enumerate(envelope["raw_records"]):
         bound = _exact_fields(f"raw_records[{index}]", raw, RAW_RECORD_FIELDS)
         if not isinstance(bound["sha256"], str) or not SHA256.fullmatch(
@@ -153,8 +291,18 @@ def _validate_physical(record: dict[str, Any]) -> None:
         ):
             raise EvidenceError(f"raw_records[{index}].sha256 is not bound")
         for field in RAW_RECORD_FIELDS - {"sha256"}:
+            if field == "fields":
+                continue
             if not isinstance(bound[field], str) or not bound[field].strip():
                 raise EvidenceError(f"raw_records[{index}].{field} is blank")
+        bound_fields.update(
+            _validate_raw_measurement(
+                record=bound,
+                envelope=envelope,
+                evidence_root=evidence_root,
+                index=index,
+            )
+        )
     missing_fields = envelope["missing_fields"]
     if (
         not isinstance(missing_fields, list)
@@ -183,6 +331,11 @@ def _validate_physical(record: dict[str, Any]) -> None:
         for field in ENVELOPE_VALUE_FIELDS
     ):
         raise EvidenceError("missing_fields must exactly identify null measurements")
+    measured_fields = ENVELOPE_VALUE_FIELDS - set(missing_fields)
+    if bound_fields != measured_fields:
+        raise EvidenceError(
+            "verified raw-record field bindings must cover every measured datum"
+        )
 
 
 def _validate_hash_bound_items(
@@ -211,7 +364,7 @@ def _validate_model(record: dict[str, Any]) -> None:
     )
 
 
-def _validate_vendor(record: dict[str, Any]) -> None:
+def _validate_vendor(record: dict[str, Any], evidence_root: Path) -> None:
     _validate_hash_bound_items(
         "observations",
         record.get("observations"),
@@ -244,9 +397,21 @@ def _validate_vendor(record: dict[str, Any]) -> None:
         )
         if not prerequisites:
             raise EvidenceError("TURNKEY_QUOTED prerequisites are incomplete")
+        _verified_artifact(
+            evidence_root=evidence_root,
+            relative_path=quote["artifact_path"],
+            approved_directory="vendor",
+            expected_sha256=quote["artifact_sha256"],
+            label="TURNKEY_QUOTED artifact",
+        )
 
 
-def validate_record(kind: str, record: object) -> dict[str, Any]:
+def validate_record(
+    kind: str,
+    record: object,
+    *,
+    evidence_root: Path | str = HERE,
+) -> dict[str, Any]:
     if kind not in STATUSES:
         raise EvidenceError(f"unknown evidence class {kind!r}")
     if not isinstance(record, dict):
@@ -259,9 +424,9 @@ def validate_record(kind: str, record: object) -> dict[str, Any]:
     if kind == "model":
         _validate_model(record)
     elif kind == "vendor":
-        _validate_vendor(record)
+        _validate_vendor(record, Path(evidence_root))
     else:
-        _validate_physical(record)
+        _validate_physical(record, Path(evidence_root))
     return record
 
 
@@ -271,14 +436,20 @@ def load_all(directory: Path | str = HERE) -> dict[str, dict[str, Any]]:
         kind: validate_record(
             kind,
             json.loads((root / f"{kind}.json").read_text(encoding="utf-8")),
+            evidence_root=root,
         )
         for kind in STATUSES
     }
 
 
-def release_allowed(evidence: dict[str, dict[str, Any]], action: str) -> bool:
+def release_allowed(
+    evidence: dict[str, dict[str, Any]],
+    action: str,
+    *,
+    evidence_root: Path | str = HERE,
+) -> bool:
     for kind in STATUSES:
-        validate_record(kind, evidence.get(kind))
+        validate_record(kind, evidence.get(kind), evidence_root=evidence_root)
     normalized = action.lower().replace("-", "_")
     aliases = {
         "connector_selection": "connector_selection",
@@ -292,24 +463,13 @@ def release_allowed(evidence: dict[str, dict[str, Any]], action: str) -> bool:
 
     physical = evidence["physical"]
     envelope = physical["treadmill_current_envelope"]
-    records_bound = bool(envelope["raw_records"])
-    for record in envelope["raw_records"]:
-        path = Path(record["path"])
-        if not path.is_absolute():
-            path = ROOT / path
-        if (
-            not path.is_file()
-            or hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]
-        ):
-            records_bound = False
-            break
     physical_ready = (
         physical["status"] == "PHYSICALLY_VALIDATED"
         and envelope["status"] == "MEASURED"
         and not envelope["missing_fields"]
         and not physical["open_items"]
         and all(envelope[field] is not None for field in ENVELOPE_VALUE_FIELDS)
-        and records_bound
+        and bool(envelope["raw_records"])
     )
     if not physical_ready:
         return False
@@ -328,10 +488,12 @@ def release_allowed(evidence: dict[str, dict[str, Any]], action: str) -> bool:
 def release_denial_reason(
     evidence: dict[str, dict[str, Any]],
     action: str,
+    *,
+    evidence_root: Path | str = HERE,
 ) -> str:
     physical = evidence["physical"]
     envelope = physical["treadmill_current_envelope"]
-    if not release_allowed(evidence, action):
+    if not release_allowed(evidence, action, evidence_root=evidence_root):
         missing = ", ".join(envelope["missing_fields"]) or "downstream prerequisites"
         return (
             f"{action} blocked: physical={physical['status']}, "
@@ -343,8 +505,14 @@ def release_denial_reason(
 def require_release(
     evidence: dict[str, dict[str, Any]],
     action: str,
+    *,
+    evidence_root: Path | str = HERE,
 ) -> None:
-    reason = release_denial_reason(evidence, action)
+    reason = release_denial_reason(
+        evidence,
+        action,
+        evidence_root=evidence_root,
+    )
     if reason:
         raise EvidenceError(reason)
 
