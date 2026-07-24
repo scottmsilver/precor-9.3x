@@ -82,6 +82,14 @@ GENERAL_SPECS = {
     "Finish": "ENIG",
     "ImpedanceControlled": True,
 }
+DESIGN_COMPONENT_REFERENCES = tuple(
+    sorted(
+        runpy.run_path(
+            str(Path(__file__).parents[1] / "tools" / "design.py"),
+            run_name="esp32tap_fab_design_fixture",
+        )["COMPONENTS"]
+    )
+)
 
 
 @pytest.fixture(scope="module")
@@ -115,6 +123,24 @@ def _write_valid_stage(directory: Path) -> None:
                 "X200000000Y-155000000D02*",
                 "X100000000Y-155000000D01*",
             ]
+        elif filename == "Esp32Tap-F_Silkscreen.gto":
+            artwork = [
+                "%ADD10C,0.200000*%",
+                "%ADD11C,0.160000*%",
+                "D10*",
+                "X100000000Y-100000000D02*",
+                "X101000000Y-100000000D01*",
+            ]
+            for index, reference in enumerate(DESIGN_COMPONENT_REFERENCES):
+                artwork.extend(
+                    [
+                        f"%TO.C,{reference}*%",
+                        *(["D11*"] if index == 0 else []),
+                        f"X{110000000 + index}Y-110000000D02*",
+                        f"X{111000000 + index}Y-110000000D01*",
+                    ]
+                )
+            artwork.append("%TD*%")
         else:
             artwork = [
                 "%ADD10C,0.100000*%",
@@ -222,7 +248,7 @@ def test_exact_rev_b_four_layer_member_set_is_locked(
     assert fab_tool.REQUIRED_GENERAL_SPECS == GENERAL_SPECS
 
 
-def test_normalization_removes_only_generation_timestamps(
+def test_normalization_removes_timestamps_and_component_silkscreen(
     fab_tool: SimpleNamespace,
     tmp_path: Path,
 ) -> None:
@@ -256,13 +282,15 @@ def test_normalization_removes_only_generation_timestamps(
         "DRILL file KiCad 10.0.1 date 1970-01-01T00:00:00"
         in normalized["Esp32Tap.drl"]
     )
+    front_silkscreen = normalized["Esp32Tap-F_Silkscreen.gto"]
+    assert "%TO.C," not in front_silkscreen
+    assert "%TD*%" not in front_silkscreen
+    assert "%ADD11C,0.160000*%" not in front_silkscreen
+    assert "%ADD10C,0.200000*%" in front_silkscreen
+    assert "X100000000Y-100000000D02*" in front_silkscreen
+    assert "X101000000Y-100000000D01*" in front_silkscreen
+    assert "X110000000Y-110000000D02*" not in front_silkscreen
     fab_tool.validate_stage(stage, require_normalized=True)
-
-    fab_tool.normalize_stage(stage)
-    assert normalized == {
-        path.name: path.read_text(encoding="utf-8")
-        for path in stage.iterdir()
-    }
 
 
 def test_different_export_times_normalize_to_identical_stage_bytes(
@@ -301,6 +329,77 @@ def test_different_export_times_normalize_to_identical_stage_bytes(
     }
 
 
+@pytest.mark.parametrize(
+    ("layer", "mutation"),
+    (
+        ("front", "component-suffix"),
+        ("front", "attribute-termination"),
+        ("front", "extra-aperture"),
+        ("back", "component-attribute"),
+        ("back", "extra-aperture"),
+        ("back", "artwork"),
+    ),
+)
+def test_normalized_stage_rejects_nonminimal_legend(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+    layer: str,
+    mutation: str,
+) -> None:
+    stage = tmp_path / f"{layer}-{mutation}"
+    _write_valid_stage(stage)
+    fab_tool.normalize_stage(stage)
+    silkscreen = stage / (
+        "Esp32Tap-F_Silkscreen.gto"
+        if layer == "front"
+        else "Esp32Tap-B_Silkscreen.gbo"
+    )
+    payload = silkscreen.read_text(encoding="utf-8")
+    if mutation == "component-suffix":
+        payload = payload.replace(
+            "M02*",
+            "%TO.C,C1*%\n"
+            "D10*\n"
+            "X120000000Y-120000000D01*\n"
+            "%TD*%\n"
+            "M02*",
+        )
+    elif mutation == "component-attribute":
+        payload = payload.replace("M02*", "%TO.C,C1*%\nM02*")
+    elif mutation == "attribute-termination":
+        payload = payload.replace("M02*", "%TD*%\nM02*")
+    elif mutation == "extra-aperture":
+        payload = payload.replace(
+            "%LPD*%",
+            "%LPD*%\n%ADD11C,0.160000*%",
+        )
+    else:
+        payload = payload.replace(
+            "M02*",
+            "%ADD11C,0.200000*%\n"
+            "D11*\n"
+            "X120000000Y-120000000D03*\n"
+            "M02*",
+        )
+    silkscreen.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(
+        fab_tool.FabExportError,
+        match=r"fabrication (?:front|back) legend",
+    ):
+        fab_tool.validate_stage(stage, require_normalized=True)
+
+
+def test_raw_stage_accepts_component_legend_before_transform(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    stage = tmp_path / "raw"
+    _write_valid_stage(stage)
+
+    fab_tool.validate_stage(stage)
+
+
 def test_normalization_fails_if_required_creation_date_is_missing(
     fab_tool: SimpleNamespace,
     tmp_path: Path,
@@ -318,6 +417,129 @@ def test_normalization_fails_if_required_creation_date_is_missing(
 
     with pytest.raises(fab_tool.FabExportError, match="CreationDate"):
         fab_tool.normalize_stage(stage)
+
+
+def _component_silkscreen_payload() -> str:
+    return "\n".join(
+        [
+            "%TF.FileFunction,Legend,Top*%",
+            "%LPD*%",
+            "G01*",
+            "G04 APERTURE LIST*",
+            "%ADD10C,0.200000*%",
+            "%ADD11C,0.160000*%",
+            "G04 APERTURE END LIST*",
+            "D10*",
+            "X100000000Y-100000000D02*",
+            "X101000000Y-100000000D01*",
+            "%TO.C,R1*%",
+            "D11*",
+            "X110000000Y-110000000D02*",
+            "X111000000Y-110000000D01*",
+            "%TO.C,C1*%",
+            "X120000000Y-120000000D02*",
+            "X121000000Y-120000000D01*",
+            "%TD*%",
+            "M02*",
+            "",
+        ]
+    )
+
+
+def test_component_silkscreen_strip_preserves_labels_and_prunes_aperture(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    silkscreen = tmp_path / "Esp32Tap-F_Silkscreen.gto"
+    silkscreen.write_text(
+        _component_silkscreen_payload(),
+        encoding="utf-8",
+    )
+
+    fab_tool._strip_component_silkscreen(
+        silkscreen,
+        expected_references={"C1", "R1"},
+    )
+
+    stripped = silkscreen.read_text(encoding="utf-8")
+    assert "%TO.C," not in stripped
+    assert "%TD*%" not in stripped
+    assert "%ADD11C,0.160000*%" not in stripped
+    assert "%ADD10C,0.200000*%" in stripped
+    assert "X100000000Y-100000000D02*" in stripped
+    assert "X101000000Y-100000000D01*" in stripped
+    assert "X110000000Y-110000000D02*" not in stripped
+    assert stripped.rstrip().endswith("M02*")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing-component", "reference set"),
+        ("duplicate-component", "duplicate component"),
+        ("malformed-component", "malformed component"),
+        ("interleaved-termination", "terminal TD"),
+        ("missing-termination", "terminal TD"),
+        ("geometry-after-termination", "terminal TD"),
+        ("label-aperture-interleaved", "board-label aperture"),
+        ("component-without-artwork", "no artwork"),
+    ],
+)
+def test_component_silkscreen_strip_fails_closed(
+    fab_tool: SimpleNamespace,
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    payload = _component_silkscreen_payload()
+    if mutation == "missing-component":
+        payload = payload.replace(
+            "%TO.C,C1*%\n"
+            "X120000000Y-120000000D02*\n"
+            "X121000000Y-120000000D01*\n",
+            "",
+        )
+    elif mutation == "duplicate-component":
+        payload = payload.replace("%TO.C,C1*%", "%TO.C,R1*%")
+    elif mutation == "malformed-component":
+        payload = payload.replace("%TO.C,C1*%", "%TO.C*%")
+    elif mutation == "interleaved-termination":
+        payload = payload.replace(
+            "%TO.C,C1*%",
+            "%TD*%\n%TO.C,C1*%",
+        )
+    elif mutation == "missing-termination":
+        payload = payload.replace("%TD*%\n", "")
+    elif mutation == "geometry-after-termination":
+        payload = payload.replace(
+            "%TD*%\nM02*",
+            "%TD*%\n"
+            "D10*\n"
+            "X130000000Y-130000000D01*\n"
+            "M02*",
+        )
+    elif mutation == "label-aperture-interleaved":
+        payload = payload.replace(
+            "%TO.C,C1*%",
+            "D10*\n"
+            "X115000000Y-115000000D01*\n"
+            "%TO.C,C1*%",
+        )
+    else:
+        payload = payload.replace(
+            "%TO.C,C1*%\n"
+            "X120000000Y-120000000D02*\n"
+            "X121000000Y-120000000D01*\n",
+            "%TO.C,C1*%\n",
+        )
+    silkscreen = tmp_path / f"{mutation}.gto"
+    silkscreen.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(fab_tool.FabExportError, match=message):
+        fab_tool._strip_component_silkscreen(
+            silkscreen,
+            expected_references={"C1", "R1"},
+        )
 
 
 @pytest.mark.parametrize(

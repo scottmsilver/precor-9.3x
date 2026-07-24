@@ -1480,26 +1480,39 @@ class Generator:
                 self.mark_circle(target, 0.50, ROUTING_LAYERS, "GND")
 
     def add_silkscreen(self) -> None:
-        def text(x: float, y: float, value: str, size: float = 1.0) -> None:
+        def text(
+            x: float,
+            y: float,
+            value: str,
+            size: float = 1.0,
+            rotation: float = 0.0,
+        ) -> None:
             item = pcbnew.PCB_TEXT(self.board)
             item.SetText(value)
             item.SetPosition(absolute((x, y)))
             item.SetLayer(pcbnew.F_SilkS)
             item.SetTextSize(VECTOR2I(MM(size), MM(size)))
             item.SetTextThickness(MM(0.20))
+            item.SetTextAngle(pcbnew.EDA_ANGLE(rotation, pcbnew.DEGREES_T))
             self.board.Add(item)
 
         text(6.5, 22.5, "CONSOLE", 1.0)
         text(6.5, 31.0, "MOTOR", 1.0)
         text(45.0, 2.0, "Esp32Tap rev B", 1.2)
-        text(24.0, 13.0, "BYPASS", 1.0)
+        # Placement locks keep every fabrication label at least 0.5 mm from
+        # the nominal installed component bodies as well as mask openings.
+        text(24.0, 12.0, "BYPASS", 1.0)
         text(30.0, 13.0, "NC", 1.0)
         text(28.0, 35.0, "EMULATE", 1.0)
-        text(34.0, 35.0, "NO", 1.0)
-        text(91.5, 47.5, "USB DATA ONLY", 1.0)
+        text(34.0, 36.5, "NO", 1.0)
+        text(90.0, 47.8, "USB DATA ONLY", 1.0, 90.0)
         text(7.5, 3.0, "PIN 1", 1.0)
         text(26.0, 48.0, "D1 K", 1.0)
-        text(35.0, 48.0, "D3 K", 1.0)
+        text(35.0, 48.0, "K D3", 1.0)
+        text(43.0, 44.4, "+ C1", 1.0)
+        text(19.0, 22.2, "K1 P1", 1.0)
+        text(93.5, 12.0, "LED1 K", 1.0)
+        text(77.0, 53.0, "K LED2", 1.0)
 
     def fill_and_save(self) -> None:
         filler = pcbnew.ZONE_FILLER(self.board)

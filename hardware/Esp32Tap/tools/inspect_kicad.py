@@ -159,6 +159,26 @@ def bbox_dict(box: Any) -> dict[str, list[float]]:
     }
 
 
+def rectangle_clearance(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+) -> float:
+    """Return filled axis-aligned rectangle clearance in PCB internal units."""
+    first_left, first_top, first_right, first_bottom = first
+    second_left, second_top, second_right, second_bottom = second
+    dx = max(
+        second_left - first_right,
+        first_left - second_right,
+        0,
+    )
+    dy = max(
+        second_top - first_bottom,
+        first_top - second_bottom,
+        0,
+    )
+    return math.hypot(dx, dy)
+
+
 def point_in_polygon(point: list[float], outline: list[list[float]]) -> bool:
     x, y = point
     inside = False
@@ -328,6 +348,10 @@ def inspect(path: Path) -> dict[str, Any]:
     footprints: dict[str, Any] = {}
     pad_items: dict[str, tuple[str, str]] = {}
     all_items: dict[str, Any] = {}
+    footprint_silkscreen_graphic_count = 0
+    fabrication_body_bboxes: list[
+        tuple[str, tuple[int, int, int, int]]
+    ] = []
     for footprint in sorted(
         board.GetFootprints(), key=lambda item: item.GetReference()
     ):
@@ -336,6 +360,35 @@ def inspect(path: Path) -> dict[str, Any]:
             raise ValueError("footprint without reference")
         if reference in footprints:
             raise ValueError(f"duplicate footprint reference {reference}")
+        footprint_silkscreen_graphic_count += sum(
+            graphic.GetLayer() in (pcbnew.F_SilkS, pcbnew.B_SilkS)
+            for graphic in footprint.GraphicalItems()
+        )
+        fabrication_shapes = [
+            graphic
+            for graphic in footprint.GraphicalItems()
+            if (
+                isinstance(graphic, pcbnew.PCB_SHAPE)
+                and graphic.GetLayer() == pcbnew.F_Fab
+            )
+        ]
+        fabrication_body_bbox: dict[str, list[float]] | None = None
+        if fabrication_shapes:
+            boxes = [
+                graphic.GetBoundingBox()
+                for graphic in fabrication_shapes
+            ]
+            body_bounds = (
+                min(box.GetLeft() for box in boxes),
+                min(box.GetTop() for box in boxes),
+                max(box.GetRight() for box in boxes),
+                max(box.GetBottom() for box in boxes),
+            )
+            fabrication_body_bboxes.append((reference, body_bounds))
+            fabrication_body_bbox = {
+                "min": [mm(body_bounds[0]), mm(body_bounds[1])],
+                "max": [mm(body_bounds[2]), mm(body_bounds[3])],
+            }
         pads: dict[str, Any] = {}
         for pad in sorted(
             footprint.Pads(),
@@ -367,6 +420,7 @@ def inspect(path: Path) -> dict[str, Any]:
             "excluded_from_bom": footprint.IsExcludedFromBOM(),
             "board_only": footprint.IsBoardOnly(),
             "bbox": bbox_dict(footprint.GetBoundingBox()),
+            "fabrication_body_bbox": fabrication_body_bbox,
             "pads": pads,
         }
 
@@ -506,6 +560,31 @@ def inspect(path: Path) -> dict[str, Any]:
 
     annotate_usb(tracks, footprints)
 
+    fabrication_obstacles: list[tuple[str, Any]] = []
+    for footprint in board.GetFootprints():
+        reference = footprint.GetReference()
+        for pad in footprint.Pads():
+            number = str(pad.GetNumber()) or "mount"
+            if pad.GetLayerSet().Contains(pcbnew.F_Mask):
+                fabrication_obstacles.append(
+                    (
+                        f"{reference}.{number} soldermask",
+                        pad.GetEffectiveShape(pcbnew.F_Mask),
+                    )
+                )
+            drill = pad.GetDrillSize()
+            if drill.x > 0 and drill.y > 0:
+                fabrication_obstacles.append(
+                    (
+                        f"{reference}.{number} hole",
+                        pad.GetEffectiveHoleShape(),
+                    )
+                )
+    for index, via in enumerate(via_objects):
+        fabrication_obstacles.append(
+            (f"via:{index:04d} hole", via.GetEffectiveHoleShape())
+        )
+
     texts: list[dict[str, Any]] = []
     edge_points: list[list[float]] = []
     for drawing in board.GetDrawings():
@@ -514,15 +593,45 @@ def inspect(path: Path) -> dict[str, Any]:
         ):
             edge_points.extend((xy(drawing.GetStart()), xy(drawing.GetEnd())))
         if isinstance(drawing, pcbnew.PCB_TEXT):
-            texts.append(
-                {
-                    "text": drawing.GetText(),
-                    "layer": board.GetLayerName(drawing.GetLayer()),
-                    "stroke_width_mm": mm(drawing.GetTextThickness()),
-                    "height_mm": mm(drawing.GetTextSize().y),
-                    "at": xy(drawing.GetPosition()),
-                }
-            )
+            entry = {
+                "text": drawing.GetText(),
+                "layer": board.GetLayerName(drawing.GetLayer()),
+                "stroke_width_mm": mm(drawing.GetTextThickness()),
+                "height_mm": mm(drawing.GetTextSize().y),
+                "at": xy(drawing.GetPosition()),
+                "rotation_deg": normalized_degrees(drawing.GetTextAngle()),
+                "bbox": bbox_dict(drawing.GetBoundingBox()),
+            }
+            if drawing.GetLayer() == pcbnew.F_SilkS:
+                text_shape = drawing.GetEffectiveTextShape()
+                clearance, obstacle = min(
+                    (
+                        text_shape.GetClearance(shape),
+                        label,
+                    )
+                    for label, shape in fabrication_obstacles
+                )
+                entry["min_fabrication_clearance_mm"] = mm(clearance)
+                entry["nearest_fabrication_obstacle"] = obstacle
+                text_box = drawing.GetBoundingBox()
+                text_bounds = (
+                    text_box.GetLeft(),
+                    text_box.GetTop(),
+                    text_box.GetRight(),
+                    text_box.GetBottom(),
+                )
+                body_clearance, body_reference = min(
+                    (
+                        rectangle_clearance(text_bounds, body_bounds),
+                        reference,
+                    )
+                    for reference, body_bounds in fabrication_body_bboxes
+                )
+                entry["min_component_body_clearance_mm"] = mm(
+                    round(body_clearance)
+                )
+                entry["nearest_component_body"] = body_reference
+            texts.append(entry)
     texts.sort(key=lambda item: (item["layer"], item["text"], item["at"]))
     if not edge_points:
         raise ValueError("board has no Edge.Cuts geometry")
@@ -627,6 +736,9 @@ def inspect(path: Path) -> dict[str, Any]:
                 "height_mm": round(max_y - min_y, 6),
             },
             "footprints": footprints,
+            "footprint_silkscreen_graphic_count": (
+                footprint_silkscreen_graphic_count
+            ),
             "tracks": tracks,
             "vias": vias,
             "zones": zones,

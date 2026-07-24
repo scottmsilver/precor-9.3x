@@ -1643,62 +1643,119 @@ def test_fixture_test_pads_have_bottom_no_copper_access(
 def test_silkscreen_minimums_and_required_markings(
     kicad_report: dict[str, Any],
 ) -> None:
+    board = _board(kicad_report)
+    assert board["footprint_silkscreen_graphic_count"] == 297
     front = [
         text
-        for text in _board(kicad_report)["texts"]
+        for text in board["texts"]
         if text["layer"] in {"F.SilkS", "F.Silkscreen"}
     ]
-    assert front
-    assert min(text["stroke_width_mm"] for text in front) >= 0.20
-    rendered = " ".join(text["text"] for text in front).upper()
-    for required in (
-        "REV B",
+    expected_labels = {
+        "ESP32TAP REV B",
         "BYPASS",
-        "EMULATE",
         "CONSOLE",
-        "MOTOR",
-        "USB DATA ONLY",
-        "PIN 1",
-        "D3 K",
+        "+ C1",
         "D1 K",
-    ):
-        assert required in rendered
-    critical_labels = {
+        "K D3",
+        "EMULATE",
+        "K1 P1",
+        "LED1 K",
+        "K LED2",
+        "MOTOR",
+        "NC",
+        "NO",
+        "PIN 1",
+        "USB DATA ONLY",
+    }
+    labels = {
         text["text"].upper(): text
         for text in front
-        if text["text"].upper()
-        in {"USB DATA ONLY", "PIN 1", "D1 K", "D3 K"}
     }
-    assert set(critical_labels) == {
-        "USB DATA ONLY",
-        "PIN 1",
-        "D1 K",
-        "D3 K",
+    assert set(labels) == expected_labels
+    # Lock the body-clearance-reviewed placements as well as marker direction.
+    expected_placements = {
+        "+ C1": ([143.0, 144.4], 0.0),
+        "BYPASS": ([124.0, 112.0], 0.0),
+        "K1 P1": ([119.0, 122.2], 0.0),
+        "LED1 K": ([193.5, 112.0], 0.0),
+        "K LED2": ([177.0, 153.0], 0.0),
+        "NO": ([134.0, 136.5], 0.0),
+        "USB DATA ONLY": ([190.0, 147.8], 90.0),
     }
-    assert all(
-        text.get("height_mm", 0.0) >= 1.0
-        for text in critical_labels.values()
+    for label, (position, rotation) in expected_placements.items():
+        assert labels[label]["at"] == position
+        assert labels[label]["rotation_deg"] == rotation
+    assert board["footprints"]["C1"]["pads"]["1"]["at"][0] < (
+        board["footprints"]["C1"]["pads"]["2"]["at"][0]
     )
+    assert board["footprints"]["D3"]["pads"]["1"]["at"][0] < (
+        board["footprints"]["D3"]["pads"]["2"]["at"][0]
+    )
+    assert board["footprints"]["LED2"]["pads"]["1"]["at"][0] < (
+        board["footprints"]["LED2"]["pads"]["2"]["at"][0]
+    )
+    assert board["footprints"]["D1"]["pads"]["1"]["at"][0] > (
+        board["footprints"]["D1"]["pads"]["2"]["at"][0]
+    )
+    assert board["footprints"]["LED1"]["pads"]["1"]["at"][0] > (
+        board["footprints"]["LED1"]["pads"]["2"]["at"][0]
+    )
+    relay_pad_1 = board["footprints"]["K1"]["pads"]["1"]["at"]
+    relay_pad_8 = board["footprints"]["K1"]["pads"]["8"]["at"]
+    assert relay_pad_1[0] < relay_pad_8[0]
+    assert labels["K1 P1"]["at"][0] < relay_pad_1[0]
+    assert labels["K1 P1"]["at"][1] == relay_pad_1[1]
+    assert labels["+ C1"]["bbox"]["max"][1] < (
+        board["footprints"]["C1"]["bbox"]["min"][1]
+    )
+    outline = board["outline"]
+    for label, text in labels.items():
+        assert text["stroke_width_mm"] >= 0.20, label
+        assert text["height_mm"] >= 1.0, label
+        assert min(
+            text["bbox"]["min"][0] - outline["min"][0],
+            text["bbox"]["min"][1] - outline["min"][1],
+            outline["max"][0] - text["bbox"]["max"][0],
+            outline["max"][1] - text["bbox"]["max"][1],
+        ) >= 0.50, label
+        assert text["min_fabrication_clearance_mm"] >= 0.25, (
+            f"{label} is only "
+            f"{text['min_fabrication_clearance_mm']:.3f} mm from "
+            f"{text['nearest_fabrication_obstacle']}"
+        )
+        assert text["min_component_body_clearance_mm"] >= 0.50, (
+            f"{label} is only "
+            f"{text['min_component_body_clearance_mm']:.3f} mm from "
+            f"{text['nearest_component_body']} nominal body"
+        )
 
 
 def test_silkscreen_gerber_strokes_meet_jlc_minimum(
     esp32tap_dir: Path,
 ) -> None:
-    aperture_widths = [
-        float(width)
+    payloads = [
+        (
+            esp32tap_dir / "kicad" / "gerbers" / filename
+        ).read_text(encoding="utf-8")
         for filename in (
             "Esp32Tap-F_Silkscreen.gto",
             "Esp32Tap-B_Silkscreen.gbo",
         )
+    ]
+    aperture_widths = [
+        float(width)
+        for payload in payloads
         for width in re.findall(
             r"%ADD\d+C,([0-9.]+)\*%",
-            (
-                esp32tap_dir / "kicad" / "gerbers" / filename
-            ).read_text(encoding="utf-8"),
+            payload,
         )
     ]
-    assert aperture_widths
-    assert min(aperture_widths) >= 0.16
+    assert set(aperture_widths) == {0.20}
+    assert all("%TO.C," not in payload for payload in payloads)
+    assert re.search(
+        r"(?m)^X[-0-9]+Y[-0-9]+D01\*$",
+        payloads[0],
+    )
 
 
 def test_project_and_dru_lock_named_usb_geometry(

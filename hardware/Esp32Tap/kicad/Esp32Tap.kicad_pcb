@@ -20629,8 +20629,19 @@
 			)
 		)
 	)
+	(gr_text "K1 P1"
+		(at 119 122.2 0)
+		(layer "F.SilkS")
+		(uuid "32d90b2c-470b-411a-98f6-b76bc5abbea0")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.2)
+			)
+		)
+	)
 	(gr_text "BYPASS"
-		(at 124 113 0)
+		(at 124 112 0)
 		(layer "F.SilkS")
 		(uuid "6ffafb90-2689-43d0-bcba-6e79479be2e4")
 		(effects
@@ -20674,7 +20685,7 @@
 		)
 	)
 	(gr_text "NO"
-		(at 134 135 0)
+		(at 134 136.5 0)
 		(layer "F.SilkS")
 		(uuid "aadc1671-74ff-43fb-a570-e649cd7f89e0")
 		(effects
@@ -20684,7 +20695,7 @@
 			)
 		)
 	)
-	(gr_text "D3 K"
+	(gr_text "K D3"
 		(at 135 148 0)
 		(layer "F.SilkS")
 		(uuid "cc758ce1-1a8d-4476-9ba2-d0acb22b0112")
@@ -20695,8 +20706,41 @@
 			)
 		)
 	)
+	(gr_text "+ C1"
+		(at 143 144.4 0)
+		(layer "F.SilkS")
+		(uuid "e910e77c-9260-476b-a3e7-9c0b6f070b20")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.2)
+			)
+		)
+	)
+	(gr_text "K LED2"
+		(at 177 153 0)
+		(layer "F.SilkS")
+		(uuid "0418f377-c196-4952-9d0a-6d547d6c2d23")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.2)
+			)
+		)
+	)
+	(gr_text "LED1 K"
+		(at 193.5 112 0)
+		(layer "F.SilkS")
+		(uuid "2d17e221-bdbd-45ed-b28f-b8c2db5944df")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.2)
+			)
+		)
+	)
 	(gr_text "USB DATA ONLY"
-		(at 191.5 147.5 0)
+		(at 190 147.8 90)
 		(layer "F.SilkS")
 		(uuid "c0ee57c0-935a-485d-bf8a-0ee3e434913b")
 		(effects

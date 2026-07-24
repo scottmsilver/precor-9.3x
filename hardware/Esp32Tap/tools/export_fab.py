@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Export and atomically publish the Esp32Tap Rev B fabrication package.
 
-KiCad writes generation timestamps into Gerber, drill, and job files.  This
-tool removes only those timestamps, validates the exact four-layer member set,
-and writes a deterministic ZIP.  Checked-in artifacts are replaced only after
-the complete staged package has passed validation.
+The deterministic fabrication transform normalizes KiCad's volatile
+timestamps and removes the complete component-attributed top-legend suffix
+while preserving the board-owned markings.  This tool then validates the
+exact four-layer member set and writes a deterministic ZIP.  Checked-in
+artifacts are replaced only after the complete staged package has passed
+validation.
 """
 
 from __future__ import annotations
@@ -664,8 +666,179 @@ def _replace_text(path: Path, substitutions: Iterable[tuple[str, str]]) -> None:
         path.write_text(normalized, encoding="utf-8", newline="\n")
 
 
+def _strip_component_silkscreen(
+    path: Path,
+    *,
+    expected_references: set[str],
+) -> None:
+    """Remove only KiCad's complete component-attributed legend suffix."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    malformed = [
+        line
+        for line in lines
+        if line.startswith("%TO.C")
+        and re.fullmatch(r"%TO\.C,[^*%,]+\*%", line) is None
+    ]
+    if malformed:
+        raise FabExportError(
+            f"{path.name} has malformed component attributes: {malformed}"
+        )
+
+    component_attributes = [
+        (index, match.group(1))
+        for index, line in enumerate(lines)
+        if (match := re.fullmatch(r"%TO\.C,([^*%,]+)\*%", line))
+    ]
+    references = [reference for _index, reference in component_attributes]
+    duplicates = sorted(
+        reference
+        for reference in set(references)
+        if references.count(reference) != 1
+    )
+    if duplicates:
+        raise FabExportError(
+            f"{path.name} has duplicate component attributes: {duplicates}"
+        )
+    actual_references = set(references)
+    if actual_references != expected_references:
+        raise FabExportError(
+            f"{path.name} component reference set differs: "
+            f"missing={sorted(expected_references - actual_references)}, "
+            f"extra={sorted(actual_references - expected_references)}"
+        )
+
+    terminations = [
+        index for index, line in enumerate(lines) if line == "%TD*%"
+    ]
+    first_component = min(index for index, _reference in component_attributes)
+    if (
+        len(terminations) != 1
+        or terminations[0]
+        <= max(index for index, _reference in component_attributes)
+        or lines[terminations[0] + 1 :] != ["M02*"]
+    ):
+        raise FabExportError(
+            f"{path.name} must have one terminal TD component boundary"
+        )
+    termination = terminations[0]
+    prefix = lines[:first_component]
+    component_region = lines[first_component:termination]
+
+    aperture_definitions: dict[str, int] = {}
+    for index, line in enumerate(lines):
+        match = re.fullmatch(r"%ADD(\d+)[^%]*\*%", line)
+        if match:
+            code = match.group(1)
+            if code in aperture_definitions:
+                raise FabExportError(
+                    f"{path.name} repeats aperture definition D{code}"
+                )
+            aperture_definitions[code] = index
+
+    selection_pattern = re.compile(r"D(\d{2,})\*")
+    artwork_pattern = re.compile(
+        r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[13]\*"
+    )
+    geometry_pattern = re.compile(
+        r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[123]\*"
+    )
+    active_aperture: str | None = None
+    board_apertures: set[str] = set()
+    label_geometry: list[str] = []
+    for line in prefix:
+        if selection := selection_pattern.fullmatch(line):
+            active_aperture = selection.group(1)
+        if geometry_pattern.fullmatch(line):
+            label_geometry.append(line)
+        if artwork_pattern.fullmatch(line):
+            if active_aperture is None:
+                raise FabExportError(
+                    f"{path.name} has label artwork without an aperture"
+                )
+            board_apertures.add(active_aperture)
+    if not label_geometry or not board_apertures:
+        raise FabExportError(f"{path.name} has no board-label geometry")
+
+    active_reference: str | None = None
+    component_apertures: set[str] = set()
+    artwork_counts = {
+        reference: 0 for reference in expected_references
+    }
+    for line in component_region:
+        if attribute := re.fullmatch(r"%TO\.C,([^*%,]+)\*%", line):
+            active_reference = attribute.group(1)
+            continue
+        if selection := selection_pattern.fullmatch(line):
+            active_aperture = selection.group(1)
+            if active_aperture in board_apertures:
+                raise FabExportError(
+                    f"{path.name} interleaves board-label aperture "
+                    f"D{active_aperture} with component artwork"
+                )
+            continue
+        if artwork_pattern.fullmatch(line):
+            if active_reference is None or active_aperture is None:
+                raise FabExportError(
+                    f"{path.name} has unattributed component artwork"
+                )
+            if active_aperture in board_apertures:
+                raise FabExportError(
+                    f"{path.name} interleaves board-label aperture "
+                    f"D{active_aperture} with component artwork"
+                )
+            component_apertures.add(active_aperture)
+            artwork_counts[active_reference] += 1
+    empty_references = sorted(
+        reference
+        for reference, count in artwork_counts.items()
+        if count == 0
+    )
+    if empty_references:
+        raise FabExportError(
+            f"{path.name} components have no artwork: {empty_references}"
+        )
+
+    retained = prefix + ["M02*"]
+    retained_apertures = {
+        match.group(1)
+        for line in retained
+        if (match := selection_pattern.fullmatch(line))
+    }
+    selected_apertures = board_apertures | component_apertures
+    undefined = sorted(selected_apertures - set(aperture_definitions))
+    if undefined:
+        raise FabExportError(
+            f"{path.name} selects undefined apertures: {undefined}"
+        )
+    stripped = [
+        line
+        for line in retained
+        if not (
+            (definition := re.fullmatch(r"%ADD(\d+)[^%]*\*%", line))
+            and definition.group(1) not in retained_apertures
+        )
+    ]
+    preserved_geometry = [
+        line for line in stripped if geometry_pattern.fullmatch(line)
+    ]
+    if preserved_geometry != label_geometry:
+        raise FabExportError(
+            f"{path.name} board-label geometry changed during stripping"
+        )
+    path.write_text(
+        "\n".join(stripped) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def normalize_stage(directory: Path) -> None:
-    """Normalize only KiCad's volatile creation-date fields."""
+    """Apply the deterministic legend and creation-date transformations."""
+    design = _load_design(ROOT)
+    _strip_component_silkscreen(
+        directory / "Esp32Tap-F_Silkscreen.gto",
+        expected_references=set(design.COMPONENTS),
+    )
     for filename in GERBER_FUNCTIONS:
         _replace_text(
             directory / filename,
@@ -860,6 +1033,71 @@ def _reject_json_constant(value: str) -> Any:
     )
 
 
+def _validate_minimal_legend(payload: str, *, front: bool) -> None:
+    """Require only board-owned top text and a completely empty back legend."""
+    label = "front" if front else "back"
+    raw_definitions = re.findall(
+        r"(?m)^%ADD[^%\r\n]*\*%$",
+        payload,
+    )
+    definitions = re.findall(
+        r"(?m)^%ADD(\d+)C,([0-9]+(?:\.[0-9]+)?)\*%$",
+        payload,
+    )
+    selections = {
+        code
+        for code in re.findall(r"(?m)^D([1-9]\d+)\*$", payload)
+    }
+    artwork_pattern = re.compile(
+        r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[13]\*"
+    )
+    artwork = [
+        line
+        for line in payload.splitlines()
+        if artwork_pattern.fullmatch(line)
+    ]
+    has_object_attributes = "%TO." in payload or "%TD" in payload
+    if not front:
+        if (
+            has_object_attributes
+            or raw_definitions
+            or selections
+            or artwork
+        ):
+            raise FabExportError(
+                "fabrication back legend must contain no attributes, "
+                "apertures, or artwork"
+            )
+        return
+
+    if (
+        has_object_attributes
+        or len(raw_definitions) != 1
+        or len(definitions) != 1
+        or float(definitions[0][1]) != 0.20
+        or selections != {definitions[0][0]}
+        or not artwork
+    ):
+        raise FabExportError(
+            f"fabrication {label} legend must contain only one selected "
+            "0.200 mm circular board-text aperture and no component "
+            "attributes"
+        )
+    active_aperture: str | None = None
+    expected_aperture = definitions[0][0]
+    for line in payload.splitlines():
+        if selection := re.fullmatch(r"D([1-9]\d+)\*", line):
+            active_aperture = selection.group(1)
+        elif (
+            artwork_pattern.fullmatch(line)
+            and active_aperture != expected_aperture
+        ):
+            raise FabExportError(
+                "fabrication front legend has artwork outside its "
+                "0.200 mm board-text aperture"
+            )
+
+
 def validate_stage(
     directory: Path,
     *,
@@ -930,6 +1168,14 @@ def validate_stage(
             )
         if filename == "Esp32Tap-Edge_Cuts.gm1":
             _validate_profile_geometry(payload)
+        if require_normalized and filename in {
+            "Esp32Tap-F_Silkscreen.gto",
+            "Esp32Tap-B_Silkscreen.gbo",
+        }:
+            _validate_minimal_legend(
+                payload,
+                front=filename == "Esp32Tap-F_Silkscreen.gto",
+            )
         commands = [
             line.strip()
             for line in payload.splitlines()
