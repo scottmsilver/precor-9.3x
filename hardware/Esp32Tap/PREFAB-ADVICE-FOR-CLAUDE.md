@@ -1,4 +1,9 @@
-# Esp32Tap Pre-Fabrication Advice for Claude
+# Superseded Rev A pre-fabrication advice for Claude
+
+**Archival status:** This audit is retained unchanged for traceability. Its
+findings drove the Rev B redesign; none of its topology, part, fabrication,
+stock, quote, or release statements describe the current package. Use
+`AI-HANDOFF.md` and the generated Rev B evidence instead.
 
 **Review date:** 2026-07-23
 

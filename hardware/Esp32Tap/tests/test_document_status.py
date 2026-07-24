@@ -219,3 +219,57 @@ def test_no_active_rev_a_or_release_ready_claims(
         "move historical text into an explicitly superseded Rev A section:\n"
         + "\n".join(violations)
     )
+
+
+def test_rev_b_handoff_states_power_firmware_and_release_boundaries(
+    esp32tap_dir: Path,
+) -> None:
+    handoff = (esp32tap_dir / "AI-HANDOFF.md").read_text(encoding="utf-8")
+    required = (
+        "Status: HOLD",
+        "current-limited +8 V bench power",
+        "USB alone cannot power or program Rev B",
+        "executable **host reference**, not production",
+        "one 4 s manual total-silence lease",
+        "complete valid parsed frame",
+        "1.5 s",
+        "GPIO7 is `VBUS_PRESENT_N`",
+        "stock self-powered TinyUSB VBUS-monitor input is active-high",
+        "encoded value was already zero",
+        "Do not submit an order",
+    )
+    missing = [phrase for phrase in required if phrase not in handoff]
+    assert not missing
+    assert re.search(r"\bpay\b", handoff, re.IGNORECASE)
+
+
+def test_firmware_plan_preserves_exact_safety_gates(
+    esp32tap_dir: Path,
+) -> None:
+    plan = (esp32tap_dir / "firmware" / "PLAN.md").read_text(
+        encoding="utf-8"
+    )
+    required = (
+        "CONFIG_ESP_TASK_WDT_INIT=y",
+        "CONFIG_ESP_TASK_WDT_TIMEOUT_S=2",
+        "CONFIG_ESP_TASK_WDT_PANIC=y",
+        "no 10 s reconnect grace",
+        "younger than\n1.5 s",
+        "at most 1 s",
+        "within 10 ms",
+        "at most 2.25 s",
+        "`bundle_sha256`",
+        "USB alone cannot power or program Rev B",
+    )
+    missing = [phrase for phrase in required if phrase not in plan]
+    assert not missing
+
+
+def test_prefab_advice_is_wholly_archival(
+    esp32tap_dir: Path,
+) -> None:
+    text = (esp32tap_dir / "PREFAB-ADVICE-FOR-CLAUDE.md").read_text(
+        encoding="utf-8"
+    )
+    assert text.startswith("# Superseded Rev A")
+    assert _active_lines(text) == []

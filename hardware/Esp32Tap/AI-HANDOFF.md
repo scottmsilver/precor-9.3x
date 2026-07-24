@@ -1,182 +1,141 @@
-# Esp32Tap — AI Handoff Brief
+# Esp32Tap Rev B — handoff and advice for Claude
 
-*Hand this to another AI (or engineer) to continue the ESP32 treadmill-tap project. Written 2026-07-23. Repo: `precor-9.3x`, hardware lives in `hardware/Esp32Tap/`.*
+**Status: HOLD. Do not submit an order, add the design to a production cart,
+authorize substitutions, or pay. Do not connect an Emulate-capable build to
+the treadmill.**
 
----
+This is the concise continuation brief for the hardware under
+`hardware/Esp32Tap/`. Repository checks can establish internal consistency;
+they cannot close the production-firmware, physical-bench, or vendor gates.
 
-## 1. Mission
+## Fixed design decisions
 
-Replace the Raspberry Pi that currently sits inline on a **Precor 9.31 treadmill**'s
-serial cable (between the console / "Upper PCA" and the motor controller / "Lower
-PCA") with a single custom **ESP32-S3-WROOM-1** board. The board intercepts the
-bus, can proxy or emulate it, runs the belt **safety** logic locally, and exposes
-the treadmill over BLE (FTMS to Zwift etc., HRM heart-rate) and WiFi.
+- The only board power source is treadmill **+8 V on the inline serial
+  cable**. J1 and J2 pass that rail through directly; the local branch is
+  protected by F1, D1, and D3 before VIN.
+- USB-C is **data and VBUS-presence only**. VBUS has no path to VIN, +5V_RLY,
+  or +3V3. Programming therefore requires a USB data cable **and**
+  current-limited +8 V bench power. USB alone cannot power or program Rev B.
+- K1 is a 5 V, 237 ohm G6K-2F-Y relay. Its NC pole is the default console-to-
+  motor bypass. Treadmill-derived TREAD_OK is hardware-ANDed with both relay
+  and TX permission; firmware cannot override an unsafe VIN window.
+- K1 pole B is an armature-state proxy: bypass is NC low / NO high; Emulate is
+  NC high / NO low. It cannot prove pole A did not weld or that every contact
+  transferred at the same instant.
+- U7 makes the motor TX path high impedance unless TX_ENABLE and TREAD_OK are
+  both true. Normal transitions use a captured inter-frame gap; emergency
+  fallback never waits for a gap.
+- The ESP32 antenna keepout is clear on every copper layer and the enclosure
+  target is a 15 mm plastic/air void. RF performance under the motor hood
+  still requires measurement.
 
-**The bus (ground truth — do not re-litigate):** single-ended, **inverted-polarity
-(idle-LOW) UART**, 9600 8N1, TTL/3.3 V. It is *called* "RS-485" in old docs but is
-**not differential and has no transceiver** — the working Pi reads it with
-`bb_serial_invert=1` on one GPIO and drives cable **pin 6** single-ended, and the
-motor responds. Cable **pin 6** is CUT and routed through the board (console→RX,
-TX→motor) for proxy/emulate; **pin 3** is a passive tap. Both carry `[key:value]`
-ASCII. See `CLAUDE.md`, `HARDWARE.md`, `RS485_DISCOVERY.md`.
+`tools/design.py` is the electrical source of truth. Do not hand-edit a
+generated netlist, schematic connection, BOM, or PCB to repair a source
+problem.
 
----
+## Firmware contract Claude must implement
 
-## 2. Current state — what is DONE
+`firmware/safety_model.py` is an executable **host reference**, not production
+ESP-IDF code. Production behavior must match its tests:
 
-- **Board design complete and machine-verified.** KiCad project ERC/DRC clean
-  (0/0), pin-accurate `NETLIST.md`, gerbers, costed BOM (LCSC part numbers, all
-  live-in-stock as of 2026-07-23), CPL. Board is 100×55 mm, 2-layer.
-- **Firmware is a PORT, not a rewrite.** The proven Pi C++ (`cpp/protocol/` KV
-  parser, `cpp/engine/` mode-state + emulation + safety) already works on real
-  hardware and is being ported to ESP-IDF. Host test suite 132/132; the real
-  logic-analyzer captures in `cpp/captures/` replay through the parser with 0
-  desyncs; the parser compiles for esp32s3. Plan: `firmware/PLAN.md`.
-- **Enclosure fixed and print-ready.** Two-part JLC3DP case (`enclosure/`), RJ45
-  cutout blocker corrected (was 8.695 mm off in Y). Base prints clean; lid has an
-  accepted flat-plate warp advisory.
-- **Both JLC orders are STAGED under the owner's account, nothing paid:**
-  - **PCBA:** qty 2 (verification build), Standard PCBA (the ESP32 module *forces*
-    Standard — see gotchas), ~**$123** + shipping. `cart.jlcpcb.com`, saved SMT quote.
-  - **Enclosure:** base + lid on JLC3DP, ~**$9.62** with shipping.
-- **Reports:** `REPORT.md` (design + BOM), `VALIDATION.md` (what was verified),
-  `WORKS-AND-FITS.md` (fit check), `ORDER-READY.md` (order walkthrough + real quote).
+- one owner tuple `(WSS or BLE transport, concrete handle, generation)`;
+- only the exact owner mutates motion or renews liveness;
+- one 4 s manual total-silence lease, with no second grace timer;
+- exact owner disconnect immediately commands zero and bypass;
+- reconnect/handle reuse starts unowned with a newer generation;
+- the local executor owns separately and survives RF loss only while every
+  local safety input remains valid;
+- console freshness comes only from a complete valid parsed frame and expires
+  at 1.5 s;
+- entry order is zero → inverted-UART physical idle-low → TX enable → qualified
+  gap → relay command → Emulate feedback within 10 ms → first complete zero
+  frame;
+- entry aborts without moving K1 if no gap arrives within 1 s;
+- normal exit finishes a zero frame → qualified gap → relay off → bypass
+  feedback within 10 ms → TX off → lease release;
+- normal exit deasserts K1 at the 1 s gap deadline; TREAD_OK loss, stale
+  console, lease expiry, emergency stop, brownout, reset, and WDT never wait;
+- GPIO7 is `VBUS_PRESENT_N`: LOW permits native-USB attach, HIGH requires the
+  D+ pull-up detached.
 
----
+Espressif's stock self-powered TinyUSB VBUS-monitor input is active-high,
+whereas GPIO7 is active-low. Do not pass GPIO7 directly to that API and claim
+completion. Implement an explicit reviewed inversion/attach strategy, then
+verify D+ at boot/reset, enumeration, and unplug on hardware.
 
-## 3. The critical open question — WILL IT WORK?
+A physical STOP whose encoded value was already zero is not universally
+detectable from a value-change parser unless a distinct wire event is proven
+in captures. The independent treadmill safety key remains authoritative.
 
-An independent adversarial review (Codex, 2026-07-23) verdict:
-**UNKNOWABLE-WITHOUT-BENCH** — the design has no gross errors and is orderable as a
-2-board verification build, but **one load-bearing thing cannot be proven except on
-the real motor.** The three findings, in priority:
+## Production build identity
 
-1. **⚠️ THE most dangerous assumption: does the real motor accept the ESP32's UART
-   timing?** The Pi sent each message as one DMA-contiguous waveform. ESP-IDF UART
-   TX can insert inter-byte gaps under scheduler load. **No capture in the repo
-   proves the motor tolerates gapped bytes.** If it doesn't, the belt simply won't
-   respond to emulate. This is gated as bench test **TC2** and is the reason not to
-   mass-produce before the bench proves it.
-2. **Dead-board back-feed — mitigated, not measured.** With the board unpowered,
-   the NC relay (K1) bridges pin 6 and physically isolates the TX driver; RX taps
-   are 4.7 kΩ (R7/R8) and ESD clamps go to GND, so injection is designed to be
-   <0.3 mA. That is a design assertion — needs a scope test on a live bus.
-3. **Belt safety with WiFi dead — safe but not *universally* stop-safe by design.**
-   An on-MCU program deliberately keeps running through network loss; manual
-   sessions have a 10 s grace. Critically, the fail-safe relay only releases on a
-   stalled task if **`CONFIG_ESP_TASK_WDT_PANIC=y`** is set in the flashed build —
-   the IDF default only logs. This is now a hard config gate in `PLAN.md`.
+Every Emulate-capable build must use a 2 s task WDT with panic/reset, enabled
+brownout reset at the highest supported threshold below the measured minimum
++3V3, and no panic-halt/GDB-stub mode. Preserve this exact gate:
 
----
+```bash
+grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig
+```
 
-## 4. What to do next — in order
+Generate the deterministic evidence identity with:
 
-### Step A — Place the two orders (owner's money, owner clicks pay)
-The carts are staged. The owner logs into their JLC account and finishes:
-- PCBA: open the saved SMT quote, pick shipping, Save to Cart, pay. (Before paying,
-  re-run JLC's BOM tool for live assembly stock — it churns.)
-- Enclosure: JLC3DP, both STLs, lid "accept risk" already ticked, pay.
-- **Do not place orders or enter payment yourself. That is always the owner's action.**
+```bash
+python3 hardware/Esp32Tap/firmware/build_safety_manifest.py \
+  --application build/esp32tap.bin \
+  --bootloader build/bootloader/bootloader.bin \
+  --partition-table build/partition_table/partition-table.bin \
+  --sdkconfig sdkconfig \
+  --measured-min-3v3 <physical-volts> \
+  --brownout-threshold <selected-documented-volts> \
+  --output build/safety-manifest.json
+```
 
-### Step B — On arrival, run the treadmill-contact gate BEFORE the belt
-Follow `firmware/PLAN.md` → "Treadmill-contact gate" exactly. Do NOT connect a
-treadmill until every box is green. Highest-value bench checks (Codex's top 3):
-1. **Dead board inline:** scope `CONS6 / MOT6 / PIN3`, verify no level/edge
-   degradation, measure clamp current. (Closes finding #2.)
-2. **Logic-analyzer compare Pi vs ESP32 at the motor pin** — every byte, message
-   boundary, the 100 ms cycle gap, under worst-case RF/CPU load. (De-risks #1
-   before belt contact.)
-3. **Prove relay release on each stalled task with the exact production
-   `sdkconfig`** (`grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig` must pass). (Closes #3.)
+The emitted `bundle_sha256` binds the application, bootloader, partition
+table, sdkconfig, model, builder, schema, and this plan. Every bench record
+must name it.
 
-### Step C — First treadmill contact, still gated (two steps)
-- **TC1 — Proxy only** (Emulate compiled out). First-ever treadmill contact; verify
-  stock behavior + parsed telemetry vs the Pi.
-- **TC2 — first Emulate**, only after TC1 is clean and the M3 watchdog matrix was
-  re-run on the exact flashed build. **This is the test that finally answers "will
-  it work" (motor byte-pacing).**
+## Reproduce repository evidence
 
-### Step D — Finish the firmware
-Port `cpp/protocol` + `cpp/engine` to ESP-IDF per `PLAN.md`; NimBLE FTMS peripheral
-+ HRM central; WSS API; OTA. Watch for latent porting bugs like the KvPair[16]
-stack-overflow QEMU found — size FreeRTOS task stacks for parser buffers.
+From the repository root:
 
----
+```bash
+make -C hardware/Esp32Tap clean-check
+make -C hardware/Esp32Tap check
 
-## 5. HARD RULES (safety — non-negotiable)
+python3 hardware/Esp32Tap/sim/run_simulations.py \
+  --host-ngspice /usr/bin/ngspice \
+  --docker-image ngspice-cached:latest
 
-- **Never drive the real treadmill belt** (the physical machine, Pi at
-  `192.168.1.206`) without the owner's explicit, in-the-moment consent. Belt-moving
-  tests happen against the mock dev server (`TREADMILL_MOCK=1`) only.
-- **Do not place orders, enter payment, or submit any cart.** Stage only; the owner
-  pays.
-- **Do not commit to git** until the owner gives the password. **Never push without
-  asking.** **Never hard-code a server URL.** (These are standing repo rules in
-  the owner's `CLAUDE.md`.)
-- After a work session that changes code, run the two-track security audit
-  (dependency CVE scan + a `codex exec --sandbox read-only` code review) before
-  claiming done.
-- The belt-safety envelope is safety-critical: 3-hour timeout, zero-speed on
-  emulate entry, auto-proxy on console button, watchdog → relay release. Treat any
-  change to it as needing its own review + the full watchdog test matrix.
+git diff --check
+```
 
----
+The simulation runner must execute all seven decks on host ngspice 42 and the
+cached Docker ngspice 39 image. Repeat it three times. A supported numeric
+assertion may pass; an out-of-envelope pulse stays `UNSUPPORTED`. The
+TPS54202 deck is an averaged behavioral model and does not prove loop margin,
+switch-node ripple, EMI, or vendor-model startup.
 
-## 6. File map (in `hardware/Esp32Tap/`)
+## Evidence that remains physical or vendor-only
 
-| File | What it is |
-|---|---|
-| `REPORT.md` | Full design rationale, BOM table, adversarial history |
-| `NETLIST.md` | Pin-accurate netlist — **source of truth** for the electrical design |
-| `firmware/PLAN.md` | C++→ESP-IDF port plan, safety envelope, BLE, the bench gate |
-| `VALIDATION.md` | What was machine-verified (SPICE, DRC, host tests, replay) |
-| `WORKS-AND-FITS.md` | Works + fits verdict (board-to-case fit, install measurements) |
-| `ORDER-READY.md` | Order walkthrough + the real live JLC quote + Standard-PCBA finding |
-| `bom/BOM.csv`, `bom/CPL-positions.csv` | JLC assembly files (LCSC part #s) |
-| `kicad/` | KiCad project + gerbers + ERC/DRC reports |
-| `enclosure/` | `esp32tap_case.scad` (parametric), STLs, `DIMENSIONS.md` |
-| `tools/jlc_api.py` | Read-only JLCPCB OpenAPI client (auth works; account lacks endpoint perms) |
-| `tools/design.py`, `gen_*.py` | Generators — the .scad/kicad/BOM regenerate from `design.py` |
+- actual +8 V range, source impedance/current capacity, inrush, noise, and
+  brownout under Wi-Fi/BLE and relay load;
+- TPS54202 switching-loop/EMI behavior and production capacitor derating;
+- dead-board backfeed and real serial edge/timing margin;
+- K1 operate/release/bounce, pole-A weld behavior, three-hour temperature,
+  and actual-contact timing;
+- at least 1,000 normal transitions with no MOT6 byte/frame splice;
+- USB reset/ROM attach, unplug indication below 3 ms, enumeration, and eye
+  margin;
+- enclosure plug fit, mesh/material acceptance, RF range, and coexistence;
+- exact current JLC stock/class, placement rotations, substitutions, carrier
+  drawing for the antenna overhang, DFM preview, and stackup/impedance
+  confirmation;
+- production ESP-IDF implementation and the complete bench safety matrix.
 
-Reference (the proven Pi implementation being ported): `cpp/protocol/`,
-`cpp/engine/`, `cpp/gpio/`, and the real captures in `cpp/captures/`.
+The first treadmill contact remains Proxy-only with relay energization compiled
+out. Emulate contact is a separate later gate with the belt clear and the
+physical safety key immediately accessible.
 
----
-
-## 7. Gotchas / hard-won facts
-
-- **The ESP32-S3 module forces JLC "Standard PCBA," not Economic** — a hard JLC
-  gate (tested: WROOM-1 *and* MINI-1 both trip it; it's the shielded castellated
-  package class, and the label drifts over time). Standard adds a ~$25 setup + a
-  ~$46 per-unique-part feeders-loading fee. There is no Economic-assemblable S3
-  module; the only Economic path is a chip-down QFN redesign (not worth it at this
-  volume). Re-check the exact part's classification at order time — it can change.
-- **JLC's minimum assembly quantity is 2** (for a 5-board PCB order you assemble
-  2–5, not 1).
-- **Panel rails:** if JLC adds breakaway edge rails for Standard PCBA (making a
-  100×71 mm panel), they ship attached and depanel to the real 100×55 mm board —
-  the enclosure is sized for 100×55.
-- **RJ45 must have NO magnetics** — a magjack breaks the DC-coupled serial. Use a
-  plain 8P8C (Amphenol 54602-908LF / C2847314).
-- **C1 electrolytic:** several 100 µF/25 V options show JLC inventory shortage;
-  C72477 (RVT1E101M0607) was the in-stock one.
-- **jlc3dp.com is a separate domain** from jlcpcb.com but shares the JLC passport
-  SSO login.
-- Board-level SPICE, DRC, host tests, capture replay, ESP-IDF build, and live stock
-  are all *machine-verified*. The 4 bench-only unknowns (motor byte-pacing, buck
-  under real rail noise, BLE range in the metal motor hood, relay lifetime) are the
-  only things a tool can't close.
-
----
-
-## 8. Environment / tooling notes (this machine)
-
-- KiCad `kicad-cli` v10 present. OpenSCAD + ngspice available via Docker only.
-  `espressif/idf` Docker image present for ESP-IDF builds.
-- `codex exec --sandbox read-only "<prompt>"` for independent reviews — keep prompts
-  **focused** (few files) or it gets killed before concluding.
-- Android app testing: prefer the real tablet over the emulator (dynamic
-  wireless-debugging endpoint via `adb mdns services`); emulators must NOT run on
-  DISPLAY `:1`.
-- Issue tracking is `bd` (beads), not TODO lists. Deliverables → claude.ai Artifacts
-  per the owner's global preference.
+Until all applicable repository checks pass, keep the package at HOLD. Even
+after they pass, describe it only as ready for vendor and bench review—not as
+permission to fabricate, pay, or operate.

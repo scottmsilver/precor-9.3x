@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://precor.local/schemas/esp32tap-safety-manifest-v1.json",
+  "title": "Esp32Tap Rev B production safety bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_by",
+    "safety_contract",
+    "power_evidence",
+    "artifacts",
+    "contract_manifest_sha256",
+    "bundle_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "generated_by": {
+      "const": "hardware/Esp32Tap/firmware/build_safety_manifest.py"
+    },
+    "safety_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manual_lease_seconds",
+        "console_fresh_seconds",
+        "transfer_gap_seconds",
+        "relay_feedback_seconds",
+        "watchdog_seconds",
+        "tread_ok_to_nc_max_seconds",
+        "software_to_nc_max_seconds",
+        "watchdog_to_nc_max_seconds",
+        "normal_transition_acceptance_cycles"
+      ],
+      "properties": {
+        "manual_lease_seconds": {
+          "const": 4.0
+        },
+        "console_fresh_seconds": {
+          "const": 1.5
+        },
+        "transfer_gap_seconds": {
+          "const": 1.0
+        },
+        "relay_feedback_seconds": {
+          "const": 0.01
+        },
+        "watchdog_seconds": {
+          "const": 2.0
+        },
+        "tread_ok_to_nc_max_seconds": {
+          "const": 0.01
+        },
+        "software_to_nc_max_seconds": {
+          "const": 0.25
+        },
+        "watchdog_to_nc_max_seconds": {
+          "const": 2.25
+        },
+        "normal_transition_acceptance_cycles": {
+          "const": 1000
+        }
+      }
+    },
+    "power_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "measured_min_3v3_volts",
+        "brownout_threshold_volts",
+        "brownout_selector"
+      ],
+      "properties": {
+        "measured_min_3v3_volts": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "brownout_threshold_volts": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "brownout_selector": {
+          "type": "string",
+          "pattern": "^CONFIG_ESP_BROWNOUT_DET_LVL_SEL_[1-7]$"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "application",
+        "bootloader",
+        "partition_table",
+        "sdkconfig",
+        "safety_model",
+        "safety_builder",
+        "safety_schema",
+        "firmware_plan"
+      ],
+      "properties": {
+        "application": {
+          "$ref": "#/$defs/artifact"
+        },
+        "bootloader": {
+          "$ref": "#/$defs/artifact"
+        },
+        "partition_table": {
+          "$ref": "#/$defs/artifact"
+        },
+        "sdkconfig": {
+          "$ref": "#/$defs/artifact"
+        },
+        "safety_model": {
+          "$ref": "#/$defs/artifact"
+        },
+        "safety_builder": {
+          "$ref": "#/$defs/artifact"
+        },
+        "safety_schema": {
+          "$ref": "#/$defs/artifact"
+        },
+        "firmware_plan": {
+          "$ref": "#/$defs/artifact"
+        }
+      }
+    },
+    "contract_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "bundle_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "size",
+        "sha256"
+      ],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}
