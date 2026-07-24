@@ -377,38 +377,80 @@ def test_selected_two_amp_ratings_are_derived_from_exact_evidence(
     )
 
     validator.validate_selection(selection, candidates)
+    expected_derived = 4.0 * (20.0 / 30.0) ** 0.5 * 0.75
     for circuit_count, interface_name in ((8, "console"), (10, "motor")):
         interface = selection["interfaces"][interface_name]
         qualification = interface["current_qualification"]
         assert qualification == {
             "evidence_id": "MOLEX-MICROFIT-PS-43045",
             "wire_awg": 22,
-            "circuit_count": circuit_count,
+            "selected_circuit_count": circuit_count,
+            "conservative_reference_circuit_count": 12,
             "ambient_c": 85,
-            "derived_current_per_contact_a": 4.0,
+            "connector_maximum_c": 105,
+            "official_temperature_rise_limit_c": 30,
+            "base_current_per_contact_a": 4.0,
+            "allowed_temperature_rise_c": 20,
+            "engineering_safety_factor": 0.75,
+            "formula": "I_base*sqrt(allowed_rise/official_rise)*safety_factor",
+            "derived_current_per_contact_a": expected_derived,
+            "expected_temperature_rise_at_2a_c": 7.5,
+            "thermal_margin_at_2a_c": 12.5,
+            "basis_class": "CONSERVATIVE_ENGINEERING_DERIVATION",
         }
         assert validator.derive_selected_contact_current_a(
             interface, selection["official_part_evidence"]
-        ) == pytest.approx(4.0)
+        ) == pytest.approx(expected_derived)
+        assert expected_derived > 2.0
 
     changed = copy.deepcopy(selection)
     changed["interfaces"]["console"]["current_qualification"][
         "derived_current_per_contact_a"
-    ] = 4.1
+    ] = 2.5
     with pytest.raises(Exception, match="derating|derived"):
         validator.validate_selection(changed, candidates)
 
     changed = copy.deepcopy(selection)
-    changed["interfaces"]["motor"]["current_qualification"]["circuit_count"] = 8
+    changed["interfaces"]["motor"]["current_qualification"][
+        "selected_circuit_count"
+    ] = 8
     with pytest.raises(Exception, match="circuit"):
         validator.validate_selection(changed, candidates)
 
     changed = copy.deepcopy(selection)
     changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][
-        "derating_table"
-    ][0]["current_per_contact_a"] = 4.1
+        "official_table"
+    ]["rows"][0]["current_per_contact_a"] = 4.6
     with pytest.raises(Exception, match="evidence was altered"):
         validator.validate_selection(changed, candidates)
+
+    changed = copy.deepcopy(selection)
+    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][
+        "official_table"
+    ]["temperature_rise_limit_c"] = 29
+    with pytest.raises(Exception, match="evidence was altered"):
+        validator.validate_selection(changed, candidates)
+
+    changed = copy.deepcopy(selection)
+    changed["official_part_evidence"]["MOLEX-MICROFIT-PS-43045"][
+        "electrical_rating"
+    ]["temperature_max_c"] = 104
+    with pytest.raises(Exception, match="rating|evidence|derivation"):
+        validator.validate_selection(changed, candidates)
+
+    mutations = (
+        ("connector_maximum_c", 104),
+        ("official_temperature_rise_limit_c", 29),
+        ("engineering_safety_factor", 0.74),
+        ("formula", "unsupported fabricated formula"),
+        ("expected_temperature_rise_at_2a_c", 7.4),
+        ("thermal_margin_at_2a_c", 12.4),
+    )
+    for field, value in mutations:
+        changed = copy.deepcopy(selection)
+        changed["interfaces"]["console"]["current_qualification"][field] = value
+        with pytest.raises(Exception, match="derivation|margin|evidence"):
+            validator.validate_selection(changed, candidates)
 
 
 def test_module_audits_cover_every_required_safety_field(

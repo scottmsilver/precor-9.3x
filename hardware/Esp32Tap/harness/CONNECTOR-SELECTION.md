@@ -28,11 +28,20 @@ drawing. Labels and color are secondary defenses.
 Micro-Fit is selected over the smaller candidates because the connector family
 is rated 600 V and -40 to +105 °C; the selected
 Alpha Wire 3051 conductors are rated 300 V and -40 to +105 °C. The 8.5 A
-maximum contact class provides margin for the conservative 2.0 A
-individual-contact rule. Selection does not trust a free current field: the
-committed validator looks up the exact 22 AWG, fully loaded 8- or 10-circuit,
-+85 °C row in the pinned Molex Micro-Fit evidence. Both selected rows derive
-4.0 A per contact. The validator
+maximum contact class is not used as the qualified value. Molex PS-43045
+publishes 22 AWG wire-to-board values of 4.5 A at 6 circuits and 4.0 A at 12
+circuits, each on a 30 °C maximum temperature-rise basis. It does not publish
+an 8-/10-circuit +85 °C row and explicitly requires further application
+derating.
+
+The committed validator therefore uses the worse 12-circuit 4.0 A value for
+both selected circuit counts and labels the following calculation a
+`CONSERVATIVE_ENGINEERING_DERIVATION`, not a manufacturer rating. At +85 °C,
+the 105 °C connector limit allows 20 °C rise. I²R scaling plus an additional
+0.75 safety factor gives
+`4.0 * sqrt(20 / 30) * 0.75 = 2.449 A/contact`. At the required 2.0 A, the
+expected rise is `30 * (2 / 4)² = 7.5 °C`, leaving 12.5 °C to the connector
+limit. The validator recomputes each result and
 assigns the full 2.0 A load to each remaining new header/terminal/22 AWG wire
 path in turn; it never credits equal sharing. Candidate geometry is explicitly
 modeled, not a completed layout. The DuraClik and TE Micro MATE-N-LOK rows

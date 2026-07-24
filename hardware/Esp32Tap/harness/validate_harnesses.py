@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 from pathlib import Path
 import sys
 from typing import Any, Iterable
@@ -59,20 +60,20 @@ COMMON_HARNESS_IDENTITIES = {
     "strain_relief": ("HellermannTyton", "151-00745", None),
     "rj45_termination": ("TE Connectivity", "1932219-1", None),
 }
-EXPECTED_MICROFIT_DERATING_ROWS = [
-    {
-        "wire_awg": 22,
-        "circuit_count": 8,
-        "ambient_c": 85,
-        "current_per_contact_a": 4.0,
-    },
-    {
-        "wire_awg": 22,
-        "circuit_count": 10,
-        "ambient_c": 85,
-        "current_per_contact_a": 4.0,
-    },
-]
+EXPECTED_MICROFIT_OFFICIAL_TABLE = {
+    "configuration": "wire_to_board",
+    "wire_awg": 22,
+    "temperature_rise_limit_c": 30,
+    "ambient_derating_required": True,
+    "manufacturer_published_85c_rating": False,
+    "rows": [
+        {"circuit_count": 6, "current_per_contact_a": 4.5},
+        {"circuit_count": 12, "current_per_contact_a": 4.0},
+    ],
+}
+MICROFIT_DERIVATION_FORMULA = (
+    "I_base*sqrt(allowed_rise/official_rise)*safety_factor"
+)
 
 
 def validate_requirements(record: object) -> dict[str, Any]:
@@ -147,28 +148,81 @@ def derive_selected_contact_current_a(
     if (
         source.get("manufacturer"),
         source.get("mpn"),
-        source.get("derating_table"),
-    ) != ("Molex", "PS-43045", EXPECTED_MICROFIT_DERATING_ROWS):
+        source.get("official_table"),
+    ) != ("Molex", "PS-43045", EXPECTED_MICROFIT_OFFICIAL_TABLE):
         raise EvidenceError("official Micro-Fit derating evidence was altered")
-    if qualification.get("circuit_count") != interface["header"].get("positions"):
+    if qualification.get("selected_circuit_count") != interface["header"].get(
+        "positions"
+    ):
         raise EvidenceError("current derating circuit count does not match header")
-    if qualification.get("circuit_count") != interface["housing"].get("positions"):
+    if qualification.get("selected_circuit_count") != interface["housing"].get(
+        "positions"
+    ):
         raise EvidenceError("current derating circuit count does not match housing")
     if qualification.get("wire_awg") != interface["wire"].get("power_ground_awg"):
         raise EvidenceError("current derating wire gauge does not match selected wire")
-    lookup_fields = ("wire_awg", "circuit_count", "ambient_c")
+    reference_circuits = qualification.get(
+        "conservative_reference_circuit_count"
+    )
     rows = [
         row
-        for row in source.get("derating_table", [])
-        if all(row.get(field) == qualification.get(field) for field in lookup_fields)
+        for row in source["official_table"]["rows"]
+        if row.get("circuit_count") == reference_circuits
     ]
     if len(rows) != 1:
-        raise EvidenceError("exact circuit-count/+85 C derating row is absent")
-    derived = float(rows[0]["current_per_contact_a"])
+        raise EvidenceError("conservative official circuit-count row is absent")
+    base_current = float(rows[0]["current_per_contact_a"])
+    official_rise = float(source["official_table"]["temperature_rise_limit_c"])
+    connector_maximum = float(source["electrical_rating"]["temperature_max_c"])
+    ambient = float(qualification.get("ambient_c", -999))
+    allowed_rise = connector_maximum - ambient
+    safety_factor = float(qualification.get("engineering_safety_factor", 0))
+    if official_rise <= 0 or allowed_rise <= 0:
+        raise EvidenceError("Micro-Fit temperature-rise derivation is not positive")
+    if not 0 < safety_factor <= 0.75:
+        raise EvidenceError("engineering safety factor must be within 0..0.75")
+    derived = (
+        base_current
+        * math.sqrt(allowed_rise / official_rise)
+        * safety_factor
+    )
+    expected_rise = official_rise * (2.0 / base_current) ** 2
+    thermal_margin = allowed_rise - expected_rise
     if qualification.get("ambient_c") != 85:
-        raise EvidenceError("current derating must use +85 C")
-    if qualification.get("derived_current_per_contact_a") != derived:
-        raise EvidenceError("selected derived current does not match derating evidence")
+        raise EvidenceError("engineering derivation must use +85 C ambient")
+    exact_fields = {
+        "wire_awg": 22,
+        "conservative_reference_circuit_count": 12,
+        "connector_maximum_c": connector_maximum,
+        "official_temperature_rise_limit_c": official_rise,
+        "base_current_per_contact_a": base_current,
+        "allowed_temperature_rise_c": allowed_rise,
+        "engineering_safety_factor": 0.75,
+        "formula": MICROFIT_DERIVATION_FORMULA,
+        "basis_class": "CONSERVATIVE_ENGINEERING_DERIVATION",
+    }
+    for field, expected in exact_fields.items():
+        if qualification.get(field) != expected:
+            raise EvidenceError(
+                f"Micro-Fit engineering derivation field changed: {field}"
+            )
+    numeric_results = {
+        "derived_current_per_contact_a": derived,
+        "expected_temperature_rise_at_2a_c": expected_rise,
+        "thermal_margin_at_2a_c": thermal_margin,
+    }
+    for field, expected in numeric_results.items():
+        if not math.isclose(
+            float(qualification.get(field, math.nan)),
+            expected,
+            rel_tol=0,
+            abs_tol=1e-12,
+        ):
+            raise EvidenceError(
+                f"Micro-Fit engineering derivation result changed: {field}"
+            )
+    if thermal_margin <= 0:
+        raise EvidenceError("Micro-Fit thermal margin is not positive")
     return derived
 
 
