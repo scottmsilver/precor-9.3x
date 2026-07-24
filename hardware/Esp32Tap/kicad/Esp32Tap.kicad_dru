@@ -1,12 +1,12 @@
 (version 1)
 
-# JLCPCB JLC04161H-7628, L1 referenced to solid L2.  The 0.285mm artwork
-# width and 0.200mm edge gap are the rounded 90-ohm geometry accepted by the
-# fabrication basis.  USB is data-only and must never change layer.
+# JLCPCB JLC04161H-7628, L1 referenced to solid L2.  The official calculator
+# result is 0.2906mm artwork width with a 0.200mm edge gap for 90 ohms.
+# USB is data-only and must never change layer.
 (rule "USB_90R_JLC04161H geometry"
     (layer "F.Cu")
     (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.Type == 'Track' && A.NetClass == 'USB_90R_JLC04161H'")
-    (constraint track_width (min 0.285mm) (max 0.285mm) (opt 0.285mm))
+    (constraint track_width (min 0.2906mm) (max 0.2906mm) (opt 0.2906mm))
 )
 
 (rule "USB_90R_JLC04161H controlled-pair gap"

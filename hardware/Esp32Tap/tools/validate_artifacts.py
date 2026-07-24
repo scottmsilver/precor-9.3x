@@ -27,9 +27,9 @@ EXPECTED_LAYERS = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
 EXPECTED_STACKUP = [
     ("F.Cu", "copper", 0.035, None),
     ("dielectric 1", "prepreg", 0.2104, 4.4),
-    ("In1.Cu", "copper", 0.0175, None),
+    ("In1.Cu", "copper", 0.0152, None),
     ("dielectric 2", "core", 1.065, 4.38),
-    ("In2.Cu", "copper", 0.0175, None),
+    ("In2.Cu", "copper", 0.0152, None),
     ("dielectric 3", "prepreg", 0.2104, 4.4),
     ("B.Cu", "copper", 0.035, None),
 ]
@@ -234,11 +234,11 @@ def validate_connectivity_and_routing(board: dict[str, Any]) -> None:
     )
     require(
         all(
-            near(track["width_mm"], 0.285)
+            near(track["width_mm"], 0.2906)
             for track in usb_tracks
             if track.get("role") != "CONNECTOR_BREAKOUT"
         ),
-        "controlled USB trace width is not 0.285 mm",
+        "controlled USB trace width is not 0.2906 mm",
     )
     pair_sections = {
         track.get("pair_section")

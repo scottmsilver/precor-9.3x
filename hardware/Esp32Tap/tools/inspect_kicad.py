@@ -243,6 +243,11 @@ def annotate_usb(
     candidates: list[tuple[float, str, str, dict[str, Any], dict[str, Any]]] = []
     for negative in minus:
         for positive in plus:
+            if (
+                negative.get("role") == "CONNECTOR_BREAKOUT"
+                or positive.get("role") == "CONNECTOR_BREAKOUT"
+            ):
+                continue
             if not parallel(negative, positive):
                 continue
             if abs(segment_length(negative) - segment_length(positive)) > 0.01:
@@ -259,7 +264,7 @@ def annotate_usb(
                     positive["end"],
                 ),
             )
-            if abs(distance - 0.485) <= 0.01:
+            if abs(distance - 0.4906) <= 0.01:
                 candidates.append(
                     (
                         distance,

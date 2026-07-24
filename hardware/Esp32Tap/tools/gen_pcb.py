@@ -53,6 +53,9 @@ USB_NETS = {
     "USB_DN_R",
     "USB_DP_R",
 }
+USB_CONTROLLED_WIDTH = 0.2906
+USB_EDGE_GAP = 0.2000
+USB_CENTER_SPACING = USB_CONTROLLED_WIDTH + USB_EDGE_GAP
 MANUAL_NETS = USB_NETS | {
     "GND",
     "+8V_F",
@@ -726,7 +729,7 @@ class Generator:
                 u31,
             ],
             "USB_DN",
-            0.285,
+            USB_CONTROLLED_WIDTH,
         )
         dp_x = 90.9
         self.add_track([a6, (dp_x, a6[1])], "USB_DP", 0.20)
@@ -742,14 +745,17 @@ class Generator:
                 u33,
             ],
             "USB_DP",
-            0.285,
+            USB_CONTROLLED_WIDTH,
         )
 
-        # Long post-ESD pair.  The central parallel run has 0.485 mm
-        # centre-to-centre separation: 0.285 mm copper + 0.200 mm edge gap.
+        # Long post-ESD pair.  The central parallel run uses the official
+        # JLC04161H-7628 90-ohm result: 0.2906 mm copper plus a 0.2000 mm
+        # edge gap gives 0.4906 mm centre-to-centre separation.
         u36, u34 = self.pad("U3", "6"), self.pad("U3", "4")
         r151, r161 = self.pad("R15", "1"), self.pad("R16", "1")
-        dp_y, dn_y = 24.000, 24.485
+        dp_y, dn_y = 24.000, 24.000 + USB_CENTER_SPACING
+        dp_outer_x = 83.2 + USB_CENTER_SPACING
+        dp_inner_x = 69.5 + USB_CENTER_SPACING
         self.add_track(
             [
                 u36,
@@ -761,15 +767,15 @@ class Generator:
                 r151,
             ],
             "USB_DN_MCU",
-            0.285,
+            USB_CONTROLLED_WIDTH,
         )
         self.add_track(
             [
                 u34,
-                (83.685, u34[1]),
-                (83.685, dp_y),
-                (69.985, dp_y),
-                (69.985, 22.0),
+                (dp_outer_x, u34[1]),
+                (dp_outer_x, dp_y),
+                (dp_inner_x, dp_y),
+                (dp_inner_x, 22.0),
                 (71.67, 22.0),
                 (71.67, dp_y),
                 (62.483742, dp_y),
@@ -777,23 +783,23 @@ class Generator:
                 r161,
             ],
             "USB_DP_MCU",
-            0.285,
+            USB_CONTROLLED_WIDTH,
         )
 
         r152, r162 = self.pad("R15", "2"), self.pad("R16", "2")
         u113, u114 = self.pad("U1", "13"), self.pad("U1", "14")
         c131, c141 = self.pad("C13", "1"), self.pad("C14", "1")
-        self.add_track([r152, u113], "USB_DN_R", 0.285)
-        self.add_track([r162, u114], "USB_DP_R", 0.285)
+        self.add_track([r152, u113], "USB_DN_R", USB_CONTROLLED_WIDTH)
+        self.add_track([r162, u114], "USB_DP_R", USB_CONTROLLED_WIDTH)
         self.add_track(
             [c131, (c131[0], r152[1]), r152],
             "USB_DN_R",
-            0.285,
+            USB_CONTROLLED_WIDTH,
         )
         self.add_track(
             [c141, (c141[0], r162[1]), r162],
             "USB_DP_R",
-            0.285,
+            USB_CONTROLLED_WIDTH,
         )
         # The paired A/B ground contacts share copper and tie directly to the
         # plated shell stakes; those stakes provide the plane connection.
@@ -1505,10 +1511,10 @@ class Generator:
 \t\t\t(layer "F.Cu" (type "copper") (thickness 0.035))
 \t\t\t(layer "dielectric 1" (type "prepreg") (thickness 0.2104)
 \t\t\t\t(material "7628 RC49%") (epsilon_r 4.4) (loss_tangent 0.02))
-\t\t\t(layer "In1.Cu" (type "copper") (thickness 0.0175))
+\t\t\t(layer "In1.Cu" (type "copper") (thickness 0.0152))
 \t\t\t(layer "dielectric 2" (type "core") (thickness 1.065)
 \t\t\t\t(material "NP-155F") (epsilon_r 4.38) (loss_tangent 0.02))
-\t\t\t(layer "In2.Cu" (type "copper") (thickness 0.0175))
+\t\t\t(layer "In2.Cu" (type "copper") (thickness 0.0152))
 \t\t\t(layer "dielectric 3" (type "prepreg") (thickness 0.2104)
 \t\t\t\t(material "7628 RC49%") (epsilon_r 4.4) (loss_tangent 0.02))
 \t\t\t(layer "B.Cu" (type "copper") (thickness 0.035))

@@ -19,12 +19,15 @@ EXPECTED_LAYERS = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
 EXPECTED_STACKUP = [
     ("F.Cu", "copper", 0.035, None),
     ("dielectric 1", "prepreg", 0.2104, 4.4),
-    ("In1.Cu", "copper", 0.0175, None),
+    ("In1.Cu", "copper", 0.0152, None),
     ("dielectric 2", "core", 1.065, 4.38),
-    ("In2.Cu", "copper", 0.0175, None),
+    ("In2.Cu", "copper", 0.0152, None),
     ("dielectric 3", "prepreg", 0.2104, 4.4),
     ("B.Cu", "copper", 0.035, None),
 ]
+USB_CONTROLLED_WIDTH_MM = 0.2906
+USB_EDGE_GAP_MM = 0.2000
+USB_CENTER_SPACING_MM = USB_CONTROLLED_WIDTH_MM + USB_EDGE_GAP_MM
 USB_ROUTE_PATHS = {
     "D-": {"USB_DN", "USB_DN_MCU", "USB_DN_R"},
     "D+": {"USB_DP", "USB_DP_MCU", "USB_DP_R"},
@@ -529,7 +532,7 @@ def _minimal_inspector_report() -> dict[str, Any]:
                     "id": "track:1",
                     "net": "N",
                     "layer": "F.Cu",
-                    "width_mm": 0.285,
+                    "width_mm": USB_CONTROLLED_WIDTH_MM,
                     "start": [0.0, 0.0],
                     "end": [1.0, 0.0],
                 }
@@ -633,7 +636,7 @@ def _usb_connectivity_report() -> dict[str, Any]:
                 "id": copper_id,
                 "net": net,
                 "layer": "F.Cu",
-                "width_mm": 0.285,
+                "width_mm": USB_CONTROLLED_WIDTH_MM,
                 "start": [0.0, 0.0],
                 "end": [1.0, 0.0],
             }
@@ -699,7 +702,7 @@ def test_usb_connectivity_rejects_a_disconnected_arbitrary_segment() -> None:
             "id": "track:USB_DP:orphan",
             "net": "USB_DP",
             "layer": "F.Cu",
-            "width_mm": 0.285,
+            "width_mm": USB_CONTROLLED_WIDTH_MM,
             "start": [10.0, 10.0],
             "end": [11.0, 10.0],
         }
@@ -866,7 +869,7 @@ def test_checked_in_usb_copper_has_no_vias_or_back_layer_segments(
     assert len(widths) == len(usb_blocks)
     assert all(
         width == pytest.approx(0.20)
-        or width == pytest.approx(0.285)
+        or width == pytest.approx(USB_CONTROLLED_WIDTH_MM)
         for width in widths
     )
     assert sum(width == pytest.approx(0.20) for width in widths) == 4
@@ -1036,7 +1039,7 @@ def test_inspected_usb_pair_is_front_copper_only(
         for item in breakout
     )
     assert all(
-        item.get("width_mm") == pytest.approx(0.285)
+        item.get("width_mm") == pytest.approx(USB_CONTROLLED_WIDTH_MM)
         for item in tracks
         if item.get("role") != "CONNECTOR_BREAKOUT"
     )
@@ -1260,8 +1263,12 @@ def test_usb_pair_has_exact_gap_match_and_reference_plane(
             _point_segment_distance(minus["start"], plus["start"], plus["end"]),
             _point_segment_distance(minus["end"], plus["start"], plus["end"]),
         )
-        edge_gap = center_gap - 0.285
-        assert edge_gap == pytest.approx(0.200, abs=0.002)
+        assert center_gap == pytest.approx(
+            USB_CENTER_SPACING_MM,
+            abs=0.002,
+        )
+        edge_gap = center_gap - USB_CONTROLLED_WIDTH_MM
+        assert edge_gap == pytest.approx(USB_EDGE_GAP_MM, abs=0.002)
         assert minus.get("reference_plane") == "In1.Cu:GND"
         assert plus.get("reference_plane") == "In1.Cu:GND"
 
@@ -1688,9 +1695,13 @@ def test_project_and_dru_lock_named_usb_geometry(
     classes = project["net_settings"]["classes"]
     usb = [item for item in classes if item["name"] == "USB_90R_JLC04161H"]
     assert len(usb) == 1
-    assert usb[0]["track_width"] == pytest.approx(0.285)
-    assert usb[0]["diff_pair_width"] == pytest.approx(0.285)
-    assert usb[0]["diff_pair_gap"] == pytest.approx(0.200)
+    assert usb[0]["track_width"] == pytest.approx(
+        USB_CONTROLLED_WIDTH_MM
+    )
+    assert usb[0]["diff_pair_width"] == pytest.approx(
+        USB_CONTROLLED_WIDTH_MM
+    )
+    assert usb[0]["diff_pair_gap"] == pytest.approx(USB_EDGE_GAP_MM)
     assignments = project["net_settings"]["netclass_assignments"]
     assert assignments
     for net in USB_ROUTE_NETS:
@@ -1704,7 +1715,7 @@ def test_project_and_dru_lock_named_usb_geometry(
     )
     for token in (
         "USB_90R_JLC04161H",
-        "0.285mm",
+        "0.2906mm",
         "0.200mm",
         "0.8mm",
         "F.Cu",
