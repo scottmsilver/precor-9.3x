@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import hashlib
 import itertools
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -245,6 +247,64 @@ def _net_for(design: SimpleNamespace, ref: str, pad: str) -> str:
 def _terminal_nets(design: SimpleNamespace, ref: str) -> set[str]:
     component = _component(design, ref)
     return {_net_for(design, ref, pad) for pad in component[7]}
+
+
+def _move_pin(
+    design: SimpleNamespace,
+    pin: tuple[str, str],
+    target_net: str,
+) -> None:
+    source_nets = [
+        net
+        for net, pins in design.NETS.items()
+        if pin in pins
+    ]
+    assert len(source_nets) == 1, pin
+    design.NETS[source_nets[0]].remove(pin)
+    design.NETS[target_net].append(pin)
+
+
+def _swap_pin_nets(
+    design: SimpleNamespace,
+    first: tuple[str, str],
+    second: tuple[str, str],
+) -> None:
+    first_net = _net_for(design, *first)
+    second_net = _net_for(design, *second)
+    assert first_net != second_net
+    design.NETS[first_net].remove(first)
+    design.NETS[second_net].remove(second)
+    design.NETS[first_net].append(second)
+    design.NETS[second_net].append(first)
+
+
+def _add_two_pin_passive(
+    design: SimpleNamespace,
+    ref: str,
+    first_net: str,
+    second_net: str,
+) -> None:
+    design.COMPONENTS[ref] = (
+        "10k",
+        "Resistor_SMD",
+        "R_0603_1608Metric",
+        "C25804",
+        "Basic",
+        0.002,
+        "Test-only injected bridge",
+        {"1": "1", "2": "2"},
+    )
+    design.PIN_TYPES[(ref, "1")] = "passive"
+    design.PIN_TYPES[(ref, "2")] = "passive"
+    design.NETS[first_net].append((ref, "1"))
+    design.NETS[second_net].append((ref, "2"))
+
+
+def _assert_design_invalid(
+    design: SimpleNamespace,
+    match: str,
+) -> pytest.ExceptionInfo[ValueError]:
+    return pytest.raises(ValueError, match=match)
 
 
 def _u6_equations(
@@ -752,3 +812,330 @@ def test_required_hardware_gate_truth_table(
 
     assert relay_gate == (rail_3v3 and tread_ok and relay_cmd)
     assert tx_gate == (rail_3v3 and tread_ok and tx_enable)
+
+
+def test_validation_uses_explicit_value_error(
+    design: SimpleNamespace,
+) -> None:
+    assert issubclass(design.DesignValidationError, ValueError)
+
+
+def test_validate_rejects_incomplete_pin_types(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    mutated.PIN_TYPES.pop(("U6", "7"))
+
+    with _assert_design_invalid(
+        mutated,
+        r"PIN_TYPES.*missing.*U6.*7.*extra",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_unknown_pin_type(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    mutated.PIN_TYPES[("U6", "7")] = "totem_pole"
+
+    with _assert_design_invalid(
+        mutated,
+        r"PIN_TYPES.*unknown.*totem_pole",
+    ):
+        mutated.validate()
+
+
+@pytest.mark.parametrize(
+    ("pin", "expected_type"),
+    [
+        (("U6", "7"), "output"),
+        (("U4", "1"), "open_collector"),
+        (("U7", "4"), "tri_state"),
+        (("U6", "8"), "power_in"),
+    ],
+    ids=("safety-output", "open-collector", "tri-state", "power-pin"),
+)
+def test_validate_uses_independent_active_pin_type_oracle(
+    load_design: Callable[[], SimpleNamespace],
+    pin: tuple[str, str],
+    expected_type: str,
+) -> None:
+    mutated = load_design()
+    mutated.PIN_TYPES[pin] = "passive"
+
+    derived_overrides = dict(mutated._PIN_TYPE_OVERRIDES)
+    derived_overrides[pin] = "passive"
+    mutated.validate.__globals__["_PIN_TYPE_OVERRIDES"] = (
+        derived_overrides
+    )
+
+    with _assert_design_invalid(
+        mutated,
+        rf"PIN_TYPES active lock.*{pin[0]}.*{pin[1]}.*"
+        rf"actual=passive.*expected={expected_type}",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_populated_dnp(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    component = list(mutated.COMPONENTS["C13"])
+    component[3] = "C14663"
+    component[4] = "Basic"
+    component[5] = 0.004
+    mutated.COMPONENTS["C13"] = tuple(component)
+
+    with _assert_design_invalid(
+        mutated,
+        r"DNP.*C13.*populated.*LCSC.*C14663",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_missing_dnp_declaration(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    mutated.DNP.remove("C13")
+
+    with _assert_design_invalid(
+        mutated,
+        r"DNP set mismatch.*missing=.*C13.*extra=",
+    ):
+        mutated.validate()
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        (0, "wrong-value"),
+        (2, "wrong-footprint"),
+        (7, {"1": "2", "2": "1"}),
+    ],
+    ids=("part", "package", "pad-map"),
+)
+def test_validate_rejects_part_package_and_pad_lock_changes(
+    load_design: Callable[[], SimpleNamespace],
+    field: int,
+    replacement: object,
+) -> None:
+    mutated = load_design()
+    component = list(mutated.COMPONENTS["F1"])
+    component[field] = replacement
+    mutated.COMPONENTS["F1"] = tuple(component)
+
+    with _assert_design_invalid(
+        mutated,
+        r"F1 part/package/pad lock mismatch.*actual=.*expected=",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_direct_vbus_power_bridge(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    _move_pin(mutated, ("C11", "2"), "+3V3")
+
+    with _assert_design_invalid(
+        mutated,
+        r"VBUS isolation lock C11\.2.*"
+        r"actual=\+3V3.*expected=GND",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_two_hop_vbus_power_bridge(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    mutated.NETS["VBUS_BRIDGE"] = [("C11", "2")]
+    mutated.NETS["GND"].remove(("C11", "2"))
+    _add_two_pin_passive(
+        mutated,
+        "R99",
+        "VBUS_BRIDGE",
+        "+3V3",
+    )
+
+    with _assert_design_invalid(
+        mutated,
+        r"VBUS isolation lock C11\.2.*"
+        r"actual=VBUS_BRIDGE.*expected=GND",
+    ):
+        mutated.validate()
+
+
+def test_validate_requires_vbus_lock_for_every_adjacent_terminal(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    component = list(mutated.COMPONENTS["C11"])
+    pad_map = dict(component[7])
+    pad_map["3"] = "unexpected"
+    component[7] = pad_map
+    mutated.COMPONENTS["C11"] = tuple(component)
+    mutated.PIN_TYPES[("C11", "3")] = "passive"
+    mutated.NETS["GND"].append(("C11", "3"))
+
+    with _assert_design_invalid(
+        mutated,
+        r"VBUS isolation lock coverage.*"
+        r"missing=.*C11.*3.*extra=",
+    ):
+        mutated.validate()
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "diagnostic"),
+    [
+        (("U1", "2"), ("U1", "1"), r"U1\.1.*actual=\+3V3.*expected=GND"),
+        (("U6", "8"), ("U6", "4"), r"U6\.4.*actual=\+3V3.*expected=GND"),
+    ],
+    ids=("esp32-supply", "and-gate-supply"),
+)
+def test_validate_rejects_exact_power_pad_swaps(
+    load_design: Callable[[], SimpleNamespace],
+    first: tuple[str, str],
+    second: tuple[str, str],
+    diagnostic: str,
+) -> None:
+    mutated = load_design()
+    _swap_pin_nets(mutated, first, second)
+
+    with _assert_design_invalid(
+        mutated,
+        rf"power-pad lock.*{diagnostic}",
+    ):
+        mutated.validate()
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "diagnostic"),
+    [
+        (("J3", "A6"), ("J3", "A7"), r"J3\.A6"),
+        (("J3", "B6"), ("J3", "B7"), r"J3\.B6"),
+        (("U3", "1"), ("U3", "3"), r"U3\.1"),
+        (("U3", "4"), ("U3", "6"), r"U3\.4"),
+    ],
+    ids=(
+        "connector-a",
+        "connector-b",
+        "protector-connector-side",
+        "protector-mcu-side",
+    ),
+)
+def test_validate_rejects_usb_polarity_swaps(
+    load_design: Callable[[], SimpleNamespace],
+    first: tuple[str, str],
+    second: tuple[str, str],
+    diagnostic: str,
+) -> None:
+    mutated = load_design()
+    expected_net = _net_for(mutated, *first)
+    _swap_pin_nets(mutated, first, second)
+    actual_net = _net_for(mutated, *first)
+
+    with _assert_design_invalid(
+        mutated,
+        rf"USB polarity lock {diagnostic}.*"
+        rf"actual={actual_net}.*expected={expected_net}",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_relay_gate_bypass(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    _move_pin(mutated, ("U5", "3"), "RELAY_CMD")
+
+    with _assert_design_invalid(
+        mutated,
+        r"relay safety lock U5\.3.*"
+        r"actual=RELAY_CMD.*expected=RELAY_GATE",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_tx_gate_bypass(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    _move_pin(mutated, ("U7", "1"), "TX_ENABLE")
+
+    with _assert_design_invalid(
+        mutated,
+        r"TX gate safety lock U7\.1.*"
+        r"actual=TX_ENABLE.*expected=TX_GATE",
+    ):
+        mutated.validate()
+
+
+def test_validate_rejects_tx_buffer_bypass(
+    load_design: Callable[[], SimpleNamespace],
+) -> None:
+    mutated = load_design()
+    _add_two_pin_passive(mutated, "R99", "TX_BUF", "GND")
+    _move_pin(mutated, ("R6", "1"), "ESP_TX")
+
+    with _assert_design_invalid(
+        mutated,
+        r"TX buffer safety lock R6\.1.*"
+        r"actual=ESP_TX.*expected=TX_BUF",
+    ):
+        mutated.validate()
+
+
+def test_validation_lock_oracles_are_immutable(
+    design: SimpleNamespace,
+) -> None:
+    for oracle_name in (
+        "_PART_LOCKS",
+        "_ACTIVE_PIN_TYPE_LOCKS",
+        "_VBUS_ADJACENT_PIN_NET_LOCKS",
+        "_POWER_PIN_NET_LOCKS",
+        "_USB_PIN_NET_LOCKS",
+        "_SAFETY_PIN_NET_LOCKS",
+    ):
+        oracle = getattr(design, oracle_name)
+        with pytest.raises(TypeError):
+            oracle[("__test__", "1")] = "unsafe"
+
+    assert isinstance(design._PART_LOCKS["C2"][4], tuple)
+    assert isinstance(design._PART_LOCKS["C3"][4], tuple)
+    assert design._PART_LOCKS["C2"][4] is not (
+        design._PART_LOCKS["C3"][4]
+    )
+
+
+def test_optimized_python_still_rejects_invalid_design(
+    design_path: Path,
+) -> None:
+    script = (
+        "import runpy\n"
+        f"design = runpy.run_path({str(design_path)!r}, "
+        "run_name='optimized_validation_test')\n"
+        "design['PIN_TYPES'].pop(('U6', '7'))\n"
+        "try:\n"
+        "    design['validate']()\n"
+        "except ValueError as exc:\n"
+        "    print(exc)\n"
+        "else:\n"
+        "    raise SystemExit('optimized validation accepted an "
+        "incomplete PIN_TYPES table')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-O", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "PIN_TYPES" in result.stdout
+    assert "missing" in result.stdout
