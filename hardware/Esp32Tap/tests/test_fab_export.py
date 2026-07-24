@@ -41,6 +41,18 @@ GERBER_FUNCTIONS = {
     "Esp32Tap-B_Silkscreen.gbo": "Legend,Bot",
     "Esp32Tap-Edge_Cuts.gm1": "Profile,NP",
 }
+GERBER_POLARITIES = {
+    filename: (
+        None
+        if filename == "Esp32Tap-Edge_Cuts.gm1"
+        else (
+            "Negative"
+            if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"}
+            else "Positive"
+        )
+    )
+    for filename in GERBER_FUNCTIONS
+}
 JOB_FUNCTIONS = {
     "Esp32Tap-F_Cu.gtl": "Copper,L1,Top",
     "Esp32Tap-In1_Cu.g1": "Copper,L2,Inr",
@@ -68,16 +80,23 @@ def fab_tool(esp32tap_dir: Path) -> SimpleNamespace:
 def _write_valid_stage(directory: Path) -> None:
     directory.mkdir(parents=True)
     for filename, function in GERBER_FUNCTIONS.items():
+        polarity = GERBER_POLARITIES[filename]
         (directory / filename).write_text(
             "\n".join(
                 [
                     "%TF.GenerationSoftware,KiCad,Pcbnew,10.0.1*%",
                     "%TF.CreationDate,2026-07-24T00:00:00-07:00*%",
                     f"%TF.FileFunction,{function}*%",
+                    *(
+                        [f"%TF.FilePolarity,{polarity}*%"]
+                        if polarity is not None
+                        else []
+                    ),
                     (
                         "G04 Created by KiCad (PCBNEW 10.0.1) "
                         "date 2026-07-24 00:00:00*"
                     ),
+                    "%LPD*%",
                     "M02*",
                     "",
                 ]
@@ -137,6 +156,7 @@ def test_exact_rev_b_four_layer_member_set_is_locked(
 ) -> None:
     assert fab_tool.EXPECTED_FAB_FILES == EXPECTED_FAB_FILES
     assert fab_tool.GERBER_FUNCTIONS == GERBER_FUNCTIONS
+    assert fab_tool.GERBER_POLARITIES == GERBER_POLARITIES
     assert fab_tool.JOB_FUNCTIONS == JOB_FUNCTIONS
 
 
@@ -246,6 +266,11 @@ def test_normalization_fails_if_required_creation_date_is_missing(
         ("wrong-function", "FileFunction"),
         ("extra-function", "FileFunction"),
         ("empty-function", "FileFunction"),
+        ("wrong-polarity", "FilePolarity"),
+        ("missing-polarity", "FilePolarity"),
+        ("duplicate-polarity", "FilePolarity"),
+        ("missing-lpd", "LPD"),
+        ("duplicate-lpd", "LPD"),
         ("wrong-drill-span", "drill FileFunction"),
         ("extra-drill-function", "drill FileFunction"),
         ("gerber-trailing-garbage", "end marker"),
@@ -300,6 +325,49 @@ def test_stage_validation_fails_closed(
                 "%TF.FileFunction,Copper,L2,Inr*%",
                 "%TF.FileFunction,*%\n"
                 "%TF.FileFunction,Copper,L2,Inr*%",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "wrong-polarity":
+        mask = stage / "Esp32Tap-F_Mask.gts"
+        mask.write_text(
+            mask.read_text(encoding="utf-8").replace(
+                "%TF.FilePolarity,Negative*%",
+                "%TF.FilePolarity,Positive*%",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "missing-polarity":
+        copper = stage / "Esp32Tap-F_Cu.gtl"
+        copper.write_text(
+            copper.read_text(encoding="utf-8").replace(
+                "%TF.FilePolarity,Positive*%\n",
+                "",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "duplicate-polarity":
+        copper = stage / "Esp32Tap-F_Cu.gtl"
+        copper.write_text(
+            copper.read_text(encoding="utf-8").replace(
+                "%TF.FilePolarity,Positive*%",
+                "%TF.FilePolarity,Positive*%\n"
+                "%TF.FilePolarity,Positive*%",
+            ),
+            encoding="utf-8",
+        )
+    elif mutation == "missing-lpd":
+        copper = stage / "Esp32Tap-F_Cu.gtl"
+        copper.write_text(
+            copper.read_text(encoding="utf-8").replace("%LPD*%\n", ""),
+            encoding="utf-8",
+        )
+    elif mutation == "duplicate-lpd":
+        copper = stage / "Esp32Tap-F_Cu.gtl"
+        copper.write_text(
+            copper.read_text(encoding="utf-8").replace(
+                "%LPD*%",
+                "%LPD*%\n%LPD*%",
             ),
             encoding="utf-8",
         )
@@ -661,6 +729,7 @@ def test_assembly_parity_accepts_only_populated_exact_mappings(
         ("missing-board-ref", "PCB references"),
         ("wrong-cpl-position", "CPL U1 Mid X"),
         ("wrong-cpl-rotation", "CPL U1 Rotation"),
+        ("fractional-board-rotation", "PCB U1 rotation"),
         ("wrong-board-layer", "PCB U1 layer"),
         ("dnp-flag-missing", "PCB C1 assembly flags"),
         ("dnp-not-excluded", "PCB C1 assembly flags"),
@@ -701,6 +770,8 @@ def test_assembly_parity_fails_closed(
         fixture["cpl_rows"][0]["Mid X"] = "10.100mm"
     elif mutation == "wrong-cpl-rotation":
         fixture["cpl_rows"][0]["Rotation"] = "0"
+    elif mutation == "fractional-board-rotation":
+        fixture["board"]["footprints"]["U1"]["rotation_deg"] = 270.4
     elif mutation == "wrong-board-layer":
         fixture["board"]["footprints"]["U1"]["layer"] = "B.Cu"
     elif mutation == "dnp-flag-missing":

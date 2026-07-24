@@ -4,83 +4,104 @@
 authorize substitutions, or pay. Do not connect an Emulate-capable build to
 the treadmill.**
 
-This is the concise continuation brief for the hardware under
-`hardware/Esp32Tap/`. Repository checks can establish internal consistency;
-they cannot close the production-firmware, physical-bench, or vendor gates.
+Claude: treat this file as the continuation brief. Preserve the separation
+between repository evidence, vendor review, and physical safety evidence.
+Never turn a passing model or KiCad check into a claim about an assembled
+treadmill.
 
-## Fixed design decisions
+## Non-negotiable design decisions
 
-- The only board power source is treadmill **+8 V on the inline serial
-  cable**. J1 and J2 pass that rail through directly; the local branch is
-  protected by F1, D1, and D3 before VIN.
-- USB-C is **data and VBUS-presence only**. VBUS has no path to VIN, +5V_RLY,
-  or +3V3. Programming therefore requires a USB data cable **and**
-  current-limited +8 V bench power. USB alone cannot power or program Rev B.
-- K1 is a 5 V, 237 ohm G6K-2F-Y relay. Its NC pole is the default console-to-
-  motor bypass. Treadmill-derived TREAD_OK is hardware-ANDed with both relay
-  and TX permission; firmware cannot override an unsafe VIN window.
-- K1 pole B is an armature-state proxy: bypass is NC low / NO high; Emulate is
-  NC high / NO low. It cannot prove pole A did not weld or that every contact
-  transferred at the same instant.
-- U7 makes the motor TX path high impedance unless TX_ENABLE and TREAD_OK are
-  both true. Normal transitions use a captured inter-frame gap; emergency
-  fallback never waits for a gap.
-- The ESP32 antenna keepout is clear on every copper layer and the enclosure
-  target is a 15 mm plastic/air void. RF performance under the motor hood
-  still requires measurement.
+- The only board power source is treadmill +8 V on the inline serial cable.
+  J1/J2 carry both +8 V conductors and both grounds straight through; F1/D1
+  protect only the local branch.
+- USB-C is data and VBUS-presence only. VBUS has no path to VIN, +3V3,
+  +5V_RLY, or the relay. Programming requires a USB cable and
+  **current-limited +8 V bench power**. **USB alone cannot power or program Rev B.**
+- K1 is a 5 V, 237 Ω Omron G6K-2F-Y relay. Pole A is the serial transfer:
+  normally closed CONS6→MOT6, normally open TX_DRV→MOT6. Pole B is dry
+  armature feedback. It cannot prove pole A is unwelded.
+- `TREAD_OK` comes from the protected treadmill VIN window. Hardware computes
+  `RELAY_GATE = RELAY_CMD AND TREAD_OK` and
+  `TX_GATE = TX_ENABLE AND TREAD_OK`; firmware cannot override a bad window.
+- U5 and Q1 are series relay-coil controls. U7 makes the motor TX output high
+  impedance without `TX_GATE`.
+- The module antenna extends 6.3 mm off the finished board. Every copper layer
+  is kept out, and the enclosure leaves a further 15 mm plastic/air void.
+  JLC carrier approval and installed RF measurements remain mandatory.
 
-`tools/design.py` is the electrical source of truth. Do not hand-edit a
-generated netlist, schematic connection, BOM, or PCB to repair a source
-problem.
+`tools/design.py` is the electrical source of truth. Change it and regenerate.
+Do not hand-edit generated schematic connectivity, PCB nets, BOM/CPL rows, or
+Gerbers.
+
+## What repository evidence currently means
+
+The checked design includes:
+
+- a generated typed schematic;
+- a 100 × 55 mm four-layer PCB with `JLC04161H-7628` stack metadata;
+- one uninterrupted In1.Cu GND reference;
+- an F.Cu-only native-USB pair with zero signal vias;
+- 13 exact fabrication members and deterministic archive metadata;
+- exact BOM/CPL/DNP/class/package/position parity;
+- seven dual-engine behavioral ngspice decks;
+- pinned, regenerated, watertight enclosure meshes and functional fit probes;
+- a recent BOM-bound snapshot of 43 exact official JLC part pages;
+- a host firmware safety model and deterministic build-manifest checker.
+
+Those are internal consistency checks. They do not close the vendor, firmware,
+or physical gates listed below.
 
 ## Firmware contract Claude must implement
 
 `firmware/safety_model.py` is an executable **host reference**, not production
-ESP-IDF code. Production behavior must match its tests:
+ESP-IDF firmware. Production behavior must preserve:
 
-- one owner tuple `(WSS or BLE transport, concrete handle, generation)`;
-- only the exact owner mutates motion or renews liveness;
-- one 4 s manual total-silence lease, with no second grace timer;
-- exact owner disconnect immediately commands zero and bypass;
-- reconnect/handle reuse starts unowned with a newer generation;
-- the local executor owns separately and survives RF loss only while every
-  local safety input remains valid;
-- console freshness comes only from a complete valid parsed frame and expires
-  at 1.5 s;
-- entry order is zero → inverted-UART physical idle-low → TX enable → qualified
-  gap → relay command → at least 1 ms continuously stable Emulate feedback,
-  qualified within 10 ms → first complete zero frame;
-- entry aborts without moving K1 if no gap arrives within 1 s;
-- normal exit finishes a zero frame → qualified gap → relay off → at least
-  1 ms continuously stable bypass feedback, qualified within 10 ms → TX off
-  → lease release;
-- normal exit deasserts K1 at the 1 s gap deadline; TREAD_OK loss, stale
-  console, lease expiry, emergency stop, brownout, reset, and WDT never wait;
-- GPIO7 is `VBUS_PRESENT_N`: LOW permits native-USB attach, HIGH requires the
-  D+ pull-up detached.
+- one owner tuple `(transport, concrete handle, generation)`;
+- only that exact owner may mutate motion or renew liveness;
+- **one 4 s manual total-silence lease**, with no second grace timer;
+- exact-owner disconnect immediately commands zero and bypass;
+- handle reuse/reconnect begins unowned with a newer generation;
+- executor ownership is separate and survives RF loss only while all local
+  safety inputs remain valid;
+- console freshness comes only from a **complete valid parsed frame** and
+  expires at **1.5 s**;
+- due deadlines win over an operation arriving at the same timestamp;
+- entry order is zero command → inverted-UART physical idle-low → TX enable →
+  qualified gap → relay command → at least 1 ms continuously stable Emulate
+  feedback sampled before 10 ms → first complete zero frame;
+- entry aborts without moving K1 if no qualified gap arrives within 1 s;
+- normal exit is complete zero frame → qualified gap → relay off → at least
+  1 ms continuously stable bypass feedback sampled before 10 ms → TX off →
+  owner release;
+- the 1 s normal-exit gap deadline deasserts K1 immediately;
+- TREAD_OK loss, stale console, lease expiry, emergency stop, brownout, reset,
+  and WDT never wait for a gap;
+- `BOTH_CLOSED` feedback is an immediate latched fault; boot feedback starts
+  unknown; a timer without an actual GPIO sample never qualifies feedback.
 
-Espressif's stock self-powered TinyUSB VBUS-monitor input is active-high,
-whereas GPIO7 is active-low. Do not pass GPIO7 directly to that API and claim
-completion. Implement an explicit reviewed inversion/attach strategy, then
-verify D+ at boot/reset, enumeration, and unplug on hardware.
+GPIO7 is `VBUS_PRESENT_N`: LOW means VBUS present. Espressif's **stock self-powered TinyUSB VBUS-monitor input is active-high**. Do not pass GPIO7
+directly to that API. Implement an explicit reviewed inversion/attach strategy
+and verify D+ behavior at power-up, reset, ROM download, enumeration, and
+unplug.
 
-A physical STOP whose encoded value was already zero is not universally
-detectable from a value-change parser unless a distinct wire event is proven
-in captures. The independent treadmill safety key remains authoritative.
+A physical STOP whose **encoded value was already zero** is not universally
+detectable from a value-change parser unless captures establish a separate
+wire event. The treadmill safety key remains authoritative.
 
 ## Production build identity
 
-Every Emulate-capable build must use a 2 s task WDT with immediate silent
-panic/reset and zero reboot delay, enabled brownout reset at the highest
-supported threshold below the measured minimum +3V3, and no panic-halt,
-print-reboot, GDB/OpenOCD-stub, or OCD-aware halt mode. Preserve this exact
-spot gate and require the manifest builder to validate the rest:
+Every Emulate-capable build needs:
 
-```bash
-grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig
-```
+- exact ESP32-S3 target;
+- 2 s task WDT subscribed to every task able to leave K1 energized;
+- `CONFIG_ESP_TASK_WDT_PANIC=y`;
+- immediate silent reboot and zero optional reboot delay;
+- no panic halt, print-reboot, GDB/OpenOCD stub, OCD-aware halt, core dump, or
+  apptrace delay;
+- enabled brownout reset at the highest supported threshold below the measured
+  minimum +3V3.
 
-Generate the deterministic evidence identity with:
+Generate and archive the manifest:
 
 ```bash
 python3 hardware/Esp32Tap/firmware/build_safety_manifest.py \
@@ -93,52 +114,61 @@ python3 hardware/Esp32Tap/firmware/build_safety_manifest.py \
   --output build/safety-manifest.json
 ```
 
-The emitted `bundle_sha256` binds the application, bootloader, partition
-table, sdkconfig, model, builder, schema, and this plan. Every bench record
-must name it.
+Every bench record must name the emitted `bundle_sha256`.
 
-## Reproduce repository evidence
+## Reproduce before giving advice
 
-From the repository root:
+From repository root:
 
 ```bash
 make -C hardware/Esp32Tap clean-check
 make -C hardware/Esp32Tap check
-
-python3 hardware/Esp32Tap/sim/run_simulations.py \
-  --host-ngspice /usr/bin/ngspice \
-  --docker-image ngspice-cached:latest
-
 git diff --check
 ```
 
-The simulation runner must execute all seven decks on host ngspice 42 and the
-cached Docker ngspice 39 image. Repeat it three times. A supported numeric
-assertion may pass; an out-of-envelope pulse stays `UNSUPPORTED`. The
-TPS54202 deck is an averaged behavioral model and does not prove loop margin,
-switch-node ripple, EMI, or vendor-model startup.
+For an explicit simulation run:
 
-## Evidence that remains physical or vendor-only
+```bash
+python3 hardware/Esp32Tap/sim/run_simulations.py \
+  --host-ngspice /usr/bin/ngspice \
+  --docker-image ngspice-cached:latest
+```
 
-- actual +8 V range, source impedance/current capacity, inrush, noise, and
-  brownout under Wi-Fi/BLE and relay load;
-- TPS54202 switching-loop/EMI behavior and production capacitor derating;
-- dead-board backfeed and real serial edge/timing margin;
-- K1 operate/release/bounce, pole-A weld behavior, three-hour temperature,
-  and actual-contact timing;
-- at least 1,000 normal transitions with no MOT6 byte/frame splice;
-- USB reset/ROM attach, unplug indication below 3 ms, enumeration, and eye
-  margin;
-- enclosure plug fit, mesh/material acceptance, RF range, and coexistence;
-- exact current JLC stock/class, placement rotations, substitutions, carrier
-  drawing for the antenna overhang, DFM preview, and stackup/impedance
-  confirmation;
-- production ESP-IDF implementation and the complete bench safety matrix.
+The runner executes all seven decks three times on host ngspice 42 and pinned
+offline Docker ngspice 39. Only manifest-listed numeric assertions may say
+PASS. Every excluded phenomenon must remain `UNSUPPORTED`.
 
-The first treadmill contact remains Proxy-only with relay energization compiled
-out. Emulate contact is a separate later gate with the belt clear and the
-physical safety key immediately accessible.
+Immediately before vendor review, refresh the read-only stock evidence:
 
-Until all applicable repository checks pass, keep the package at HOLD. Even
-after they pass, describe it only as ready for vendor and bench review—not as
-permission to fabricate, pay, or operate.
+```bash
+python3 hardware/Esp32Tap/tools/check_jlc_stock.py --refresh
+```
+
+Do not interpret public stock as a quote or assembly acceptance.
+
+## Remaining gates Claude must keep open
+
+- actual +8 V range, source impedance, current capacity, inrush, noise, surge,
+  brownout, and load/thermal behavior;
+- TPS54202 switching-loop stability, ripple, EMI, startup, and production
+  capacitor derating;
+- dead-board leakage and real serial voltage/edge/timing margin;
+- K1 operation, release, bounce, welding, temperature, and contact-measured
+  fault timing;
+- 1,000 normal transitions with no MOT6 byte/frame splice;
+- native USB reset/ROM attach, unplug below 3 ms, enumeration, and eye margin;
+- production ESP-IDF implementation, security, WDT, brownout, radio
+  coexistence, and complete safety matrix;
+- exact-current JLC quote, DFM, stack/impedance, placement, THT service,
+  substitution review, and antenna-overhang carrier drawing;
+- enclosure material acceptance, physical plug/screw/mount fit, installed
+  clearance, and RF range.
+
+First treadmill contact is Proxy-only with relay energization compiled out.
+Emulate contact is a separate later gate with the belt clear and the physical
+safety key immediately accessible.
+
+Advice to Claude in one sentence: preserve HOLD, reproduce the exact artifacts,
+report model limits honestly, and ask the owner before any action that submits,
+commits money, changes a vendor part, or exposes a treadmill to an
+Emulate-capable build.

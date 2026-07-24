@@ -46,6 +46,7 @@ def _requirements() -> dict[str, dict[str, object]]:
             "references": ["U1", "U2"],
             "jlc_class": "Extended",
             "required_qty": 4,
+            "footprint": "Lib:Footprint",
         }
     }
 
@@ -55,6 +56,7 @@ def _record() -> dict[str, object]:
         "lcsc": "C123",
         "model": "EXACT-PART",
         "package": "SOT-23",
+        "footprint": "Lib:Footprint",
         "library_type": "expand",
         "jlc_class": "Extended",
         "overseas_stock_count": 42,
@@ -71,6 +73,7 @@ def _expected_parts() -> dict[str, dict[str, str]]:
         "C123": {
             "model": "EXACT-PART",
             "package": "SOT-23",
+            "footprint": "Lib:Footprint",
         }
     }
 
@@ -110,6 +113,7 @@ def test_requirements_are_derived_from_matching_design_and_bom(
             "references": ["U1"],
             "jlc_class": "Extended",
             "required_qty": 2,
+            "footprint": "Lib:Footprint",
         }
     }
 
@@ -245,6 +249,17 @@ def test_snapshot_records_bind_bom_identity_quantity_and_model(
     )
 
 
+def test_snapshot_records_reject_empty_success(
+    stock_tool: SimpleNamespace,
+) -> None:
+    with pytest.raises(stock_tool.StockError, match="empty"):
+        stock_tool.validate_records(
+            records=[],
+            requirements={},
+            expected_parts={},
+        )
+
+
 def test_part_expectations_reject_nonfinite_json(
     stock_tool: SimpleNamespace,
     tmp_path: Path,
@@ -252,7 +267,8 @@ def test_part_expectations_reject_nonfinite_json(
     expectations = tmp_path / "expectations.json"
     expectations.write_text(
         '{"schema_version":1,"parts":'
-        '{"C123":{"model":NaN,"package":"SOT-23"}}}',
+        '{"C123":{"model":NaN,"package":"SOT-23",'
+        '"footprint":"Lib:Footprint"}}}',
         encoding="utf-8",
     )
 
@@ -310,6 +326,7 @@ def test_snapshot_metadata_requires_fresh_exact_official_provenance(
         ("stock-field", "provenance"),
         ("access", "provenance"),
         ("timestamp", "timestamp"),
+        ("noncanonical", "canonical"),
     ],
 )
 def test_snapshot_metadata_fails_closed(
@@ -329,6 +346,8 @@ def test_snapshot_metadata_fails_closed(
         metadata["stock_field"] = "invented"
     elif mutation == "access":
         metadata["catalog_access"] = {"authenticated_api": "pretended"}
+    elif mutation == "noncanonical":
+        metadata["checked_at_utc"] = "2026-7-24T7:00:00Z"
     else:
         metadata["checked_at_utc"] = "yesterday"
 
@@ -340,12 +359,26 @@ def test_snapshot_metadata_fails_closed(
         )
 
 
+@pytest.mark.parametrize("max_age", [float("nan"), float("inf")])
+def test_snapshot_metadata_rejects_nonfinite_max_age(
+    stock_tool: SimpleNamespace,
+    max_age: float,
+) -> None:
+    with pytest.raises(stock_tool.StockError, match="finite"):
+        stock_tool.validate_snapshot_metadata(
+            _snapshot_metadata(stock_tool, "2026-07-24T07:00:00Z"),
+            now=datetime(2026, 7, 24, 8, 0, tzinfo=timezone.utc),
+            max_age_hours=max_age,
+        )
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
         ("missing", "records differ"),
         ("wrong-model", "model"),
         ("wrong-package", "package"),
+        ("wrong-footprint", "footprint"),
         ("wrong-class", "class"),
         ("wrong-library-type", "library type"),
         ("unknown", "UNKNOWN"),
@@ -370,6 +403,8 @@ def test_snapshot_records_fail_closed(
         records[0]["model"] = "WRONG"
     elif mutation == "wrong-package":
         records[0]["package"] = "WRONG"
+    elif mutation == "wrong-footprint":
+        records[0]["footprint"] = "Wrong:Footprint"
     elif mutation == "wrong-class":
         records[0]["jlc_class"] = "Basic"
     elif mutation == "wrong-library-type":
@@ -395,6 +430,45 @@ def test_snapshot_records_fail_closed(
             records=copy.deepcopy(records),
             requirements=copy.deepcopy(requirements),
             expected_parts=_expected_parts(),
+        )
+
+
+def test_refresh_rejects_design_footprint_mismatch_before_fetch(
+    stock_tool: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_design_and_bom(tmp_path)
+    expectations = tmp_path / "bom" / "JLC-PART-EXPECTATIONS.json"
+    expectations.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "parts": {
+                    "C123": {
+                        "model": "EXACT-PART",
+                        "package": "SOT-23",
+                        "footprint": "Wrong:QFN",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def unexpected_fetch(code: str) -> str:
+        pytest.fail(f"network fetch happened before footprint check: {code}")
+
+    monkeypatch.setitem(
+        stock_tool.refresh_snapshot.__globals__,
+        "_fetch",
+        unexpected_fetch,
+    )
+    with pytest.raises(stock_tool.StockError, match="footprint"):
+        stock_tool.refresh_snapshot(
+            root=tmp_path,
+            expectations_path=expectations,
+            snapshot_path=tmp_path / "bom" / "snapshot.json",
         )
 
 

@@ -17,6 +17,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import sys
@@ -66,6 +67,7 @@ RECORD_FIELDS = frozenset(
         "lcsc",
         "model",
         "package",
+        "footprint",
         "library_type",
         "jlc_class",
         "overseas_stock_count",
@@ -338,21 +340,27 @@ def build_requirements(
         if not re.fullmatch(r"C\d+", lcsc):
             raise StockError(f"{reference}: invalid LCSC/JLC code {lcsc!r}")
         jlc_class = raw_class.removesuffix("-THT")
+        footprint = f"{component[1]}:{component[2]}"
         requirement = requirements.setdefault(
             lcsc,
             {
                 "references": [],
                 "jlc_class": jlc_class,
                 "required_qty": 0,
+                "footprint": footprint,
             },
         )
         if requirement["jlc_class"] != jlc_class:
             raise StockError(f"{lcsc}: design has conflicting JLC classes")
+        if requirement["footprint"] != footprint:
+            raise StockError(f"{lcsc}: design has conflicting footprints")
         requirement["references"].append(reference)
         requirement["required_qty"] += BUILD_QUANTITY
     for requirement in requirements.values():
         requirement["references"].sort()
     requirements = dict(sorted(requirements.items()))
+    if not requirements:
+        raise StockError("design assembly requirements cannot be empty")
 
     bom_path = root / "bom" / "BOM.csv"
     try:
@@ -396,21 +404,45 @@ def build_requirements(
         jlc_class = row["JLC class"].removesuffix("-THT")
         if jlc_class not in {"Basic", "Extended"}:
             raise StockError(f"BOM has unsupported JLC class {jlc_class!r}")
+        design_footprints: set[str] = set()
+        for reference in references:
+            component = design.COMPONENTS.get(reference)
+            if component is None:
+                raise StockError(
+                    f"BOM reference {reference} is absent from design"
+                )
+            if component[3] != code:
+                raise StockError(
+                    f"BOM {reference} LCSC code differs from design"
+                )
+            if component[2] != row["Footprint"]:
+                raise StockError(
+                    f"BOM {reference} footprint differs from design"
+                )
+            design_footprints.add(f"{component[1]}:{component[2]}")
+        if len(design_footprints) != 1:
+            raise StockError(f"{code}: BOM groups conflicting footprints")
+        footprint = design_footprints.pop()
         requirement = bom_requirements.setdefault(
             code,
             {
                 "references": [],
                 "jlc_class": jlc_class,
                 "required_qty": 0,
+                "footprint": footprint,
             },
         )
         if requirement["jlc_class"] != jlc_class:
             raise StockError(f"{code}: BOM has conflicting JLC classes")
+        if requirement["footprint"] != footprint:
+            raise StockError(f"{code}: BOM has conflicting footprints")
         requirement["references"].extend(references)
         requirement["required_qty"] += quantity * BUILD_QUANTITY
     for requirement in bom_requirements.values():
         requirement["references"].sort()
     bom_requirements = dict(sorted(bom_requirements.items()))
+    if not bom_requirements:
+        raise StockError("BOM assembly requirements cannot be empty")
     if bom_requirements != requirements:
         raise StockError(
             "BOM requirements differ from design requirements: "
@@ -440,16 +472,39 @@ def _load_expected_parts(path: Path) -> dict[str, dict[str, str]]:
         if (
             re.fullmatch(r"C\d+", code) is None
             or not isinstance(record, dict)
-            or set(record) != {"model", "package"}
+            or set(record) != {"model", "package", "footprint"}
             or not all(
                 isinstance(record[field], str) and record[field]
-                for field in ("model", "package")
+                for field in ("model", "package", "footprint")
             )
         ):
             raise StockError(
-                "part expectations contain an invalid code/model/package"
+                "part expectations contain an invalid "
+                "code/model/package/footprint"
             )
     return parts
+
+
+def _validate_expected_parts(
+    *,
+    requirements: dict[str, dict[str, object]],
+    expected_parts: dict[str, dict[str, str]],
+) -> None:
+    if not requirements or not expected_parts:
+        raise StockError("stock requirements/expectations cannot be empty")
+    if set(expected_parts) != set(requirements):
+        raise StockError(
+            "expected-part records differ from BOM requirements: "
+            f"missing={sorted(set(requirements) - set(expected_parts))}, "
+            f"extra={sorted(set(expected_parts) - set(requirements))}"
+        )
+    for code, requirement in requirements.items():
+        if expected_parts[code]["footprint"] != requirement["footprint"]:
+            raise StockError(
+                f"{code}: expected footprint differs from design; "
+                f"expected={expected_parts[code]['footprint']!r}, "
+                f"design={requirement['footprint']!r}"
+            )
 
 
 def validate_records(
@@ -458,6 +513,12 @@ def validate_records(
     requirements: dict[str, dict[str, object]],
     expected_parts: dict[str, dict[str, str]],
 ) -> None:
+    if not records:
+        raise StockError("stock snapshot records differ: empty")
+    _validate_expected_parts(
+        requirements=requirements,
+        expected_parts=expected_parts,
+    )
     by_code: dict[str, dict[str, Any]] = {}
     for record in records:
         if not isinstance(record, dict) or set(record) != RECORD_FIELDS:
@@ -472,13 +533,6 @@ def validate_records(
             f"missing={sorted(set(requirements) - set(by_code))}, "
             f"extra={sorted(set(by_code) - set(requirements))}"
         )
-    if set(expected_parts) != set(requirements):
-        raise StockError(
-            "expected-part records differ from BOM requirements: "
-            f"missing={sorted(set(requirements) - set(expected_parts))}, "
-            f"extra={sorted(set(expected_parts) - set(requirements))}"
-        )
-
     for code, requirement in requirements.items():
         record = by_code[code]
         expectation = expected_parts[code]
@@ -491,6 +545,16 @@ def validate_records(
             raise StockError(
                 f"{code}: package differs; expected "
                 f"{expectation['package']!r}, actual {record.get('package')!r}"
+            )
+        if (
+            record.get("footprint") != expectation["footprint"]
+            or record.get("footprint") != requirement["footprint"]
+        ):
+            raise StockError(
+                f"{code}: footprint differs; expected "
+                f"{expectation['footprint']!r}, "
+                f"design={requirement['footprint']!r}, "
+                f"actual={record.get('footprint')!r}"
             )
         expected_class = requirement["jlc_class"]
         if record.get("jlc_class") != expected_class:
@@ -580,9 +644,10 @@ def validate_snapshot_metadata(
     if (
         isinstance(max_age_hours, bool)
         or not isinstance(max_age_hours, (int, float))
+        or not math.isfinite(max_age_hours)
         or max_age_hours <= 0
     ):
-        raise StockError("maximum snapshot age must be positive")
+        raise StockError("maximum snapshot age must be finite and positive")
     if (
         snapshot.get("source") != SOURCE_DESCRIPTION
         or snapshot.get("source_template") != SOURCE_TEMPLATE
@@ -602,6 +667,8 @@ def validate_snapshot_metadata(
         raise StockError(
             "stock snapshot timestamp must be canonical UTC"
         ) from error
+    if checked_at.strftime("%Y-%m-%dT%H:%M:%SZ") != raw_timestamp:
+        raise StockError("stock snapshot timestamp must be canonical UTC")
     current = datetime.now(timezone.utc) if now is None else now
     if current.tzinfo is None or current.utcoffset() is None:
         raise StockError("current time must be timezone-aware")
@@ -623,6 +690,10 @@ def refresh_snapshot(
 ) -> dict[str, Any]:
     requirements = build_requirements(root)
     expected_parts = _load_expected_parts(expectations_path)
+    _validate_expected_parts(
+        requirements=requirements,
+        expected_parts=expected_parts,
+    )
     records: list[dict[str, Any]] = []
     for code, requirement in requirements.items():
         record = parse_catalog_page(_fetch(code), code)
@@ -632,6 +703,7 @@ def refresh_snapshot(
                 "source_url": SOURCE_TEMPLATE.format(code=code),
                 "references": requirement["references"],
                 "required_qty": requirement["required_qty"],
+                "footprint": requirement["footprint"],
                 "status": (
                     "IN_STOCK"
                     if assembly_stock >= requirement["required_qty"]

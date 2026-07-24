@@ -1,0 +1,220 @@
+{
+  "parts": {
+    "C106858": {
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "model": "CC0603KRX7R8BB105",
+      "package": "0603"
+    },
+    "C14663": {
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "model": "CC0603KRX7R9BB104",
+      "package": "0603"
+    },
+    "C14860": {
+      "footprint": "Capacitor_SMD:C_1206_3216Metric",
+      "model": "CL31B106KAHNNNE",
+      "package": "1206"
+    },
+    "C151250": {
+      "footprint": "Diode_SMD:D_SMB",
+      "model": "SMBJ10A",
+      "package": "DO-214AA"
+    },
+    "C15849": {
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "model": "CL10A105KB8NNNC",
+      "package": "0603"
+    },
+    "C15850": {
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "model": "CL21A106KAYNNNE",
+      "package": "0805"
+    },
+    "C165948": {
+      "footprint": "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12",
+      "model": "TYPE-C-31-M-12",
+      "package": "SMD"
+    },
+    "C191884": {
+      "footprint": "Package_TO_SOT_SMD:SOT-23-6",
+      "model": "TPS54202DDCR",
+      "package": "SOT-23-6"
+    },
+    "C207065": {
+      "footprint": "Fuse:Fuse_1812_4532Metric",
+      "model": "1812L075/24DR",
+      "package": "1812"
+    },
+    "C21190": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF1001T5E",
+      "package": "0603"
+    },
+    "C22775": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF1000T5E",
+      "package": "0603"
+    },
+    "C22807": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF1503T5E",
+      "package": "0603"
+    },
+    "C2286": {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "model": "KT-0603R",
+      "package": "0603"
+    },
+    "C23138": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF3300T5E",
+      "package": "0603"
+    },
+    "C23186": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF5101T5E",
+      "package": "0603"
+    },
+    "C23204": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF5600T5E",
+      "package": "0603"
+    },
+    "C23345": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF220JT5E",
+      "package": "0603"
+    },
+    "C23354": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF2553T5E",
+      "package": "0603"
+    },
+    "C25803": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF1003T5E",
+      "package": "0603"
+    },
+    "C25804": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF1002T5E",
+      "package": "0603"
+    },
+    "C25819": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF4702T5E",
+      "package": "0603"
+    },
+    "C2847314": {
+      "footprint": "Connector_RJ:RJ45_Amphenol_54602-x08_Horizontal",
+      "model": "54602-908LF",
+      "package": "Plugin"
+    },
+    "C2913198": {
+      "footprint": "RF_Module:ESP32-S3-WROOM-1",
+      "model": "ESP32-S3-WROOM-1-N8",
+      "package": "SMD,25.5x18mm"
+    },
+    "C2918511": {
+      "footprint": "Capacitor_SMD:C_1210_3225Metric",
+      "model": "CS3225X7R226K250NRL",
+      "package": "1210"
+    },
+    "C316020": {
+      "footprint": "Diode_SMD:D_SOD-323",
+      "model": "PESD3V3L1BA-N",
+      "package": "SOD-323"
+    },
+    "C31850": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF2202T5E",
+      "package": "0603"
+    },
+    "C33002": {
+      "footprint": "Package_TO_SOT_SMD:SOT-23-6",
+      "model": "TPS3700DDCR",
+      "package": "SOT-23-6"
+    },
+    "C342541": {
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "model": "C1608C0G1H102JT000N",
+      "package": "0603"
+    },
+    "C352973": {
+      "footprint": "Package_SO:SSOP-8_2.95x2.8mm_P0.65mm",
+      "model": "SN74LVC2G08DCTR",
+      "package": "SM-8"
+    },
+    "C354262": {
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "model": "CC0805KKX7R8BB475",
+      "package": "0805"
+    },
+    "C38117": {
+      "footprint": "Inductor_SMD:L_Sunlord_SWPA4030S",
+      "model": "SWPA4030S100MT",
+      "package": "SMD,4x4mm"
+    },
+    "C39148": {
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "model": "CL10C560JB8NNNC",
+      "package": "0603"
+    },
+    "C47190": {
+      "footprint": "Relay_SMD:Relay_DPDT_Omron_G6K-2F-Y",
+      "model": "G6K-2F-Y-TR DC5",
+      "package": "SMD,10x6.5mm"
+    },
+    "C52801": {
+      "footprint": "Package_TO_SOT_SMD:SOT-23",
+      "model": "BC817-40,215",
+      "package": "SOT-23"
+    },
+    "C72443": {
+      "footprint": "Button_Switch_SMD:SW_Push_1P1T_NO_CK_KMR2",
+      "model": "KMR221GLFS",
+      "package": "SMD,4.6x2.8mm"
+    },
+    "C72477": {
+      "footprint": "Capacitor_SMD:CP_Elec_6.3x7.7",
+      "model": "RVT1E101M0607",
+      "package": "SMD,D6.3xL7.7mm"
+    },
+    "C7519": {
+      "footprint": "Package_TO_SOT_SMD:SOT-23-6",
+      "model": "USBLC6-2SC6",
+      "package": "SOT-23-6L"
+    },
+    "C7834": {
+      "footprint": "Package_TO_SOT_SMD:SOT-23-5",
+      "model": "SN74LVC1G126DBVR",
+      "package": "SOT-23-5"
+    },
+    "C80275": {
+      "footprint": "Diode_SMD:D_SMA",
+      "model": "SMAJ6.0CA",
+      "package": "DO-214AC(SMA)"
+    },
+    "C8545": {
+      "footprint": "Package_TO_SOT_SMD:SOT-23",
+      "model": "2N7002",
+      "package": "SOT-23"
+    },
+    "C8678": {
+      "footprint": "Diode_SMD:D_SMA",
+      "model": "SS34",
+      "package": "SMA(DO-214AC)"
+    },
+    "C96028": {
+      "footprint": "Package_TO_SOT_SMD:SOT-23-5",
+      "model": "TPS70950DBVR",
+      "package": "SOT-23-5"
+    },
+    "C965804": {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "model": "XL-1608UGC-04",
+      "package": "0603"
+    }
+  },
+  "schema_version": 1
+}

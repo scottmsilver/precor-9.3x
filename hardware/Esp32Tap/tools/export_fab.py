@@ -61,6 +61,18 @@ GERBER_FUNCTIONS = {
     "Esp32Tap-B_Silkscreen.gbo": "Legend,Bot",
     "Esp32Tap-Edge_Cuts.gm1": "Profile,NP",
 }
+GERBER_POLARITIES = {
+    filename: (
+        None
+        if filename == "Esp32Tap-Edge_Cuts.gm1"
+        else (
+            "Negative"
+            if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"}
+            else "Positive"
+        )
+    )
+    for filename in GERBER_FUNCTIONS
+}
 JOB_FUNCTIONS = {
     "Esp32Tap-F_Cu.gtl": "Copper,L1,Top",
     "Esp32Tap-In1_Cu.g1": "Copper,L2,Inr",
@@ -317,6 +329,16 @@ def validate_assembly_records(
             raise FabExportError(
                 f"PCB {reference} rotation_deg must be a finite number"
             )
+        rounded_rotation = round(float(rotation))
+        if not math.isclose(
+            float(rotation),
+            float(rounded_rotation),
+            abs_tol=1e-9,
+        ):
+            raise FabExportError(
+                f"PCB {reference} rotation_deg must be integral; "
+                f"actual={float(rotation):g}"
+            )
 
         bom = bom_by_reference[reference]
         expected_bom = {
@@ -364,7 +386,7 @@ def validate_assembly_records(
             raise FabExportError(
                 f"CPL {reference} Rotation is not numeric"
             ) from error
-        expected_rotation = float(f"{float(rotation):.0f}")
+        expected_rotation = float(rounded_rotation)
         rotation_delta = abs(
             (actual_rotation - expected_rotation + 180.0) % 360.0 - 180.0
         )
@@ -662,6 +684,23 @@ def validate_stage(
             raise FabExportError(
                 f"{filename} must have exactly one FileFunction "
                 f"{expected_function}; actual={functions}"
+            )
+        expected_polarity = GERBER_POLARITIES[filename]
+        polarities = re.findall(
+            r"%TF\.FilePolarity,([^*]*)\*%",
+            payload,
+        )
+        expected_polarities = (
+            [] if expected_polarity is None else [expected_polarity]
+        )
+        if polarities != expected_polarities:
+            raise FabExportError(
+                f"{filename} FilePolarity differs: "
+                f"expected={expected_polarities}, actual={polarities}"
+            )
+        if payload.count("%LPD*%") != 1 or "%LPC*%" in payload:
+            raise FabExportError(
+                f"{filename} must have exactly one LPD and no LPC"
             )
         commands = [
             line.strip()
