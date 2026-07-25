@@ -8,8 +8,16 @@ The "binary R...E frame protocol" observed on pin 3 and in logic analyzer
 captures **never existed**. It was KV text misinterpreted due to UART signal
 polarity inversion caused by reading RS-485 signaling with a TTL-level adapter.
 
-Both pin 3 and pin 6 carry the same KV text protocol (`[key:value]`) over
-RS-485 differential signaling.
+Both pin 3 and pin 6 carry the same KV text protocol (`[key:value]`) as
+**single-ended, inverted-polarity (idle-LOW) UART at TTL/3.3 V levels** — 9600
+8N1. **"RS-485" here is a misnomer** carried over from the early investigation:
+the tap reads and drives ONE signal line referenced to ground (no differential
+A/B pair, no transceiver). This is proven by the working Pi, which reads with
+`bb_serial_invert=1` on a single GPIO and drives pin 6 single-ended, and the
+motor responds. Any reading of this document as "differential RS-485" is wrong
+and would invalidate every single-ended tap/emulator built on this bus
+(the C++ `treadmill_io` and the ESP32 `Esp32Tap` design both depend on it being
+single-ended).
 
 ## How We Found It
 
