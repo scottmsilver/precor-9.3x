@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export and atomically publish the Esp32Tap Rev C fabrication package.
+"""Export and atomically publish the Esp32Tap Rev D fabrication package.
 
 The deterministic fabrication transform normalizes KiCad's volatile
 timestamps and removes the complete component-attributed top-legend suffix
@@ -24,12 +24,11 @@ import stat
 import subprocess
 import sys
 import tempfile
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
-
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -68,11 +67,7 @@ GERBER_POLARITIES = {
     filename: (
         None
         if filename == "Esp32Tap-Edge_Cuts.gm1"
-        else (
-            "Negative"
-            if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"}
-            else "Positive"
-        )
+        else ("Negative" if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"} else "Positive")
     )
     for filename in GERBER_FUNCTIONS
 }
@@ -90,11 +85,7 @@ JOB_FUNCTIONS = {
     "Esp32Tap-Edge_Cuts.gm1": "Profile",
 }
 JOB_POLARITIES = {
-    filename: (
-        "Negative"
-        if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"}
-        else "Positive"
-    )
+    filename: ("Negative" if filename in {"Esp32Tap-F_Mask.gts", "Esp32Tap-B_Mask.gbs"} else "Positive")
     for filename in JOB_FUNCTIONS
 }
 REQUIRED_GENERAL_SPECS = {
@@ -118,7 +109,7 @@ KICAD_PROJECT_FILES = {
     "fp-lib-table",
 }
 KICAD_FOOTPRINT_DIRECTORIES = {
-    "Connector_Molex.pretty",
+    "RJ45_SMD.pretty",
     "Button_Switch_SMD.pretty",
     "RF_Module.pretty",
 }
@@ -164,11 +155,7 @@ def _require_rev_c_release(
     """Load the optional Rev C evidence gate only when explicitly requested."""
     sys.path.insert(0, str(ROOT))
     try:
-        from evidence.schemas import (
-            EvidenceError,
-            load_all,
-            require_release,
-        )
+        from evidence.schemas import EvidenceError, load_all, require_release
     except ImportError as error:
         raise FabExportError(f"Rev C evidence gate is unavailable: {error}") from error
     try:
@@ -188,9 +175,7 @@ def _exact_reference_set(
 ) -> None:
     if actual != expected:
         raise FabExportError(
-            f"{label} references differ: "
-            f"missing={sorted(expected - actual)}, "
-            f"extra={sorted(actual - expected)}"
+            f"{label} references differ: " f"missing={sorted(expected - actual)}, " f"extra={sorted(actual - expected)}"
         )
 
 
@@ -219,9 +204,7 @@ def validate_assembly_records(
     """Cross-check exact references and purchasing metadata across artifacts."""
     design_references = set(components)
     populated = {
-        reference
-        for reference, component in components.items()
-        if reference not in dnp and component[4] != "none"
+        reference for reference, component in components.items() if reference not in dnp and component[4] != "none"
     }
     _exact_reference_set(
         "schematic",
@@ -245,22 +228,13 @@ def validate_assembly_records(
     for reference, component in components.items():
         expected_flags = {
             "dnp": reference in dnp,
-            "excluded_from_bom": (
-                reference in dnp or component[4] == "none"
-            ),
+            "excluded_from_bom": (reference in dnp or component[4] == "none"),
             "board_only": False,
         }
-        actual_flags = {
-            name: footprints[reference].get(name)
-            for name in flag_names
-        }
-        if (
-            any(type(value) is not bool for value in actual_flags.values())
-            or actual_flags != expected_flags
-        ):
+        actual_flags = {name: footprints[reference].get(name) for name in flag_names}
+        if any(type(value) is not bool for value in actual_flags.values()) or actual_flags != expected_flags:
             raise FabExportError(
-                f"PCB {reference} assembly flags differ: "
-                f"expected={expected_flags}, actual={actual_flags}"
+                f"PCB {reference} assembly flags differ: " f"expected={expected_flags}, actual={actual_flags}"
             )
     for reference in ("MH1", "MH2", "MH3"):
         expected_flags = {
@@ -268,17 +242,10 @@ def validate_assembly_records(
             "excluded_from_bom": True,
             "board_only": True,
         }
-        actual_flags = {
-            name: footprints[reference].get(name)
-            for name in flag_names
-        }
-        if (
-            any(type(value) is not bool for value in actual_flags.values())
-            or actual_flags != expected_flags
-        ):
+        actual_flags = {name: footprints[reference].get(name) for name in flag_names}
+        if any(type(value) is not bool for value in actual_flags.values()) or actual_flags != expected_flags:
             raise FabExportError(
-                f"PCB {reference} assembly flags differ: "
-                f"expected={expected_flags}, actual={actual_flags}"
+                f"PCB {reference} assembly flags differ: " f"expected={expected_flags}, actual={actual_flags}"
             )
 
     bom_by_reference: dict[str, dict[str, str]] = {}
@@ -289,23 +256,15 @@ def validate_assembly_records(
                 f"missing={sorted(BOM_FIELDS - set(row))}, "
                 f"extra={sorted(set(row) - BOM_FIELDS)}"
             )
-        references = [
-            reference.strip()
-            for reference in row.get("Designator", "").split(",")
-            if reference.strip()
-        ]
+        references = [reference.strip() for reference in row.get("Designator", "").split(",") if reference.strip()]
         if not references:
             raise FabExportError("BOM contains a row without designators")
         try:
             quantity = int(row.get("Qty", ""))
         except ValueError as error:
-            raise FabExportError(
-                f"BOM {references} Qty is not an integer"
-            ) from error
+            raise FabExportError(f"BOM {references} Qty is not an integer") from error
         if quantity != len(references):
-            raise FabExportError(
-                f"BOM {references} Qty={quantity} does not match designators"
-            )
+            raise FabExportError(f"BOM {references} Qty={quantity} does not match designators")
         for reference in references:
             if reference in bom_by_reference:
                 raise FabExportError(f"BOM repeats reference {reference}")
@@ -377,28 +336,18 @@ def validate_assembly_records(
 
         if board_footprint.get("layer") != "F.Cu":
             raise FabExportError(
-                f"PCB {reference} layer differs: expected=F.Cu, "
-                f"actual={board_footprint.get('layer')}"
+                f"PCB {reference} layer differs: expected=F.Cu, " f"actual={board_footprint.get('layer')}"
             )
         rotation = board_footprint.get("rotation_deg")
-        if (
-            isinstance(rotation, bool)
-            or not isinstance(rotation, (int, float))
-            or not math.isfinite(float(rotation))
-        ):
-            raise FabExportError(
-                f"PCB {reference} rotation_deg must be a finite number"
-            )
+        if isinstance(rotation, bool) or not isinstance(rotation, (int, float)) or not math.isfinite(float(rotation)):
+            raise FabExportError(f"PCB {reference} rotation_deg must be a finite number")
         rounded_rotation = round(float(rotation))
         if not math.isclose(
             float(rotation),
             float(rounded_rotation),
             abs_tol=1e-9,
         ):
-            raise FabExportError(
-                f"PCB {reference} rotation_deg must be integral; "
-                f"actual={float(rotation):g}"
-            )
+            raise FabExportError(f"PCB {reference} rotation_deg must be integral; " f"actual={float(rotation):g}")
 
         bom = bom_by_reference[reference]
         expected_bom = {
@@ -412,14 +361,9 @@ def validate_assembly_records(
         for field, expected in expected_bom.items():
             if bom.get(field) != expected:
                 raise FabExportError(
-                    f"BOM {reference} {field} differs: "
-                    f"expected={expected!r}, actual={bom.get(field)!r}"
+                    f"BOM {reference} {field} differs: " f"expected={expected!r}, actual={bom.get(field)!r}"
                 )
-        row_references = [
-            item.strip()
-            for item in bom["Designator"].split(",")
-            if item.strip()
-        ]
+        row_references = [item.strip() for item in bom["Designator"].split(",") if item.strip()]
         expected_extended = f"{unit_cost * len(row_references):.3f}"
         if bom.get("Ext cost (USD)") != expected_extended:
             raise FabExportError(
@@ -437,23 +381,15 @@ def validate_assembly_records(
         for field, expected in expected_cpl.items():
             if cpl.get(field) != expected:
                 raise FabExportError(
-                    f"CPL {reference} {field} differs: "
-                    f"expected={expected!r}, actual={cpl.get(field)!r}"
+                    f"CPL {reference} {field} differs: " f"expected={expected!r}, actual={cpl.get(field)!r}"
                 )
         try:
             actual_rotation = float(cpl.get("Rotation", ""))
         except (TypeError, ValueError) as error:
-            raise FabExportError(
-                f"CPL {reference} Rotation is not numeric"
-            ) from error
+            raise FabExportError(f"CPL {reference} Rotation is not numeric") from error
         expected_rotation = float(rounded_rotation)
-        rotation_delta = abs(
-            (actual_rotation - expected_rotation + 180.0) % 360.0 - 180.0
-        )
-        if (
-            not math.isfinite(actual_rotation)
-            or rotation_delta > 1e-9
-        ):
+        rotation_delta = abs((actual_rotation - expected_rotation + 180.0) % 360.0 - 180.0)
+        if not math.isfinite(actual_rotation) or rotation_delta > 1e-9:
             raise FabExportError(
                 f"CPL {reference} Rotation differs: "
                 f"expected={expected_rotation:g} degrees modulo 360, "
@@ -468,13 +404,11 @@ def validate_assembly_records(
         actual_y = _parse_mm(cpl.get("Mid Y", ""), f"CPL {reference} Mid Y")
         if not math.isclose(actual_x, expected_x, abs_tol=0.0005):
             raise FabExportError(
-                f"CPL {reference} Mid X differs: "
-                f"expected={expected_x:.3f}mm, actual={actual_x:.3f}mm"
+                f"CPL {reference} Mid X differs: " f"expected={expected_x:.3f}mm, actual={actual_x:.3f}mm"
             )
         if not math.isclose(actual_y, expected_y, abs_tol=0.0005):
             raise FabExportError(
-                f"CPL {reference} Mid Y differs: "
-                f"expected={expected_y:.3f}mm, actual={actual_y:.3f}mm"
+                f"CPL {reference} Mid Y differs: " f"expected={expected_y:.3f}mm, actual={actual_y:.3f}mm"
             )
 
 
@@ -535,14 +469,10 @@ def isolated_kicad_project(source: Path) -> Iterator[Path]:
     """Yield a same-basename project copy so KiCad sidecars stay disposable."""
     source = Path(os.path.abspath(source))
     if source.is_symlink() or not source.is_file():
-        raise FabExportError(
-            f"KiCad project source must be a regular non-symlink file: {source}"
-        )
+        raise FabExportError(f"KiCad project source must be a regular non-symlink file: {source}")
     source_directory = source.parent.resolve()
     if source.resolve().parent != source_directory:
-        raise FabExportError(
-            f"KiCad project source resolves outside its directory: {source}"
-        )
+        raise FabExportError(f"KiCad project source resolves outside its directory: {source}")
 
     with tempfile.TemporaryDirectory(
         prefix="esp32tap-kicad-project-",
@@ -554,29 +484,21 @@ def isolated_kicad_project(source: Path) -> Iterator[Path]:
             if not candidate.exists():
                 continue
             if candidate.is_symlink() or not candidate.is_file():
-                raise FabExportError(
-                    "KiCad project companion must be a regular "
-                    f"non-symlink file: {candidate}"
-                )
+                raise FabExportError("KiCad project companion must be a regular " f"non-symlink file: {candidate}")
             shutil.copy2(candidate, isolated_directory / filename)
         for directory_name in sorted(KICAD_FOOTPRINT_DIRECTORIES):
             candidate = source_directory / directory_name
             if not candidate.exists():
                 continue
             if candidate.is_symlink() or not candidate.is_dir():
-                raise FabExportError(
-                    "KiCad footprint library must be a regular "
-                    f"non-symlink directory: {candidate}"
-                )
+                raise FabExportError("KiCad footprint library must be a regular " f"non-symlink directory: {candidate}")
             shutil.copytree(
                 candidate,
                 isolated_directory / directory_name,
             )
         isolated_source = isolated_directory / source.name
         if not isolated_source.is_file():
-            raise FabExportError(
-                f"failed to isolate KiCad project source: {source}"
-            )
+            raise FabExportError(f"failed to isolate KiCad project source: {source}")
         yield isolated_source
 
 
@@ -619,9 +541,7 @@ def _load_schematic_records(root: Path) -> dict[str, dict[str, str]]:
         try:
             xml_root = ET.parse(output).getroot()
         except (OSError, ET.ParseError) as error:
-            raise FabExportError(
-                f"cannot parse schematic netlist XML: {error}"
-            ) from error
+            raise FabExportError(f"cannot parse schematic netlist XML: {error}") from error
 
     records: dict[str, dict[str, str]] = {}
     for component in xml_root.findall("./components/comp"):
@@ -631,9 +551,7 @@ def _load_schematic_records(root: Path) -> dict[str, dict[str, str]]:
             for property_element in component.findall("./property")
         }
         if not reference or reference in records:
-            raise FabExportError(
-                f"schematic netlist has blank/duplicate reference {reference!r}"
-            )
+            raise FabExportError(f"schematic netlist has blank/duplicate reference {reference!r}")
         records[reference] = {
             "value": component.findtext("value", default=""),
             "footprint": component.findtext("footprint", default=""),
@@ -656,9 +574,7 @@ def _load_board_record(root: Path) -> dict[str, Any]:
         report = json.loads(output)
         board = report["board"]
     except (json.JSONDecodeError, KeyError, TypeError) as error:
-        raise FabExportError(
-            f"PCB inspector returned invalid versioned JSON: {error}"
-        ) from error
+        raise FabExportError(f"PCB inspector returned invalid versioned JSON: {error}") from error
     if report.get("schema_version") != 1 or not isinstance(board, dict):
         raise FabExportError("PCB inspector schema_version must be 1")
     return board
@@ -668,12 +584,8 @@ def _load_csv_rows(path: Path) -> list[dict[str, str]]:
     try:
         with path.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
-            if not reader.fieldnames or len(set(reader.fieldnames)) != len(
-                reader.fieldnames
-            ):
-                raise FabExportError(
-                    f"{path.name} has missing/duplicate CSV headings"
-                )
+            if not reader.fieldnames or len(set(reader.fieldnames)) != len(reader.fieldnames):
+                raise FabExportError(f"{path.name} has missing/duplicate CSV headings")
             return [dict(row) for row in reader]
     except (OSError, UnicodeDecodeError, csv.Error) as error:
         raise FabExportError(f"cannot parse {path}: {error}") from error
@@ -702,8 +614,7 @@ def _replace_text(path: Path, substitutions: Iterable[tuple[str, str]]) -> None:
         normalized, count = re.subn(pattern, replacement, normalized)
         if count != 1:
             raise FabExportError(
-                f"{path.name} must contain exactly one timestamp matching "
-                f"{pattern!r}; found {count}"
+                f"{path.name} must contain exactly one timestamp matching " f"{pattern!r}; found {count}"
             )
     if normalized != original:
         path.write_text(normalized, encoding="utf-8", newline="\n")
@@ -717,15 +628,10 @@ def _strip_component_silkscreen(
     """Remove only KiCad's complete component-attributed legend suffix."""
     lines = path.read_text(encoding="utf-8").splitlines()
     malformed = [
-        line
-        for line in lines
-        if line.startswith("%TO.C")
-        and re.fullmatch(r"%TO\.C,[^*%,]+\*%", line) is None
+        line for line in lines if line.startswith("%TO.C") and re.fullmatch(r"%TO\.C,[^*%,]+\*%", line) is None
     ]
     if malformed:
-        raise FabExportError(
-            f"{path.name} has malformed component attributes: {malformed}"
-        )
+        raise FabExportError(f"{path.name} has malformed component attributes: {malformed}")
 
     component_attributes = [
         (index, match.group(1))
@@ -733,15 +639,9 @@ def _strip_component_silkscreen(
         if (match := re.fullmatch(r"%TO\.C,([^*%,]+)\*%", line))
     ]
     references = [reference for _index, reference in component_attributes]
-    duplicates = sorted(
-        reference
-        for reference in set(references)
-        if references.count(reference) != 1
-    )
+    duplicates = sorted(reference for reference in set(references) if references.count(reference) != 1)
     if duplicates:
-        raise FabExportError(
-            f"{path.name} has duplicate component attributes: {duplicates}"
-        )
+        raise FabExportError(f"{path.name} has duplicate component attributes: {duplicates}")
     actual_references = set(references)
     if actual_references != expected_references:
         raise FabExportError(
@@ -750,19 +650,14 @@ def _strip_component_silkscreen(
             f"extra={sorted(actual_references - expected_references)}"
         )
 
-    terminations = [
-        index for index, line in enumerate(lines) if line == "%TD*%"
-    ]
+    terminations = [index for index, line in enumerate(lines) if line == "%TD*%"]
     first_component = min(index for index, _reference in component_attributes)
     if (
         len(terminations) != 1
-        or terminations[0]
-        <= max(index for index, _reference in component_attributes)
+        or terminations[0] <= max(index for index, _reference in component_attributes)
         or lines[terminations[0] + 1 :] != ["M02*"]
     ):
-        raise FabExportError(
-            f"{path.name} must have one terminal TD component boundary"
-        )
+        raise FabExportError(f"{path.name} must have one terminal TD component boundary")
     termination = terminations[0]
     prefix = lines[:first_component]
     component_region = lines[first_component:termination]
@@ -773,18 +668,12 @@ def _strip_component_silkscreen(
         if match:
             code = match.group(1)
             if code in aperture_definitions:
-                raise FabExportError(
-                    f"{path.name} repeats aperture definition D{code}"
-                )
+                raise FabExportError(f"{path.name} repeats aperture definition D{code}")
             aperture_definitions[code] = index
 
     selection_pattern = re.compile(r"D(\d{2,})\*")
-    artwork_pattern = re.compile(
-        r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[13]\*"
-    )
-    geometry_pattern = re.compile(
-        r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[123]\*"
-    )
+    artwork_pattern = re.compile(r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[13]\*")
+    geometry_pattern = re.compile(r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[123]\*")
     active_aperture: str | None = None
     board_apertures: set[str] = set()
     label_geometry: list[str] = []
@@ -795,18 +684,14 @@ def _strip_component_silkscreen(
             label_geometry.append(line)
         if artwork_pattern.fullmatch(line):
             if active_aperture is None:
-                raise FabExportError(
-                    f"{path.name} has label artwork without an aperture"
-                )
+                raise FabExportError(f"{path.name} has label artwork without an aperture")
             board_apertures.add(active_aperture)
     if not label_geometry or not board_apertures:
         raise FabExportError(f"{path.name} has no board-label geometry")
 
     active_reference: str | None = None
     component_apertures: set[str] = set()
-    artwork_counts = {
-        reference: 0 for reference in expected_references
-    }
+    artwork_counts = {reference: 0 for reference in expected_references}
     for line in component_region:
         if attribute := re.fullmatch(r"%TO\.C,([^*%,]+)\*%", line):
             active_reference = attribute.group(1)
@@ -815,59 +700,38 @@ def _strip_component_silkscreen(
             active_aperture = selection.group(1)
             if active_aperture in board_apertures:
                 raise FabExportError(
-                    f"{path.name} interleaves board-label aperture "
-                    f"D{active_aperture} with component artwork"
+                    f"{path.name} interleaves board-label aperture " f"D{active_aperture} with component artwork"
                 )
             continue
         if artwork_pattern.fullmatch(line):
             if active_reference is None or active_aperture is None:
-                raise FabExportError(
-                    f"{path.name} has unattributed component artwork"
-                )
+                raise FabExportError(f"{path.name} has unattributed component artwork")
             if active_aperture in board_apertures:
                 raise FabExportError(
-                    f"{path.name} interleaves board-label aperture "
-                    f"D{active_aperture} with component artwork"
+                    f"{path.name} interleaves board-label aperture " f"D{active_aperture} with component artwork"
                 )
             component_apertures.add(active_aperture)
             artwork_counts[active_reference] += 1
-    empty_references = sorted(
-        reference
-        for reference, count in artwork_counts.items()
-        if count == 0
-    )
+    empty_references = sorted(reference for reference, count in artwork_counts.items() if count == 0)
     if empty_references:
-        raise FabExportError(
-            f"{path.name} components have no artwork: {empty_references}"
-        )
+        raise FabExportError(f"{path.name} components have no artwork: {empty_references}")
 
     retained = prefix + ["M02*"]
-    retained_apertures = {
-        match.group(1)
-        for line in retained
-        if (match := selection_pattern.fullmatch(line))
-    }
+    retained_apertures = {match.group(1) for line in retained if (match := selection_pattern.fullmatch(line))}
     selected_apertures = board_apertures | component_apertures
     undefined = sorted(selected_apertures - set(aperture_definitions))
     if undefined:
-        raise FabExportError(
-            f"{path.name} selects undefined apertures: {undefined}"
-        )
+        raise FabExportError(f"{path.name} selects undefined apertures: {undefined}")
     stripped = [
         line
         for line in retained
         if not (
-            (definition := re.fullmatch(r"%ADD(\d+)[^%]*\*%", line))
-            and definition.group(1) not in retained_apertures
+            (definition := re.fullmatch(r"%ADD(\d+)[^%]*\*%", line)) and definition.group(1) not in retained_apertures
         )
     ]
-    preserved_geometry = [
-        line for line in stripped if geometry_pattern.fullmatch(line)
-    ]
+    preserved_geometry = [line for line in stripped if geometry_pattern.fullmatch(line)]
     if preserved_geometry != label_geometry:
-        raise FabExportError(
-            f"{path.name} board-label geometry changed during stripping"
-        )
+        raise FabExportError(f"{path.name} board-label geometry changed during stripping")
     path.write_text(
         "\n".join(stripped) + "\n",
         encoding="utf-8",
@@ -934,17 +798,10 @@ def _read_nonempty(path: Path) -> str:
 
 def _validate_profile_geometry(payload: str) -> None:
     if payload.count("%FSLAX46Y46*%") != 1 or payload.count("%MOMM*%") != 1:
-        raise FabExportError(
-            "Esp32Tap-Edge_Cuts.gm1 profile must use exact 4.6 metric format"
-        )
+        raise FabExportError("Esp32Tap-Edge_Cuts.gm1 profile must use exact 4.6 metric format")
     apertures = re.findall(r"(?m)^%ADD[^%\r\n]+\*%$", payload)
-    if (
-        apertures != ["%ADD10C,0.100000*%"]
-        or len(re.findall(r"(?m)^D10\*$", payload)) != 1
-    ):
-        raise FabExportError(
-            "Esp32Tap-Edge_Cuts.gm1 profile must use one 0.100 mm aperture"
-        )
+    if apertures != ["%ADD10C,0.100000*%"] or len(re.findall(r"(?m)^D10\*$", payload)) != 1:
+        raise FabExportError("Esp32Tap-Edge_Cuts.gm1 profile must use one 0.100 mm aperture")
     if re.search(
         r"(?m)^(?:G0[23]\*|G0[123](?!\*)[^\r\n]+|"
         r"G3[67]\*|D0[123]\*|"
@@ -952,38 +809,28 @@ def _validate_profile_geometry(payload: str) -> None:
         payload,
     ):
         raise FabExportError(
-            "Esp32Tap-Edge_Cuts.gm1 profile contains unsupported extra "
-            "flash, arc, region, or modal geometry"
+            "Esp32Tap-Edge_Cuts.gm1 profile contains unsupported extra " "flash, arc, region, or modal geometry"
         )
 
     position: tuple[float, float] | None = None
-    segments: set[
-        tuple[tuple[float, float], tuple[float, float]]
-    ] = set()
+    segments: set[tuple[tuple[float, float], tuple[float, float]]] = set()
     coordinate_commands = re.findall(
         r"(?m)^X([+-]?\d+)Y([+-]?\d+)D0([12])\*$",
         payload,
     )
     all_coordinate_commands = re.findall(
-        r"(?m)^(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|"
-        r"Y[+-]?\d+)D0[123]\*$",
+        r"(?m)^(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|" r"Y[+-]?\d+)D0[123]\*$",
         payload,
     )
-    if (
-        len(coordinate_commands) != 8
-        or len(all_coordinate_commands) != len(coordinate_commands)
-    ):
+    if len(coordinate_commands) != 8 or len(all_coordinate_commands) != len(coordinate_commands):
         raise FabExportError(
-            "Esp32Tap-Edge_Cuts.gm1 profile must contain exactly four "
-            "moves and four straight edge draws"
+            "Esp32Tap-Edge_Cuts.gm1 profile must contain exactly four " "moves and four straight edge draws"
         )
     for raw_x, raw_y, operation in coordinate_commands:
         point = (int(raw_x) / 1_000_000, int(raw_y) / 1_000_000)
         if operation == "1":
             if position is None:
-                raise FabExportError(
-                    "Esp32Tap-Edge_Cuts.gm1 profile draws before moving"
-                )
+                raise FabExportError("Esp32Tap-Edge_Cuts.gm1 profile draws before moving")
             segments.add(tuple(sorted((position, point))))
         position = point
 
@@ -998,10 +845,7 @@ def _validate_profile_geometry(payload: str) -> None:
         tuple(sorted((bottom_left, top_left))),
     }
     if segments != expected_segments:
-        raise FabExportError(
-            "Esp32Tap-Edge_Cuts.gm1 profile must be the closed "
-            "95.0 x 58.0 mm Rev C rectangle"
-        )
+        raise FabExportError("Esp32Tap-Edge_Cuts.gm1 profile must be the closed " "95.0 x 58.0 mm Rev D rectangle")
 
 
 def _validate_drill_artwork(drill: str) -> None:
@@ -1011,8 +855,7 @@ def _validate_drill_artwork(drill: str) -> None:
     hits = {"Plated": 0, "NonPlated": 0}
     for line in (item.strip() for item in drill.splitlines()):
         aperture = re.fullmatch(
-            r";\s*#@!\s*TA\.AperFunction,"
-            r"(Plated|NonPlated),[^\r\n]+",
+            r";\s*#@!\s*TA\.AperFunction," r"(Plated|NonPlated),[^\r\n]+",
             line,
         )
         if aperture:
@@ -1027,9 +870,7 @@ def _validate_drill_artwork(drill: str) -> None:
                 or not math.isfinite(float(raw_diameter))
                 or float(raw_diameter) <= 0
             ):
-                raise FabExportError(
-                    "Esp32Tap.drl has an invalid or ambiguous drill tool"
-                )
+                raise FabExportError("Esp32Tap.drl has an invalid or ambiguous drill tool")
             tool_plating[tool] = pending_plating
             pending_plating = None
             continue
@@ -1037,28 +878,21 @@ def _validate_drill_artwork(drill: str) -> None:
         if selection:
             active_tool = selection.group(1)
             if active_tool not in tool_plating:
-                raise FabExportError(
-                    "Esp32Tap.drl selects an undefined drill tool"
-                )
+                raise FabExportError("Esp32Tap.drl selects an undefined drill tool")
             continue
         if re.fullmatch(
-            r"X[+-]?[0-9]+(?:\.[0-9]+)?"
-            r"Y[+-]?[0-9]+(?:\.[0-9]+)?",
+            r"X[+-]?[0-9]+(?:\.[0-9]+)?" r"Y[+-]?[0-9]+(?:\.[0-9]+)?",
             line,
         ):
             if active_tool is None:
-                raise FabExportError(
-                    "Esp32Tap.drl has a hit without a selected drill tool"
-                )
+                raise FabExportError("Esp32Tap.drl has a hit without a selected drill tool")
             hits[tool_plating[active_tool]] += 1
 
     if not tool_plating:
         raise FabExportError("Esp32Tap.drl has no drill tool definitions")
     for plating in ("Plated", "NonPlated"):
         if hits[plating] < 1:
-            raise FabExportError(
-                f"Esp32Tap.drl has no {plating} drill hit"
-            )
+            raise FabExportError(f"Esp32Tap.drl has no {plating} drill hit")
 
 
 def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -1071,9 +905,7 @@ def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _reject_json_constant(value: str) -> Any:
-    raise FabExportError(
-        f"Gerber job contains non-standard JSON constant {value!r}"
-    )
+    raise FabExportError(f"Gerber job contains non-standard JSON constant {value!r}")
 
 
 def _validate_minimal_legend(payload: str, *, front: bool) -> None:
@@ -1087,30 +919,13 @@ def _validate_minimal_legend(payload: str, *, front: bool) -> None:
         r"(?m)^%ADD(\d+)C,([0-9]+(?:\.[0-9]+)?)\*%$",
         payload,
     )
-    selections = {
-        code
-        for code in re.findall(r"(?m)^D([1-9]\d+)\*$", payload)
-    }
-    artwork_pattern = re.compile(
-        r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[13]\*"
-    )
-    artwork = [
-        line
-        for line in payload.splitlines()
-        if artwork_pattern.fullmatch(line)
-    ]
+    selections = {code for code in re.findall(r"(?m)^D([1-9]\d+)\*$", payload)}
+    artwork_pattern = re.compile(r"(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|Y[+-]?\d+)D0[13]\*")
+    artwork = [line for line in payload.splitlines() if artwork_pattern.fullmatch(line)]
     has_object_attributes = "%TO." in payload or "%TD" in payload
     if not front:
-        if (
-            has_object_attributes
-            or raw_definitions
-            or selections
-            or artwork
-        ):
-            raise FabExportError(
-                "fabrication back legend must contain no attributes, "
-                "apertures, or artwork"
-            )
+        if has_object_attributes or raw_definitions or selections or artwork:
+            raise FabExportError("fabrication back legend must contain no attributes, " "apertures, or artwork")
         return
 
     if (
@@ -1131,14 +946,8 @@ def _validate_minimal_legend(payload: str, *, front: bool) -> None:
     for line in payload.splitlines():
         if selection := re.fullmatch(r"D([1-9]\d+)\*", line):
             active_aperture = selection.group(1)
-        elif (
-            artwork_pattern.fullmatch(line)
-            and active_aperture != expected_aperture
-        ):
-            raise FabExportError(
-                "fabrication front legend has artwork outside its "
-                "0.200 mm board-text aperture"
-            )
+        elif artwork_pattern.fullmatch(line) and active_aperture != expected_aperture:
+            raise FabExportError("fabrication front legend has artwork outside its " "0.200 mm board-text aperture")
 
 
 def validate_stage(
@@ -1146,22 +955,17 @@ def validate_stage(
     *,
     require_normalized: bool = False,
 ) -> None:
-    """Fail closed unless the directory is the exact Rev C four-layer package."""
+    """Fail closed unless the directory is the exact Rev D four-layer package."""
     if directory.is_symlink() or not directory.is_dir():
         raise FabExportError(f"fabrication stage is not a directory: {directory}")
     entries = list(directory.iterdir())
     actual = {path.name for path in entries}
-    invalid = sorted(
-        path.name
-        for path in entries
-        if path.is_symlink() or not path.is_file()
-    )
+    invalid = sorted(path.name for path in entries if path.is_symlink() or not path.is_file())
     if invalid or actual != EXPECTED_FAB_FILES:
         missing = sorted(EXPECTED_FAB_FILES - actual)
         extra = sorted(actual - EXPECTED_FAB_FILES)
         raise FabExportError(
-            "fabrication member set is not exact: "
-            f"missing={missing}, extra={extra}, invalid={invalid}"
+            "fabrication member set is not exact: " f"missing={missing}, extra={extra}, invalid={invalid}"
         )
 
     for filename, expected_function in GERBER_FUNCTIONS.items():
@@ -1172,43 +976,31 @@ def validate_stage(
         )
         if functions != [expected_function]:
             raise FabExportError(
-                f"{filename} must have exactly one FileFunction "
-                f"{expected_function}; actual={functions}"
+                f"{filename} must have exactly one FileFunction " f"{expected_function}; actual={functions}"
             )
         expected_polarity = GERBER_POLARITIES[filename]
         polarities = re.findall(
             r"%TF\.FilePolarity,([^*]*)\*%",
             payload,
         )
-        expected_polarities = (
-            [] if expected_polarity is None else [expected_polarity]
-        )
+        expected_polarities = [] if expected_polarity is None else [expected_polarity]
         if polarities != expected_polarities:
             raise FabExportError(
-                f"{filename} FilePolarity differs: "
-                f"expected={expected_polarities}, actual={polarities}"
+                f"{filename} FilePolarity differs: " f"expected={expected_polarities}, actual={polarities}"
             )
         if payload.count("%LPD*%") != 1 or "%LPC*%" in payload:
-            raise FabExportError(
-                f"{filename} must have exactly one LPD and no LPC"
-            )
+            raise FabExportError(f"{filename} must have exactly one LPD and no LPC")
         if re.search(
             r"%(?:SR|LM|LR|LS|OF|SF|MI|IP|AS|IR)[^%\r\n]*\*%",
             payload,
         ):
-            raise FabExportError(
-                f"{filename} must not contain Gerber repeat or transform "
-                "commands"
-            )
+            raise FabExportError(f"{filename} must not contain Gerber repeat or transform " "commands")
         artwork = re.findall(
-            r"(?m)^(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|"
-            r"Y[+-]?\d+)D0[13]\*$",
+            r"(?m)^(?:(?:X[+-]?\d+)(?:Y[+-]?\d+)?|" r"Y[+-]?\d+)D0[13]\*$",
             payload,
         )
         if filename not in EMPTY_ARTWORK_LAYERS and not artwork:
-            raise FabExportError(
-                f"{filename} must contain actual Gerber artwork"
-            )
+            raise FabExportError(f"{filename} must contain actual Gerber artwork")
         if filename == "Esp32Tap-Edge_Cuts.gm1":
             _validate_profile_geometry(payload)
         if require_normalized and filename in {
@@ -1219,15 +1011,9 @@ def validate_stage(
                 payload,
                 front=filename == "Esp32Tap-F_Silkscreen.gto",
             )
-        commands = [
-            line.strip()
-            for line in payload.splitlines()
-            if line.strip()
-        ]
+        commands = [line.strip() for line in payload.splitlines() if line.strip()]
         if commands.count("M02*") != 1 or commands[-1] != "M02*":
-            raise FabExportError(
-                f"{filename} Gerber end marker is missing or not final"
-            )
+            raise FabExportError(f"{filename} Gerber end marker is missing or not final")
         if require_normalized:
             creation_dates = re.findall(
                 r"%TF\.CreationDate,([^*]*)\*%",
@@ -1237,13 +1023,8 @@ def validate_stage(
                 r"(?m)^G04 Created by KiCad .* date ([^\r\n*]+)\*$",
                 payload,
             )
-            if (
-                creation_dates != [NORMALIZED_ISO_DATE]
-                or text_dates != [NORMALIZED_TEXT_DATE]
-            ):
-                raise FabExportError(
-                    f"{filename} timestamps are not exactly normalized"
-                )
+            if creation_dates != [NORMALIZED_ISO_DATE] or text_dates != [NORMALIZED_TEXT_DATE]:
+                raise FabExportError(f"{filename} timestamps are not exactly normalized")
 
     drill = _read_nonempty(directory / "Esp32Tap.drl")
     drill_functions = [
@@ -1258,26 +1039,10 @@ def validate_stage(
             "Esp32Tap.drl must have exactly one drill FileFunction spanning "
             f"copper layers 1 through 4; actual={drill_functions}"
         )
-    drill_commands = [
-        line.strip()
-        for line in drill.splitlines()
-        if line.strip()
-    ]
-    unit_commands = [
-        command
-        for command in drill_commands
-        if re.fullmatch(r"(?:METRIC|INCH)(?:,.*)?", command)
-    ]
-    legacy_mode_commands = [
-        command
-        for command in drill_commands
-        if re.fullmatch(r"(?:M7[12]|G7[01]|ICI,.*)", command)
-    ]
-    if (
-        len(re.findall(r"(?m)^M48\s*$", drill)) != 1
-        or drill_commands.count("M30") != 1
-        or drill_commands[-1] != "M30"
-    ):
+    drill_commands = [line.strip() for line in drill.splitlines() if line.strip()]
+    unit_commands = [command for command in drill_commands if re.fullmatch(r"(?:METRIC|INCH)(?:,.*)?", command)]
+    legacy_mode_commands = [command for command in drill_commands if re.fullmatch(r"(?:M7[12]|G7[01]|ICI,.*)", command)]
+    if len(re.findall(r"(?m)^M48\s*$", drill)) != 1 or drill_commands.count("M30") != 1 or drill_commands[-1] != "M30":
         raise FabExportError("Esp32Tap.drl is not a complete Excellon drill file")
     if (
         len(
@@ -1293,9 +1058,7 @@ def validate_stage(
         or "G91" in drill_commands
         or legacy_mode_commands
     ):
-        raise FabExportError(
-            "Esp32Tap.drl must use exactly one absolute metric decimal mode"
-        )
+        raise FabExportError("Esp32Tap.drl must use exactly one absolute metric decimal mode")
     _validate_drill_artwork(drill)
     if require_normalized:
         drill_creation_dates = re.findall(
@@ -1306,13 +1069,8 @@ def validate_stage(
             r"(?m)^;\s*DRILL file KiCad .* date ([^\r\n]+)$",
             drill,
         )
-        if (
-            drill_creation_dates != [NORMALIZED_ISO_DATE]
-            or drill_text_dates != [NORMALIZED_DRILL_DATE]
-        ):
-            raise FabExportError(
-                "Esp32Tap.drl timestamps are not exactly normalized"
-            )
+        if drill_creation_dates != [NORMALIZED_ISO_DATE] or drill_text_dates != [NORMALIZED_DRILL_DATE]:
+            raise FabExportError("Esp32Tap.drl timestamps are not exactly normalized")
 
     job_text = _read_nonempty(directory / "Esp32Tap-job.gbrjob")
     try:
@@ -1326,30 +1084,19 @@ def validate_stage(
     try:
         entries = job["FilesAttributes"]
         if not isinstance(entries, list) or len(entries) != len(JOB_FUNCTIONS):
-            raise FabExportError(
-                "Gerber job must contain each file/function entry exactly once"
-            )
+            raise FabExportError("Gerber job must contain each file/function entry exactly once")
         job_attributes: dict[str, dict[str, str]] = {}
         for entry in entries:
-            if (
-                not isinstance(entry, dict)
-                or set(entry)
-                != {"Path", "FileFunction", "FilePolarity"}
-            ):
+            if not isinstance(entry, dict) or set(entry) != {"Path", "FileFunction", "FilePolarity"}:
                 raise FabExportError(
-                    "Gerber job FilesAttributes entries must contain exactly "
-                    "Path, FileFunction, and FilePolarity"
+                    "Gerber job FilesAttributes entries must contain exactly " "Path, FileFunction, and FilePolarity"
                 )
             path = entry["Path"]
             if not isinstance(path, str) or path in job_attributes:
-                raise FabExportError(
-                    "Gerber job has a blank or duplicate file entry"
-                )
+                raise FabExportError("Gerber job has a blank or duplicate file entry")
             job_attributes[path] = entry
     except (KeyError, TypeError) as error:
-        raise FabExportError(
-            "Gerber job lacks valid FilesAttributes"
-        ) from error
+        raise FabExportError("Gerber job lacks valid FilesAttributes") from error
     expected_job_attributes = {
         filename: {
             "Path": filename,
@@ -1359,15 +1106,10 @@ def validate_stage(
         for filename, function in JOB_FUNCTIONS.items()
     }
     if job_attributes != expected_job_attributes:
-        raise FabExportError(
-            "Gerber job file/function/polarity mapping is not the exact "
-            "Rev C set"
-        )
+        raise FabExportError("Gerber job file/function/polarity mapping is not the exact " "Rev D set")
     general = job.get("GeneralSpecs")
     if not isinstance(general, dict):
-        raise FabExportError(
-            "Gerber job GeneralSpecs must be an object"
-        )
+        raise FabExportError("Gerber job GeneralSpecs must be an object")
     size = general.get("Size")
     numeric_specs = (
         isinstance(size, dict)
@@ -1398,24 +1140,19 @@ def validate_stage(
     if (
         not numeric_specs
         or general.get("Finish") != REQUIRED_GENERAL_SPECS["Finish"]
-        or general.get("ImpedanceControlled")
-        is not REQUIRED_GENERAL_SPECS["ImpedanceControlled"]
+        or general.get("ImpedanceControlled") is not REQUIRED_GENERAL_SPECS["ImpedanceControlled"]
     ):
         raise FabExportError(
-                "Gerber job GeneralSpecs differ from the locked Rev C "
+            "Gerber job GeneralSpecs differ from the locked Rev D "
             "size, layer count, thickness, finish, or impedance setting"
         )
     if require_normalized:
         try:
             job_creation_date = job["Header"]["CreationDate"]
         except (KeyError, TypeError) as error:
-            raise FabExportError(
-                "Gerber job lacks a normalized CreationDate"
-            ) from error
+            raise FabExportError("Gerber job lacks a normalized CreationDate") from error
         if job_creation_date != NORMALIZED_ISO_DATE:
-            raise FabExportError(
-                "Gerber job CreationDate is not normalized"
-            )
+            raise FabExportError("Gerber job CreationDate is not normalized")
 
 
 def write_deterministic_archive(directory: Path, destination: Path) -> None:
@@ -1521,8 +1258,7 @@ def publish_stage(
                 retain_recovery = True
                 raise FabExportError(
                     "fabrication publish failed and rollback was incomplete; "
-                    f"recovery retained at {publish_root}: "
-                    + "; ".join(rollback_errors)
+                    f"recovery retained at {publish_root}: " + "; ".join(rollback_errors)
                 ) from publish_error
             raise
         if backup_directory.exists():
@@ -1600,34 +1336,22 @@ def validate_publish_paths(
     destination = Path(os.path.abspath(destination))
     archive = Path(os.path.abspath(archive))
     if board.is_symlink() or board.name != "Esp32Tap.kicad_pcb":
-        raise FabExportError(
-            "board must be the non-symlink Esp32Tap.kicad_pcb source"
-        )
+        raise FabExportError("board must be the non-symlink Esp32Tap.kicad_pcb source")
     if not board.is_file():
         raise FabExportError(f"board source does not exist: {board}")
     kicad_directory = board.parent.resolve()
     if board.resolve() != kicad_directory / "Esp32Tap.kicad_pcb":
         raise FabExportError("board source resolves outside its KiCad directory")
 
-    if (
-        destination.name != "gerbers"
-        or destination.parent.resolve() != kicad_directory
-    ):
-        raise FabExportError(
-            "output directory must be the board sibling kicad/gerbers"
-        )
+    if destination.name != "gerbers" or destination.parent.resolve() != kicad_directory:
+        raise FabExportError("output directory must be the board sibling kicad/gerbers")
     if destination.is_symlink():
         raise FabExportError("output directory cannot be a symlink")
     if destination.exists() and not destination.is_dir():
         raise FabExportError("output directory exists but is not a directory")
 
-    if (
-        archive.name != "Esp32Tap-gerbers.zip"
-        or archive.parent.resolve() != kicad_directory
-    ):
-        raise FabExportError(
-            "archive must be the board sibling Esp32Tap-gerbers.zip"
-        )
+    if archive.name != "Esp32Tap-gerbers.zip" or archive.parent.resolve() != kicad_directory:
+        raise FabExportError("archive must be the board sibling Esp32Tap-gerbers.zip")
     if archive.is_symlink():
         raise FabExportError("archive cannot be a symlink")
     if archive.exists():
@@ -1696,9 +1420,7 @@ def _validate_checked_in(
     except OSError as error:
         raise FabExportError(f"cannot read fabrication archive: {error}") from error
     if actual != expected:
-        raise FabExportError(
-            "checked-in fabrication archive is not the deterministic package"
-        )
+        raise FabExportError("checked-in fabrication archive is not the deterministic package")
     audit_assembly(root)
 
 
@@ -1719,10 +1441,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
                 args.archive,
                 args.board.parent.parent,
             )
-            print(
-                f"PASS: exact {len(EXPECTED_FAB_FILES)}-member "
-                "Rev C fabrication package and assembly parity"
-            )
+            print(f"PASS: exact {len(EXPECTED_FAB_FILES)}-member " "Rev D fabrication package and assembly parity")
             return 0
         export_fab(
             board=args.board,
@@ -1730,10 +1449,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
             archive=args.archive,
             kicad_cli=args.kicad_cli,
         )
-        print(
-            f"WROTE {args.output_dir} and {args.archive} "
-            f"({len(EXPECTED_FAB_FILES)} deterministic members)"
-        )
+        print(f"WROTE {args.output_dir} and {args.archive} " f"({len(EXPECTED_FAB_FILES)} deterministic members)")
         return 0
     except FabExportError as error:
         print(f"export_fab: {error}", file=sys.stderr)

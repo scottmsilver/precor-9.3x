@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import copy
 import hashlib
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from hardware.Esp32Tap.evidence.schemas import (
     EvidenceError,
     load_all,
-    release_denial_reason,
     release_allowed,
+    release_denial_reason,
     validate_record,
 )
 
@@ -55,10 +55,7 @@ PREDECESSOR_PATHS = {
     "hardware/PiZeroHat/kicad/WIRING.md",
     "hardware/PiZeroHat/kicad/PiZeroHat.kicad_sch",
     "hardware/PiZeroHat/kicad/PiZeroHat.kicad_pcb",
-    (
-        "docs/superpowers/specs/"
-        "2026-07-24-esp32tap-rev-c-turnkey-compact-design.md"
-    ),
+    ("docs/superpowers/specs/" "2026-07-24-esp32tap-rev-c-turnkey-compact-design.md"),
 }
 PREDECESSOR_ALLOWED_ACTIONS = {
     "connector_selection",
@@ -74,9 +71,7 @@ PREDECESSOR_FORBIDDEN_ACTIONS = {
     "TURNKEY_QUOTED",
 }
 REAL_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-REV_C_GERBER_SHA256 = (
-    "219562b21c51bf71e11474c5ea3fae9b698c56b279ad1a41950b440381507ed5"
-)
+REV_C_GERBER_SHA256 = "219562b21c51bf71e11474c5ea3fae9b698c56b279ad1a41950b440381507ed5"
 
 
 @pytest.fixture()
@@ -90,13 +85,7 @@ def _copy_model_artifacts(
 ) -> None:
     for assertion in evidence["model"]["assertions"]:
         relative = Path(assertion["artifact_path"])
-        source = (
-            REAL_REPOSITORY_ROOT
-            / "hardware"
-            / "Esp32Tap"
-            / "evidence"
-            / relative
-        )
+        source = REAL_REPOSITORY_ROOT / "hardware" / "Esp32Tap" / "evidence" / relative
         target = evidence_root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
@@ -118,10 +107,7 @@ def _measured_physical_record(
     envelope.update(
         {
             "status": "MEASURED",
-            **{
-                field: value
-                for field, (value, _, _, _) in PHYSICAL_VALUES.items()
-            },
+            **{field: value for field, (value, _, _, _) in PHYSICAL_VALUES.items()},
             "missing_fields": [],
         }
     )
@@ -141,10 +127,7 @@ def _measured_physical_record(
         rows = [
             "timestamp_utc,measurement,unit,value",
             *[
-                (
-                    f"2026-07-24T12:00:{index:02d}Z,"
-                    f"{measurement},{unit},{value}"
-                )
+                (f"2026-07-24T12:00:{index:02d}Z," f"{measurement},{unit},{value}")
                 for index, field in enumerate(selected)
                 for value, measurement, unit, _ in [PHYSICAL_VALUES[field]]
             ],
@@ -197,9 +180,7 @@ def _add_pth_barrel_observation(
     artifact = evidence_root / "vendor" / "pth-barrel-confirmation.json"
     artifact.write_text(
         (
-            '{"archive_sha256":"'
-            + REV_C_GERBER_SHA256
-            + '","minimum_um":20,"order_configuration":"4-layer, 1.6 mm, '
+            '{"archive_sha256":"' + REV_C_GERBER_SHA256 + '","minimum_um":20,"order_configuration":"4-layer, 1.6 mm, '
             'exact uploaded Gerber archive"}\n'
         ),
         encoding="utf-8",
@@ -209,9 +190,7 @@ def _add_pth_barrel_observation(
             "claim": "Vendor confirms minimum 20 um PTH barrel copper",
             "requirement": "pth_barrel_minimum_20um",
             "gerber_archive_sha256": REV_C_GERBER_SHA256,
-            "order_configuration": (
-                "4-layer, 1.6 mm, exact uploaded Gerber archive"
-            ),
+            "order_configuration": ("4-layer, 1.6 mm, exact uploaded Gerber archive"),
             "source_url": "https://vendor.example/review/pth-456",
             "operator": "operator-1",
             "observed_at_utc": "2026-07-24T12:05:00Z",
@@ -275,12 +254,8 @@ def test_conservative_predecessor_action_matrix(
     evidence: dict[str, object],
 ) -> None:
     assert evidence["physical"]["status"] == "NOT_MEASURED"
-    assert evidence["physical"]["treadmill_current_envelope"]["status"] == (
-        "NOT_MEASURED"
-    )
-    assert len(
-        evidence["physical"]["treadmill_current_envelope"]["missing_fields"]
-    ) == 11
+    assert evidence["physical"]["treadmill_current_envelope"]["status"] == ("NOT_MEASURED")
+    assert len(evidence["physical"]["treadmill_current_envelope"]["missing_fields"]) == 11
     for action in PREDECESSOR_ALLOWED_ACTIONS:
         assert release_allowed(
             evidence,
@@ -336,11 +311,14 @@ def test_predecessor_constraints_are_exact(
     repository_root = tmp_path / "repository"
     record = _predecessor_record(repository_root)
 
-    assert validate_record(
-        "predecessor",
-        record,
-        repository_root=repository_root,
-    ) == record
+    assert (
+        validate_record(
+            "predecessor",
+            record,
+            repository_root=repository_root,
+        )
+        == record
+    )
 
 
 def test_unknown_fields_are_rejected() -> None:
@@ -409,9 +387,7 @@ def test_numeric_physical_measurements_reject_descriptive_text(
     evidence: dict[str, object],
 ) -> None:
     malformed = copy.deepcopy(evidence["physical"])
-    malformed["treadmill_current_envelope"][
-        "source_voltage_minimum_volts"
-    ] = "about eight"
+    malformed["treadmill_current_envelope"]["source_voltage_minimum_volts"] = "about eight"
 
     with pytest.raises(EvidenceError, match="finite number"):
         validate_record("physical", malformed)
@@ -506,11 +482,14 @@ def test_matching_turnkey_quote_artifact_is_accepted(
         "artifact_sha256": hashlib.sha256(quote_path.read_bytes()).hexdigest(),
     }
 
-    assert validate_record(
-        "vendor",
-        vendor,
-        evidence_root=evidence_root,
-    ) == vendor
+    assert (
+        validate_record(
+            "vendor",
+            vendor,
+            evidence_root=evidence_root,
+        )
+        == vendor
+    )
 
 
 def test_model_assertion_requires_verified_artifact_in_model_directory(
@@ -553,11 +532,14 @@ def test_matching_model_assertion_artifact_is_accepted(
         }
     ]
 
-    assert validate_record(
-        "model",
-        model,
-        evidence_root=evidence_root,
-    ) == model
+    assert (
+        validate_record(
+            "model",
+            model,
+            evidence_root=evidence_root,
+        )
+        == model
+    )
 
 
 def test_vendor_accepted_requires_verified_nonempty_observations(
@@ -621,9 +603,7 @@ def test_not_measured_blocks_every_rev_c_release(
     evidence: dict[str, object],
     action: str,
 ) -> None:
-    assert evidence["physical"]["treadmill_current_envelope"]["status"] == (
-        "NOT_MEASURED"
-    )
+    assert evidence["physical"]["treadmill_current_envelope"]["status"] == ("NOT_MEASURED")
     assert not release_allowed(evidence, action)
 
 
@@ -660,11 +640,14 @@ def test_varying_timestamped_waveform_uses_declared_aggregations(
         ],
     )
 
-    assert validate_record(
-        "physical",
-        physical,
-        evidence_root=evidence_root,
-    ) == physical
+    assert (
+        validate_record(
+            "physical",
+            physical,
+            evidence_root=evidence_root,
+        )
+        == physical
+    )
 
 
 def test_symlinked_approved_raw_directory_cannot_escape_evidence_root(
@@ -703,9 +686,7 @@ def test_physical_binding_rejects_missing_raw_path(
 ) -> None:
     evidence_root = tmp_path / "evidence"
     physical = _measured_physical_record(evidence, evidence_root)
-    raw = evidence_root / physical["treadmill_current_envelope"]["raw_records"][0][
-        "path"
-    ]
+    raw = evidence_root / physical["treadmill_current_envelope"]["raw_records"][0]["path"]
     raw.unlink()
 
     with pytest.raises(EvidenceError, match="does not exist"):
@@ -720,9 +701,7 @@ def test_physical_binding_rejects_non_raw_source_file(
     physical["treadmill_current_envelope"]["raw_records"] = [
         {
             "path": "schemas.py",
-            "sha256": hashlib.sha256(
-                (esp32tap_dir / "evidence" / "schemas.py").read_bytes()
-            ).hexdigest(),
+            "sha256": hashlib.sha256((esp32tap_dir / "evidence" / "schemas.py").read_bytes()).hexdigest(),
             "instrument": "scope-S1",
             "fixture": "installed-treadmill-F1",
             "capture_started_at_utc": "2026-07-24T12:00:00Z",
@@ -827,15 +806,9 @@ def test_current_voltage_csv_cannot_claim_unrelated_physical_fields(
     payload = "\n".join(
         [
             "timestamp_utc,measurement,unit,value",
-            (
-                "2026-07-24T12:00:00Z,source_voltage,V,7.7"
-            ),
-            (
-                "2026-07-24T12:00:02Z,source_voltage,V,8.3"
-            ),
-            (
-                "2026-07-24T12:00:01Z,continuous_current,A,0.5"
-            ),
+            ("2026-07-24T12:00:00Z,source_voltage,V,7.7"),
+            ("2026-07-24T12:00:02Z,source_voltage,V,8.3"),
+            ("2026-07-24T12:00:01Z,continuous_current,A,0.5"),
             "",
         ]
     )
@@ -862,12 +835,8 @@ def test_verified_raw_bindings_must_cover_every_measured_datum(
     payload = "\n".join(
         [
             "timestamp_utc,measurement,unit,value",
-            (
-                "2026-07-24T12:00:00Z,source_voltage,V,7.7"
-            ),
-            (
-                "2026-07-24T12:00:01Z,continuous_current,A,0.5"
-            ),
+            ("2026-07-24T12:00:00Z,source_voltage,V,7.7"),
+            ("2026-07-24T12:00:01Z,continuous_current,A,0.5"),
             "",
         ]
     )
@@ -1040,14 +1009,6 @@ def test_schema_cli_reports_hold_reason(esp32tap_dir: Path) -> None:
             "conservative-predecessor",
         ],
         [
-            "harness/validate_harnesses.py",
-            "--release",
-            "--action",
-            "connector_selection",
-            "--basis",
-            "conservative-predecessor",
-        ],
-        [
             "tools/export_fab.py",
             "--audit-only",
             "--require-rev-c-release",
@@ -1077,8 +1038,6 @@ def test_explicit_predecessor_verification_entry_points_pass(
     "command",
     [
         ["evidence/schemas.py", "--basis", "conservative-predecessor"],
-        ["harness/validate_harnesses.py", "--action", "layout"],
-        ["harness/validate_harnesses.py", "--basis", "conservative-predecessor"],
         ["tools/export_fab.py", "--rev-c-action", "verification_fabrication"],
         ["tools/export_fab.py", "--basis", "conservative-predecessor"],
     ],
@@ -1149,23 +1108,20 @@ def test_exporter_normalizes_missing_and_malformed_evidence_errors(
     assert "Traceback" not in result.stderr
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        ["harness/validate_harnesses.py", "--release"],
+def test_not_measured_blocks_the_release_entry_point(
+    esp32tap_dir: Path,
+) -> None:
+    # Rev D: the harness/ pigtail subsystem (and its separate
+    # harness/validate_harnesses.py release gate) is retired along with
+    # the Micro-Fit connectors; export_fab.py is now the only fabrication
+    # release entry point.
+    result = subprocess.run(
         [
+            sys.executable,
             "tools/export_fab.py",
             "--audit-only",
             "--require-rev-c-release",
         ],
-    ],
-)
-def test_not_measured_blocks_both_release_entry_points(
-    esp32tap_dir: Path,
-    command: list[str],
-) -> None:
-    result = subprocess.run(
-        [sys.executable, *command],
         cwd=esp32tap_dir,
         text=True,
         capture_output=True,

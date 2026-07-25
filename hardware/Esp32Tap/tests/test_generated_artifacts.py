@@ -47,8 +47,8 @@ EXPECTED_USB_NET_PADS = {
     "USB_DP_R": {("R16", "2"), ("C14", "1"), ("U1", "14")},
 }
 EXPECTED_FOOTPRINTS = {
-    "J1": ("Connector_Molex:" "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal"),
-    "J2": ("Connector_Molex:" "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal"),
+    "J1": "RJ45_SMD:RJ45-SMD_441440003",
+    "J2": "RJ45_SMD:RJ45-SMD_441440003",
     "SW1": "Button_Switch_SMD:SW_SPST_SKRPACE010",
     "SW2": "Button_Switch_SMD:SW_SPST_SKRPACE010",
     "F1": "Fuse:Fuse_1812_4532Metric",
@@ -490,10 +490,19 @@ def _planar_copper_graph(
     tuple[float, float],
     list[tuple[float, tuple[float, float]]],
 ]:
-    epsilon = 1e-7
+    # 1e-4 mm (0.1 um), not 1e-7: pcbnew stores coordinates as integer
+    # nanometres, so round-tripping a clean decimal mm value through
+    # FromMM()/ToMM() can land ~1 nm (1e-6 mm) off the intended value --
+    # 10x tighter than 1e-7 would tolerate, but a real routing distinction
+    # is always at least tens of microns, so 1e-4 cannot create a false
+    # intersection/shared-node match.
+    epsilon = 1e-4
 
     def point(value: tuple[float, float]) -> tuple[float, float]:
-        return (round(value[0], 6), round(value[1], 6))
+        # Match `epsilon` above: coarse enough to merge two conceptually-
+        # identical nodes whose pcbnew-derived coordinates differ by the
+        # ~1 nm FromMM()/ToMM() round-trip artifact.
+        return (round(value[0], 4), round(value[1], 4))
 
     normalized = [(point(start), point(end)) for start, end in segments]
     split_points = [{start, end} for start, end in normalized]
@@ -1044,8 +1053,7 @@ def test_footprint_generation_uses_only_pinned_project_sources(
     generator = (esp32tap_dir / "tools" / "gen_footprints.py").read_text(encoding="utf-8")
     assert "/usr/share/kicad/footprints" not in generator
     expected = {
-        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal.kicad_mod": "ff2f1200a5a71b525549f42a2bdb2fd4a07e9937e46b6c30b0daf40974c2d5f6",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal.kicad_mod": "cf8ae212da9c7bf802d8f6d50b3ce33b33be66af8403e0a02e18f569aa87a16f",
+        "RJ45-SMD_441440003.kicad_mod": "aa1fe4ddaf8087ef440e4d2f76aa3db133c3651048a906d319bdc70c4fac92af",
         "ESP32-S3-WROOM-1.kicad_mod": "b7f7c0eb5ecd56a08d127f464d0b0ffb5dc5e2b685bb493de1d731654e57bbd3",
     }
     for filename, digest in expected.items():
@@ -1097,8 +1105,8 @@ def test_compaction_locks_explicit_coupled_groups_and_neighbors(
         "C11": [87.0, 43.0, 0],
         "TP5": [49.0, 36.0, 0],
         "TP13": [74.6, 36.0, 0],
-        "J1": [12.5, 11.0, 90],
-        "J2": [12.5, 37.0, 90],
+        "J1": [8.0, 15.0, 90],
+        "J2": [8.0, 37.0, 90],
         "K1": [30.2, 23.0, 0],
         "D4": [30.0, 11.5, 0],
         "D5": [27.0, 15.0, 270],
@@ -1235,15 +1243,15 @@ def test_power_corridors_preserve_a_locked_safety_route_priority(
     assert {track["layer"] for track in pass_through if track["net"] == "GND" and track["width_mm"] >= 2.0} == {"F.Cu"}
 
 
-def test_checked_in_sources_identify_a_four_layer_rev_c_board(
+def test_checked_in_sources_identify_a_four_layer_rev_d_board(
     esp32tap_dir: Path,
 ) -> None:
     pcb = (esp32tap_dir / "kicad" / "Esp32Tap.kicad_pcb").read_text(encoding="utf-8")
     schematic = (esp32tap_dir / "kicad" / "Esp32Tap.kicad_sch").read_text(encoding="utf-8")
 
     assert all(f'"{layer}"' in pcb for layer in EXPECTED_LAYERS)
-    assert re.search(r'\(rev\s+"C"\)', schematic)
-    assert re.search(r"Esp32Tap\s+rev\s+C", pcb, re.IGNORECASE)
+    assert re.search(r'\(rev\s+"D"\)', schematic)
+    assert re.search(r"Esp32Tap\s+rev\s+D", pcb, re.IGNORECASE)
     for marking in ("BYPASS", "EMULATE"):
         assert f'"{marking}"' in pcb
 
@@ -1300,7 +1308,7 @@ def test_independent_fab_profile_drills_and_antenna_binding(
             archived = zipped.read(name)
             assert hashlib.sha256(archived).digest() == hashlib.sha256(exported).digest()
             binding.update(name.encode("utf-8") + b"\0" + hashlib.sha256(archived).digest())
-        assert binding.hexdigest() == ("e221c302960aae0ac8524c5ff2ab6edb41993228fdd5227adaf5785917edc16a")
+        assert binding.hexdigest() == ("e4f5e16c4de8bf4eb481318ef51577fb26049ace955ddc246b7a7c0078e472fe")
 
     # Component bodies are not present in Gerber/Excellon. Bind the
     # inspector's antenna proof to this exact reviewed PCB and fab package.
@@ -1579,16 +1587,16 @@ def test_inspected_vbus_cannot_reach_vin(
     assert not vbus_to_vin_bridges
 
 
-def test_inspected_title_and_silkscreen_are_rev_c(
+def test_inspected_title_and_silkscreen_are_rev_d(
     kicad_report: dict[str, Any],
 ) -> None:
     board = _board(kicad_report)
     assert board["title"] == "Esp32Tap - ESP32-S3 Precor serial-bus tap"
-    assert board["revision"] == "C"
+    assert board["revision"] == "D"
 
     front_silk = [item for item in board["texts"] if item.get("layer") in {"F.SilkS", "F.Silkscreen"}]
     rendered = "\n".join(str(item.get("text", "")) for item in front_silk)
-    assert re.search(r"Esp32Tap\s+rev\s+C", rendered, re.IGNORECASE)
+    assert re.search(r"Esp32Tap\s+rev\s+D", rendered, re.IGNORECASE)
     assert "BYPASS" in rendered
     assert "EMULATE" in rendered
 
@@ -1715,9 +1723,15 @@ def test_enclosure_geometry_is_explicit_and_board_derived(
     assert antenna["span_x_mm"][1] <= board["outline"]["max"][0]
 
 
-def test_microfit_headers_face_the_left_board_edge(
+def test_rj45_jacks_face_the_left_board_edge(
     kicad_report: dict[str, Any],
 ) -> None:
+    # Rev D: J1/J2 are the Molex 441440003 right-angle SMD RJ45 (LCSC
+    # C585890). Its mating opening/pad row sits near the board edge; the
+    # jack's rear mechanical-tab cap (the fabrication body's far X) extends
+    # inward toward the board interior -- the opposite geometry from Rev
+    # C's Micro-Fit housing, whose mating nose was the part closest to the
+    # board edge.
     board = _board(kicad_report)
     outline = board["outline"]
     for ref in ("J1", "J2"):
@@ -1726,9 +1740,10 @@ def test_microfit_headers_face_the_left_board_edge(
         assert connector["rotation_deg"] == pytest.approx(90.0)
         assert body is not None
         assert body["min"][0] >= outline["min"][0]
-        assert body["max"][0] <= connector["at"][0]
-        # The keyed 43045 right-angle housing mates toward decreasing X.
-        assert body["min"][0] - outline["min"][0] <= 0.25
+        pad_row_x = connector["pads"]["1"]["at"][0]
+        assert pad_row_x - outline["min"][0] == pytest.approx(2.1, abs=0.05)
+        assert pad_row_x < body["max"][0]
+        assert body["max"][0] - outline["min"][0] < 20.0
 
 
 def _assert_exact_non_smt_pad_occurrences(board: dict[str, Any]) -> None:
@@ -1930,19 +1945,26 @@ def _power_proof(board: dict[str, Any]) -> dict[str, Any]:
     via_intent_ids = [via.get("power_intent_id") for via in vias]
     assert len(via_intent_ids) == len(expected_vias)
     assert len(set(via_intent_ids)) == len(via_intent_ids), "duplicate coincident intended power-via occurrence"
+    # pcbnew stores coordinates as integer nanometres; round-tripping a
+    # clean decimal mm value through FromMM()/ToMM() can land 1 nm off the
+    # intended value (see inspect_kicad.py's _GEOMETRY_MATCH_DECIMALS
+    # note), so endpoint/position comparisons use pytest.approx rather
+    # than exact equality.
     for track in tracks:
         expected = expected_tracks[track["power_intent_id"]]
         assert track["net"] == expected["net"]
         assert track["layer"] == expected["layer"]
         assert track["width_mm"] == pytest.approx(expected["width_mm"])
-        assert {
-            tuple(track["start"]),
-            tuple(track["end"]),
-        } == {tuple(expected["start"]), tuple(expected["end"])}
+        actual_endpoints = sorted([tuple(track["start"]), tuple(track["end"])])
+        expected_endpoints = sorted([tuple(expected["start"]), tuple(expected["end"])])
+        for actual_point, expected_point in zip(actual_endpoints, expected_endpoints, strict=True):
+            for actual_value, expected_value in zip(actual_point, expected_point, strict=True):
+                assert actual_value == pytest.approx(expected_value, abs=1e-4)
     for via in vias:
         expected = expected_vias[via["power_intent_id"]]
         assert via["net"] == expected["net"]
-        assert tuple(via["at"]) == tuple(expected["at"])
+        for actual_value, expected_value in zip(via["at"], expected["at"], strict=True):
+            assert actual_value == pytest.approx(expected_value, abs=1e-4)
         assert via["size_mm"] == pytest.approx(expected["size_mm"])
         assert via["drill_mm"] == pytest.approx(expected["drill_mm"])
 
@@ -1958,10 +1980,17 @@ def _power_proof(board: dict[str, Any]) -> dict[str, Any]:
     assert assumption["live_quote_dfm_confirmation_required"]
     via_plating_m = assumption["plating_thickness_um"] * 1e-6
     board_thickness_m = 1.59e-3
-    epsilon = 1e-7
+    # 1e-4 mm (0.1 um), not 1e-7: pcbnew stores coordinates as integer
+    # nanometres, so round-tripping a clean decimal mm value through
+    # FromMM()/ToMM() can land ~1 nm (1e-6 mm) off the intended value --
+    # 10x tighter than 1e-7 would tolerate, but a real routing distinction
+    # is always at least tens of microns, so 1e-4 cannot create a false
+    # intersection/shared-node match.
+    epsilon = 1e-4
 
     def point(layer: str, xy: Any) -> tuple[str, float, float]:
-        return (layer, round(xy[0], 6), round(xy[1], 6))
+        # Match `epsilon` above (pcbnew ~1 nm round-trip tolerance).
+        return (layer, round(xy[0], 4), round(xy[1], 4))
 
     def planar_edges(net: str) -> list[dict[str, Any]]:
         selected = [track for track in tracks if track["net"] == net]
@@ -2238,18 +2267,21 @@ def _power_proof(board: dict[str, Any]) -> dict[str, Any]:
 
 def test_single_open_connector_power_paths_are_sized_for_two_amps(
     kicad_report: dict[str, Any],
-    esp32tap_dir: Path,
 ) -> None:
-    limits = json.loads((esp32tap_dir / "harness" / "electrical_limits.json").read_text(encoding="utf-8"))
-    assert limits["total_current_a"] == pytest.approx(2.0)
-    assert limits["pcb"]["copper_via_resistance_ohm"] is None
-    assert "COMPLETE_INSTALLED_DROP" in limits["unsupported"]
-    assert "AMBIENT_THERMAL" in limits["unsupported"]
+    # Rev D: the harness/ pigtail subsystem (and its electrical_limits.json
+    # supply-drop model, which combined PCB contact + wire + RJ45
+    # termination resistance for a discrete factory harness) is retired
+    # along with the Micro-Fit connectors -- the RJ45 jack is now the
+    # board-mounted termination directly. `_power_proof` below still
+    # solves the actual emitted copper (both nets' resistance, current
+    # distribution, and IPC-2152 thermal rise) directly from the
+    # generated PCB, independent of any harness-specific evidence file.
     result = _power_proof(_board(kicad_report))
-    assert result["nets"]["+8V_RAW"]["resistance_ohm"] == pytest.approx(0.018745, abs=0.000005)
-    assert result["nets"]["GND"]["resistance_ohm"] == pytest.approx(0.019665, abs=0.000005)
-    assert result["combined_drop_v"] == pytest.approx(0.076821, abs=0.000010)
-    assert result["nets"]["+8V_RAW"]["max_via_current_a"] == pytest.approx(1.131922, abs=0.000005)
+    assert result["nets"]["+8V_RAW"]["resistance_ohm"] == pytest.approx(0.014279, abs=0.000005)
+    assert result["nets"]["GND"]["resistance_ohm"] == pytest.approx(0.034911, abs=0.000005)
+    assert result["combined_drop_v"] == pytest.approx(0.098380, abs=0.000010)
+    assert result["combined_drop_v"] <= 0.1
+    assert result["nets"]["+8V_RAW"]["max_via_current_a"] == pytest.approx(0.828913, abs=0.000005)
     assert max(net["max_track_current_a"] for net in result["nets"].values()) == pytest.approx(2.0)
     assert result["gnd_via_conservative_envelope"]["current_a"] == 2.0
     assert result["gnd_via_conservative_envelope"]["max_rise_c"] <= 20.0
@@ -2813,10 +2845,13 @@ def test_silkscreen_minimums_and_required_markings(
     kicad_report: dict[str, Any],
 ) -> None:
     board = _board(kicad_report)
-    assert board["footprint_silkscreen_graphic_count"] == 295
+    # Rev D: 307, not 295 -- the RJ45-SMD_441440003 footprint's silkscreen
+    # (front-mating-face marks, courtyard-adjacent outline) has a
+    # different graphic count than Rev C's Micro-Fit headers.
+    assert board["footprint_silkscreen_graphic_count"] == 307
     front = [text for text in board["texts"] if text["layer"] in {"F.SilkS", "F.Silkscreen"}]
     expected_labels = {
-        "ESP32TAP REV C",
+        "ESP32TAP REV D",
         "BYPASS",
         "CONSOLE",
         "D1 K",
@@ -2838,13 +2873,16 @@ def test_silkscreen_minimums_and_required_markings(
         "BYPASS": ([142.0, 110.0], 0.0),
         "D1 K": ([126.5, 148.0], 90.0),
         "EMULATE": ([129.5, 137.0], 0.0),
-        "ESP32TAP REV C": ([158.0, 103.0], 0.0),
-        "K1 P1": ([122.5, 119.2], 0.0),
+        "ESP32TAP REV D": ([158.0, 103.0], 0.0),
+        "K1 P1": ([123.0, 119.2], 0.0),
         "LED1 K": ([191.0, 121.0], 0.0),
         "K LED2": ([177.0, 153.0], 0.0),
         "NO": ([142.0, 135.0], 0.0),
-        "MOTOR": ([121.0, 137.0], 0.0),
-        "PIN 1": ([119.5, 115.5], 0.0),
+        # Rev D: rotated vertical (90 deg) to fit the narrow corridor
+        # between the RJ45 jacks' deeper courtyard and D4/D5 (see
+        # gen_pcb.py add_silkscreen).
+        "MOTOR": ([123.0, 137.0], 90.0),
+        "PIN 1": ([123.0, 108.0], 90.0),
         "USB DATA ONLY": ([150.0, 108.0], 0.0),
     }
     for label, (position, rotation) in expected_placements.items():

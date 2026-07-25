@@ -1,21 +1,21 @@
 {
-  "bom_sha256": "145d665ab83110291f1518bf1e6f2e3439635c4b551ac79a8a5d9015d4ca20c8",
+  "bom_sha256": "431c19cac0d0ec19c25b0aa46be198026619b64a86df6025a4dc9881d1633047",
   "build_quantity": 2,
   "catalog_access": {
     "authenticated_api": "NOT_USED",
     "mode": "anonymous-read-only"
   },
   "catalog_status": "PASS",
-  "checked_at_utc": "2026-07-25T00:51:42Z",
+  "checked_at_utc": "2026-07-25T21:38:12Z",
   "parts": [
     {
-      "can_presale_number": 128922,
+      "can_presale_number": 130032,
       "footprint": "Capacitor_SMD:C_0603_1608Metric",
       "jlc_class": "Extended",
       "lcsc": "C106858",
       "library_type": "expand",
       "model": "CC0603KRX7R8BB105",
-      "overseas_stock_count": 243001,
+      "overseas_stock_count": 244111,
       "package": "0603",
       "references": [
         "C15"
@@ -25,13 +25,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 69967,
+      "can_presale_number": 69646,
       "footprint": "Button_Switch_SMD:SW_SPST_SKRPACE010",
       "jlc_class": "Extended",
       "lcsc": "C139797",
       "library_type": "expand",
       "model": "SKRPACE010",
-      "overseas_stock_count": 71073,
+      "overseas_stock_count": 70752,
       "package": "SMD-4P,4.2x3.2mm",
       "references": [
         "SW1",
@@ -42,13 +42,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 24451549,
+      "can_presale_number": 25450941,
       "footprint": "Capacitor_SMD:C_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C14663",
       "library_type": "base",
       "model": "CC0603KRX7R9BB104",
-      "overseas_stock_count": 33338025,
+      "overseas_stock_count": 34335659,
       "package": "0603",
       "references": [
         "C11",
@@ -64,13 +64,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 95530,
+      "can_presale_number": 95324,
       "footprint": "Capacitor_SMD:C_1206_3216Metric",
       "jlc_class": "Extended",
       "lcsc": "C14860",
       "library_type": "expand",
       "model": "CL31B106KAHNNNE",
-      "overseas_stock_count": 196146,
+      "overseas_stock_count": 195940,
       "package": "1206",
       "references": [
         "C2",
@@ -97,13 +97,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 13785330,
+      "can_presale_number": 13699929,
       "footprint": "Capacitor_SMD:C_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C15849",
       "library_type": "base",
       "model": "CL10A105KB8NNNC",
-      "overseas_stock_count": 15359806,
+      "overseas_stock_count": 15276271,
       "package": "0603",
       "references": [
         "C10"
@@ -113,13 +113,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 7882890,
+      "can_presale_number": 7848056,
       "footprint": "Capacitor_SMD:C_0805_2012Metric",
       "jlc_class": "Basic",
       "lcsc": "C15850",
       "library_type": "base",
       "model": "CL21A106KAYNNNE",
-      "overseas_stock_count": 10511249,
+      "overseas_stock_count": 10476320,
       "package": "0805",
       "references": [
         "C8"
@@ -129,13 +129,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 273097,
+      "can_presale_number": 272636,
       "footprint": "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12",
       "jlc_class": "Extended",
       "lcsc": "C165948",
       "library_type": "expand",
       "model": "TYPE-C-31-M-12",
-      "overseas_stock_count": 283922,
+      "overseas_stock_count": 283466,
       "package": "SMD",
       "references": [
         "J3"
@@ -145,13 +145,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 33856,
+      "can_presale_number": 73055,
       "footprint": "Package_TO_SOT_SMD:SOT-23-6",
       "jlc_class": "Extended",
       "lcsc": "C191884",
       "library_type": "expand",
       "model": "TPS54202DDCR",
-      "overseas_stock_count": 39237,
+      "overseas_stock_count": 78436,
       "package": "SOT-23-6",
       "references": [
         "U2"
@@ -183,7 +183,7 @@
       "lcsc": "C21190",
       "library_type": "base",
       "model": "0603WAF1001T5E",
-      "overseas_stock_count": 4109213,
+      "overseas_stock_count": 4027770,
       "package": "0603",
       "references": [
         "R12"
@@ -193,13 +193,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 1042538,
+      "can_presale_number": 982116,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C22775",
       "library_type": "base",
       "model": "0603WAF1000T5E",
-      "overseas_stock_count": 4512798,
+      "overseas_stock_count": 4452356,
       "package": "0603",
       "references": [
         "R6"
@@ -209,13 +209,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 1116078,
+      "can_presale_number": 1121106,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C22807",
       "library_type": "base",
       "model": "0603WAF1503T5E",
-      "overseas_stock_count": 1301751,
+      "overseas_stock_count": 1306819,
       "package": "0603",
       "references": [
         "R17"
@@ -225,13 +225,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 7138344,
+      "can_presale_number": 7083117,
       "footprint": "LED_SMD:LED_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C2286",
       "library_type": "base",
       "model": "KT-0603R",
-      "overseas_stock_count": 7822155,
+      "overseas_stock_count": 7766927,
       "package": "0603",
       "references": [
         "LED2"
@@ -241,13 +241,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 1376230,
+      "can_presale_number": 1357554,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C23138",
       "library_type": "base",
       "model": "0603WAF3300T5E",
-      "overseas_stock_count": 2245989,
+      "overseas_stock_count": 2227313,
       "package": "0603",
       "references": [
         "R11"
@@ -263,7 +263,7 @@
       "lcsc": "C23162",
       "library_type": "base",
       "model": "0603WAF4701T5E",
-      "overseas_stock_count": 4647991,
+      "overseas_stock_count": 4585612,
       "package": "0603",
       "references": [
         "R32"
@@ -273,13 +273,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 1155582,
+      "can_presale_number": 1128066,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C23186",
       "library_type": "base",
       "model": "0603WAF5101T5E",
-      "overseas_stock_count": 3103930,
+      "overseas_stock_count": 3076454,
       "package": "0603",
       "references": [
         "R4",
@@ -290,13 +290,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 2928653,
+      "can_presale_number": 2921410,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C23204",
       "library_type": "base",
       "model": "0603WAF5600T5E",
-      "overseas_stock_count": 3201745,
+      "overseas_stock_count": 3194502,
       "package": "0603",
       "references": [
         "R9"
@@ -312,7 +312,7 @@
       "lcsc": "C23345",
       "library_type": "base",
       "model": "0603WAF220JT5E",
-      "overseas_stock_count": 500703,
+      "overseas_stock_count": 486979,
       "package": "0603",
       "references": [
         "R15",
@@ -323,13 +323,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 8819,
+      "can_presale_number": 8799,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Extended",
       "lcsc": "C23354",
       "library_type": "expand",
       "model": "0603WAF2553T5E",
-      "overseas_stock_count": 10735,
+      "overseas_stock_count": 10715,
       "package": "0603",
       "references": [
         "R19"
@@ -339,29 +339,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 842,
-      "footprint": "Connector_Molex:Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-      "jlc_class": "Extended",
-      "lcsc": "C240838",
-      "library_type": "expand",
-      "model": "430450809",
-      "overseas_stock_count": 1190,
-      "package": "SMD,P=3mm,Surface Mount\uff0cRight Angle",
-      "references": [
-        "J1"
-      ],
-      "required_qty": 2,
-      "source_url": "https://jlcpcb.com/partdetail/C240838",
-      "status": "IN_STOCK"
-    },
-    {
-      "can_presale_number": 3821576,
+      "can_presale_number": 4018709,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C25803",
       "library_type": "base",
       "model": "0603WAF1003T5E",
-      "overseas_stock_count": 7414129,
+      "overseas_stock_count": 7611320,
       "package": "0603",
       "references": [
         "R1",
@@ -379,7 +363,7 @@
       "lcsc": "C25804",
       "library_type": "base",
       "model": "0603WAF1002T5E",
-      "overseas_stock_count": 5611384,
+      "overseas_stock_count": 5701872,
       "package": "0603",
       "references": [
         "R10",
@@ -410,7 +394,7 @@
       "lcsc": "C25819",
       "library_type": "base",
       "model": "0603WAF4702T5E",
-      "overseas_stock_count": 692928,
+      "overseas_stock_count": 686109,
       "package": "0603",
       "references": [
         "R14"
@@ -420,13 +404,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 5577,
+      "can_presale_number": 5361,
       "footprint": "RF_Module:ESP32-S3-WROOM-1",
       "jlc_class": "Extended",
       "lcsc": "C2913198",
       "library_type": "expand",
       "model": "ESP32-S3-WROOM-1-N8",
-      "overseas_stock_count": 6003,
+      "overseas_stock_count": 5787,
       "package": "SMD,25.5x18mm",
       "references": [
         "U1"
@@ -442,24 +426,25 @@
       "lcsc": "C2918511",
       "library_type": "expand",
       "model": "CS3225X7R226K250NRL",
-      "overseas_stock_count": 76961,
+      "overseas_stock_count": 76709,
       "package": "1210",
       "references": [
+        "C1",
         "C6",
         "C7"
       ],
-      "required_qty": 4,
+      "required_qty": 6,
       "source_url": "https://jlcpcb.com/partdetail/C2918511",
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 133115,
+      "can_presale_number": 132405,
       "footprint": "Diode_SMD:D_SOD-323",
       "jlc_class": "Extended",
       "lcsc": "C316020",
       "library_type": "expand",
       "model": "PESD3V3L1BA-N",
-      "overseas_stock_count": 137305,
+      "overseas_stock_count": 136595,
       "package": "SOD-323",
       "references": [
         "D5",
@@ -471,13 +456,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 1092850,
+      "can_presale_number": 1146204,
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "jlc_class": "Basic",
       "lcsc": "C31850",
       "library_type": "base",
       "model": "0603WAF2202T5E",
-      "overseas_stock_count": 1629697,
+      "overseas_stock_count": 1683051,
       "package": "0603",
       "references": [
         "R2"
@@ -536,13 +521,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 170092,
+      "can_presale_number": 173749,
       "footprint": "Capacitor_SMD:C_0805_2012Metric",
       "jlc_class": "Extended",
       "lcsc": "C354262",
       "library_type": "expand",
       "model": "CC0805KKX7R8BB475",
-      "overseas_stock_count": 195567,
+      "overseas_stock_count": 199224,
       "package": "0805",
       "references": [
         "C16"
@@ -552,13 +537,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 174897,
+      "can_presale_number": 174742,
       "footprint": "Inductor_SMD:L_Sunlord_SWPA4030S",
       "jlc_class": "Extended",
       "lcsc": "C38117",
       "library_type": "expand",
       "model": "SWPA4030S100MT",
-      "overseas_stock_count": 177169,
+      "overseas_stock_count": 177014,
       "package": "SMD,4x4mm",
       "references": [
         "L1"
@@ -568,13 +553,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 98540,
+      "can_presale_number": 98005,
       "footprint": "Capacitor_SMD:C_0603_1608Metric",
       "jlc_class": "Extended",
       "lcsc": "C39148",
       "library_type": "expand",
       "model": "CL10C560JB8NNNC",
-      "overseas_stock_count": 149401,
+      "overseas_stock_count": 148866,
       "package": "0603",
       "references": [
         "C12"
@@ -584,13 +569,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 30922,
+      "can_presale_number": 56602,
       "footprint": "Relay_SMD:Relay_DPDT_Omron_G6K-2F-Y",
       "jlc_class": "Extended",
       "lcsc": "C47190",
       "library_type": "expand",
       "model": "G6K-2F-Y-TR DC5",
-      "overseas_stock_count": 30922,
+      "overseas_stock_count": 56602,
       "package": "SMD,10x6.5mm",
       "references": [
         "K1"
@@ -600,13 +585,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 799643,
+      "can_presale_number": 1299931,
       "footprint": "Package_TO_SOT_SMD:SOT-23",
       "jlc_class": "Extended",
       "lcsc": "C52801",
       "library_type": "expand",
       "model": "BC817-40,215",
-      "overseas_stock_count": 799643,
+      "overseas_stock_count": 1299931,
       "package": "SOT-23",
       "references": [
         "Q1"
@@ -616,45 +601,30 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 122,
-      "footprint": "Connector_Molex:Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
+      "can_presale_number": 3848,
+      "footprint": "RJ45_SMD:RJ45-SMD_441440003",
       "jlc_class": "Extended",
-      "lcsc": "C563827",
+      "lcsc": "C585890",
       "library_type": "expand",
-      "model": "430451010",
-      "overseas_stock_count": 124,
-      "package": "SMD,P=3mm,Surface Mount\uff0cRight Angle",
+      "model": "441440003",
+      "overseas_stock_count": 3881,
+      "package": "SMD",
       "references": [
+        "J1",
         "J2"
       ],
-      "required_qty": 2,
-      "source_url": "https://jlcpcb.com/partdetail/C563827",
+      "required_qty": 4,
+      "source_url": "https://jlcpcb.com/partdetail/C585890",
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 248617,
-      "footprint": "Capacitor_SMD:CP_Elec_6.3x7.7",
-      "jlc_class": "Extended",
-      "lcsc": "C72477",
-      "library_type": "expand",
-      "model": "RVT1E101M0607",
-      "overseas_stock_count": 250664,
-      "package": "SMD,D6.3xL7.7mm",
-      "references": [
-        "C1"
-      ],
-      "required_qty": 2,
-      "source_url": "https://jlcpcb.com/partdetail/C72477",
-      "status": "IN_STOCK"
-    },
-    {
-      "can_presale_number": 21056,
+      "can_presale_number": 17962,
       "footprint": "Package_TO_SOT_SMD:SOT-23-6",
       "jlc_class": "Extended",
       "lcsc": "C7519",
       "library_type": "expand",
       "model": "USBLC6-2SC6",
-      "overseas_stock_count": 24375,
+      "overseas_stock_count": 21293,
       "package": "SOT-23-6L",
       "references": [
         "U3"
@@ -664,13 +634,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 18729,
+      "can_presale_number": 20906,
       "footprint": "Package_TO_SOT_SMD:SOT-23-5",
       "jlc_class": "Extended",
       "lcsc": "C7834",
       "library_type": "expand",
       "model": "SN74LVC1G126DBVR",
-      "overseas_stock_count": 19188,
+      "overseas_stock_count": 21365,
       "package": "SOT-23-5",
       "references": [
         "U7"
@@ -696,13 +666,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 23924,
+      "can_presale_number": 197304,
       "footprint": "Package_TO_SOT_SMD:SOT-23",
       "jlc_class": "Basic",
       "lcsc": "C8545",
       "library_type": "base",
       "model": "2N7002",
-      "overseas_stock_count": 175874,
+      "overseas_stock_count": 349048,
       "package": "SOT-23",
       "references": [
         "Q2"
@@ -712,13 +682,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 2225755,
+      "can_presale_number": 2207555,
       "footprint": "Diode_SMD:D_SMA",
       "jlc_class": "Basic",
       "lcsc": "C8678",
       "library_type": "base",
       "model": "SS34",
-      "overseas_stock_count": 2452025,
+      "overseas_stock_count": 2434003,
       "package": "SMA(DO-214AC)",
       "references": [
         "D1"
@@ -728,13 +698,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 12649,
+      "can_presale_number": 12644,
       "footprint": "Package_TO_SOT_SMD:SOT-23-5",
       "jlc_class": "Extended",
       "lcsc": "C96028",
       "library_type": "expand",
       "model": "TPS70950DBVR",
-      "overseas_stock_count": 12957,
+      "overseas_stock_count": 12952,
       "package": "SOT-23-5",
       "references": [
         "U5"
@@ -744,13 +714,13 @@
       "status": "IN_STOCK"
     },
     {
-      "can_presale_number": 5035708,
+      "can_presale_number": 4978092,
       "footprint": "LED_SMD:LED_0603_1608Metric",
       "jlc_class": "Extended",
       "lcsc": "C965804",
       "library_type": "expand",
       "model": "XL-1608UGC-04",
-      "overseas_stock_count": 5089374,
+      "overseas_stock_count": 5031758,
       "package": "0603",
       "references": [
         "LED1"

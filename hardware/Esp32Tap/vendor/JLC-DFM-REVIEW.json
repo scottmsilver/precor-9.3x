@@ -2,11 +2,11 @@
   "schema_version": 1,
   "status": "HOLD",
   "scope_status": "NOT_REVIEWED_EXACT_ARCHIVE",
-  "evidence_scope": "The regenerated exact Rev C archive has not been uploaded or reviewed by a vendor. The retained category counts are explicitly bound to a superseded archive and are not release evidence for this archive or order configuration.",
-  "checked_at_utc": "2026-07-25T15:02:47Z",
+  "evidence_scope": "The regenerated exact Rev D archive has not been uploaded or reviewed by a vendor. The retained category counts are explicitly bound to a superseded archive and are not release evidence for this archive or order configuration.",
+  "checked_at_utc": "2026-07-25T23:15:05Z",
   "archive": {
     "path": "kicad/Esp32Tap-gerbers.zip",
-    "sha256": "5a040947f7b3efa5d4e4c27d7e197fbdcf7cb1db10449d59bb4d1632f0062ba2"
+    "sha256": "ad4d98149b7ca04f6cf20692860a7fcc517fb5daee0bce5eda2193b56cc55b85"
   },
   "parsed_board": {
     "copper_layers": 4,

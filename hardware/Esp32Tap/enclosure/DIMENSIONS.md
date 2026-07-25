@@ -1,9 +1,9 @@
-# Esp32Tap Rev C enclosure dimensions and modeled validation
+# Esp32Tap Rev D enclosure dimensions and modeled validation
 
 **Status: HOLD.** The CAD and checked-in meshes pass deterministic model
-validation. Actual board/connector fit, delivered-harness strain relief,
-wrong-mating attempts, installed bend clearance, RF performance, material
-acceptance, and enclosure supply remain physical or vendor gates.
+validation. Actual board/connector fit, delivered plug/latch/extraction
+clearance, installed bend clearance, RF performance, material acceptance,
+and enclosure supply remain physical or vendor gates.
 
 The source is `esp32tap_case.scad`. Both meshes are rendered with hard
 warnings using the immutable image:
@@ -23,16 +23,19 @@ Coordinates use the PCB outline minimum as `(0, 0)`.
 | Item | Inspector-derived value |
 |---|---|
 | Board | 95.0 × 58.0 × 1.6 mm |
-| J1 footprint anchor / body width | (12.5, 14.0) / 15.75 mm |
-| J2 footprint anchor / body width | (12.5, 40.0) / 18.75 mm |
+| J1 footprint anchor / body width | (8.0, 18.0) / 15.48 mm |
+| J2 footprint anchor / body width | (8.0, 40.0) / 15.48 mm |
 | J3 USB-C center | (91.2, 39.5) mm |
 | SW1 / SW2 centers | (42.0, 7.0) / (91.0, 20.0) mm |
 | U1 physical antenna edge | 3.3 mm inside board Y=0 |
 | U1 antenna span | X=69.0…87.0 mm |
 | Mounting centers | (20.0, 6.0), (48.0, 6.0), (92.0, 55.0) mm |
 
-The mounting locations reproduce the versioned inspection report exactly;
-this is modeled geometry, not delivered fit evidence.
+J1 and J2 are the identical Molex 0441440003 right-angle SMD 8P8C RJ45 jack
+(LCSC C585890), so their body widths (and every RJ45 dimension below) are
+the same value; only the board-Y anchor differs. The mounting locations
+reproduce the versioned inspection report exactly; this is modeled
+geometry, not delivered fit evidence.
 
 ## Shell and access geometry
 
@@ -48,56 +51,52 @@ this is modeled geometry, not delivered fit evidence.
 | Switch access | Ø2.5 mm tool openings at exact SW1/SW2 centers |
 | Connector latch clearance | 6.0 mm modeled straight-access depth |
 | Exterior cable bend service envelope | 18.0 mm minimum radius |
-| Strain relief | Integrated zip-tie bridges for 5.0 mm jackets |
 | Closure | Tool-less snap latches; optional supplied M3 fasteners/posts |
 
 The enclosure contains no metal in the antenna void. The external 18 mm
 bend envelope is a production routing requirement; it is not represented as
-proof that a delivered harness fits an installed treadmill.
+proof that a delivered cable fits an installed treadmill.
 
-## Keyed harness apertures
+## RJ45 wall apertures
 
-The selected collar body is 15.6 × 13.6 mm. Each opening is 16.6 × 14.0 mm,
-giving 0.5 mm modeled collar clearance per side. A 3.0 mm rib enters a 3.4 × 2.2 mm
-slot. Console and Motor slots are offset −5.0 mm and +5.0 mm respectively.
-The 10.0 mm separation leaves a 6.6 mm modeled wrong-mating collision margin.
+Both jacks are the identical, unshielded 8P8C part, edge-mounted with the
+mating opening facing off the board's X=0 edge (see `gen_pcb.py` `PLACE`).
+There is no mechanical keying between console and motor any more: both
+apertures are identical, straight 16.0 × 14.0 mm openings that clear the
+15.48 × 13.4 mm jack body by 0.26 mm on width. CONSOLE/MOTOR silkscreen is
+the only differentiator; a mis-plugged cable is a labeling/procedure risk,
+not something this CAD rejects.
 
-These dimensions encode geometric rejection in CAD. Delivered wrong-harness
-attempts remain open physical evidence.
+These apertures are modeled fit only. Delivered plug seating, latch
+engagement, and wrong-cable attempts remain open physical evidence.
 
-## Mated connector and pigtail service envelopes
+## RJ45 plug service envelope
 
-The receptacle envelopes are taken from the official Molex
-`430250000-SD` Rev A customer drawing for the selected `43025-0800`
-(`430250800`) and `43025-1000` (`430251000`) housings:
+The jack (Molex 0441440003 / LCSC C585890) mechanical envelope:
 
-| Item | 8-circuit J1 | 10-circuit J2 |
-|---|---:|---:|
-| Nominal housing width A | 12.85 mm | 15.85 mm |
-| Maximum modeled width (including 0.25 mm drawing tolerance) | 13.10 mm | 16.10 mm |
-| Maximum modeled height | 11.06 mm | 11.06 mm |
-| Maximum modeled housing depth | 17.81 mm | 17.81 mm |
-| Maximum modeled mated 43025/43020 depth | 25.02 mm | 25.02 mm |
-| Straight latch/extraction clearance beyond mated envelope | 6.0 mm | 6.0 mm |
+| Item | Value |
+|---|---|
+| Body width | 15.48 mm |
+| Body depth (board edge to rear mechanical-tab cap) | 17.17 mm |
+| Body height above board | 13.4 mm |
+| Aperture (width × height) | 16.0 × 14.0 mm |
+| Latch/extraction clearance | 6.0 mm |
+| Cable exit direction | Enclosure X-min (both jacks) |
 
-The shared 16.6 mm aperture leaves 0.25 mm on each side of the maximum J2
-housing envelope. Both service volumes point toward enclosure X-min:
-the factory harness pigtails exit outward, then retain an 18 mm minimum bend
-radius for 22 AWG conductors before the integrated 5 mm jacket strain relief.
-The service-volume geometry is model evidence only; delivered housing,
-latch, extraction, and installed pigtail checks remain physical gates.
-
-Official drawing:
-<https://www.molex.com/content/dam/molex/molex-dot-com/products/automated/en-us/salesdrawingpdf/430/43025/430251600_sd.pdf>
+Both jacks' service volumes point toward enclosure X-min: the treadmill's
+own RJ45 cable exits outward, then retains an 18 mm minimum bend radius
+before reaching the enclosure wall. The service-volume geometry is model
+evidence only; delivered plug seating, latch, and extraction checks remain
+physical gates.
 
 ## Checked mesh evidence
 
 | Mesh | Byte SHA-256 | Canonical geometry SHA-256 | Volume | Bounds |
 |---|---|---|---:|---|
-| `esp32tap_base.stl` | `097558cfea5cbc591866f01aae818b1784ca18bfc82a1d21fced37697424d9aa` | `590c8b310cf560c0b337cc2d632e28c96e0bff94f7ae37a5c448508331119b45` | 43,792.682 mm³ | −6…112 × −1.2…83.7 × 0…23.6 mm |
-| `esp32tap_lid.stl` | `ccf89dc86528bf850dc80a7aceadf61193741d3e6fecf37d9ca385cc4c513e73` | `cd9d13dd46ca09035dad29a626d7c18d2688f8a468ebfe559381c19ba7149160` | 27,060.858 mm³ | 0…104 × 0…83.7 × 0…4.2 mm |
+| `esp32tap_base.stl` | `424f54d01e6b05ee66f717ebece51dd360dee2268af46a4e0fbe6b8bfd00bc32` | `817efa8de7af36e9306a4a15bfe3b69a1c1e73fc47d7b54a40f1105aa22760c9` | 43,414.399 mm³ | −6…112 × −1.2…83.7 × 0…23.6 mm |
+| `esp32tap_lid.stl` | `dceda9ed05d40ae223d6dfe68f464d909a5982b2dfad88c50bbf7296226239c7` | `cd9d13dd46ca09035dad29a626d7c18d2688f8a468ebfe559381c19ba7149160` | 27,060.858 mm³ | 0…104 × 0…83.7 × 0…4.2 mm |
 
 Both meshes are single positive-volume, watertight, winding-consistent
-manifolds with exactly two faces per welded edge. Ninety-three occupancy and
-boundary probes cover the cavity, keyed apertures, strain relief, USB,
-switches, mounting posts, lid posts, snap receivers, and antenna void.
+manifolds with exactly two faces per welded edge. Eighty-five occupancy and
+boundary probes cover the cavity, RJ45 apertures, USB, switches, mounting
+posts, lid posts, snap receivers, and antenna void.

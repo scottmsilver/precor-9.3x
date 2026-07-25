@@ -1,61 +1,75 @@
 {
   "evidence_class": "MODEL",
   "status": "MODELED",
-  "board_size_mm": [95.0, 58.0, 1.6],
-  "outer_shell_mm": [104.0, 83.7, 23.6],
-  "lid_mm": [104.0, 83.7, 4.2],
+  "board_size_mm": [
+    95.0,
+    58.0,
+    1.6
+  ],
+  "outer_shell_mm": [
+    104.0,
+    83.7,
+    23.6
+  ],
+  "lid_mm": [
+    104.0,
+    83.7,
+    4.2
+  ],
   "antenna_void_mm": 15.0,
   "antenna_physical_edge_from_board_y0_mm": 3.3,
   "antenna_axial_envelope": "15 mm air/plastic from physical ESP antenna edge to inner wall",
-  "connector_centers_mm": [[12.5, 14.0], [12.5, 40.0]],
-  "connector_body_widths_mm": [15.75, 18.75],
-  "usb_center_mm": [91.2, 39.5],
-  "switch_centers_mm": [[42.0, 7.0], [91.0, 20.0]],
-  "keyed_apertures": {
-    "console_key_offset_mm": -5.0,
-    "motor_key_offset_mm": 5.0,
-    "matching_clearance_mm": 0.5,
-    "wrong_mating_collision_margin_mm": 6.6
-  },
-  "molex_drawing": {
-    "document": "430250000-SD Rev A",
-    "source": "https://www.molex.com/content/dam/molex/molex-dot-com/products/automated/en-us/salesdrawingpdf/430/43025/430251600_sd.pdf",
-    "general_tolerance_mm": 0.25
-  },
-  "mated_housing_envelopes_mm": [
-    {
-      "mpn": "430250800",
-      "width_max": 13.1,
-      "height_max": 11.06,
-      "housing_depth_max": 17.81,
-      "mated_depth_max": 25.02,
-      "latch_extraction_clearance": 6.0,
-      "pigtail_exit_direction_x": -1
-    },
-    {
-      "mpn": "430251000",
-      "width_max": 16.1,
-      "height_max": 11.06,
-      "housing_depth_max": 17.81,
-      "mated_depth_max": 25.02,
-      "latch_extraction_clearance": 6.0,
-      "pigtail_exit_direction_x": -1
-    }
+  "connector_centers_mm": [
+    [
+      8.0,
+      18.0
+    ],
+    [
+      8.0,
+      40.0
+    ]
   ],
+  "connector_body_widths_mm": [
+    15.48,
+    15.48
+  ],
+  "usb_center_mm": [
+    91.2,
+    39.5
+  ],
+  "switch_centers_mm": [
+    [
+      42.0,
+      7.0
+    ],
+    [
+      91.0,
+      20.0
+    ]
+  ],
+  "rj45_jack": {
+    "mpn": "441440003",
+    "lcsc": "C585890",
+    "note": "Rev D: J1 and J2 are the identical unshielded right-angle SMD 8P8C jack, edge-mounted with the mating opening facing off the board edge. There is no mechanical keying between console and motor any more; CONSOLE/MOTOR silkscreen is the only differentiator.",
+    "body_width_mm": 15.48,
+    "body_depth_mm": 17.17,
+    "body_height_mm": 13.4,
+    "aperture_width_mm": 16.0,
+    "aperture_height_mm": 14.0,
+    "aperture_width_clearance_mm": 0.26
+  },
   "connector_latch_clearance_mm": 6.0,
   "external_cable_bend_service_radius_mm": 18.0,
-  "strain_relief_cable_diameter_mm": 5.0,
   "closure": "TOOL_LESS_SNAP_LATCH_WITH_OPTIONAL_SUPPLIED_M3",
   "artifacts": {
-    "enclosure/esp32tap_case.scad": "11faece8be592862f17a0167143692aecd3572a2d67ced503c25cfc0bc8f11ea",
-    "enclosure/esp32tap_base.stl": "097558cfea5cbc591866f01aae818b1784ca18bfc82a1d21fced37697424d9aa",
-    "enclosure/esp32tap_lid.stl": "ccf89dc86528bf850dc80a7aceadf61193741d3e6fecf37d9ca385cc4c513e73"
+    "enclosure/esp32tap_case.scad": "5105df1c9f6c369d02db82c68013d7a892383cd7b874fa35a8fff73495894c31",
+    "enclosure/esp32tap_base.stl": "424f54d01e6b05ee66f717ebece51dd360dee2268af46a4e0fbe6b8bfd00bc32",
+    "enclosure/esp32tap_lid.stl": "dceda9ed05d40ae223d6dfe68f464d909a5982b2dfad88c50bbf7296226239c7"
   },
   "physical_gates": [
     "actual board and connector fit",
-    "delivered Molex housing and latch extraction envelope",
-    "delivered harness strain relief",
-    "delivered wrong-mating attempts",
+    "delivered RJ45 jack and plug latch/extraction envelope",
+    "delivered cable strain relief at the enclosure wall",
     "installed cable bend clearance",
     "installed RF performance"
   ]

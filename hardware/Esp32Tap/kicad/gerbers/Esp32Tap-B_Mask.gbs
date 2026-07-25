@@ -1,6 +1,6 @@
 %TF.GenerationSoftware,KiCad,Pcbnew,10.0.1-10.0.1~ubuntu24.04.1*%
 %TF.CreationDate,1970-01-01T00:00:00+00:00*%
-%TF.ProjectId,Esp32Tap,45737033-3254-4617-902e-6b696361645f,C*%
+%TF.ProjectId,Esp32Tap,45737033-3254-4617-902e-6b696361645f,D*%
 %TF.SameCoordinates,Original*%
 %TF.FileFunction,Soldermask,Bot*%
 %TF.FilePolarity,Negative*%
@@ -33,10 +33,10 @@ D13*
 %TO.C,MH1*%
 X120000000Y-103000000D03*
 %TD*%
-%TO.C,MH2*%
-X148000000Y-103000000D03*
-%TD*%
 %TO.C,MH3*%
 X192000000Y-152000000D03*
+%TD*%
+%TO.C,MH2*%
+X148000000Y-103000000D03*
 %TD*%
 M02*

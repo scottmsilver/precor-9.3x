@@ -1,4 +1,4 @@
-# Esp32Tap Rev C — handoff and advice for Claude
+# Esp32Tap Rev D — handoff and advice for Claude
 
 **Status: HOLD. Do not submit an order, add the design to a production cart,
 authorize substitutions, or pay. Do not connect an Emulate-capable build to
@@ -7,19 +7,21 @@ the treadmill.**
 Claude: preserve the distinction between repository evidence, vendor evidence,
 and physical evidence. A passing model is not an assembled-treadmill result.
 
-## Rev C facts that must not regress
+## Rev D facts that must not regress
 
 - The finished board is **95.0 × 58.0 mm**, four layers, on the modeled
   `JLC04161H-7628` stack.
 - U1 is fully inside the finished outline. Its locked body-to-edge margins are
   **3.25 mm and 3.30 mm**. Its stock manufacturer keepout forbids tracks,
   vias, pads, footprints, and zone fill on every copper layer.
-- J1/J2 are right-angle **SMT Molex Micro-Fit 3.0** board headers:
-  `430450809` and `430451010`. RJ45 exists only at the remote ends of two
-  custom turnkey pigtails; there are no board-mounted RJ45 jacks.
-- The serial harness's +8 V conductors are the board's only power source.
+- J1/J2 are the identical right-angle **SMT Molex 0441440003** (LCSC
+  `C585890`) 8P8C RJ45 jack, edge-mounted with the mating opening facing off
+  the board's X=0 edge. There is no separate pigtail harness and no
+  mechanical keying between console and motor; CONSOLE/MOTOR silkscreen is
+  the only differentiator.
+- The treadmill cable's +8 V conductors are the board's only power source.
   USB-C is native USB data plus VBUS presence detection only. It cannot power
-  VIN, +3V3, +5V_RLY, or K1. **USB alone cannot power or program Rev C.**
+  VIN, +3V3, +5V_RLY, or K1. **USB alone cannot power or program Rev D.**
   Programming requires USB data and **current-limited +8 V bench power**.
 - USB is not galvanically isolated. Measure host-to-treadmill ground potential
   and connection current and review bonding/isolation before simultaneous
@@ -34,12 +36,12 @@ Gerbers.
 
 ## Exact repository evidence
 
-- The exact 2 A PCB trace-union solve is **76.821149 mV** supply-plus-return:
-  +8 V is 18.745090 mΩ and the conservative trace-only GND return is
-  19.665484 mΩ.
-- The +8 V solve's maximum via current is **1.131922 A**; its conservative
-  IPC-2221 internal-barrel rise is **15.234166 °C** and I²R is
-  **1.864230 mW**.
+- The exact 2 A PCB trace-union solve is **98.379966 mV** supply-plus-return:
+  +8 V is 14.279315 mΩ and the conservative trace-only GND return is
+  34.910668 mΩ.
+- The +8 V solve's maximum via current is **0.828913 A**; its conservative
+  IPC-2221 internal-barrel rise is **7.504156 °C** and I²R is
+  **0.999735 mW**.
 - Every intended GND stitching via is 1.4/1.0 mm. Because the In1 plane is not
   solved exactly, each is independently qualified at the full 2.0 A:
   **12.273573 °C** rise and **2.328020 mW** I²R using a conservative
@@ -114,14 +116,15 @@ harness list is: `RJ45_SINGLE_OPEN_2A`, `MINIMUM_VIN`, `SOURCE_IMPEDANCE`,
 
 ## Gates that remain open
 
-- a live JLC review of the **current exact** ZIP, BOM, CPL, and placement;
+- a live JLC review of the **current exact** ZIP, BOM, CPL, and placement,
+  including Standard PCBA placement confirmation for the Extended-class RJ45
+  jacks;
 - confirmation of the selected stack/impedance and 20 µm Class 2 hole copper;
 - J3's four plated mechanical stakes under normal top-side reflow—no
   manual/wave operation is requested;
 - panel carrier/rail, tooling, fiducial, tab, and delivered-edge details;
-- exact turnkey RJ45 pigtail drawings, pin mapping, strain relief, validation,
-  and quote;
-- enclosure quote, material, physical fit, installed clearance, and RF range;
+- enclosure quote, material, physical fit, installed clearance, and RF range
+  for the J1/J2 RJ45 wall apertures;
 - treadmill +8 V/VIN/source-impedance/transient/load/thermal measurements;
 - RJ45 single-open 2 A qualification and complete installed loop drop;
 - relay contact timing/bounce/weld/temperature and 1,000 splice-free transfers;
@@ -130,7 +133,7 @@ harness list is: `RJ45_SINGLE_OPEN_2A`, `MINIMUM_VIN`, `SOURCE_IMPEDANCE`,
 - production firmware, security, WDT/brownout evidence, and safety matrix.
 
 The existing operator-observed JLCDFM JSON is bound to an older exact archive.
-Preserve it as historical evidence; do not relabel it as review of Rev C's
+Preserve it as historical evidence; do not relabel it as review of Rev D's
 current bytes. First treadmill contact remains Proxy-only with relay
 energization compiled out.
 

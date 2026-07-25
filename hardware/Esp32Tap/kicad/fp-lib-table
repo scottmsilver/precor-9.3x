@@ -1,6 +1,6 @@
 (fp_lib_table
   (version 7)
-  (lib (name "Connector_Molex")(type "KiCad")(uri "${KIPRJMOD}/Connector_Molex.pretty")(options "")(descr "Esp32Tap qualified Molex footprints"))
   (lib (name "Button_Switch_SMD")(type "KiCad")(uri "${KIPRJMOD}/Button_Switch_SMD.pretty")(options "")(descr "Esp32Tap qualified switch footprints"))
   (lib (name "RF_Module")(type "KiCad")(uri "${KIPRJMOD}/RF_Module.pretty")(options "")(descr "Esp32Tap pinned ESP32 module footprint"))
+  (lib (name "RJ45_SMD")(type "KiCad")(uri "${KIPRJMOD}/RJ45_SMD.pretty")(options "")(descr "Esp32Tap pinned RJ45 SMD jack footprint"))
 )

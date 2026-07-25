@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Rev C case against versioned PCB geometry and welded STLs."""
+"""Validate the Rev D case against versioned PCB geometry and welded STLs."""
 
 from __future__ import annotations
 
@@ -18,20 +18,14 @@ from typing import Any, Iterable
 import numpy as np
 import trimesh
 
-
-OPENSCAD_IMAGE = (
-    "openscad/openscad@sha256:"
-    "147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37"
-)
-EXPECTED_CONNECTOR_CENTERS = ((12.5, 14.0), (12.5, 40.0))
-EXPECTED_CONNECTOR_BODY_WIDTHS = (15.75, 18.75)
+OPENSCAD_IMAGE = "openscad/openscad@sha256:" "147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37"
+EXPECTED_CONNECTOR_CENTERS = ((8.0, 18.0), (8.0, 40.0))
+# Rev D: J1 and J2 are the identical Molex 441440003 RJ45 jack, so both
+# fabrication-body widths (from inspect_kicad) are the same value.
+EXPECTED_CONNECTOR_BODY_WIDTHS = (15.48, 15.48)
 EXPECTED_USB_CENTER = (91.2, 39.5)
 EXPECTED_SWITCH_CENTERS = ((42.0, 7.0), (91.0, 20.0))
 EXPECTED_MOUNTING_HOLES = ((20.0, 6.0), (48.0, 6.0), (92.0, 55.0))
-MOLEX_HOUSING_WIDTHS = (12.85, 15.85)
-MOLEX_HOUSING_HEIGHT = 10.81
-MOLEX_HOUSING_DEPTH = 17.56
-MOLEX_MATED_DEPTH = 24.77
 REQUIRED_SCALARS = (
     "board_l",
     "board_w",
@@ -42,29 +36,14 @@ REQUIRED_SCALARS = (
     "ant_air_gap",
     "j1_yc",
     "j2_yc",
-    "j1_body_w",
-    "j2_body_w",
-    "j1_housing_w",
-    "j2_housing_w",
-    "housing_h",
-    "housing_depth",
-    "mated_depth",
-    "housing_dim_tolerance",
-    "pigtail_exit_direction",
-    "collar_body_w",
-    "collar_body_h",
-    "collar_aperture_w",
-    "collar_aperture_h",
-    "key_rib_w",
-    "key_slot_w",
-    "key_slot_d",
-    "j1_key_offset",
-    "j2_key_offset",
+    "rj45_body_w",
+    "rj45_body_depth",
+    "rj45_body_h",
+    "aperture_w",
+    "aperture_h",
     "latch_clearance",
     "cable_bend_radius",
-    "strain_relief_diameter",
-    "rj45_w",
-    "rj45_h",
+    "cable_exit_direction",
     "usb_yc",
     "usb_h",
     "usb_om_w",
@@ -89,8 +68,7 @@ class ValidationError(ValueError):
 
 def _number(source: str, name: str) -> float:
     match = re.search(
-        rf"(?m)^\s*{re.escape(name)}\s*=\s*"
-        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*;",
+        rf"(?m)^\s*{re.escape(name)}\s*=\s*" r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\s*;",
         source,
     )
     if not match:
@@ -106,18 +84,12 @@ def parse_scad_parameters(source: str) -> dict[str, float]:
 
     parameters = {name: _number(source, name) for name in REQUIRED_SCALARS}
     expression = re.search(
-        r"(?m)^\s*post_inset\s*=\s*"
-        r"post_d\s*/\s*2\s*-\s*post_wall_overlap\s*;",
+        r"(?m)^\s*post_inset\s*=\s*" r"post_d\s*/\s*2\s*-\s*post_wall_overlap\s*;",
         source,
     )
     if not expression:
-        raise ValidationError(
-            "post_inset must be derived from post_d / 2 - "
-            "post_wall_overlap"
-        )
-    parameters["post_inset"] = (
-        parameters["post_d"] / 2 - parameters["post_wall_overlap"]
-    )
+        raise ValidationError("post_inset must be derived from post_d / 2 - " "post_wall_overlap")
+    parameters["post_inset"] = parameters["post_d"] / 2 - parameters["post_wall_overlap"]
     return parameters
 
 
@@ -129,12 +101,9 @@ def _numeric_pairs(source: str, name: str) -> tuple[tuple[float, float], ...]:
     if not assignment:
         raise ValidationError(f"SCAD is missing vector-array assignment {name}")
     number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
-    pair_pattern = re.compile(
-        rf"\[\s*({number})\s*,\s*({number})\s*\]"
-    )
+    pair_pattern = re.compile(rf"\[\s*({number})\s*,\s*({number})\s*\]")
     pairs = tuple(
-        (float(match.group(1)), float(match.group(2)))
-        for match in pair_pattern.finditer(assignment.group(1))
+        (float(match.group(1)), float(match.group(2))) for match in pair_pattern.finditer(assignment.group(1))
     )
     residual = pair_pattern.sub("", assignment.group(1))
     if not pairs or residual.strip(" \t\r\n,"):
@@ -145,8 +114,7 @@ def _numeric_pairs(source: str, name: str) -> tuple[tuple[float, float], ...]:
 def _numeric_pair(source: str, name: str) -> tuple[float, float]:
     number = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
     assignment = re.search(
-        rf"(?m)^\s*{re.escape(name)}\s*=\s*"
-        rf"\[\s*({number})\s*,\s*({number})\s*\]\s*;",
+        rf"(?m)^\s*{re.escape(name)}\s*=\s*" rf"\[\s*({number})\s*,\s*({number})\s*\]\s*;",
         source,
     )
     if not assignment:
@@ -154,55 +122,34 @@ def _numeric_pair(source: str, name: str) -> tuple[float, float]:
     return float(assignment.group(1)), float(assignment.group(2))
 
 
-def validate_keyed_apertures(
+def validate_rj45_aperture(
     *,
-    collar_body_width: float,
+    body_width: float,
     aperture_width: float,
-    key_rib_width: float,
-    key_slot_width: float,
-    console_offset: float,
-    motor_offset: float,
+    aperture_height: float,
+    body_height: float,
 ) -> dict[str, float]:
-    values = (
-        collar_body_width,
-        aperture_width,
-        key_rib_width,
-        key_slot_width,
-        console_offset,
-        motor_offset,
-    )
+    """Rev D: both jacks are the identical, unshielded 8P8C part — there is
+    no mechanical keying between console and motor any more (CONSOLE/MOTOR
+    silkscreen is the only differentiator).  This only checks that the
+    panel aperture actually clears the mating plug/jack body."""
+    values = (body_width, aperture_width, aperture_height, body_height)
     if any(not math.isfinite(value) for value in values):
-        raise ValidationError("keyed aperture dimensions must be finite")
-    if min(collar_body_width, aperture_width, key_rib_width, key_slot_width) <= 0:
-        raise ValidationError("keyed aperture dimensions must be positive")
-    matching_clearance = (aperture_width - collar_body_width) / 2
-    rib_clearance = (key_slot_width - key_rib_width) / 2
-    separation = abs(motor_offset - console_offset)
-    collision_margin = separation - key_slot_width
-    if matching_clearance < 0.2 - 1e-9 or rib_clearance < 0.2 - 1e-9:
-        raise ValidationError("matching keyed collar lacks 0.2 mm clearance")
-    if collision_margin <= 0:
-        raise ValidationError("wrong harness is not geometrically rejected")
-    return {
-        "matching_clearance_mm": matching_clearance,
-        "key_rib_clearance_mm": rib_clearance,
-        "wrong_mating_collision_margin_mm": collision_margin,
-    }
+        raise ValidationError("RJ45 aperture dimensions must be finite")
+    if min(values) <= 0:
+        raise ValidationError("RJ45 aperture dimensions must be positive")
+    width_clearance = (aperture_width - body_width) / 2
+    if width_clearance < 0.2 - 1e-9:
+        raise ValidationError("RJ45 aperture lacks 0.2 mm clearance around the jack body")
+    return {"width_clearance_mm": width_clearance}
 
 
 def expected_dimensions(parameters: dict[str, float]) -> dict[str, float]:
     interior_length = parameters["board_l"] + 2 * parameters["clr"]
     interior_width = (
-        parameters["board_w"]
-        + parameters["bot_clr"]
-        + parameters["ant_overhang"]
-        + parameters["ant_air_gap"]
+        parameters["board_w"] + parameters["bot_clr"] + parameters["ant_overhang"] + parameters["ant_air_gap"]
     )
-    interior_height = (
-        parameters["standoff"]
-        + parameters["board_t"]
-        + parameters["headroom"]
-    )
+    interior_height = parameters["standoff"] + parameters["board_t"] + parameters["headroom"]
     return {
         "interior_length_mm": interior_length,
         "interior_width_mm": interior_width,
@@ -210,9 +157,7 @@ def expected_dimensions(parameters: dict[str, float]) -> dict[str, float]:
         "outer_width_mm": interior_width + 2 * parameters["wall"],
         "base_height_mm": parameters["wall"] + interior_height,
         "antenna_void_mm": parameters["ant_air_gap"],
-        "post_wall_overlap_mm": (
-            parameters["post_d"] / 2 - parameters["post_inset"]
-        ),
+        "post_wall_overlap_mm": (parameters["post_d"] / 2 - parameters["post_inset"]),
         "lid_post_relief_mm": parameters["post_d"] + 0.6,
     }
 
@@ -222,9 +167,7 @@ def _xy(value: Any, label: str) -> tuple[float, float]:
         not isinstance(value, list)
         or len(value) != 2
         or any(
-            isinstance(coordinate, bool)
-            or not isinstance(coordinate, (int, float))
-            or not math.isfinite(coordinate)
+            isinstance(coordinate, bool) or not isinstance(coordinate, (int, float)) or not math.isfinite(coordinate)
             for coordinate in value
         )
     ):
@@ -239,9 +182,7 @@ def _footprint_at(
     try:
         footprint = footprints[reference]
     except KeyError as error:
-        raise ValidationError(
-            f"inspector report is missing {reference}"
-        ) from error
+        raise ValidationError(f"inspector report is missing {reference}") from error
     if not isinstance(footprint, dict):
         raise ValidationError(f"{reference} footprint must be an object")
     return _xy(footprint.get("at"), f"{reference}.at")
@@ -290,26 +231,15 @@ def _antenna_geometry(
 ) -> tuple[float, tuple[float, float]]:
     antenna = board.get("antenna")
     if not isinstance(antenna, dict):
-        raise ValidationError(
-            "inspector schema must include board.antenna physical geometry"
-        )
+        raise ValidationError("inspector schema must include board.antenna physical geometry")
     expected_keys = {"reference", "physical_edge_y_mm", "span_x_mm"}
     if set(antenna) != expected_keys:
-        raise ValidationError(
-            "board.antenna must contain exactly reference, "
-            "physical_edge_y_mm, and span_x_mm"
-        )
+        raise ValidationError("board.antenna must contain exactly reference, " "physical_edge_y_mm, and span_x_mm")
     if antenna.get("reference") != "U1":
         raise ValidationError("board.antenna.reference must be U1")
     edge = antenna.get("physical_edge_y_mm")
-    if (
-        isinstance(edge, bool)
-        or not isinstance(edge, (int, float))
-        or not math.isfinite(edge)
-    ):
-        raise ValidationError(
-            "board.antenna must include finite physical_edge_y_mm"
-        )
+    if isinstance(edge, bool) or not isinstance(edge, (int, float)) or not math.isfinite(edge):
+        raise ValidationError("board.antenna must include finite physical_edge_y_mm")
     span = antenna.get("span_x_mm")
     span_x = _xy(span, "board.antenna.span_x_mm")
     if span_x[1] <= span_x[0]:
@@ -338,35 +268,17 @@ def derive_board_geometry(report: dict[str, Any]) -> dict[str, Any]:
         raise ValidationError("inspector report is missing board.footprints")
 
     connector_centers = tuple(
-        tuple(
-            coordinate - origin[index]
-            for index, coordinate in enumerate(
-                _footprint_at(footprints, reference)
-            )
-        )
+        tuple(coordinate - origin[index] for index, coordinate in enumerate(_footprint_at(footprints, reference)))
         for reference in ("J1", "J2")
     )
     usb = _footprint_at(footprints, "J3")
     switches = tuple(
-        tuple(
-            coordinate - origin[index]
-            for index, coordinate in enumerate(
-                _footprint_at(footprints, reference)
-            )
-        )
+        tuple(coordinate - origin[index] for index, coordinate in enumerate(_footprint_at(footprints, reference)))
         for reference in ("SW1", "SW2")
     )
-    connector_body_widths = tuple(
-        _fabrication_body_size(footprints, reference)[1]
-        for reference in ("J1", "J2")
-    )
+    connector_body_widths = tuple(_fabrication_body_size(footprints, reference)[1] for reference in ("J1", "J2"))
     mounting = tuple(
-        tuple(
-            coordinate - origin[index]
-            for index, coordinate in enumerate(
-                _footprint_at(footprints, reference)
-            )
-        )
+        tuple(coordinate - origin[index] for index, coordinate in enumerate(_footprint_at(footprints, reference)))
         for reference in ("MH1", "MH2", "MH3")
     )
     antenna_edge, antenna_span = _antenna_geometry(board)
@@ -390,9 +302,7 @@ def derive_board_geometry(report: dict[str, Any]) -> dict[str, Any]:
 
 def _close(actual: float, expected: float, label: str, tolerance: float) -> None:
     if not math.isclose(actual, expected, abs_tol=tolerance):
-        raise ValidationError(
-            f"{label}: expected {expected:.6f} mm, got {actual:.6f} mm"
-        )
+        raise ValidationError(f"{label}: expected {expected:.6f} mm, got {actual:.6f} mm")
 
 
 def validate_fit(
@@ -403,9 +313,7 @@ def validate_fit(
     _close(parameters["board_l"], geometry["board_size_mm"][0], "board X", 0.01)
     _close(parameters["board_w"], geometry["board_size_mm"][1], "board Y", 0.01)
     for index, expected in enumerate(geometry["connector_centers_mm"], start=1):
-        _close(
-            parameters[f"j{index}_yc"], expected[1], f"J{index} center", 0.01
-        )
+        _close(parameters[f"j{index}_yc"], expected[1], f"J{index} center", 0.01)
         for axis, actual in enumerate(expected):
             _close(
                 actual,
@@ -413,14 +321,16 @@ def validate_fit(
                 f"J{index} PCB axis {axis}",
                 0.01,
             )
+        # Rev D: J1 and J2 are the identical RJ45 part, so both compare
+        # against the single shared rj45_body_w SCAD parameter.
         _close(
-            parameters[f"j{index}_body_w"],
+            parameters["rj45_body_w"],
             geometry["connector_body_widths_mm"][index - 1],
             f"J{index} body width",
             0.01,
         )
         _close(
-            parameters[f"j{index}_body_w"],
+            parameters["rj45_body_w"],
             EXPECTED_CONNECTOR_BODY_WIDTHS[index - 1],
             f"J{index} expected body width",
             0.01,
@@ -460,79 +370,29 @@ def validate_fit(
     )
     if parameters["ant_air_gap"] < 15.0:
         raise ValidationError("antenna wall void is less than 15 mm")
-    keyed = validate_keyed_apertures(
-        collar_body_width=parameters["collar_body_w"],
-        aperture_width=parameters["collar_aperture_w"],
-        key_rib_width=parameters["key_rib_w"],
-        key_slot_width=parameters["key_slot_w"],
-        console_offset=parameters["j1_key_offset"],
-        motor_offset=parameters["j2_key_offset"],
+    validate_rj45_aperture(
+        body_width=parameters["rj45_body_w"],
+        aperture_width=parameters["aperture_w"],
+        aperture_height=parameters["aperture_h"],
+        body_height=parameters["rj45_body_h"],
     )
-    if keyed["wrong_mating_collision_margin_mm"] < 6.6 - 1e-9:
-        raise ValidationError("wrong-harness collision margin is below 6.6 mm")
-    _close(parameters["collar_body_h"], 13.6, "collar body height", 1e-6)
-    _close(parameters["collar_aperture_h"], 14.0, "collar aperture height", 1e-6)
-    for index, width in enumerate(MOLEX_HOUSING_WIDTHS, start=1):
-        _close(
-            parameters[f"j{index}_housing_w"],
-            width,
-            f"J{index} Molex housing width",
-            1e-6,
-        )
+    _close(parameters["rj45_body_h"], 13.4, "RJ45 jack body height", 1e-6)
+    _close(parameters["aperture_h"], 14.0, "RJ45 aperture height", 1e-6)
+    _close(parameters["aperture_w"], 16.0, "RJ45 aperture width", 1e-6)
     _close(
-        parameters["housing_h"],
-        MOLEX_HOUSING_HEIGHT,
-        "Molex housing height",
-        1e-6,
-    )
-    _close(
-        parameters["housing_depth"],
-        MOLEX_HOUSING_DEPTH,
-        "Molex housing depth",
-        1e-6,
-    )
-    _close(
-        parameters["mated_depth"],
-        MOLEX_MATED_DEPTH,
-        "Molex mated depth",
-        1e-6,
-    )
-    _close(
-        parameters["housing_dim_tolerance"],
-        0.25,
-        "Molex drawing envelope tolerance",
-        1e-6,
-    )
-    _close(
-        parameters["pigtail_exit_direction"],
+        parameters["cable_exit_direction"],
         -1.0,
-        "outward pigtail direction",
+        "outward cable exit direction",
         1e-6,
     )
-    widest_housing_max = max(MOLEX_HOUSING_WIDTHS) + parameters[
-        "housing_dim_tolerance"
-    ]
-    if parameters["collar_aperture_w"] - widest_housing_max < 0.5 - 1e-9:
-        raise ValidationError(
-            "keyed aperture does not clear the maximum Molex housing "
-            "envelope by 0.25 mm per side"
-        )
-    _close(parameters["key_slot_d"], 2.2, "key slot depth", 1e-6)
     if parameters["latch_clearance"] < 6.0:
         raise ValidationError("connector latch clearance is below 6 mm")
     if parameters["cable_bend_radius"] < 18.0:
         raise ValidationError("external cable bend service radius is below 18 mm")
-    _close(
-        parameters["strain_relief_diameter"],
-        5.0,
-        "strain-relief cable diameter",
-        1e-6,
-    )
     _close(parameters["snap_clearance"], 0.3, "snap-latch clearance", 1e-6)
     for module_name in (
-        "keyed_harness_aperture",
-        "mated_housing_service_envelope",
-        "strain_relief_bridge",
+        "rj45_wall_aperture",
+        "rj45_plug_service_envelope",
         "snap_latch",
     ):
         if f"module {module_name}" not in source:
@@ -547,9 +407,7 @@ def validate_fit(
     if parameters["post_wall_overlap"] <= 0:
         raise ValidationError("lid posts must overlap the wall")
     if source.count("wall+post_inset") != 4:
-        raise ValidationError(
-            "all four lid-post coordinates must derive from post_inset"
-        )
+        raise ValidationError("all four lid-post coordinates must derive from post_inset")
     if not re.search(r"\bd\s*=\s*post_d\s*\+\s*0\.6\b", source):
         raise ValidationError("lid post relief must be post_d + 0.6")
 
@@ -601,9 +459,7 @@ def validate_fit(
         dy = max(board_min[1] - center[1], 0.0, center[1] - board_max[1])
         clearance = math.hypot(dx, dy) - radius
         if clearance < 0.2:
-            raise ValidationError(
-                f"lid post {index} has only {clearance:.3f} mm board clearance"
-            )
+            raise ValidationError(f"lid post {index} has only {clearance:.3f} mm board clearance")
 
 
 def _load_mesh(path: Path, *, process: bool) -> trimesh.Trimesh:
@@ -620,9 +476,7 @@ def validate_mesh(path: Path) -> dict[str, Any]:
     loaded.merge_vertices(digits_vertex=6)
     bodies = loaded.split(only_watertight=False)
     if len(bodies) != 1:
-        raise ValidationError(
-            f"{path.name} has {len(bodies)} disconnected bodies after welding"
-        )
+        raise ValidationError(f"{path.name} has {len(bodies)} disconnected bodies after welding")
     if loaded.volume <= 0:
         raise ValidationError(f"{path.name} does not have positive volume")
     if not loaded.is_winding_consistent:
@@ -635,14 +489,8 @@ def validate_mesh(path: Path) -> dict[str, Any]:
     )
     if not np.all(incidence == 2):
         values, counts = np.unique(incidence, return_counts=True)
-        histogram = ", ".join(
-            f"{int(value)}:{int(count)}"
-            for value, count in zip(values, counts, strict=True)
-        )
-        raise ValidationError(
-            f"{path.name} welded-edge incidence is not exactly two "
-            f"({histogram})"
-        )
+        histogram = ", ".join(f"{int(value)}:{int(count)}" for value, count in zip(values, counts, strict=True))
+        raise ValidationError(f"{path.name} welded-edge incidence is not exactly two " f"({histogram})")
     return {
         "path": path.name,
         "body_count": 1,
@@ -659,10 +507,7 @@ def _mesh_geometry_digest(path: Path) -> str:
 
     loaded = _load_mesh(path, process=False)
     triangles = np.round(loaded.triangles, decimals=6)
-    canonical = [
-        tuple(sorted(tuple(float(value) for value in vertex) for vertex in face))
-        for face in triangles
-    ]
+    canonical = [tuple(sorted(tuple(float(value) for value in vertex) for vertex in face)) for face in triangles]
     canonical.sort()
     payload = json.dumps(canonical, separators=(",", ":")).encode("ascii")
     return hashlib.sha256(payload).hexdigest()
@@ -671,9 +516,7 @@ def _mesh_geometry_digest(path: Path) -> str:
 def _render_canonical_meshes(enclosure: Path) -> dict[str, str]:
     """Render the live SCAD with the immutable OpenSCAD image."""
 
-    with tempfile.TemporaryDirectory(
-        prefix="esp32tap-enclosure-canonical-"
-    ) as temporary:
+    with tempfile.TemporaryDirectory(prefix="esp32tap-enclosure-canonical-") as temporary:
         output = Path(temporary)
         digests: dict[str, str] = {}
         for part in ("base", "lid"):
@@ -710,14 +553,10 @@ def _render_canonical_meshes(enclosure: Path) -> dict[str, str]:
                     timeout=120,
                 )
             except (OSError, subprocess.TimeoutExpired) as error:
-                raise ValidationError(
-                    f"canonical render could not execute for {part}: {error}"
-                ) from error
+                raise ValidationError(f"canonical render could not execute for {part}: {error}") from error
             if completed.returncode:
                 detail = completed.stderr.strip() or completed.stdout.strip()
-                raise ValidationError(
-                    f"canonical render failed for {part}: {detail}"
-                )
+                raise ValidationError(f"canonical render failed for {part}: {detail}")
             validate_mesh(rendered)
             digests[part] = _mesh_geometry_digest(rendered)
         return digests
@@ -732,13 +571,9 @@ def _expect_occupancy(
     try:
         actual = mesh.contains(np.asarray(points, dtype=float)).tolist()
     except (ValueError, RuntimeError) as error:
-        raise ValidationError(
-            f"{label} occupancy probes could not run: {error}"
-        ) from error
+        raise ValidationError(f"{label} occupancy probes could not run: {error}") from error
     if actual != expected:
-        raise ValidationError(
-            f"{label} geometry probes expected {expected}, got {actual}"
-        )
+        raise ValidationError(f"{label} geometry probes expected {expected}, got {actual}")
 
 
 def _expect_vertices(
@@ -755,10 +590,7 @@ def _expect_vertices(
                 axis=1,
             )
         ):
-            raise ValidationError(
-                f"{label} is missing boundary vertex "
-                f"{np.round(point, 6).tolist()}"
-            )
+            raise ValidationError(f"{label} is missing boundary vertex " f"{np.round(point, 6).tolist()}")
 
 
 def validate_functional_geometry(
@@ -777,9 +609,7 @@ def validate_functional_geometry(
     outer_width = dimensions["outer_width_mm"]
     base_height = dimensions["base_height_mm"]
     board_x = wall + parameters["clr"]
-    board_y = (
-        wall + parameters["ant_overhang"] + parameters["ant_air_gap"]
-    )
+    board_y = wall + parameters["ant_overhang"] + parameters["ant_air_gap"]
     board_z = wall + parameters["standoff"]
     probe_count = 0
 
@@ -804,8 +634,8 @@ def validate_functional_geometry(
     probe_count += len(cavity_points)
 
     rj45_centers: list[list[float]] = []
-    aperture_width = parameters["collar_aperture_w"]
-    aperture_height = parameters["collar_aperture_h"]
+    aperture_width = parameters["aperture_w"]
+    aperture_height = parameters["aperture_h"]
     aperture_z = board_z + parameters["board_t"] - 0.3
     for index, center_y in enumerate(
         geometry["rj45_centers_y_mm"],
@@ -850,40 +680,8 @@ def validate_functional_geometry(
         )
         probe_count += len(points)
 
-        key_offset = parameters[f"j{index}_key_offset"]
-        other_offset = parameters[f"j{2 if index == 1 else 1}_key_offset"]
-        key_z = aperture_z + parameters["collar_aperture_h"] + 0.5
-        keyed_points = [
-            [wall / 2, shell_y + key_offset, key_z],
-            [wall / 2, shell_y + other_offset, key_z],
-        ]
-        _expect_occupancy(
-            base,
-            keyed_points,
-            [False, True],
-            f"J{index} keyed collar slot",
-        )
-        probe_count += len(keyed_points)
-
-        strain_points = [
-            [-2.0, shell_y, wall + 2.0],
-            [-2.0, shell_y + 8.0, wall + 2.0],
-        ]
-        _expect_occupancy(
-            base,
-            strain_points,
-            [False, True],
-            f"J{index} strain-relief bridge",
-        )
-        probe_count += len(strain_points)
-
     usb_y = board_y + geometry["usb_center_y_mm"]
-    usb_z = (
-        board_z
-        + parameters["board_t"]
-        + parameters["usb_h"] / 2
-        - parameters["usb_om_h"] / 2
-    )
+    usb_z = board_z + parameters["board_t"] + parameters["usb_h"] / 2 - parameters["usb_om_h"] / 2
     usb_half_width = parameters["usb_om_w"] / 2
     usb_points = [
         [outer_length - wall / 2, usb_y, usb_z + parameters["usb_om_h"] / 2],
@@ -947,10 +745,7 @@ def validate_functional_geometry(
         )
         probe_count += len(switch_points)
 
-    antenna_x = (
-        board_x
-        + sum(geometry["antenna_span_x_mm"]) / 2
-    )
+    antenna_x = board_x + sum(geometry["antenna_span_x_mm"]) / 2
     antenna_edge_y = wall + parameters["ant_air_gap"]
     antenna_points = [
         [antenna_x, wall + 0.2, 10.0],
@@ -1070,10 +865,7 @@ def validate_functional_geometry(
             lid,
             [
                 [
-                    center_x
-                    + direction_x
-                    * (parameters["post_d"] + 0.6)
-                    / 2,
+                    center_x + direction_x * (parameters["post_d"] + 0.6) / 2,
                     center_y,
                     z,
                 ]
@@ -1122,50 +914,27 @@ def validate_functional_geometry(
         ],
         "mounting_post_centers_shell_mm": mounting_centers,
         "antenna_inner_wall_to_edge_mm": antenna_edge_y - wall,
-        "keyed_apertures": validate_keyed_apertures(
-            collar_body_width=parameters["collar_body_w"],
-            aperture_width=parameters["collar_aperture_w"],
-            key_rib_width=parameters["key_rib_w"],
-            key_slot_width=parameters["key_slot_w"],
-            console_offset=parameters["j1_key_offset"],
-            motor_offset=parameters["j2_key_offset"],
+        "rj45_apertures": validate_rj45_aperture(
+            body_width=parameters["rj45_body_w"],
+            aperture_width=parameters["aperture_w"],
+            aperture_height=parameters["aperture_h"],
+            body_height=parameters["rj45_body_h"],
         ),
         "external_cable_bend_service_radius_mm": parameters["cable_bend_radius"],
         "connector_latch_clearance_mm": parameters["latch_clearance"],
-        "molex_mated_housing_envelopes_mm": [
+        "rj45_jacks_mm": [
             {
-                "mpn": "430250800",
-                "width_max": parameters["j1_housing_w"]
-                + parameters["housing_dim_tolerance"],
-                "height_max": parameters["housing_h"]
-                + parameters["housing_dim_tolerance"],
-                "housing_depth_max": parameters["housing_depth"]
-                + parameters["housing_dim_tolerance"],
-                "mated_depth_max": parameters["mated_depth"]
-                + parameters["housing_dim_tolerance"],
+                "mpn": "441440003",
+                "lcsc": "C585890",
+                "body_width": parameters["rj45_body_w"],
+                "body_depth": parameters["rj45_body_depth"],
+                "body_height": parameters["rj45_body_h"],
+                "aperture_width": parameters["aperture_w"],
+                "aperture_height": parameters["aperture_h"],
                 "extraction_clearance": parameters["latch_clearance"],
-                "pigtail_exit_direction_x": parameters[
-                    "pigtail_exit_direction"
-                ],
-            },
-            {
-                "mpn": "430251000",
-                "width_max": parameters["j2_housing_w"]
-                + parameters["housing_dim_tolerance"],
-                "height_max": parameters["housing_h"]
-                + parameters["housing_dim_tolerance"],
-                "housing_depth_max": parameters["housing_depth"]
-                + parameters["housing_dim_tolerance"],
-                "mated_depth_max": parameters["mated_depth"]
-                + parameters["housing_dim_tolerance"],
-                "extraction_clearance": parameters["latch_clearance"],
-                "pigtail_exit_direction_x": parameters[
-                    "pigtail_exit_direction"
-                ],
-            },
-        ],
-        "strain_relief_cable_diameter_mm": parameters[
-            "strain_relief_diameter"
+                "cable_exit_direction_x": parameters["cable_exit_direction"],
+            }
+            for _ in ("J1", "J2")
         ],
         "closure": "TOOL_LESS_SNAP_LATCH_WITH_OPTIONAL_SUPPLIED_M3",
     }
@@ -1176,9 +945,7 @@ def _inspection(project_dir: Path, supplied: Path | None) -> dict[str, Any]:
         try:
             return json.loads(supplied.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
-            raise ValidationError(
-                f"cannot read inspection JSON {supplied}: {error}"
-            ) from error
+            raise ValidationError(f"cannot read inspection JSON {supplied}: {error}") from error
     inspector = project_dir / "tools" / "inspect_kicad.py"
     command = ["/usr/bin/python3", str(inspector), "--json"]
     try:
@@ -1193,10 +960,7 @@ def _inspection(project_dir: Path, supplied: Path | None) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ValidationError(f"cannot execute PCB inspector: {error}") from error
     if completed.returncode:
-        raise ValidationError(
-            "PCB inspector failed: "
-            + (completed.stderr.strip() or completed.stdout.strip())
-        )
+        raise ValidationError("PCB inspector failed: " + (completed.stderr.strip() or completed.stdout.strip()))
     try:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as error:
@@ -1228,9 +992,7 @@ def validate(
     }
     for part in ("base", "lid"):
         if checked_digests[part] != canonical[part]:
-            raise ValidationError(
-                f"{part} mesh does not match the pinned canonical render"
-            )
+            raise ValidationError(f"{part} mesh does not match the pinned canonical render")
     features = validate_functional_geometry(
         base_path,
         lid_path,
@@ -1279,9 +1041,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     try:
         result = validate(
             args.project_dir.resolve(),
-            None
-            if args.inspection_json is None
-            else args.inspection_json.resolve(),
+            None if args.inspection_json is None else args.inspection_json.resolve(),
         )
     except ValidationError as error:
         print(f"validate_enclosure: {error}", file=sys.stderr)

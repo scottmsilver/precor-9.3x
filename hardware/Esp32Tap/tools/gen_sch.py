@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the typed Rev C KiCad schematic from ``design.py``.
+"""Generate the typed Rev D KiCad schematic from ``design.py``.
 
 Each physical component is represented by a generated box symbol.  A global
 label (or explicit no-connect marker) is placed directly on every pin, making
@@ -19,9 +19,8 @@ from pathlib import Path
 
 import design
 
-
 PROJECT = "Esp32Tap"
-SCHEMATIC_TITLE = "Esp32Tap Rev C - ESP32-S3 Precor serial-bus tap"
+SCHEMATIC_TITLE = "Esp32Tap Rev D - ESP32-S3 Precor serial-bus tap"
 SCHEMATIC_DATE = "2026-07-24"
 UUID_NAMESPACE = uuid.uuid5(
     uuid.NAMESPACE_URL,
@@ -29,15 +28,12 @@ UUID_NAMESPACE = uuid.uuid5(
 )
 FOOTPRINT_TABLE = """(fp_lib_table
   (version 7)
-  (lib (name "Connector_Molex")(type "KiCad")(uri "${KIPRJMOD}/Connector_Molex.pretty")(options "")(descr "Esp32Tap qualified Molex footprints"))
+  (lib (name "RJ45_SMD")(type "KiCad")(uri "${KIPRJMOD}/RJ45_SMD.pretty")(options "")(descr "Esp32Tap pinned RJ45 SMD jack footprint"))
   (lib (name "Button_Switch_SMD")(type "KiCad")(uri "${KIPRJMOD}/Button_Switch_SMD.pretty")(options "")(descr "Esp32Tap qualified switch footprints"))
 )
 """
 VALIDATION_FOOTPRINTS = {
-    "Connector_Molex": (
-        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-    ),
+    "RJ45_SMD": ("RJ45-SMD_441440003",),
     "Button_Switch_SMD": ("SW_SPST_SKRPACE010",),
 }
 PIN_TYPE_TOKENS = {
@@ -85,20 +81,12 @@ def validate_uuid_uniqueness(schematic: str) -> None:
             duplicates.add(value)
         seen.add(value)
     if duplicates:
-        raise ValueError(
-            "duplicate schematic UUID(s): "
-            + ", ".join(sorted(duplicates))
-        )
+        raise ValueError("duplicate schematic UUID(s): " + ", ".join(sorted(duplicates)))
 
 
 def escape(value: object) -> str:
     """Escape a value for a quoted KiCad S-expression string."""
-    return (
-        str(value)
-        .replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", " ")
-    )
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 
 
 def pin_type_token(reference: str, pad: str) -> str:
@@ -107,10 +95,7 @@ def pin_type_token(reference: str, pad: str) -> str:
     try:
         return PIN_TYPE_TOKENS[design_type]
     except KeyError as error:
-        raise ValueError(
-            f"unsupported KiCad pin type for {reference}.{pad}: "
-            f"{design_type!r}"
-        ) from error
+        raise ValueError(f"unsupported KiCad pin type for {reference}.{pad}: " f"{design_type!r}") from error
 
 
 def sorted_pins(pinmap: dict[str, str]) -> list[tuple[str, str]]:
@@ -157,14 +142,8 @@ def symbol_definition(
             f"(at {body_width / 2:.2f} {-half_height - 1.27:.2f} 0) "
             "(effects (font (size 1.27 1.27))))"
         ),
-        (
-            '      (property "Footprint" "" (at 0 0 0) '
-            "(effects (font (size 1.27 1.27)) (hide yes)))"
-        ),
-        (
-            '      (property "Datasheet" "" (at 0 0 0) '
-            "(effects (font (size 1.27 1.27)) (hide yes)))"
-        ),
+        ('      (property "Footprint" "" (at 0 0 0) ' "(effects (font (size 1.27 1.27)) (hide yes)))"),
+        ('      (property "Datasheet" "" (at 0 0 0) ' "(effects (font (size 1.27 1.27)) (hide yes)))"),
         f'      (symbol "{symbol_name}_0_1"',
         (
             f"        (rectangle (start 0 {half_height:.2f}) "
@@ -179,18 +158,9 @@ def symbol_definition(
         pin_y = half_height - (index + 1) * 2.54
         output.extend(
             [
-                (
-                    f"        (pin {pin_type_token(reference, pad)} line "
-                    f"(at -2.54 {pin_y:.2f} 0) (length 2.54)"
-                ),
-                (
-                    f'          (name "{escape(pin_name)}" '
-                    "(effects (font (size 1.27 1.27))))"
-                ),
-                (
-                    f'          (number "{escape(pad)}" '
-                    "(effects (font (size 1.27 1.27)))))"
-                ),
+                (f"        (pin {pin_type_token(reference, pad)} line " f"(at -2.54 {pin_y:.2f} 0) (length 2.54)"),
+                (f'          (name "{escape(pin_name)}" ' "(effects (font (size 1.27 1.27))))"),
+                (f'          (number "{escape(pad)}" ' "(effects (font (size 1.27 1.27)))))"),
             ]
         )
     output.extend(["      )", "    )"])
@@ -202,24 +172,11 @@ def power_flag_definition() -> str:
     return "\n".join(
         [
             '    (symbol "esp32tap:PWR_FLAG"',
-            "      (pin_names (offset 1.016))"
-            " (exclude_from_sim yes) (in_bom no) (on_board no)",
-            (
-                '      (property "Reference" "#FLG" (at 5.08 2.54 0) '
-                "(effects (font (size 1.27 1.27))))"
-            ),
-            (
-                '      (property "Value" "PWR_FLAG" (at 5.08 -2.54 0) '
-                "(effects (font (size 1.27 1.27))))"
-            ),
-            (
-                '      (property "Footprint" "" (at 0 0 0) '
-                "(effects (font (size 1.27 1.27)) (hide yes)))"
-            ),
-            (
-                '      (property "Datasheet" "" (at 0 0 0) '
-                "(effects (font (size 1.27 1.27)) (hide yes)))"
-            ),
+            "      (pin_names (offset 1.016))" " (exclude_from_sim yes) (in_bom no) (on_board no)",
+            ('      (property "Reference" "#FLG" (at 5.08 2.54 0) ' "(effects (font (size 1.27 1.27))))"),
+            ('      (property "Value" "PWR_FLAG" (at 5.08 -2.54 0) ' "(effects (font (size 1.27 1.27))))"),
+            ('      (property "Footprint" "" (at 0 0 0) ' "(effects (font (size 1.27 1.27)) (hide yes)))"),
+            ('      (property "Datasheet" "" (at 0 0 0) ' "(effects (font (size 1.27 1.27)) (hide yes)))"),
             '      (symbol "PWR_FLAG_0_1"',
             (
                 "        (rectangle (start 0 1.27) (end 10.16 -1.27) "
@@ -228,18 +185,9 @@ def power_flag_definition() -> str:
             ),
             "      )",
             '      (symbol "PWR_FLAG_1_1"',
-            (
-                "        (pin power_out line (at -2.54 0 0) "
-                "(length 2.54)"
-            ),
-            (
-                '          (name "Power flag" '
-                "(effects (font (size 1.27 1.27))))"
-            ),
-            (
-                '          (number "1" '
-                "(effects (font (size 1.27 1.27)))))"
-            ),
+            ("        (pin power_out line (at -2.54 0 0) " "(length 2.54)"),
+            ('          (name "Power flag" ' "(effects (font (size 1.27 1.27))))"),
+            ('          (number "1" ' "(effects (font (size 1.27 1.27)))))"),
             "      )",
             "    )",
         ]
@@ -273,11 +221,7 @@ def pin_connectivity() -> tuple[
     dict[tuple[str, str], str],
     set[tuple[str, str]],
 ]:
-    pin_net = {
-        pin: net
-        for net, pins in design.NETS.items()
-        for pin in pins
-    }
+    pin_net = {pin: net for net, pins in design.NETS.items() for pin in pins}
     return pin_net, set(design.NC)
 
 
@@ -317,18 +261,13 @@ def render_schematic() -> tuple[str, list[str]]:
         dnp = "yes" if reference in design.DNP else "no"
         body.extend(
             [
-                (
-                    f'  (symbol (lib_id "esp32tap:{symbol_name}") '
-                    f"(at {x_position:.2f} {y_center:.2f} 0) (unit 1)"
-                ),
+                (f'  (symbol (lib_id "esp32tap:{symbol_name}") ' f"(at {x_position:.2f} {y_center:.2f} 0) (unit 1)"),
                 (
                     "    (exclude_from_sim no) "
                     f"(in_bom {'yes' if assembly_fitted else 'no'}) "
                     f"(on_board yes) (dnp {dnp})"
                 ),
-                (
-                    f'    (uuid "{stable_uuid("component", reference)}")'
-                ),
+                (f'    (uuid "{stable_uuid("component", reference)}")'),
                 (
                     f'    (property "Reference" "{escape(reference)}" '
                     f"(at {x_position + 2:.2f} "
@@ -375,10 +314,7 @@ def render_schematic() -> tuple[str, list[str]]:
             ]
         )
         for pad, _pin_name in pins:
-            body.append(
-                f'    (pin "{escape(pad)}" '
-                f'(uuid "{stable_uuid("component", reference, "pin", pad)}"))'
-            )
+            body.append(f'    (pin "{escape(pad)}" ' f'(uuid "{stable_uuid("component", reference, "pin", pad)}"))')
         body.extend(
             [
                 (
@@ -415,17 +351,9 @@ def render_schematic() -> tuple[str, list[str]]:
         y_position = snap(40.0) + index * 10.16
         body.extend(
             [
-                (
-                    '  (symbol (lib_id "esp32tap:PWR_FLAG") '
-                    f"(at {x_position:.2f} {y_position:.2f} 0) (unit 1)"
-                ),
-                (
-                    "    (exclude_from_sim yes) (in_bom no) "
-                    "(on_board no) (dnp no)"
-                ),
-                (
-                    f'    (uuid "{stable_uuid("power-flag", net)}")'
-                ),
+                ('  (symbol (lib_id "esp32tap:PWR_FLAG") ' f"(at {x_position:.2f} {y_position:.2f} 0) (unit 1)"),
+                ("    (exclude_from_sim yes) (in_bom no) " "(on_board no) (dnp no)"),
+                (f'    (uuid "{stable_uuid("power-flag", net)}")'),
                 (
                     f'    (property "Reference" "{reference}" '
                     f"(at {x_position + 2.54:.2f} "
@@ -460,10 +388,7 @@ def render_schematic() -> tuple[str, list[str]]:
                     f"(at {x_position:.2f} {y_position:.2f} 0) "
                     "(effects (font (size 1.27 1.27)) (hide yes)))"
                 ),
-                (
-                    '    (pin "1" '
-                    f'(uuid "{stable_uuid("power-flag", net, "pin", "1")}"))'
-                ),
+                ('    (pin "1" ' f'(uuid "{stable_uuid("power-flag", net, "pin", "1")}"))'),
                 (
                     f'    (instances (project "{PROJECT}" '
                     f'(path "/{root_uuid}" (reference "{reference}") '
@@ -486,9 +411,9 @@ def render_schematic() -> tuple[str, list[str]]:
         '  (paper "A1")',
         (
             f'  (title_block (title "{SCHEMATIC_TITLE}") '
-            f'(date "{SCHEMATIC_DATE}") (rev "C") '
+            f'(date "{SCHEMATIC_DATE}") (rev "D") '
             '(company "precor-9.3x") '
-            '(comment 1 "Status: generated Rev C typed schematic") '
+            '(comment 1 "Status: generated Rev D typed schematic") '
             '(comment 2 "Source of truth: tools/design.py") '
             '(comment 3 "Generated by tools/gen_sch.py; do not hand-edit"))'
         ),
@@ -505,10 +430,7 @@ def render_schematic() -> tuple[str, list[str]]:
 
 
 def render_symbol_library(library_symbols: list[str]) -> str:
-    library = [
-        '(kicad_symbol_lib (version 20231120) '
-        '(generator "esp32tap_gen")'
-    ]
+    library = ["(kicad_symbol_lib (version 20231120) " '(generator "esp32tap_gen")']
     library.extend(
         symbol.replace(
             '(symbol "esp32tap:',
@@ -608,8 +530,7 @@ def validate_staged_outputs(staging_directory: Path) -> None:
     )
     report = erc_report.read_text(encoding="utf-8")
     summary = re.search(
-        r"\*\* ERC messages:\s+(\d+)\s+Errors\s+"
-        r"(\d+)\s+Warnings\s+(\d+)",
+        r"\*\* ERC messages:\s+(\d+)\s+Errors\s+" r"(\d+)\s+Warnings\s+(\d+)",
         report,
     )
     if summary is None or any(int(value) for value in summary.groups()):

@@ -1,4 +1,4 @@
-// Esp32Tap two-part enclosure — parametric, sized to the Rev C board.
+// Esp32Tap two-part enclosure — parametric, sized to the Rev D board.
 // Coordinates follow the PCB: origin = board top-left corner, +X right,
 // +Y toward the bottom edge (the PCB "top edge" carries the antenna
 // overhang).  Board-position parameters below are taken directly from
@@ -22,37 +22,32 @@ ant_x0       = 69.0;    // physical U1 F.Fab antenna span in board X
 ant_x1       = 87.0;
 ant_air_gap  = 15.0;    // plastic/air void from antenna edge to inner wall
 
-// J1/J2 are the exact Rev C Micro-Fit footprint anchors from inspect_kicad.
-// The enclosure opening is for the factory harness' modeled keyed collar,
-// not a claim that a delivered harness has been fit-tested.
-j1_yc = 14.0;
+// Rev D: J1/J2 are both the Molex 441440003 right-angle SMD RJ45 jack
+// (LCSC C585890) — the exact footprint anchors from inspect_kicad.  Unlike
+// Rev C's two different Micro-Fit part numbers, J1 and J2 are now the
+// identical part, edge-mounted with the mating opening facing off the
+// board's X=0 edge (rotation places the jack's local -Y, the pin/opening
+// side, onto world -X — see gen_pcb.py PLACE).  There is no mechanical
+// keying between console and motor any more: both apertures are
+// identical, standard 8P8C openings.  CONSOLE/MOTOR silkscreen is the
+// only differentiator; a mis-plugged cable is a labeling/procedure risk
+// now, not something this CAD rejects.
+j1_yc = 18.0;
 j2_yc = 40.0;
-j1_body_w = 15.75;
-j2_body_w = 18.75;
-// Full receptacle/mated envelopes from Molex 430250000-SD, revision A:
-// 43025-0800 width A=12.85; 43025-1000 width A=15.85; housing depth
-// 17.56; height 10.81; mated 43025/43020 depth 24.77 (all mm).
-j1_housing_w = 12.85;
-j2_housing_w = 15.85;
-housing_h = 10.81;
-housing_depth = 17.56;
-mated_depth = 24.77;
-housing_dim_tolerance = 0.25; // drawing general tolerance, 2-place mm
-pigtail_exit_direction = -1.0; // both harnesses exit outward through X-min
-collar_body_w = 15.6;
-collar_body_h = 13.6;
-collar_aperture_w = 16.6; // clears 15.85 +0.25 max housing by 0.25/side
-collar_aperture_h = 14.0;
-key_rib_w = 3.0;
-key_slot_w = 3.4;
-key_slot_d = 2.2;
-j1_key_offset = -5.0;
-j2_key_offset = 5.0;
-rj45_w = 15.0; // legacy probe alias: opening = rj45_w + 1 = 16
-rj45_h = 13.0; // legacy probe alias: opening = rj45_h + 1 = 14
-latch_clearance = 6.0;
-cable_bend_radius = 18.0;
-strain_relief_diameter = 5.0;
+// Fabrication-body bbox from inspect_kicad (identical for J1 and J2 —
+// same part): Y width (across the row of 8 pins) and X depth (pin row to
+// the rear mechanical-tab cap).
+rj45_body_w     = 15.48;
+rj45_body_depth = 17.17;
+rj45_body_h     = 13.4;  // jack shell height above the board (datasheet)
+// Panel aperture: clears the mating 8P8C plug shell plus finger
+// clearance for the latch tab — not the full jack body, which sits
+// inside the case, recessed a few mm behind the wall.
+aperture_w = 16.0;
+aperture_h = 14.0;
+latch_clearance = 6.0;          // straight insertion/extraction depth
+cable_bend_radius = 18.0;       // external cable bend service envelope
+cable_exit_direction = -1.0;    // both jacks open outward through X-min
 
 // USB-C on the X=board_l wall.  The receptacle face sits at the board edge,
 // 4.5 mm behind the exterior wall face (2.5 wall + 2.0 clearance), so the
@@ -128,38 +123,28 @@ module rrect(l, w, h, r) {
   hull() for (x=[r, l-r], y=[r, w-r]) translate([x, y, 0]) cylinder(h=h, r=r);
 }
 
-module keyed_harness_aperture(yc, key_offset) {
+// Straight, unkeyed 8P8C wall aperture: clears the mating plug shell plus
+// finger clearance for the latch tab, tunneling from the exterior face
+// through latch_clearance past the board edge so a plug can seat against
+// the board-mounted jack (recessed rj45_body_depth-ish behind the wall)
+// and still be pinched/extracted without touching the aperture wall.
+module rj45_wall_aperture(yc) {
   aperture_z = bz0 + board_t - 0.3;
-  translate([-1, wall + by0 + yc - collar_aperture_w/2, aperture_z])
-    cube([wall + bx0 + latch_clearance + 2,
-          collar_aperture_w, collar_aperture_h]);
-  translate([-1,
-             wall + by0 + yc + key_offset - key_slot_w/2,
-             aperture_z + collar_aperture_h - 0.01])
-    cube([wall + bx0 + latch_clearance + 2, key_slot_w, key_slot_d + 0.01]);
+  translate([-1, wall + by0 + yc - aperture_w/2, aperture_z])
+    cube([wall + bx0 + latch_clearance + 2, aperture_w, aperture_h]);
 }
 
-// Model-only keep-clear volume: the complete mated Molex envelope plus
-// latch/extraction clearance.  In assembled use, its negative-X end is the
-// outward 22 AWG pigtail path; the enclosure wall opening intersects the
-// envelope without placing plastic in the housing or extraction sweep.
-module mated_housing_service_envelope(yc, housing_w) {
-  envelope_depth = mated_depth + housing_dim_tolerance + latch_clearance;
-  translate([wall + bx0 + 12.5 - envelope_depth,
-             wall + by0 + yc - (housing_w + housing_dim_tolerance)/2,
-             bz0 + board_t])
-    cube([envelope_depth,
-          housing_w + housing_dim_tolerance,
-          housing_h + housing_dim_tolerance]);
-}
-
-module strain_relief_bridge(yc) {
-  difference() {
-    translate([-4, wall + by0 + yc - 10, wall])
-      cube([4.2, 20, 4]);
-    translate([-5, wall + by0 + yc - 3.5, wall + 0.8])
-      cube([6, 7, 2.4]);
-  }
+// Model-only keep-clear volume: the aperture cross-section extended
+// outward for the external cable bend radius and inward through
+// latch_clearance.  Preview-only (excluded from base/lid STLs); confirms
+// the wall opening doesn't require plastic in the plug's seat/extraction
+// sweep.
+module rj45_plug_service_envelope(yc) {
+  translate([-cable_bend_radius,
+             wall + by0 + yc - aperture_w/2,
+             bz0 + board_t - 0.3])
+    cube([cable_bend_radius + wall + bx0 + latch_clearance,
+          aperture_w, aperture_h]);
 }
 
 module snap_latch(xc, far_side=false) {
@@ -182,9 +167,9 @@ module base() {
     // main cavity
     translate([wall, wall, wall]) rrect(int_l, int_w, int_h + 1, 2);
 
-    // Distinct keyed harness apertures. Wrong-key collision is geometric.
-    keyed_harness_aperture(j1_yc, j1_key_offset);
-    keyed_harness_aperture(j2_yc, j2_key_offset);
+    // RJ45 wall apertures (both jacks are the identical part; unkeyed).
+    rj45_wall_aperture(j1_yc);
+    rj45_wall_aperture(j2_yc);
 
     // USB-C aperture, X = out_l wall — overmold-sized (see parameter note):
     // the receptacle is recessed 4.5 mm behind the exterior face, so the
@@ -202,9 +187,6 @@ module base() {
         cube([4, wall + 2, 6]);
     }
   }
-  // Integrated zip-tie bridges restrain each factory harness jacket.
-  strain_relief_bridge(j1_yc);
-  strain_relief_bridge(j2_yc);
   // Two optional tool-less closure latches; supplied M3 screws remain usable.
   snap_latch(out_l/2, false);
   snap_latch(out_l/2, true);
@@ -290,6 +272,6 @@ else {
   base();
   translate([0, out_w + 12, 0]) lid();
   // Transparent preview-only service volumes; excluded from base/lid STLs.
-  %mated_housing_service_envelope(j1_yc, j1_housing_w);
-  %mated_housing_service_envelope(j2_yc, j2_housing_w);
+  %rj45_plug_service_envelope(j1_yc);
+  %rj45_plug_service_envelope(j2_yc);
 }

@@ -1,4 +1,4 @@
-# Esp32Tap Rev C vendor procedure
+# Esp32Tap Rev D vendor procedure
 
 **Status: HOLD. Do not submit, add to a production cart, authorize a
 substitution, or pay.** This is a future review procedure, not purchase
@@ -12,7 +12,6 @@ authorization.
 | Assembly BOM | `bom/BOM.csv` |
 | Placement | `bom/CPL-positions.csv` |
 | Enclosure | Current approved base/lid files only after enclosure review |
-| Pigtails | Approved dimensioned console/motor production drawings |
 
 Regenerate and run:
 
@@ -23,8 +22,8 @@ python3 hardware/Esp32Tap/tools/check_jlc_stock.py --refresh
 git diff --check
 ```
 
-Record hashes for the current ZIP, BOM, CPL, stock snapshot, approved enclosure
-files, and pigtail drawings. Never mix generations or edit generated CSVs.
+Record hashes for the current ZIP, BOM, CPL, stock snapshot, and approved
+enclosure files. Never mix generations or edit generated CSVs.
 
 ## PCB/PCBA preview
 
@@ -35,8 +34,10 @@ Require the preview and quote to show:
   ENIG, lead-free top-side Standard PCBA;
 - controlled impedance for 90 Ω USB on L1/L2, using the generated
   0.2906/0.2000 mm controlled geometry;
-- J1 `430450809` and J2 `430451010` as right-angle **SMT Micro-Fit** headers,
-  with exact package, orientation, and latch direction;
+- J1 and J2 as the identical Molex `0441440003` right-angle SMD 8P8C RJ45
+  jack (LCSC `C585890`), machine-placed with exact package, orientation,
+  and mating-opening direction; both are `Extended`-class parts, so confirm
+  live Standard PCBA placement support in the quote;
 - J3 under standard reflow. Its four S1 plated mechanical stakes are part of
   the stock footprint; do not request or quote manual/wave soldering;
 - the exact DNP/populated set and no unreviewed substitutions;
@@ -52,7 +53,7 @@ tooling, fiducials, tabs, support, depanel method, delivered outline, and edge
 dressing. Keep metal and tooling out of the antenna keepout.
 
 The operator-observed `vendor/JLC-DFM-REVIEW.json` is bound to an older exact
-archive. Preserve it; do not treat it as approval of current Rev C bytes.
+archive. Preserve it; do not treat it as approval of current bytes.
 Upload the current exact ZIP for a new live review, then verify the same BOM,
 CPL, and placement preview.
 
@@ -71,9 +72,10 @@ Useful live references:
 Confirm every populated designator's exact code, model, package, class,
 quantity, side, position, and rotation. In particular:
 
-- J1/J2 are the two distinct Micro-Fit headers, not RJ45 jacks or magjacks;
-- J1 mates only with `430250800`, J2 only with `430251000`, using
-  `430300001` terminals;
+- J1/J2 are the two identical board-mounted RJ45 jacks — there is no
+  separate connector family or off-board harness to reconcile, and no
+  mechanical keying between them; CONSOLE/MOTOR silkscreen plus housing
+  color are the only differentiator;
 - K1 is `G6K-2F-Y-TR DC5`;
 - U1 is `ESP32-S3-WROOM-1-N8`, fully inside the finished edge;
 - C13/C14 and mechanical/test items remain excluded as generated;
@@ -82,37 +84,25 @@ quantity, side, position, and rotation. In particular:
 Any vendor rotation, footprint, or substitution proposal stops the review and
 returns to source/regeneration.
 
-## Pigtail quote
-
-The board order does not include the external RJ45 interfaces. Obtain separate
-turnkey quotes for two keyed pigtails:
-
-- console: `430250800` housing, `430300001` terminals, mapped to RJ45;
-- motor: `430251000` housing, `430300001` terminals, mapped to RJ45.
-
-The quote must bind exact drawings, one-to-one pin mapping, wire type/gauge,
-length, strain relief, labels/keying, crimp tooling, pull test, continuity
-test, wrong-mating prevention, and RJ45 source. RJ45 single-open 2 A remains
-unsupported; do not call the system turnkey until physical qualification and
-installed loop testing close.
-
 ## Enclosure quote
 
 Keep enclosure purchasing open until the current 95 × 58 board-derived
-geometry is approved. Quote nonconductive material, no scaling/hollowing,
-critical apertures and posts, shrink/warp, support removal, screw fit, and
-installed RF clearance. Local mesh checks are not vendor acceptance.
+geometry, including the J1/J2 RJ45 wall apertures, is approved. Quote
+nonconductive material, no scaling/hollowing, critical apertures and posts,
+shrink/warp, support removal, screw fit, and installed RF clearance. Local
+mesh checks are not vendor acceptance.
 
 ## Release conditions
 
 Before purchase, obtain and archive:
 
 1. live current-archive CAM/DFM and stack/impedance acceptance;
-2. exact BOM/CPL placement acceptance;
+2. exact BOM/CPL placement acceptance, including Standard PCBA placement
+   confirmation for both RJ45 jacks;
 3. 20 µm Class 2 barrel-plating confirmation;
 4. carrier/rail and J3 standard-reflow confirmation;
-5. exact turnkey pigtail and enclosure quotes/drawings;
+5. exact enclosure quote/drawings;
 6. owner authorization for the specified verification quantity.
 
 After arrival, follow `README.md`, `VALIDATION.md`, and `firmware/PLAN.md`.
-USB alone cannot power Rev C. First treadmill contact is Proxy-only.
+USB alone cannot power Rev D. First treadmill contact is Proxy-only.

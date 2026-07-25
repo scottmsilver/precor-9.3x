@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the checked-in Rev B manufacturing artifacts without pcbnew.
+"""Validate the checked-in Rev D manufacturing artifacts without pcbnew.
 
 The physical board is inspected across a JSON boundary by ``inspect_kicad.py``
 under KiCad's system Python.  Everything in this program uses only the normal
@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 import design
-
 
 ROOT = Path(__file__).resolve().parent.parent
 KICAD = ROOT / "kicad"
@@ -84,9 +83,7 @@ def inspect_board() -> dict[str, Any]:
     )
     require(
         completed.returncode == 0,
-        "physical inspector failed:\n"
-        + completed.stdout
-        + completed.stderr,
+        "physical inspector failed:\n" + completed.stdout + completed.stderr,
     )
     report = json.loads(completed.stdout)
     require(report.get("schema_version") == 1, "unexpected inspector schema")
@@ -96,7 +93,7 @@ def inspect_board() -> dict[str, Any]:
 
 
 def validate_geometry(board: dict[str, Any]) -> None:
-    require(board["revision"] == "C", "PCB revision is not C")
+    require(board["revision"] == "D", "PCB revision is not D")
     require(
         board["copper_layers"] == EXPECTED_LAYERS,
         f"copper layer set differs: {board['copper_layers']}",
@@ -199,59 +196,33 @@ def validate_connectivity_and_routing(board: dict[str, Any]) -> None:
 
     tracks = board["tracks"]
     require(
-        not [
-            track
-            for track in tracks
-            if track["layer"] == "In1.Cu" and track["net"] != "GND"
-        ],
+        not [track for track in tracks if track["layer"] == "In1.Cu" and track["net"] != "GND"],
         "In1.Cu contains non-ground routing",
     )
-    usb_tracks = [
-        track for track in tracks if track["net"].startswith("USB_D")
-    ]
+    usb_tracks = [track for track in tracks if track["net"].startswith("USB_D")]
     require(usb_tracks, "USB has no routed copper")
     require(
         all(track["layer"] == "F.Cu" for track in usb_tracks),
         "USB leaves F.Cu",
     )
     require(
-        not [
-            via
-            for via in board["vias"]
-            if via["net"].startswith("USB_D")
-        ],
+        not [via for via in board["vias"] if via["net"].startswith("USB_D")],
         "USB contains vias",
     )
-    breakouts = [
-        track
-        for track in usb_tracks
-        if track.get("role") == "CONNECTOR_BREAKOUT"
-    ]
+    breakouts = [track for track in usb_tracks if track.get("role") == "CONNECTOR_BREAKOUT"]
     require(len(breakouts) == 4, "USB connector breakout count is not four")
     require(
         all(near(track["width_mm"], 0.20) for track in breakouts),
         "USB connector breakout is not 0.20 mm",
     )
     require(
-        all(
-            near(track["width_mm"], 0.2906)
-            for track in usb_tracks
-            if track.get("role") != "CONNECTOR_BREAKOUT"
-        ),
+        all(near(track["width_mm"], 0.2906) for track in usb_tracks if track.get("role") != "CONNECTOR_BREAKOUT"),
         "controlled USB trace width is not 0.2906 mm",
     )
-    pair_sections = {
-        track.get("pair_section")
-        for track in usb_tracks
-        if track.get("pair_section")
-    }
+    pair_sections = {track.get("pair_section") for track in usb_tracks if track.get("pair_section")}
     require(pair_sections, "inspector found no controlled USB pair section")
     require(
-        all(
-            track.get("reference_plane") == "In1.Cu:GND"
-            for track in usb_tracks
-            if track.get("pair_section")
-        ),
+        all(track.get("reference_plane") == "In1.Cu:GND" for track in usb_tracks if track.get("pair_section")),
         "controlled USB pair lacks In1.Cu ground reference",
     )
     area_names = {area["name"] for area in board["rule_areas"]}
@@ -269,12 +240,7 @@ def validate_connectivity_and_routing(board: dict[str, Any]) -> None:
 def csv_references(path: Path, column: str) -> set[str]:
     with path.open(newline="", encoding="utf-8") as handle:
         rows = csv.DictReader(handle)
-        return {
-            reference.strip()
-            for row in rows
-            for reference in row[column].split(",")
-            if reference.strip()
-        }
+        return {reference.strip() for row in rows for reference in row[column].split(",") if reference.strip()}
 
 
 def validate_assembly(board: dict[str, Any]) -> None:
@@ -302,11 +268,7 @@ def validate_assembly(board: dict[str, Any]) -> None:
                 row["JLC class"] == "Extended",
                 f"{row['LCSC Part #']} is not marked Extended in BOM",
             )
-    r9_rows = [
-        row
-        for row in bom_rows
-        if "R9" in row["Designator"].split(",")
-    ]
+    r9_rows = [row for row in bom_rows if "R9" in row["Designator"].split(",")]
     require(len(r9_rows) == 1, "R9 is absent or duplicated in BOM")
     require(r9_rows[0]["Comment"] == "560R", "R9 BOM value is not 560R")
     require(
@@ -341,13 +303,9 @@ def validate_reports_and_fab() -> None:
         "Found 0 Footprint errors",
     ):
         require(marker in report, f"{name} is not clean: missing {marker}")
-    ignored_section = report.partition("** Ignored checks **")[2].partition(
-        "** End of Report **"
-    )[0]
+    ignored_section = report.partition("** Ignored checks **")[2].partition("** End of Report **")[0]
     ignored = {
-        line.strip().removeprefix("- ")
-        for line in ignored_section.splitlines()
-        if line.strip().startswith("- ")
+        line.strip().removeprefix("- ") for line in ignored_section.splitlines() if line.strip().startswith("- ")
     }
     require(
         ignored == {"Silkscreen clipped by board edge"},
@@ -374,8 +332,7 @@ def main() -> int:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
     print(
-        "PASS: Rev C board, stackup, routing, parity, assembly, "
-        "and fabrication artifacts are internally consistent"
+        "PASS: Rev D board, stackup, routing, parity, assembly, " "and fabrication artifacts are internally consistent"
     )
     return 0
 

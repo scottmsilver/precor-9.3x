@@ -47,6 +47,18 @@ DRILL_SHAPES = {
 }
 
 
+#: Matching tolerance for power-intent geometry lookups. pcbnew stores
+#: coordinates as integer nanometres internally; round-tripping a clean
+#: decimal millimetre value (e.g. Y=133.83) through FromMM()/ToMM() can
+#: land 1 nm (0.000001 mm) off the intended value due to float64
+#: quantization -- round(..., 6) does not absorb that, since the stored
+#: value already differs at the 6th decimal. Four decimal places (0.1 um)
+#: is far finer than any PCB manufacturing tolerance and comfortably
+#: absorbs this artifact without risking accidental key collisions
+#: between genuinely distinct routed geometry.
+_GEOMETRY_MATCH_DECIMALS = 4
+
+
 def _track_signature(
     net: str,
     layer: str,
@@ -57,12 +69,26 @@ def _track_signature(
     endpoints = tuple(
         sorted(
             (
-                tuple(round(value, 6) for value in start),
-                tuple(round(value, 6) for value in end),
+                tuple(round(value, _GEOMETRY_MATCH_DECIMALS) for value in start),
+                tuple(round(value, _GEOMETRY_MATCH_DECIMALS) for value in end),
             )
         )
     )
     return (net, layer, round(width_mm, 6), *endpoints)
+
+
+def _via_signature(
+    net: str,
+    at: Iterable[float],
+    size_mm: float,
+    drill_mm: float,
+) -> tuple[object, ...]:
+    return (
+        net,
+        tuple(round(value, _GEOMETRY_MATCH_DECIMALS) for value in at),
+        round(size_mm, 6),
+        round(drill_mm, 6),
+    )
 
 
 POWER_TRACK_INTENT = {
@@ -76,9 +102,9 @@ POWER_TRACK_INTENT = {
     for segment in power_intent.track_segments(POWER_DATUM)
 }
 POWER_VIA_INTENT = {
-    (
+    _via_signature(
         via["net"],
-        tuple(via["at"]),
+        via["at"],
         via["size_mm"],
         via["drill_mm"],
     ): via["id"]
@@ -186,7 +212,8 @@ def parse_stackup(source: str, board: Any) -> dict[str, Any]:
         "layers": [
             layer
             for layer in layers
-            if layer["name"] in {
+            if layer["name"]
+            in {
                 "F.Cu",
                 "In1.Cu",
                 "In2.Cu",
@@ -202,9 +229,7 @@ def parse_stackup(source: str, board: Any) -> dict[str, Any]:
 def polygon(zone: Any) -> list[list[float]]:
     outline = zone.Outline()
     if outline.OutlineCount() != 1:
-        raise ValueError(
-            f"zone {zone.GetZoneName()!r} must have exactly one outline"
-        )
+        raise ValueError(f"zone {zone.GetZoneName()!r} must have exactly one outline")
     chain = outline.COutline(0)
     return [xy(chain.CPoint(index)) for index in range(chain.PointCount())]
 
@@ -271,8 +296,7 @@ def point_segment_distance(
         0.0,
         min(
             1.0,
-            ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy)
-            / (dx * dx + dy * dy),
+            ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / (dx * dx + dy * dy),
         ),
     )
     projection = [start[0] + fraction * dx, start[1] + fraction * dy]
@@ -300,30 +324,18 @@ def annotate_usb(
         if track["net"] not in {"USB_DN", "USB_DP"}:
             continue
         if any(
-            math.hypot(endpoint[0] - pad[0], endpoint[1] - pad[1])
-            <= 0.01
+            math.hypot(endpoint[0] - pad[0], endpoint[1] - pad[1]) <= 0.01
             for endpoint in (track["start"], track["end"])
             for pad in connector_pads
         ):
             track["role"] = "CONNECTOR_BREAKOUT"
 
-    minus = [
-        track
-        for track in tracks
-        if track["net"] in USB_MINUS and track["layer"] == "F.Cu"
-    ]
-    plus = [
-        track
-        for track in tracks
-        if track["net"] in USB_PLUS and track["layer"] == "F.Cu"
-    ]
+    minus = [track for track in tracks if track["net"] in USB_MINUS and track["layer"] == "F.Cu"]
+    plus = [track for track in tracks if track["net"] in USB_PLUS and track["layer"] == "F.Cu"]
     candidates: list[tuple[float, str, str, dict[str, Any], dict[str, Any]]] = []
     for negative in minus:
         for positive in plus:
-            if (
-                negative.get("role") == "CONNECTOR_BREAKOUT"
-                or positive.get("role") == "CONNECTOR_BREAKOUT"
-            ):
+            if negative.get("role") == "CONNECTOR_BREAKOUT" or positive.get("role") == "CONNECTOR_BREAKOUT":
                 continue
             if not parallel(negative, positive):
                 continue
@@ -372,8 +384,7 @@ def annotate_usb(
             for track in tracks
             if track["net"] == net
             and min(
-                math.hypot(endpoint[0] - pad[0], endpoint[1] - pad[1])
-                for endpoint in (track["start"], track["end"])
+                math.hypot(endpoint[0] - pad[0], endpoint[1] - pad[1]) for endpoint in (track["start"], track["end"])
             )
             <= 0.01
         ]
@@ -386,11 +397,7 @@ def annotate_usb(
 
 
 def enabled_copper_layers(board: Any) -> list[str]:
-    return [
-        board.GetLayerName(layer)
-        for layer in COPPER_LAYER_IDS
-        if board.IsLayerEnabled(layer)
-    ]
+    return [board.GetLayerName(layer) for layer in COPPER_LAYER_IDS if board.IsLayerEnabled(layer)]
 
 
 def inspect(path: Path) -> dict[str, Any]:
@@ -407,35 +414,24 @@ def inspect(path: Path) -> dict[str, Any]:
     logical_pad_seen: set[tuple[str, str]] = set()
     all_items: dict[str, Any] = {}
     footprint_silkscreen_graphic_count = 0
-    fabrication_body_bboxes: list[
-        tuple[str, tuple[int, int, int, int]]
-    ] = []
-    for footprint in sorted(
-        board.GetFootprints(), key=lambda item: item.GetReference()
-    ):
+    fabrication_body_bboxes: list[tuple[str, tuple[int, int, int, int]]] = []
+    for footprint in sorted(board.GetFootprints(), key=lambda item: item.GetReference()):
         reference = footprint.GetReference()
         if not reference:
             raise ValueError("footprint without reference")
         if reference in footprints:
             raise ValueError(f"duplicate footprint reference {reference}")
         footprint_silkscreen_graphic_count += sum(
-            graphic.GetLayer() in (pcbnew.F_SilkS, pcbnew.B_SilkS)
-            for graphic in footprint.GraphicalItems()
+            graphic.GetLayer() in (pcbnew.F_SilkS, pcbnew.B_SilkS) for graphic in footprint.GraphicalItems()
         )
         fabrication_shapes = [
             graphic
             for graphic in footprint.GraphicalItems()
-            if (
-                isinstance(graphic, pcbnew.PCB_SHAPE)
-                and graphic.GetLayer() == pcbnew.F_Fab
-            )
+            if (isinstance(graphic, pcbnew.PCB_SHAPE) and graphic.GetLayer() == pcbnew.F_Fab)
         ]
         fabrication_body_bbox: dict[str, list[float]] | None = None
         if fabrication_shapes:
-            boxes = [
-                graphic.GetBoundingBox()
-                for graphic in fabrication_shapes
-            ]
+            boxes = [graphic.GetBoundingBox() for graphic in fabrication_shapes]
             body_bounds = (
                 min(box.GetLeft() for box in boxes),
                 min(box.GetTop() for box in boxes),
@@ -448,16 +444,11 @@ def inspect(path: Path) -> dict[str, Any]:
                 "max": [mm(body_bounds[2]), mm(body_bounds[3])],
             }
         courtyard_shapes = [
-            graphic
-            for graphic in footprint.GraphicalItems()
-            if graphic.GetLayer() in (pcbnew.F_CrtYd, pcbnew.B_CrtYd)
+            graphic for graphic in footprint.GraphicalItems() if graphic.GetLayer() in (pcbnew.F_CrtYd, pcbnew.B_CrtYd)
         ]
         courtyard_bbox: dict[str, list[float]] | None = None
         if courtyard_shapes:
-            boxes = [
-                graphic.GetBoundingBox()
-                for graphic in courtyard_shapes
-            ]
+            boxes = [graphic.GetBoundingBox() for graphic in courtyard_shapes]
             courtyard_bbox = {
                 "min": [
                     mm(min(box.GetLeft() for box in boxes)),
@@ -488,17 +479,11 @@ def inspect(path: Path) -> dict[str, Any]:
             size = pad.GetSize()
             drill = pad.GetDrillSize()
             pad_record = {
-                "occurrence_id": (
-                    f"{reference}:{number}:"
-                    f"{len(pad_occurrences):02d}"
-                ),
+                "occurrence_id": (f"{reference}:{number}:" f"{len(pad_occurrences):02d}"),
                 "number": number,
                 "net": pad.GetNetname(),
                 "at": xy(pad.GetPosition()),
-                "layers": [
-                    board.GetLayerName(layer)
-                    for layer in pad.GetLayerSet().Seq()
-                ],
+                "layers": [board.GetLayerName(layer) for layer in pad.GetLayerSet().Seq()],
                 "attribute": attribute,
                 "shape": PAD_SHAPES[pad.GetShape()],
                 "drill_shape": DRILL_SHAPES[pad.GetDrillShape()],
@@ -506,11 +491,7 @@ def inspect(path: Path) -> dict[str, Any]:
                 "drill_mm": [mm(drill.x), mm(drill.y)],
             }
             pad_occurrences.append(pad_record)
-            pads[number] = {
-                key: value
-                for key, value in pad_record.items()
-                if key not in {"occurrence_id", "number"}
-            }
+            pads[number] = {key: value for key, value in pad_record.items() if key not in {"occurrence_id", "number"}}
             logical_pad = (reference, number)
             if logical_pad not in logical_pad_seen:
                 pad_items[item_uuid(pad)] = logical_pad
@@ -519,10 +500,7 @@ def inspect(path: Path) -> dict[str, Any]:
         manufacturer_keepouts = []
         if reference == "U1":
             source_path = (
-                Path(__file__).resolve().parents[1]
-                / "tools"
-                / "footprint_sources"
-                / "ESP32-S3-WROOM-1.kicad_mod"
+                Path(__file__).resolve().parents[1] / "tools" / "footprint_sources" / "ESP32-S3-WROOM-1.kicad_mod"
             )
             source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
             for index, zone in enumerate(footprint.Zones()):
@@ -531,26 +509,15 @@ def inspect(path: Path) -> dict[str, Any]:
                 manufacturer_keepouts.append(
                     {
                         "id": f"U1:manufacturer_keepout:{index:02d}",
-                        "source_file": (
-                            "tools/footprint_sources/"
-                            "ESP32-S3-WROOM-1.kicad_mod"
-                        ),
+                        "source_file": ("tools/footprint_sources/" "ESP32-S3-WROOM-1.kicad_mod"),
                         "source_sha256": source_sha256,
-                        "layers": [
-                            board.GetLayerName(layer)
-                            for layer in COPPER_LAYER_IDS
-                            if zone.IsOnLayer(layer)
-                        ],
+                        "layers": [board.GetLayerName(layer) for layer in COPPER_LAYER_IDS if zone.IsOnLayer(layer)],
                         "outline": polygon(zone),
-                        "forbid_footprints": (
-                            zone.GetDoNotAllowFootprints()
-                        ),
+                        "forbid_footprints": (zone.GetDoNotAllowFootprints()),
                         "forbid_pads": zone.GetDoNotAllowPads(),
                         "forbid_tracks": zone.GetDoNotAllowTracks(),
                         "forbid_vias": zone.GetDoNotAllowVias(),
-                        "forbid_zone_fills": (
-                            zone.GetDoNotAllowZoneFills()
-                        ),
+                        "forbid_zone_fills": (zone.GetDoNotAllowZoneFills()),
                     }
                 )
         footprints[reference] = {
@@ -597,9 +564,7 @@ def inspect(path: Path) -> dict[str, Any]:
         width = mm(item.GetWidth())
         start = xy(item.GetStart())
         end = xy(item.GetEnd())
-        power_intent_id = POWER_TRACK_INTENT.get(
-            _track_signature(net, layer, width, start, end)
-        )
+        power_intent_id = POWER_TRACK_INTENT.get(_track_signature(net, layer, width, start, end))
         tracks.append(
             {
                 "id": identifier,
@@ -636,9 +601,7 @@ def inspect(path: Path) -> dict[str, Any]:
         size = mm(item.GetWidth(pcbnew.F_Cu))
         drill = mm(item.GetDrillValue())
         position = xy(item.GetPosition())
-        power_intent_id = POWER_VIA_INTENT.get(
-            (net, tuple(position), size, drill)
-        )
+        power_intent_id = POWER_VIA_INTENT.get(_via_signature(net, position, size, drill))
         vias.append(
             {
                 "id": identifier,
@@ -679,11 +642,7 @@ def inspect(path: Path) -> dict[str, Any]:
             rule_areas.append(
                 {
                     "name": zone.GetZoneName(),
-                    "layers": [
-                        board.GetLayerName(layer)
-                        for layer in COPPER_LAYER_IDS
-                        if zone.IsOnLayer(layer)
-                    ],
+                    "layers": [board.GetLayerName(layer) for layer in COPPER_LAYER_IDS if zone.IsOnLayer(layer)],
                     "outline": outline,
                     "forbid_footprints": zone.GetDoNotAllowFootprints(),
                     "forbid_pads": zone.GetDoNotAllowPads(),
@@ -706,22 +665,14 @@ def inspect(path: Path) -> dict[str, Any]:
             }
         )
 
-    antenna_names = {
-        area["name"]
-        for area in rule_areas
-        if area["name"] == "ESP32_ANTENNA_ALL_COPPER_KEEPOUT"
-    }
+    antenna_names = {area["name"] for area in rule_areas if area["name"] == "ESP32_ANTENNA_ALL_COPPER_KEEPOUT"}
     if antenna_names:
         for zone in zones:
             if zone["layer"] == "In1.Cu" and zone["net"] == "GND":
                 zone["explicit_exceptions"] = sorted(antenna_names)
 
     fixture = next(
-        (
-            area
-            for area in rule_areas
-            if area["name"] == "TP5_TP13_BOTTOM_FIXTURE"
-        ),
+        (area for area in rule_areas if area["name"] == "TP5_TP13_BOTTOM_FIXTURE"),
         None,
     )
     if fixture:
@@ -757,16 +708,12 @@ def inspect(path: Path) -> dict[str, Any]:
                     )
                 )
     for index, via in enumerate(via_objects):
-        fabrication_obstacles.append(
-            (f"via:{index:04d} hole", via.GetEffectiveHoleShape())
-        )
+        fabrication_obstacles.append((f"via:{index:04d} hole", via.GetEffectiveHoleShape()))
 
     texts: list[dict[str, Any]] = []
     edge_points: list[list[float]] = []
     for drawing in board.GetDrawings():
-        if drawing.GetLayer() == pcbnew.Edge_Cuts and isinstance(
-            drawing, pcbnew.PCB_SHAPE
-        ):
+        if drawing.GetLayer() == pcbnew.Edge_Cuts and isinstance(drawing, pcbnew.PCB_SHAPE):
             edge_points.extend((xy(drawing.GetStart()), xy(drawing.GetEnd())))
         if isinstance(drawing, pcbnew.PCB_TEXT):
             entry = {
@@ -803,9 +750,7 @@ def inspect(path: Path) -> dict[str, Any]:
                     )
                     for reference, body_bounds in fabrication_body_bboxes
                 )
-                entry["min_component_body_clearance_mm"] = mm(
-                    round(body_clearance)
-                )
+                entry["min_component_body_clearance_mm"] = mm(round(body_clearance))
                 entry["nearest_component_body"] = body_reference
             texts.append(entry)
     texts.sort(key=lambda item: (item["layer"], item["text"], item["at"]))
@@ -842,20 +787,10 @@ def inspect(path: Path) -> dict[str, Any]:
                 {
                     pad_items[uid]
                     for uid in connected_uids
-                    if uid in pad_items
-                    and footprints[pad_items[uid][0]]["pads"][
-                        pad_items[uid][1]
-                    ]["net"]
-                    == net
+                    if uid in pad_items and footprints[pad_items[uid][0]]["pads"][pad_items[uid][1]]["net"] == net
                 }
             )
-            component_copper = sorted(
-                {
-                    copper_ids[uid]
-                    for uid in connected_uids
-                    if uid in copper_ids
-                }
-            )
+            component_copper = sorted({copper_ids[uid] for uid in connected_uids if uid in copper_ids})
             if not component_pads and not component_copper:
                 raise ValueError(f"empty connectivity component on {net}")
             components.append(
@@ -869,18 +804,12 @@ def inspect(path: Path) -> dict[str, Any]:
                 removed = {seed_uid}
             for uid in removed:
                 remaining.pop(uid, None)
-        components.sort(
-            key=lambda item: (item["pads"], item["copper_ids"])
-        )
+        components.sort(key=lambda item: (item["pads"], item["copper_ids"]))
         connectivity[net] = {"components": components}
 
     title = board.GetTitleBlock()
     u1 = next(
-        (
-            footprint
-            for footprint in board.GetFootprints()
-            if footprint.GetReference() == "U1"
-        ),
+        (footprint for footprint in board.GetFootprints() if footprint.GetReference() == "U1"),
         None,
     )
     if u1 is None:
@@ -913,9 +842,7 @@ def inspect(path: Path) -> dict[str, Any]:
                 "area_mm2": round((max_x - min_x) * (max_y - min_y), 6),
             },
             "footprints": footprints,
-            "footprint_silkscreen_graphic_count": (
-                footprint_silkscreen_graphic_count
-            ),
+            "footprint_silkscreen_graphic_count": (footprint_silkscreen_graphic_count),
             "tracks": tracks,
             "vias": vias,
             "zones": zones,
@@ -936,9 +863,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument(
         "--board",
         type=Path,
-        default=Path(__file__).resolve().parents[1]
-        / "kicad"
-        / "Esp32Tap.kicad_pcb",
+        default=Path(__file__).resolve().parents[1] / "kicad" / "Esp32Tap.kicad_pcb",
     )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)

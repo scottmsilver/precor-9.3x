@@ -1,9 +1,9 @@
-# Esp32Tap Rev C validation record
+# Esp32Tap Rev D validation record
 
 **Status: HOLD.** Passing repository gates establish internal consistency
 under declared models, not vendor acceptance or physical treadmill behavior.
 
-**Evidence date:** 2026-07-24
+**Evidence date:** 2026-07-25
 
 ## Canonical repository gate
 
@@ -20,7 +20,7 @@ offline Docker ngspice 39, and three repetitions of every simulation deck.
 
 | Area | Result | Repository-supported statement |
 |---|---|---|
-| Schematic | PASS | Typed Rev C schematic; ERC policy clean |
+| Schematic | PASS | Typed Rev D schematic; ERC policy clean |
 | PCB | PASS | 95 × 58 mm, four layers, exact net/pad parity, DRC/parity clean |
 | Antenna | PASS | U1 fully on-board; 3.25/3.30 mm margins; exact stock all-layer keepout |
 | USB | PASS | F.Cu-only, no signal vias, cycle-free planar topology, both A/B paths matched |
@@ -34,8 +34,11 @@ offline Docker ngspice 39, and three repetitions of every simulation deck.
 
 - Finished outline: 95.0 × 58.0 mm.
 - U1 body-to-finished-edge margins: 3.25 and 3.30 mm.
-- J1/J2: SMT Micro-Fit `430450809`/`430451010`; RJ45 is external pigtail
-  hardware only.
+- J1/J2: identical Molex `0441440003` right-angle SMD 8P8C RJ45 jacks (LCSC
+  `C585890`), edge-mounted with the mating opening facing off the board's
+  X=0 edge; no external pigtail hardware. There is no mechanical keying
+  between the console and motor interfaces — CONSOLE/MOTOR silkscreen plus
+  housing color are the only differentiator.
 - USB shortest paths:
   D− A/B 60.0528786214/59.0528786214 mm,
   D+ A/B 60.0528777233/59.0528777233 mm.
@@ -48,13 +51,13 @@ At 2.0 A the emitted-copper planar-union solve gives:
 
 | Quantity | Result |
 |---|---:|
-| +8 V resistance | 18.745090 mΩ |
-| Conservative trace-only GND resistance | 19.665484 mΩ |
-| Supply-plus-return drop | 76.821149 mV |
-| +8 V maximum via current | 1.131922 A |
-| +8 V maximum via rise | 15.234166 °C |
-| +8 V maximum via I²R | 1.864230 mW |
-| Maximum F/B track rise | 6.660309 °C |
+| +8 V resistance | 14.279315 mΩ |
+| Conservative trace-only GND resistance | 34.910668 mΩ |
+| Supply-plus-return drop | 98.379966 mV |
+| +8 V maximum via current | 0.828913 A |
+| +8 V maximum via rise | 7.504156 °C |
+| +8 V maximum via I²R | 0.999735 mW |
+| Maximum track rise (either net) | 6.660309 °C |
 
 The graph splits intersections and collinear overlaps, unions coincident
 same-layer copper, preserves distinct parallel routes, and rejects duplicate
@@ -75,7 +78,7 @@ mandatory.
 supported values remain recorded in `sim/README.md`; `sim/assertions.json` is
 the pass/fail authority.
 
-The exact machine-readable harness unsupported list is:
+The exact machine-readable unsupported list is:
 
 - `RJ45_SINGLE_OPEN_2A`
 - `MINIMUM_VIN`
@@ -101,10 +104,10 @@ effects.
 
 | Artifact | SHA-256 |
 |---|---|
-| `kicad/Esp32Tap.kicad_pcb` | `af6208addc4253620bfacf9dbca51c0963ef676910b3934d1bcf307996803f1a` |
-| `kicad/Esp32Tap-gerbers.zip` | `219562b21c51bf71e11474c5ea3fae9b698c56b279ad1a41950b440381507ed5` |
-| `bom/BOM.csv` | `9e972a4008ede233bc63c19e05d1b15e43d6e0e15094e2106f43ec3737647f7c` |
-| `bom/CPL-positions.csv` | `977f1a0ac2ba081d7f5c49f900a9250c8c2d5c26de7ca02cec59130619426e87` |
+| `kicad/Esp32Tap.kicad_pcb` | `fecbc139b52bc873add8ddb1625db63f899dc9ac98c7ca8db442febc2edeea96` |
+| `kicad/Esp32Tap-gerbers.zip` | `ad4d98149b7ca04f6cf20692860a7fcc517fb5daee0bce5eda2193b56cc55b85` |
+| `bom/BOM.csv` | `431c19cac0d0ec19c25b0aa46be198026619b64a86df6025a4dc9881d1633047` |
+| `bom/CPL-positions.csv` | `a475ff84cb210053e400e619b3c0073af0af9ac7cf57f4d3e85049bf5cc3014d` |
 
 These identify repository bytes only. The operator-observed
 `vendor/JLC-DFM-REVIEW.json` is bound to an older archive and must not be
@@ -112,13 +115,14 @@ presented as review of these bytes.
 
 ## Open vendor and physical gates
 
-- live current ZIP/BOM/CPL placement and production CAM review;
+- live current ZIP/BOM/CPL placement and production CAM review, including
+  the Extended-class RJ45 jacks' Standard PCBA placement support;
 - stack/impedance and 20 µm barrel-plating confirmation;
 - J3 plated mechanical stakes accepted under normal top-side reflow, without
   manual/wave processing;
 - carrier/rails/tooling/depanel details for the 58 mm board axis;
-- exact turnkey Micro-Fit-to-RJ45 pigtail drawings and quote;
-- current enclosure quote, material, fit, installed clearance, and RF tests;
+- current enclosure quote, material, fit, installed clearance, and RF tests
+  for the RJ45 aperture geometry;
 - treadmill source, minimum VIN, transient, complete installed drop, ambient,
   current, and thermal measurements;
 - RJ45 single-open 2 A qualification;

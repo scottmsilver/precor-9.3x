@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 STATUS_DOCUMENTS = (
     "README.md",
     "REPORT.md",
@@ -55,37 +54,27 @@ def _active_lines(text: str) -> list[tuple[int, str]]:
         begins_block = bool(SUPERSEDED_BLOCK_BEGIN.search(line))
         ends_block = bool(SUPERSEDED_BLOCK_END.search(line))
         if begins_block:
-            assert not in_superseded_block, (
-                f"nested superseded block at source line {line_number}"
-            )
+            assert not in_superseded_block, f"nested superseded block at source line {line_number}"
             in_superseded_block = not ends_block
             continue
         if in_superseded_block:
             if ends_block:
                 in_superseded_block = False
             continue
-        assert not ends_block, (
-            f"superseded block ends without a begin at source line {line_number}"
-        )
+        assert not ends_block, f"superseded block ends without a begin at source line {line_number}"
 
         heading = re.match(r"^(#{1,6})\s+(.*)$", line)
         if heading:
             level = len(heading.group(1))
             title = heading.group(2)
-            if (
-                re.search(r"\bsuperseded\b", title, re.IGNORECASE)
-                and re.search(
-                    r"\brev(?:ision)?\s+A\b",
-                    title,
-                    re.IGNORECASE,
-                )
+            if re.search(r"\bsuperseded\b", title, re.IGNORECASE) and re.search(
+                r"\brev(?:ision)?\s+A\b",
+                title,
+                re.IGNORECASE,
             ):
                 suppressed_heading_level = level
                 continue
-            if (
-                suppressed_heading_level is not None
-                and level <= suppressed_heading_level
-            ):
+            if suppressed_heading_level is not None and level <= suppressed_heading_level:
                 suppressed_heading_level = None
         if SUPERSEDED_LINE.search(line):
             continue
@@ -103,11 +92,7 @@ def _line_hits(
     lines: list[tuple[int, str]],
     pattern: re.Pattern[str],
 ) -> list[tuple[int, str]]:
-    return [
-        (line_number, line.strip())
-        for line_number, line in lines
-        if pattern.search(line)
-    ]
+    return [(line_number, line.strip()) for line_number, line in lines if pattern.search(line)]
 
 
 def _hold_violations(filename: str, text: str) -> list[str]:
@@ -115,18 +100,12 @@ def _hold_violations(filename: str, text: str) -> list[str]:
     if not active_lines:
         if filename in FULLY_ARCHIVAL_DOCUMENTS:
             return []
-        return [
-            f"{filename} is a current status document and cannot be "
-            "entirely suppressed"
-        ]
+        return [f"{filename} is a current status document and cannot be " "entirely suppressed"]
 
     active = "\n".join(line for _, line in active_lines)
     if re.search(r"\bHOLD\b", active):
         return []
-    return [
-        f"{filename} must state HOLD until every repository-closeable "
-        "Rev B gate passes"
-    ]
+    return [f"{filename} must state HOLD until every repository-closeable " "Rev B gate passes"]
 
 
 def test_historical_rev_a_is_allowed_only_when_explicitly_superseded() -> None:
@@ -169,8 +148,7 @@ The old package said GO to order.
 
     assert _active_lines(sample) == []
     assert _hold_violations("README.md", sample) == [
-        "README.md is a current status document and cannot be entirely "
-        "suppressed"
+        "README.md is a current status document and cannot be entirely " "suppressed"
     ]
     assert not _hold_violations("PREFAB-ADVICE-FOR-CLAUDE.md", sample)
 
@@ -210,25 +188,22 @@ def test_no_active_rev_a_or_release_ready_claims(
         active_lines = _active_lines(path.read_text(encoding="utf-8"))
         for label, pattern in FORBIDDEN_ACTIVE_CLAIMS.items():
             for line_number, line in _line_hits(active_lines, pattern):
-                violations.append(
-                    f"{filename}:{line_number}: {label}: {line}"
-                )
+                violations.append(f"{filename}:{line_number}: {label}: {line}")
 
     assert not violations, (
         "Active Esp32Tap documents still contain Rev A/release-ready claims; "
-        "move historical text into an explicitly superseded Rev A section:\n"
-        + "\n".join(violations)
+        "move historical text into an explicitly superseded Rev A section:\n" + "\n".join(violations)
     )
 
 
-def test_rev_c_handoff_states_power_firmware_and_release_boundaries(
+def test_rev_d_handoff_states_power_firmware_and_release_boundaries(
     esp32tap_dir: Path,
 ) -> None:
     handoff = (esp32tap_dir / "AI-HANDOFF.md").read_text(encoding="utf-8")
     required = (
         "Status: HOLD",
         "current-limited +8 V bench power",
-        "USB alone cannot power or program Rev C",
+        "USB alone cannot power or program Rev D",
         "executable **host reference**, not production",
         "one 4 s manual total-silence lease",
         "complete valid parsed frame",
@@ -246,9 +221,7 @@ def test_rev_c_handoff_states_power_firmware_and_release_boundaries(
 def test_firmware_plan_preserves_exact_safety_gates(
     esp32tap_dir: Path,
 ) -> None:
-    plan = (esp32tap_dir / "firmware" / "PLAN.md").read_text(
-        encoding="utf-8"
-    )
+    plan = (esp32tap_dir / "firmware" / "PLAN.md").read_text(encoding="utf-8")
     required = (
         "CONFIG_ESP_TASK_WDT_EN=y",
         "CONFIG_ESP_TASK_WDT_INIT=y",
@@ -273,8 +246,6 @@ def test_firmware_plan_preserves_exact_safety_gates(
 def test_prefab_advice_is_wholly_archival(
     esp32tap_dir: Path,
 ) -> None:
-    text = (esp32tap_dir / "PREFAB-ADVICE-FOR-CLAUDE.md").read_text(
-        encoding="utf-8"
-    )
+    text = (esp32tap_dir / "PREFAB-ADVICE-FOR-CLAUDE.md").read_text(encoding="utf-8")
     assert text.startswith("# Superseded Rev A")
     assert _active_lines(text) == []

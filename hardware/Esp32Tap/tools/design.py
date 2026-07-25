@@ -21,51 +21,42 @@ FPLIB = "/usr/share/kicad/footprints"
 COMPONENTS = {
     # --- Connectors -------------------------------------------------------
     "J1": (
-        "430450809",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-        "C240838",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
         "Extended",
-        2.14,
-        "Molex Micro-Fit 3.0 8-circuit right-angle SMT header — console "
-        "interface; mates only with 430250800 housing using 430300001 "
-        "terminals; PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
+        0.35,
+        "Molex 441440003 unshielded right-angle SMD 8P8C RJ45 jack — "
+        "console interface; edge-mounted with the mating opening facing "
+        "off the board edge so a standard RJ45 plug reaches through the "
+        "enclosure wall aperture; pads 9/10 are mechanical-only (NC).",
         {
             str(i): n
             for i, n in enumerate(
                 ["GND_A", "P8V_A", "PIN3", "PIN4", "PIN5_SAFETY", "PIN6_CONSOLE", "GND_B", "P8V_B"], start=1
             )
-        },
+        }
+        | {"9": "NC", "10": "NC"},
     ),
     "J2": (
-        "430451010",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-        "C563827",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
         "Extended",
-        2.58,
-        "Molex Micro-Fit 3.0 10-circuit right-angle SMT header — motor "
-        "interface; mates only with 430251000 housing using 430300001 "
-        "terminals; pads 9/10 NC; "
-        "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
+        0.35,
+        "Molex 441440003 unshielded right-angle SMD 8P8C RJ45 jack — "
+        "motor interface; edge-mounted with the mating opening facing "
+        "off the board edge so a standard RJ45 plug reaches through the "
+        "enclosure wall aperture; pads 9/10 are mechanical-only (NC).",
         {
             str(i): n
             for i, n in enumerate(
-                [
-                    "GND_A",
-                    "P8V_A",
-                    "PIN3",
-                    "PIN4",
-                    "PIN5_SAFETY",
-                    "PIN6_MOTOR",
-                    "GND_B",
-                    "P8V_B",
-                    "NC",
-                    "NC",
-                ],
-                start=1,
+                ["GND_A", "P8V_A", "PIN3", "PIN4", "PIN5_SAFETY", "PIN6_MOTOR", "GND_B", "P8V_B"], start=1
             )
-        },
+        }
+        | {"9": "NC", "10": "NC"},
     ),
     "J3": (
         "USB-C_HRO_TYPE-C-31-M-12",
@@ -1179,6 +1170,8 @@ NC = [
         "39",
     ]
 ] + [
+    ("J1", "9"),
+    ("J1", "10"),
     ("J2", "9"),
     ("J2", "10"),
     ("J3", "A8"),
@@ -1342,6 +1335,8 @@ _ACTIVE_PIN_TYPE_LOCKS = MappingProxyType(
         ("Q1", "3"): "open_collector",
         ("Q2", "1"): "input",
         ("Q2", "3"): "open_collector",
+        ("J1", "9"): "no_connect",
+        ("J1", "10"): "no_connect",
         ("J2", "9"): "no_connect",
         ("J2", "10"): "no_connect",
         ("J3", "A8"): "no_connect",
@@ -1358,10 +1353,10 @@ PIN_TYPES = {
 _TWO_PIN_LOCK = {"1": "1", "2": "2"}
 _PART_LOCKS = {
     "J1": (
-        "430450809",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-        "C240838",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
         {
             "1": "GND_A",
             "2": "P8V_A",
@@ -1371,13 +1366,15 @@ _PART_LOCKS = {
             "6": "PIN6_CONSOLE",
             "7": "GND_B",
             "8": "P8V_B",
+            "9": "NC",
+            "10": "NC",
         },
     ),
     "J2": (
-        "430451010",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-        "C563827",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
         {
             "1": "GND_A",
             "2": "P8V_A",

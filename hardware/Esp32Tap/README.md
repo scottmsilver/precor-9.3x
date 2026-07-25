@@ -1,4 +1,4 @@
-# Esp32Tap Rev C
+# Esp32Tap Rev D
 
 **Status: HOLD.** Do not submit fabrication, authorize substitutions, pay, or
 connect an Emulate-capable build to a treadmill until the applicable vendor,
@@ -10,11 +10,14 @@ console path. Emulate mode transfers that path to a hardware-gated ESP32-S3
 transmitter. The treadmill safety key remains authoritative; this board is not
 a certified functional-safety controller.
 
-## Rev C architecture
+## Rev D architecture
 
-- J1/J2 are SMT Molex Micro-Fit 3.0 headers. Separate custom pigtails adapt
-  them to the treadmill's RJ45 interfaces.
-- The serial harness's +8 V rails are the only board power input and pass
+- J1/J2 are both the identical Molex 0441440003 right-angle SMD 8P8C RJ45
+  jack (LCSC C585890), edge-mounted with the mating opening facing off the
+  board's X=0 edge. There is no separate pigtail harness and no mechanical
+  keying between console and motor any more; CONSOLE/MOTOR silkscreen is
+  the only differentiator.
+- The treadmill cable's +8 V rails are the only board power input and pass
   directly between J1/J2. F1/D1 protect only the local branch.
 - USB-C is native data and VBUS-presence sensing only. USB cannot energize the
   board or relay; programming needs current-limited serial +8 V bench power.
@@ -31,7 +34,7 @@ a certified functional-safety controller.
 | `kicad/Esp32Tap.kicad_pcb` | Generated 95 × 58 mm four-layer PCB |
 | `bom/BOM.csv` / `bom/CPL-positions.csv` | Exact assembly inputs |
 | `kicad/Esp32Tap-gerbers.zip` | Deterministic 13-member fabrication archive |
-| `harness/` | Micro-Fit-to-RJ45 pigtail definitions and open qualifications |
+| `kicad/models/` | Committed RJ45 jack 3D model (STEP + WRL, LCSC C585890) |
 | `sim/` | Eight ngspice decks and dual-engine assertion runner |
 | `firmware/PLAN.md` | Production firmware and bench contract |
 | `firmware/safety_model.py` | Host reference, not flashable firmware |
@@ -42,17 +45,17 @@ Do not repair generated hardware or assembly outputs by hand.
 
 ## Locked board facts
 
-| Item | Rev C value |
+| Item | Rev D value |
 |---|---|
 | Finished outline | 95.0 × 58.0 mm |
 | Stack | Four layers; modeled 1.59 mm `JLC04161H-7628` |
-| Board connectors | J1 `430450809`, J2 `430451010`, right-angle SMT Micro-Fit |
+| Board connectors | J1/J2 both `0441440003` (LCSC C585890), right-angle SMD 8P8C RJ45, unkeyed |
 | Antenna | U1 fully on-board; 3.25/3.30 mm body margins; stock all-layer keepout |
 | USB | F.Cu-only, zero signal vias, 0.2906 mm width / 0.2000 mm controlled edge gap |
 | USB paths | D− A/B 60.0528786214/59.0528786214 mm; D+ A/B 60.0528777233/59.0528777233 mm |
 | USB per-side skew | 0.0000008981 mm |
-| 2 A PCB trace-union drop | 76.821149 mV supply plus return |
-| +8 via maximum | 1.131922 A; 15.234166 °C rise |
+| 2 A PCB trace-union drop | 98.379966 mV supply plus return |
+| +8 via maximum | 0.828913 A; 6.660309 °C rise |
 | GND-via envelope | Full 2.0 A in any via; 12.273573 °C at 20 µm plating |
 
 The GND return result is a conservative trace-only solve. The independent
@@ -76,7 +79,7 @@ parity.
 ## Bring-up sequence
 
 1. Inspect identity, polarity, soldering, shorts, NC bypass, and TX isolation.
-2. Apply current-limited +8 V at the documented Micro-Fit power contacts;
+2. Apply current-limited +8 V at the documented RJ45 power contacts;
    verify VIN, +3V3, relay-off supply state, TREAD_OK, current, and temperature.
 3. Establish a reviewed USB/treadmill bonding or isolation setup, then test
    VBUS presence, ROM/reset attach, enumeration, and unplug.
@@ -92,5 +95,5 @@ The exact unsupported harness claims are `RJ45_SINGLE_OPEN_2A`,
 `RF`, and `SWITCHING_LOOP`.
 
 Live JLC review of the current archive/BOM/CPL/placement, 20 µm hole copper,
-J3 mechanical-stake reflow, carrier/rails, turnkey pigtails, and enclosure
-quote remains open. The correct decision remains HOLD.
+J3 mechanical-stake reflow, carrier/rails, and enclosure quote remains open.
+The correct decision remains HOLD.

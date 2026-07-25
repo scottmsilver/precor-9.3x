@@ -24,11 +24,15 @@ class PartLock:
 
 TWO_PIN_PASSIVE = {"1": "1", "2": "2"}
 EXPECTED_PARTS = {
+    # Rev D: J1 and J2 are both the Molex 441440003 right-angle SMD RJ45
+    # jack (LCSC C585890) — identical part, edge-mounted with the mating
+    # opening facing off the board edge. Pads 9/10 are the jack's large
+    # mechanical (NC) ground-tab pads, present on both connectors now.
     "J1": PartLock(
-        "430450809",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-        "C240838",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
         {
             "1": "GND_A",
             "2": "P8V_A",
@@ -38,13 +42,15 @@ EXPECTED_PARTS = {
             "6": "PIN6_CONSOLE",
             "7": "GND_B",
             "8": "P8V_B",
+            "9": "NC",
+            "10": "NC",
         },
     ),
     "J2": PartLock(
-        "430451010",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-        "C563827",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
         {
             "1": "GND_A",
             "2": "P8V_A",
@@ -407,6 +413,9 @@ EXPECTED_ACTIVE_PIN_TYPES = {
     ("Q1", "3"): "open_collector",
     ("Q2", "1"): "input",
     ("Q2", "3"): "open_collector",
+    # Rev D: both J1 and J2 are the RJ45 jack with mechanical-only pads 9/10.
+    ("J1", "9"): "no_connect",
+    ("J1", "10"): "no_connect",
     ("J2", "9"): "no_connect",
     ("J2", "10"): "no_connect",
     ("J3", "A8"): "no_connect",
@@ -522,26 +531,32 @@ def test_every_populated_rev_c_part_has_an_smt_assembly_class(
     } == {}
 
 
-def test_rev_c_treadmill_interfaces_are_physically_incompatible(
+def test_rev_d_console_and_motor_use_the_identical_rj45_jack(
     design: SimpleNamespace,
 ) -> None:
+    # Rev D deliberately trades Rev C's mechanically-incompatible Micro-Fit
+    # pair (8-circuit vs. 10-circuit, physically unable to cross-mate) for
+    # two identical, unshielded 8P8C RJ45 jacks. There is no CAD-enforced
+    # keying any more: CONSOLE/MOTOR silkscreen is the only differentiator,
+    # and a mis-plugged cable is a labeling/procedure risk, not something
+    # this connector choice rejects.
     console = _component(design, "J1")
     motor = _component(design, "J2")
 
     assert console[0:4] == (
-        "430450809",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-        "C240838",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
     )
     assert motor[0:4] == (
-        "430451010",
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-        "C563827",
+        "441440003",
+        "RJ45_SMD",
+        "RJ45-SMD_441440003",
+        "C585890",
     )
-    assert console[2] != motor[2]
-    assert set(console[7]) == {str(pin) for pin in range(1, 9)}
+    assert console[2] == motor[2]
+    assert set(console[7]) == {str(pin) for pin in range(1, 11)}
     assert set(motor[7]) == {str(pin) for pin in range(1, 11)}
 
 
@@ -562,7 +577,7 @@ def test_rev_c_preserves_rj45_signal_mapping_and_marks_spares_nc(
         assert actual == expected
         assert _net_for(design, ref, "6") == pin6_net
 
-    assert {("J2", "9"), ("J2", "10")} <= set(design.NC)
+    assert {("J1", "9"), ("J1", "10"), ("J2", "9"), ("J2", "10")} <= set(design.NC)
     assert all(("J2", spare) not in pins for pins in design.NETS.values() for spare in ("9", "10"))
 
 
@@ -1084,7 +1099,7 @@ def test_all_non_passive_pin_types_match_independent_contract(
 ) -> None:
     actual = {pin: pin_type for pin, pin_type in design.PIN_TYPES.items() if pin_type != "passive"}
 
-    assert len(EXPECTED_ACTIVE_PIN_TYPES) == 84
+    assert len(EXPECTED_ACTIVE_PIN_TYPES) == 86
     assert actual == EXPECTED_ACTIVE_PIN_TYPES
 
 

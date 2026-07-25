@@ -14,7 +14,6 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
-
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 SYSTEM_PYTHON = Path("/usr/bin/python3")
@@ -22,18 +21,12 @@ sys.dont_write_bytecode = True
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from export_fab import (  # noqa: E402
-    EXPECTED_FAB_FILES,
-    FabExportError,
-    isolated_kicad_project,
-)
-
+from export_fab import EXPECTED_FAB_FILES, FabExportError, isolated_kicad_project  # noqa: E402
 
 SOURCE_PATHS = (
     Path("tools/design.py"),
     Path("tools/gen_footprints.py"),
-    Path("tools/footprint_sources/Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal.kicad_mod"),
-    Path("tools/footprint_sources/Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal.kicad_mod"),
+    Path("tools/footprint_sources/RJ45-SMD_441440003.kicad_mod"),
     Path("tools/footprint_sources/ESP32-S3-WROOM-1.kicad_mod"),
     Path("tools/gen_sch.py"),
     Path("tools/gen_pcb.py"),
@@ -53,17 +46,13 @@ GENERATED_PATHS = (
     Path("kicad/esp32tap.kicad_sym"),
     Path("kicad/sym-lib-table"),
     Path("kicad/fp-lib-table"),
-    Path("kicad/Connector_Molex.pretty/Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal.kicad_mod"),
-    Path("kicad/Connector_Molex.pretty/Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal.kicad_mod"),
+    Path("kicad/RJ45_SMD.pretty/RJ45-SMD_441440003.kicad_mod"),
     Path("kicad/Button_Switch_SMD.pretty/SW_SPST_SKRPACE010.kicad_mod"),
     Path("kicad/RF_Module.pretty/ESP32-S3-WROOM-1.kicad_mod"),
     Path("kicad/erc.rpt"),
     Path("kicad/drc.rpt"),
     Path("kicad/Esp32Tap-gerbers.zip"),
-    *(
-        Path("kicad/gerbers") / filename
-        for filename in sorted(EXPECTED_FAB_FILES)
-    ),
+    *(Path("kicad/gerbers") / filename for filename in sorted(EXPECTED_FAB_FILES)),
 )
 NORMALIZED_REPORT_DATE = "1970-01-01T00:00:00"
 
@@ -76,9 +65,7 @@ def _validate_declarations() -> None:
     sources = set(SOURCE_PATHS)
     generated = set(GENERATED_PATHS)
     if sources & generated:
-        raise ReproError(
-            f"source/generated declarations overlap: {sorted(sources & generated)}"
-        )
+        raise ReproError(f"source/generated declarations overlap: {sorted(sources & generated)}")
     for path in sources | generated:
         if path.is_absolute() or ".." in path.parts:
             raise ReproError(f"unsafe declared path: {path}")
@@ -112,9 +99,7 @@ def normalize_report(kind: str, report: str) -> str:
     if kind == "erc":
         pattern = r"(?m)^ERC report \([^,\r\n]+,\s*Encoding UTF8\)$"
         if len(re.findall(pattern, report)) != 1:
-            raise ReproError(
-                "ERC report header/timestamp must appear exactly once"
-            )
+            raise ReproError("ERC report header/timestamp must appear exactly once")
         return re.sub(
             pattern,
             f"ERC report ({NORMALIZED_REPORT_DATE}, Encoding UTF8)",
@@ -124,13 +109,8 @@ def normalize_report(kind: str, report: str) -> str:
     if kind == "drc":
         title = r"(?m)^\*\* Drc report for Esp32Tap\.kicad_pcb \*\*$"
         pattern = r"(?m)^\*\* Created on [^*\r\n]+ \*\*$"
-        if (
-            len(re.findall(title, report)) != 1
-            or len(re.findall(pattern, report)) != 1
-        ):
-            raise ReproError(
-                "DRC report title/header timestamp must each appear exactly once"
-            )
+        if len(re.findall(title, report)) != 1 or len(re.findall(pattern, report)) != 1:
+            raise ReproError("DRC report title/header timestamp must each appear exactly once")
         return re.sub(
             pattern,
             f"** Created on {NORMALIZED_REPORT_DATE} **",
@@ -144,18 +124,13 @@ def validate_report(kind: str, report: str) -> None:
     """Require a parseable zero-violation summary."""
     if kind == "erc":
         summaries = re.findall(
-            r"\*\* ERC messages:\s+(\d+)\s+Errors\s+"
-            r"(\d+)\s+Warnings\s+(\d+)",
+            r"\*\* ERC messages:\s+(\d+)\s+Errors\s+" r"(\d+)\s+Warnings\s+(\d+)",
             report,
         )
         if len(summaries) != 1:
-            raise ReproError(
-                "ERC summary must appear exactly once and be well formed"
-            )
+            raise ReproError("ERC summary must appear exactly once and be well formed")
         if any(int(value) for value in summaries[0]):
-            raise ReproError(
-                f"ERC violations are nonzero: {summaries[0]}"
-            )
+            raise ReproError(f"ERC violations are nonzero: {summaries[0]}")
         return
     if kind == "drc":
         patterns = {
@@ -167,10 +142,7 @@ def validate_report(kind: str, report: str) -> None:
         for label, pattern in patterns.items():
             matches = re.findall(pattern, report, flags=re.IGNORECASE)
             if len(matches) != 1:
-                raise ReproError(
-                    "DRC summary "
-                    f"{label} count must appear exactly once"
-                )
+                raise ReproError("DRC summary " f"{label} count must appear exactly once")
             counts[label] = int(matches[0])
         if any(counts.values()):
             raise ReproError(f"DRC violations are nonzero: {counts}")
@@ -208,11 +180,7 @@ def _report_command(kind: str, source: Path, output: Path) -> list[str]:
 
 def render_report(root: Path, kind: str) -> str:
     """Run KiCad into a temporary file and return normalized checked output."""
-    filename = (
-        "Esp32Tap.kicad_sch"
-        if kind == "erc"
-        else "Esp32Tap.kicad_pcb"
-    )
+    filename = "Esp32Tap.kicad_sch" if kind == "erc" else "Esp32Tap.kicad_pcb"
     source = root / "kicad" / filename
     try:
         with isolated_kicad_project(source) as isolated_source:
@@ -225,13 +193,9 @@ def render_report(root: Path, kind: str) -> str:
             try:
                 report = output.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as error:
-                raise ReproError(
-                    f"cannot read {kind.upper()} report: {error}"
-                ) from error
+                raise ReproError(f"cannot read {kind.upper()} report: {error}") from error
     except FabExportError as error:
-        raise ReproError(
-            f"cannot isolate KiCad {kind.upper()} project: {error}"
-        ) from error
+        raise ReproError(f"cannot isolate KiCad {kind.upper()} project: {error}") from error
     normalized = normalize_report(kind, report)
     validate_report(kind, normalized)
     return normalized
@@ -268,9 +232,7 @@ def _copy_sources(source_root: Path, isolated_root: Path) -> None:
             raise ReproError(f"declared source is missing: {relative}")
         resolved_source = source.resolve()
         if not resolved_source.is_relative_to(resolved_root):
-            raise ReproError(
-                f"declared source resolves outside root: {relative}"
-            )
+            raise ReproError(f"declared source resolves outside root: {relative}")
         destination = isolated_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
@@ -317,53 +279,32 @@ def compare_generated(expected_root: Path, actual_root: Path) -> None:
     """Compare every declared generated path byte-for-byte."""
     problems: list[str] = []
     allowed_files = set(SOURCE_PATHS) | set(GENERATED_PATHS)
-    allowed_directories = {
-        parent
-        for relative in allowed_files
-        for parent in relative.parents
-        if parent != Path(".")
-    }
+    allowed_directories = {parent for relative in allowed_files for parent in relative.parents if parent != Path(".")}
     entries = list(actual_root.rglob("*"))
-    symlinks = sorted(
-        path.relative_to(actual_root)
-        for path in entries
-        if path.is_symlink()
-    )
+    symlinks = sorted(path.relative_to(actual_root) for path in entries if path.is_symlink())
     if symlinks:
-        problems.append(
-            "isolated regeneration emitted symlinks: "
-            + ", ".join(str(path) for path in symlinks)
-        )
+        problems.append("isolated regeneration emitted symlinks: " + ", ".join(str(path) for path in symlinks))
     undeclared = sorted(
         path.relative_to(actual_root)
         for path in entries
-        if path.relative_to(actual_root)
-        not in allowed_files | allowed_directories
+        if path.relative_to(actual_root) not in allowed_files | allowed_directories
     )
     if undeclared:
         problems.append(
-            "isolated regeneration emitted undeclared entries: "
-            + ", ".join(str(path) for path in undeclared)
+            "isolated regeneration emitted undeclared entries: " + ", ".join(str(path) for path in undeclared)
         )
     wrong_types = sorted(
         path.relative_to(actual_root)
         for path in entries
         if not path.is_symlink()
         and (
-            (
-                path.relative_to(actual_root) in allowed_files
-                and not path.is_file()
-            )
-            or (
-                path.relative_to(actual_root) in allowed_directories
-                and not path.is_dir()
-            )
+            (path.relative_to(actual_root) in allowed_files and not path.is_file())
+            or (path.relative_to(actual_root) in allowed_directories and not path.is_dir())
         )
     )
     if wrong_types:
         problems.append(
-            "isolated regeneration emitted wrong entry types: "
-            + ", ".join(str(path) for path in wrong_types)
+            "isolated regeneration emitted wrong entry types: " + ", ".join(str(path) for path in wrong_types)
         )
     for relative in GENERATED_PATHS:
         expected = expected_root / relative
@@ -380,15 +321,9 @@ def compare_generated(expected_root: Path, actual_root: Path) -> None:
         expected_hash = _digest(expected)
         actual_hash = _digest(actual)
         if expected_hash != actual_hash:
-            problems.append(
-                f"{relative}: differs "
-                f"(checked-in={expected_hash}, regenerated={actual_hash})"
-            )
+            problems.append(f"{relative}: differs " f"(checked-in={expected_hash}, regenerated={actual_hash})")
     if problems:
-        raise ReproError(
-            "generated artifacts are stale or non-reproducible:\n"
-            + "\n".join(problems)
-        )
+        raise ReproError("generated artifacts are stale or non-reproducible:\n" + "\n".join(problems))
 
 
 def reproduce_and_compare(root: Path = ROOT) -> None:
@@ -422,10 +357,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
             print(f"WROTE kicad/{args.write_report}.rpt (0 violations)")
         else:
             reproduce_and_compare(root)
-            print(
-                f"PASS: {len(GENERATED_PATHS)} generated artifacts "
-                "are byte-reproducible"
-            )
+            print(f"PASS: {len(GENERATED_PATHS)} generated artifacts " "are byte-reproducible")
         return 0
     except ReproError as error:
         print(f"repro_check: {error}", file=sys.stderr)

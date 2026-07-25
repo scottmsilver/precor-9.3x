@@ -15,8 +15,7 @@ from typing import Any
 
 import pytest
 
-
-SCHEMATIC_TITLE = "Esp32Tap Rev C - ESP32-S3 Precor serial-bus tap"
+SCHEMATIC_TITLE = "Esp32Tap Rev D - ESP32-S3 Precor serial-bus tap"
 SCHEMATIC_DATE = "2026-07-24"
 GENERATED_SCHEMATIC_FILES = (
     "Esp32Tap.kicad_sch",
@@ -70,9 +69,7 @@ def _parse_sexpr(source: str) -> list[Any]:
             assert len(stack) > 1, "unexpected closing parenthesis"
             stack.pop()
         else:
-            stack[-1].append(
-                json.loads(token) if token.startswith('"') else token
-            )
+            stack[-1].append(json.loads(token) if token.startswith('"') else token)
     assert len(stack) == 1, "unterminated S-expression"
     assert len(roots) == 1 and isinstance(roots[0], list)
     return roots[0]
@@ -89,11 +86,7 @@ def _atom(value: Any) -> Any:
 
 
 def _children(node: list[Any], tag: str) -> list[list[Any]]:
-    return [
-        child
-        for child in node[1:]
-        if isinstance(child, list) and _tag(child) == tag
-    ]
+    return [child for child in node[1:] if isinstance(child, list) and _tag(child) == tag]
 
 
 def _child(node: list[Any], tag: str) -> list[Any]:
@@ -103,10 +96,7 @@ def _child(node: list[Any], tag: str) -> list[Any]:
 
 
 def _properties(node: list[Any]) -> dict[str, str]:
-    return {
-        str(_atom(prop[1])): str(_atom(prop[2]))
-        for prop in _children(node, "property")
-    }
+    return {str(_atom(prop[1])): str(_atom(prop[2])) for prop in _children(node, "property")}
 
 
 def _recursive_children(node: list[Any], tag: str) -> list[list[Any]]:
@@ -149,10 +139,7 @@ def _instances(schematic: list[Any]) -> dict[str, list[Any]]:
 
 def _library_symbols(schematic: list[Any]) -> dict[str, list[Any]]:
     container = _child(schematic, "lib_symbols")
-    return {
-        str(_atom(symbol[1])): symbol
-        for symbol in _children(container, "symbol")
-    }
+    return {str(_atom(symbol[1])): symbol for symbol in _children(container, "symbol")}
 
 
 @pytest.fixture(scope="module")
@@ -163,18 +150,15 @@ def schematic(esp32tap_dir: Path) -> list[Any]:
     return parsed
 
 
-def test_schematic_title_block_identifies_rev_c(
+def test_schematic_title_block_identifies_rev_d(
     schematic: list[Any],
 ) -> None:
     title_block = _child(schematic, "title_block")
     assert _atom(_child(title_block, "title")[1]) == SCHEMATIC_TITLE
-    assert _atom(_child(title_block, "rev")[1]) == "C"
+    assert _atom(_child(title_block, "rev")[1]) == "D"
     assert _atom(_child(title_block, "date")[1]) == SCHEMATIC_DATE
-    comments = {
-        int(comment[1]): str(_atom(comment[2]))
-        for comment in _children(title_block, "comment")
-    }
-    assert comments[1] == "Status: generated Rev C typed schematic"
+    comments = {int(comment[1]): str(_atom(comment[2])) for comment in _children(title_block, "comment")}
+    assert comments[1] == "Status: generated Rev D typed schematic"
     assert comments[2] == "Source of truth: tools/design.py"
 
 
@@ -185,51 +169,32 @@ def test_schematic_components_and_pin_types_exactly_match_design(
     instances = _instances(schematic)
     libraries = _library_symbols(schematic)
     design_refs = set(design.COMPONENTS)
-    physical_refs = {
-        reference
-        for reference in instances
-        if not reference.startswith("#FLG")
-    }
+    physical_refs = {reference for reference in instances if not reference.startswith("#FLG")}
     assert physical_refs == design_refs
 
     for reference, component in design.COMPONENTS.items():
-        value, footprint_lib, footprint, lcsc, *_metadata, pin_names = (
-            component
-        )
+        value, footprint_lib, footprint, lcsc, *_metadata, pin_names = component
         instance = instances[reference]
         properties = _properties(instance)
         assert properties["Reference"] == reference
         assert properties["Value"] == value
         assert properties["Footprint"] == f"{footprint_lib}:{footprint}"
         assert properties["LCSC"] == lcsc
-        assert _atom(_child(instance, "dnp")[1]) == (
-            "yes" if reference in design.DNP else "no"
-        )
-        expected_in_bom = (
-            reference not in design.DNP and component[4] != "none"
-        )
-        assert _atom(_child(instance, "in_bom")[1]) == (
-            "yes" if expected_in_bom else "no"
-        )
+        assert _atom(_child(instance, "dnp")[1]) == ("yes" if reference in design.DNP else "no")
+        expected_in_bom = reference not in design.DNP and component[4] != "none"
+        assert _atom(_child(instance, "in_bom")[1]) == ("yes" if expected_in_bom else "no")
 
-        instance_pads = {
-            str(_atom(pin[1]))
-            for pin in _children(instance, "pin")
-        }
+        instance_pads = {str(_atom(pin[1])) for pin in _children(instance, "pin")}
         assert instance_pads == set(pin_names)
 
         library_id = str(_atom(_child(instance, "lib_id")[1]))
         assert library_id in libraries
-        assert _atom(_child(libraries[library_id], "in_bom")[1]) == (
-            "yes" if expected_in_bom else "no"
-        )
+        assert _atom(_child(libraries[library_id], "in_bom")[1]) == ("yes" if expected_in_bom else "no")
         library_pins = _library_pins(libraries[library_id])
         assert set(library_pins) == set(pin_names)
         for pad, name in pin_names.items():
             library_pin = library_pins[pad]
-            assert str(_atom(library_pin[1])) == design.PIN_TYPES[
-                (reference, pad)
-            ]
+            assert str(_atom(library_pin[1])) == design.PIN_TYPES[(reference, pad)]
             assert str(_atom(_child(library_pin, "name")[1])) == name
 
     for reference in set(instances) - design_refs:
@@ -248,21 +213,12 @@ def test_schematic_connectivity_exactly_matches_design(
 ) -> None:
     instances = _instances(schematic)
     libraries = _library_symbols(schematic)
-    labels_by_position: dict[tuple[float, float], list[str]] = defaultdict(
-        list
-    )
+    labels_by_position: dict[tuple[float, float], list[str]] = defaultdict(list)
     for label in _children(schematic, "global_label"):
         labels_by_position[_position(label)].append(str(_atom(label[1])))
-    no_connect_positions = {
-        _position(marker)
-        for marker in _children(schematic, "no_connect")
-    }
+    no_connect_positions = {_position(marker) for marker in _children(schematic, "no_connect")}
 
-    expected_net = {
-        pin: net
-        for net, pins in design.NETS.items()
-        for pin in pins
-    }
+    expected_net = {pin: net for net, pins in design.NETS.items() for pin in pins}
     nc = set(design.NC)
     actual_connected_pins = set()
     actual_nc_pins = set()
@@ -289,9 +245,7 @@ def test_schematic_connectivity_exactly_matches_design(
                 assert not labels_by_position[position]
                 actual_nc_pins.add(design_pin)
             else:
-                assert labels_by_position[position] == [
-                    expected_net[design_pin]
-                ]
+                assert labels_by_position[position] == [expected_net[design_pin]]
                 assert position not in no_connect_positions
                 actual_connected_pins.add(design_pin)
 
@@ -309,15 +263,9 @@ def test_schematic_power_flags_are_explicit_non_assembly_helpers(
         reference: _properties(instance)["Value"]
         for reference, instance in instances.items()
         if reference.startswith("#FLG")
-    } == {
-        reference: "PWR_FLAG"
-        for reference in EXPECTED_POWER_FLAGS
-    }
+    } == {reference: "PWR_FLAG" for reference in EXPECTED_POWER_FLAGS}
 
-    labels_by_position = {
-        _position(label): str(_atom(label[1]))
-        for label in _children(schematic, "global_label")
-    }
+    labels_by_position = {_position(label): str(_atom(label[1])) for label in _children(schematic, "global_label")}
     for reference, net in EXPECTED_POWER_FLAGS.items():
         instance = instances[reference]
         properties = _properties(instance)
@@ -325,10 +273,7 @@ def test_schematic_power_flags_are_explicit_non_assembly_helpers(
         assert _atom(_child(instance, "on_board")[1]) == "no"
         assert properties["Footprint"] == ""
         assert properties["LCSC"] == ""
-        assert {
-            str(_atom(pin[1]))
-            for pin in _children(instance, "pin")
-        } == {"1"}
+        assert {str(_atom(pin[1])) for pin in _children(instance, "pin")} == {"1"}
 
         library_id = str(_atom(_child(instance, "lib_id")[1]))
         library_pin = _library_pins(libraries[library_id])["1"]
@@ -363,10 +308,7 @@ def test_schematic_generation_is_deterministic(
         text=True,
     )
     assert first_run.returncode == 0, first_run.stderr
-    first = {
-        filename: (kicad / filename).read_bytes()
-        for filename in GENERATED_SCHEMATIC_FILES
-    }
+    first = {filename: (kicad / filename).read_bytes() for filename in GENERATED_SCHEMATIC_FILES}
 
     second_run = subprocess.run(
         command,
@@ -376,10 +318,7 @@ def test_schematic_generation_is_deterministic(
         text=True,
     )
     assert second_run.returncode == 0, second_run.stderr
-    second = {
-        filename: (kicad / filename).read_bytes()
-        for filename in GENERATED_SCHEMATIC_FILES
-    }
+    second = {filename: (kicad / filename).read_bytes() for filename in GENERATED_SCHEMATIC_FILES}
     assert second == first
 
 
@@ -390,9 +329,7 @@ def test_uuid_identity_encoding_cannot_alias_slash_containing_parts(
         esp32tap_dir / "tools" / "gen_sch.py",
         "_esp32tap_gen_sch_uuid_test",
     )
-    assert generator.stable_uuid("label", "A/B", "C") != (
-        generator.stable_uuid("label", "A", "B/C")
-    )
+    assert generator.stable_uuid("label", "A/B", "C") != (generator.stable_uuid("label", "A", "B/C"))
 
 
 def test_schematic_render_rejects_duplicate_uuids(
@@ -415,13 +352,8 @@ def test_schematic_render_rejects_duplicate_uuids(
 
 def _seed_schematic_outputs(output_directory: Path) -> dict[Path, bytes]:
     output_directory.mkdir(parents=True)
-    sentinels = {
-        output_directory / filename: f"old {filename}\n".encode()
-        for filename in GENERATED_SCHEMATIC_FILES
-    }
-    sentinels[output_directory / "Esp32Tap.kicad_pro"] = (
-        b'{"old": true}\n'
-    )
+    sentinels = {output_directory / filename: f"old {filename}\n".encode() for filename in GENERATED_SCHEMATIC_FILES}
+    sentinels[output_directory / "Esp32Tap.kicad_pro"] = b'{"old": true}\n'
     for path, content in sentinels.items():
         path.write_bytes(content)
     return sentinels
@@ -454,10 +386,7 @@ def test_schematic_staging_failure_preserves_every_destination(
     with pytest.raises(RuntimeError, match="injected staged render failure"):
         generator.write_outputs(output_directory)
 
-    assert {
-        path: path.read_bytes()
-        for path in sentinels
-    } == sentinels
+    assert {path: path.read_bytes() for path in sentinels} == sentinels
 
 
 def test_schematic_validation_failure_preserves_every_destination(
@@ -487,10 +416,7 @@ def test_schematic_validation_failure_preserves_every_destination(
     ):
         generator.write_outputs(output_directory)
 
-    assert {
-        path: path.read_bytes()
-        for path in sentinels
-    } == sentinels
+    assert {path: path.read_bytes() for path in sentinels} == sentinels
 
 
 def _fake_design_source() -> str:
@@ -653,13 +579,8 @@ def test_bom_keeps_same_value_parts_with_distinct_metadata_separate(
     assert by_reference["R3"]["Unit cost (USD)"] == "0.001"
     assert by_reference["R4"]["Unit cost (USD)"] == "0.125"
     assert by_reference["R5"]["Description"] == "first 10k role"
-    assert (
-        by_reference["R6"]["Description"]
-        == "unrelated second 10k role"
-    )
-    assert by_reference["R7"]["Footprint"] == by_reference["R8"][
-        "Footprint"
-    ]
+    assert by_reference["R6"]["Description"] == "unrelated second 10k role"
+    assert by_reference["R7"]["Footprint"] == by_reference["R8"]["Footprint"]
     assert by_reference["R9"]["Footprint"] == "Footprint_A"
     assert by_reference["R10"]["Footprint"] == "Footprint_B"
     assert by_reference["R11"]["LCSC Part #"] == "C1006"
@@ -678,10 +599,7 @@ def _seed_doc_outputs(sandbox: Path) -> dict[Path, bytes]:
 
 
 def _assert_files_unchanged(sentinels: dict[Path, bytes]) -> None:
-    assert {
-        path: path.read_bytes()
-        for path in sentinels
-    } == sentinels
+    assert {path: path.read_bytes() for path in sentinels} == sentinels
 
 
 def test_default_docs_dependency_failure_is_atomic(
@@ -751,7 +669,9 @@ def test_docs_render_failure_is_atomic(
     tmp_path: Path,
     esp32tap_dir: Path,
 ) -> None:
-    design_source = _fake_design_source() + """\
+    design_source = (
+        _fake_design_source()
+        + """\
 
 class ExplodingCost:
     def __rmul__(self, _quantity):
@@ -765,6 +685,7 @@ component = list(COMPONENTS["R3"])
 component[5] = ExplodingCost()
 COMPONENTS["R3"] = tuple(component)
 """
+    )
     sandbox, tools = _docs_sandbox(
         tmp_path,
         esp32tap_dir,
@@ -897,9 +818,7 @@ def generated_tree(
             text=True,
         )
         assert completed.returncode == 0, (
-            f"{' '.join(command)} failed\n"
-            f"stdout:\n{completed.stdout}\n"
-            f"stderr:\n{completed.stderr}"
+            f"{' '.join(command)} failed\n" f"stdout:\n{completed.stdout}\n" f"stderr:\n{completed.stderr}"
         )
     return sandbox
 
@@ -911,25 +830,18 @@ def test_temp_generation_byte_matches_committed_artifacts(
     for generated_relative, committed_relative in DETERMINISTIC_ARTIFACTS:
         generated = generated_tree / generated_relative
         committed = esp32tap_dir / committed_relative
-        assert generated.read_bytes() == committed.read_bytes(), (
-            f"committed artifact is stale: {committed_relative}"
-        )
+        assert generated.read_bytes() == committed.read_bytes(), f"committed artifact is stale: {committed_relative}"
 
 
 def _assert_erc_semantics(report: str) -> None:
     summary = re.search(
-        r"\*\* ERC messages:\s+(\d+)\s+Errors\s+"
-        r"(\d+)\s+Warnings\s+(\d+)",
+        r"\*\* ERC messages:\s+(\d+)\s+Errors\s+" r"(\d+)\s+Warnings\s+(\d+)",
         report,
     )
     assert summary is not None, report
     assert tuple(int(value) for value in summary.groups()) == (0, 0, 0)
     assert "; excluded" not in report.lower()
-    ignored = {
-        line.strip()[2:]
-        for line in report.splitlines()
-        if line.strip().startswith("- ")
-    }
+    ignored = {line.strip()[2:] for line in report.splitlines() if line.strip().startswith("- ")}
     assert ignored == ALLOWED_ERC_IGNORED_CHECKS
 
 
@@ -978,18 +890,11 @@ def test_temp_generation_is_accepted_by_kicad(
     exported = ET.parse(xml_netlist).getroot()
     components = exported.find("components")
     assert components is not None
-    assert {
-        component.attrib["ref"]
-        for component in components
-    } == set(design.COMPONENTS)
+    assert {component.attrib["ref"] for component in components} == set(design.COMPONENTS)
     nets = exported.find("nets")
     assert nets is not None
     actual_nets = {
-        net.attrib["name"]: {
-            (node.attrib["ref"], node.attrib["pin"])
-            for node in net.findall("node")
-        }
-        for net in nets
+        net.attrib["name"]: {(node.attrib["ref"], node.attrib["pin"]) for node in net.findall("node")} for net in nets
     }
     for net, pins in design.NETS.items():
         assert actual_nets[net] == set(pins)
@@ -1046,9 +951,7 @@ def test_temp_generation_is_accepted_by_kicad(
 def test_checked_in_erc_has_only_known_project_default_ignores(
     esp32tap_dir: Path,
 ) -> None:
-    report = (esp32tap_dir / "kicad" / "erc.rpt").read_text(
-        encoding="utf-8"
-    )
+    report = (esp32tap_dir / "kicad" / "erc.rpt").read_text(encoding="utf-8")
     _assert_erc_semantics(report)
 
 
@@ -1056,13 +959,8 @@ def _expected_component_line(
     reference: str,
     component: tuple[Any, ...],
 ) -> str:
-    value, footprint_lib, footprint, lcsc, jlc_class, _cost, desc, _pins = (
-        component
-    )
-    return (
-        f"| {reference} | {value} | {footprint_lib}:{footprint} | "
-        f"{lcsc or '-'} | {jlc_class} | {desc} |"
-    )
+    value, footprint_lib, footprint, lcsc, jlc_class, _cost, desc, _pins = component
+    return f"| {reference} | {value} | {footprint_lib}:{footprint} | " f"{lcsc or '-'} | {jlc_class} | {desc} |"
 
 
 def _expected_net_line(
@@ -1070,11 +968,7 @@ def _expected_net_line(
     pins: list[tuple[str, str]],
     design: SimpleNamespace,
 ) -> str:
-    entries = ", ".join(
-        f"`{reference}.{pad}` "
-        f"({design.COMPONENTS[reference][7][pad]})"
-        for reference, pad in pins
-    )
+    entries = ", ".join(f"`{reference}.{pad}` " f"({design.COMPONENTS[reference][7][pad]})" for reference, pad in pins)
     return f"* **{net}** — {entries}"
 
 
@@ -1088,10 +982,7 @@ def test_checked_in_netlist_exactly_matches_design(
         assert _expected_component_line(reference, component) in netlist
     for net, pins in design.NETS.items():
         assert _expected_net_line(net, pins, design) in netlist
-    expected_nc = ", ".join(
-        f"`{reference}.{pad}`"
-        for reference, pad in design.NC
-    )
+    expected_nc = ", ".join(f"`{reference}.{pad}`" for reference, pad in design.NC)
     assert f"\n{expected_nc}\n" in netlist
 
 
@@ -1140,9 +1031,7 @@ def test_checked_in_netlist_describes_rev_b_topology(
 def _expected_bom_rows(design: SimpleNamespace) -> list[dict[str, str]]:
     groups: dict[tuple[Any, ...], list[str]] = {}
     for reference, component in design.COMPONENTS.items():
-        value, footprint_lib, footprint, lcsc, jlc_class, cost, desc, _pins = (
-            component
-        )
+        value, footprint_lib, footprint, lcsc, jlc_class, cost, desc, _pins = component
         if reference in design.DNP or jlc_class == "none":
             continue
         key = (
@@ -1195,11 +1084,7 @@ def test_checked_in_bom_exactly_matches_populated_rev_c_components(
         actual = list(csv.DictReader(bom_file))
 
     assert actual == _expected_bom_rows(design)
-    references = {
-        reference
-        for row in actual
-        for reference in row["Designator"].split(",")
-    }
+    references = {reference for row in actual for reference in row["Designator"].split(",")}
     assert references == {
         reference
         for reference, component in design.COMPONENTS.items()
@@ -1207,15 +1092,8 @@ def test_checked_in_bom_exactly_matches_populated_rev_c_components(
     }
     assert "D2" not in references
     assert references.isdisjoint(design.DNP)
-    assert not any(
-        reference.startswith(("TP", "MH"))
-        for reference in references
-    )
-    by_reference = {
-        reference: row
-        for row in actual
-        for reference in row["Designator"].split(",")
-    }
+    assert not any(reference.startswith(("TP", "MH")) for reference in references)
+    by_reference = {reference: row for row in actual for reference in row["Designator"].split(",")}
     assert {
         ref: (
             by_reference[ref]["Comment"],
@@ -1226,15 +1104,15 @@ def test_checked_in_bom_exactly_matches_populated_rev_c_components(
         for ref in ("J1", "J2", "SW1", "SW2", "U1")
     } == {
         "J1": (
-            "430450809",
-            "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-            "C240838",
+            "441440003",
+            "RJ45-SMD_441440003",
+            "C585890",
             "Extended",
         ),
         "J2": (
-            "430451010",
-            "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-            "C563827",
+            "441440003",
+            "RJ45-SMD_441440003",
+            "C585890",
             "Extended",
         ),
         "SW1": (

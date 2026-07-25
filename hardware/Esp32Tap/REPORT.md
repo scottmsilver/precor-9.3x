@@ -1,16 +1,19 @@
-# Esp32Tap Rev C engineering review
+# Esp32Tap Rev D engineering review
 
 **Status: HOLD.** This report is not authorization to fabricate, pay, deploy,
 or operate a treadmill.
 
 ## Executive conclusion
 
-Rev C is internally coherent under the checked repository models:
+Rev D is internally coherent under the checked repository models:
 
 - 95 × 58 mm four-layer PCB;
 - U1 fully inside the board with 3.25/3.30 mm margins and its stock all-layer
   manufacturer keepout intact;
-- SMT Micro-Fit board interfaces and separate turnkey RJ45 pigtail concept;
+- J1/J2 are the identical Molex `0441440003` right-angle SMD 8P8C RJ45 jack,
+  board-mounted with the mating opening facing off the board edge — no
+  external pigtail harness and no mechanical keying between console and
+  motor;
 - serial +8 V as the only board power source and USB as data-only;
 - hardware-qualified relay and TX permissions;
 - cycle-free, via-free, closely matched native USB routing;
@@ -20,12 +23,12 @@ Rev C is internally coherent under the checked repository models:
 - eight repeated dual-engine behavioral simulation decks.
 
 This closes repository-detectable consistency defects. It does not close
-vendor, harness, firmware, or physical safety work.
+vendor, firmware, or physical safety work.
 
 ## Safety and power architecture
 
 ```text
-Micro-Fit J1/J2 serial +8 V pass-through
+J1/J2 RJ45 serial +8 V pass-through
         |
         +-- F1 -- D1 -- VIN -- U2 ------------------------- +3V3
                          |                                   |
@@ -49,16 +52,16 @@ fault-to-stable-NC time remain unsupported.
 
 The exact 2 A trace-union solve gives:
 
-- +8 V: 18.745090 mΩ;
-- conservative trace-only GND: 19.665484 mΩ;
-- combined loop drop: **76.821149 mV**.
+- +8 V: 14.279315 mΩ;
+- conservative trace-only GND: 34.910668 mΩ;
+- combined loop drop: **98.379966 mV**.
 
 Coincident trace primitives are treated as one physical copper union, while
 geometrically separate branches remain parallel. Duplicate coincident
 intended vias fail validation.
 
-At the worst exact +8 V case, maximum via current is 1.131922 A, barrel rise
-is 15.234166 °C, and I²R is 1.864230 mW. The trace model does not solve In1
+At the worst exact +8 V case, maximum via current is 0.828913 A, barrel rise
+is 7.504156 °C, and I²R is 0.999735 mW. The trace model does not solve In1
 plane current sharing, so every 1.4/1.0 mm GND via receives a separate
 full-2.0-A envelope: 12.273573 °C and 2.328020 mW at 20 µm plating.
 
@@ -82,11 +85,13 @@ unplug behavior, eye margin, and USB/treadmill return current remain open.
 
 ## Interfaces and manufacturing
 
-J1/J2 are `430450809` and `430451010` right-angle SMT Micro-Fit headers. The
-external treadmill interfaces require two separately quoted, keyed,
-dimensioned Micro-Fit-to-RJ45 pigtails. Their RJ45 source, pin mapping, crimp,
-strain relief, continuity/pull testing, and single-open 2 A behavior are not
-qualified.
+J1/J2 are two instances of `0441440003`, a right-angle SMD 8P8C RJ45 jack
+(LCSC `C585890`), edge-mounted with the mating opening facing off the
+board's X=0 edge so a standard RJ45 plug reaches through the enclosure wall
+aperture. There is no separate pigtail harness to quote or qualify; the
+treadmill cable plugs directly into the assembled board. Because J1 and J2
+are mechanically identical, console/motor differentiation is silkscreen and
+housing color only — RJ45 single-open 2 A behavior remains unqualified.
 
 J3 is a standard-reflow USB-C part. Its four plated S1 holes are mechanical
 stakes in the stock footprint; no manual/wave operation is requested.
@@ -105,7 +110,7 @@ Eight decks run three times on host ngspice 42 and pinned Docker ngspice 39:
 input protection, treadmill permission, safety truth table, relay drive,
 VBUS presence, averaged buck, UART taps, and harness supply drop.
 
-The exact harness unsupported list remains `RJ45_SINGLE_OPEN_2A`,
+The exact unsupported list remains `RJ45_SINGLE_OPEN_2A`,
 `MINIMUM_VIN`, `SOURCE_IMPEDANCE`, `AMBIENT_THERMAL`,
 `TRANSIENT_RESPONSE`, `COMPLETE_INSTALLED_DROP`, `USB_RETURN_CURRENT`, `ESD`,
 `RF`, and `SWITCHING_LOOP`. The simulation manifest additionally keeps
@@ -121,6 +126,6 @@ or treadmill safety.
 
 Keep HOLD. The next allowed actions are read-only/live vendor reviews of the
 current exact ZIP/BOM/CPL, 20 µm barrel plating, standard-reflow J3 stakes,
-carrier/rails, pigtail drawings, and enclosure quote. Purchase requires owner
-authorization after those reviews. First treadmill contact remains Proxy-only
-with relay energization compiled out; Emulate requires a later explicit gate.
+carrier/rails, and enclosure quote. Purchase requires owner authorization
+after those reviews. First treadmill contact remains Proxy-only with relay
+energization compiled out; Emulate requires a later explicit gate.

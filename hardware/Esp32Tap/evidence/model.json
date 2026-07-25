@@ -3,10 +3,10 @@
   "status": "MODELED",
   "assertions": [
     {
-      "claim": "Rev C enclosure CAD fit and keyed-aperture geometry",
+      "claim": "Rev C enclosure CAD fit and RJ45 aperture geometry",
       "method": "OpenSCAD canonical render, inspector-bound dimensional validation, manifold mesh checks, and functional occupancy probes; physical fit remains open",
       "artifact_path": "model/rev-c-enclosure.json",
-      "artifact_sha256": "ea4dc11a23fd90ce53c4989be17d30d1cea75da303fa70c56906165043276642"
+      "artifact_sha256": "148405c467ad5790e321a6fd9181ed0620353f9c97e12cb8bf31e56c657636e1"
     }
   ]
 }

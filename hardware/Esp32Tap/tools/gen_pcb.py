@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Generate the Esp32Tap Rev C four-layer PCB from ``design.py``.
+"""Generate the Esp32Tap Rev D four-layer PCB from ``design.py``.
 
 Critical current loops, feedback, and USB are explicit routes.  Remaining
 low-speed nets use a deterministic two-routing-layer grid search: vertical
@@ -161,30 +161,24 @@ LOCKED_DFM_ESCAPES = {
     ("R30", "2"): (81.6, 44.0),
 }
 
-CUSTOM_FOOTPRINT_SOURCES = {
-    (
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-0809_2x04-1MP_P3.00mm_Horizontal",
-    ): (
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-0810_2x04-1MP_P3.00mm_Horizontal",
-    ),
-    (
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-    ): (
-        "Connector_Molex",
-        "Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
-    ),
-}
+CUSTOM_FOOTPRINT_SOURCES: dict[tuple[str, str], tuple[str, str]] = {}
 
 
 # Coordinates are board-local millimetres.  The groups deliberately preserve
 # the RJ45/enclosure geometry, keep RF/USB clear of power, and make the
 # supervisor, relay, and converter loops probeable.
 PLACE = {
-    "J1": (12.5, 11.0, 90),
-    "J2": (12.5, 37.0, 90),
+    # Rev D: Molex 441440003 right-angle SMD RJ45 (LCSC C585890).  The
+    # jack's mating opening faces local -Y; at rotation=90 that maps to
+    # world -X, i.e. off the board's left edge (see kicad/models/ + the
+    # gen_footprints RJ45_SMD entry).  X=8.0 sets the pad row ~2.1 mm and
+    # the courtyard ~2.8 mm inside the board edge (clean edge clearance,
+    # shallow enclosure-wall standoff).  J1's Y moved 11.0 -> 15.0 versus
+    # Rev C's Micro-Fit so the deeper RJ45 shell (courtyard to X=19.7)
+    # clears MH1's keepout (X 17.0-23.0, Y 0.0-6.0); J2 keeps Y=37.0 since
+    # nothing else sits in its footprint's larger footprint there.
+    "J1": (8.0, 15.0, 90),
+    "J2": (8.0, 37.0, 90),
     "J3": (96.2, 36.5, 90),
     "U1": (78.0, 6.45, 0),
     "K1": (30.2, 23.0, 0),
@@ -460,7 +454,7 @@ class Generator:
         settings.m_MinTrackWidth = MM(0.20)
         title = self.board.GetTitleBlock()
         title.SetTitle("Esp32Tap - ESP32-S3 Precor serial-bus tap")
-        title.SetRevision("C")
+        title.SetRevision("D")
         title.SetCompany("precor-9.3x")
         title.SetComment(0, "STACKUP: JLC04161H-7628")
         title.SetComment(
@@ -1135,7 +1129,15 @@ class Generator:
     def add_shifted_u1_bus_route(self) -> None:
         """Preserve the qualified CONS6 tree after the coupled U1 shift."""
         escapes = {
-            ("J1", "6"): (16.0, 12.4),
+            # Rev D: J1 pad 6 sits in the tight 1.27 mm RJ45 pitch row
+            # (see power_intent.py); escape straight out at the pad's own
+            # Y to X=8.0 instead of the old long F.Cu diagonal, which
+            # crossed the new power contacts. Onward routing is on IN2
+            # (see below), so the F.Cu stub only needs to clear +8V_RAW's
+            # main bus (X=5.3, a via clearance concern along its entire
+            # length) and GND's via cluster (X=7.35-10.35, but only at
+            # its own Y -- 13.1 sits clear of any GND contact's Y).
+            ("J1", "6"): (8.0, 13.1),
             ("D5", "1"): (27.2, 13.2),
             ("K1", "2"): (25.6, 22.4),
             ("R7", "1"): (62.0, 19.6),
@@ -1249,6 +1251,14 @@ class Generator:
             return target, [point, target]
         if (ref, str(pad.GetNumber())) == ("J1", "3"):
             desired = (16.4, 12.8)
+        elif ref in ("J1", "J2") and str(pad.GetNumber()) in {"3", "4", "5", "6"}:
+            # Rev D: the RJ45's 1.27 mm pad pitch (see power_intent.py)
+            # makes the generic center-relative heuristic below pick a
+            # too-close escape (it measures "outward" from the footprint
+            # center, which sits deep inside the jack shell, not from the
+            # pad row) -- push straight out at the pad's own Y instead,
+            # comfortably past the JLC vendor pad-to-via clearance.
+            desired = (point[0] + 4.0, point[1])
         elif (ref, str(pad.GetNumber())) == ("R26", "2"):
             desired = (35.2, 32.8)
         elif (ref, str(pad.GetNumber())) == ("U1", "5"):
@@ -1746,9 +1756,13 @@ class Generator:
             item.SetTextAngle(pcbnew.EDA_ANGLE(rotation, pcbnew.DEGREES_T))
             self.board.Add(item)
 
-        text(6.5, 22.5, "CONSOLE", 1.0)
-        text(21.0, 37.0, "MOTOR", 1.0)
-        text(58.0, 3.0, "Esp32Tap rev C", 1.2)
+        # Rev D: J1/J2's RJ45 courtyards (X 2.8-19.7) are much deeper than
+        # Rev C's Micro-Fit headers, so CONSOLE/MOTOR/PIN 1 move into the
+        # clear corridor between the jack shells and D4/D5 (X~27-30),
+        # rotated vertical to fit the corridor's narrow (~7 mm) width.
+        text(23.0, 15.0, "CONSOLE", 1.0, 90.0)
+        text(23.0, 37.0, "MOTOR", 1.0, 90.0)
+        text(58.0, 3.0, "Esp32Tap rev D", 1.2)
         # Placement locks keep every fabrication label at least 0.5 mm from
         # the nominal installed component bodies as well as mask openings.
         text(42.0, 10.0, "BYPASS", 1.0)
@@ -1756,10 +1770,15 @@ class Generator:
         text(29.5, 37.0, "EMULATE", 1.0)
         text(42.0, 35.0, "NO", 1.0)
         text(50.0, 8.0, "USB DATA ONLY", 1.0)
-        text(19.5, 15.5, "PIN 1", 1.0)
+        text(23.0, 8.0, "PIN 1", 1.0, 90.0)
         text(26.5, 48.0, "D1 K", 1.0, 90.0)
         text(35.0, 48.0, "K D3", 1.0)
-        text(22.5, 19.2, "K1 P1", 1.0)
+        # Rev D: 22.5 -> 23.0 -- J1's RJ45 fabrication body now reaches to
+        # X=19.9 (its rear mechanical-tab cap, deeper than Rev C's
+        # Micro-Fit body), so the old X left only 0.07 mm component-body
+        # clearance instead of the required 0.5 mm; 23.0 threads the gap
+        # between that and K1 pad 1's soldermask (>=0.25 mm needed there).
+        text(23.0, 19.2, "K1 P1", 1.0)
         text(91.0, 21.0, "LED1 K", 1.0)
         text(77.0, 53.0, "K LED2", 1.0)
 
