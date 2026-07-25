@@ -1307,6 +1307,24 @@
           (number "2" (effects (font (size 1.27 1.27)))))
       )
     )
+    (symbol "SYM_R32"
+      (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (property "Reference" "R" (at 10.16 5.08 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "SYM_R32" (at 10.16 -5.08 0) (effects (font (size 1.27 1.27))))
+      (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+      (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+      (symbol "SYM_R32_0_1"
+        (rectangle (start 0 3.81) (end 20.32 -3.81) (stroke (width 0.254) (type default)) (fill (type background)))
+      )
+      (symbol "SYM_R32_1_1"
+        (pin passive line (at -2.54 1.27 0) (length 2.54)
+          (name "1" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at -2.54 -1.27 0) (length 2.54)
+          (name "2" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27)))))
+      )
+    )
     (symbol "SYM_C1"
       (pin_names (offset 1.016)) (exclude_from_sim no) (in_bom yes) (on_board yes)
       (property "Reference" "C" (at 10.16 5.08 0) (effects (font (size 1.27 1.27))))
@@ -1318,10 +1336,10 @@
       )
       (symbol "SYM_C1_1_1"
         (pin passive line (at -2.54 1.27 0) (length 2.54)
-          (name "+" (effects (font (size 1.27 1.27))))
+          (name "1" (effects (font (size 1.27 1.27))))
           (number "1" (effects (font (size 1.27 1.27)))))
         (pin passive line (at -2.54 -1.27 0) (length 2.54)
-          (name "-" (effects (font (size 1.27 1.27))))
+          (name "2" (effects (font (size 1.27 1.27))))
           (number "2" (effects (font (size 1.27 1.27)))))
       )
     )

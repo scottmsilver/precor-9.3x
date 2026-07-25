@@ -427,14 +427,8 @@ def _pins(design: SimpleNamespace, net: str) -> set[tuple[str, str]]:
 
 
 def _net_for(design: SimpleNamespace, ref: str, pad: str) -> str:
-    matches = [
-        net
-        for net, pins in design.NETS.items()
-        if (ref, pad) in pins
-    ]
-    assert len(matches) == 1, (
-        f"{ref}.{pad} must belong to exactly one net; found {matches}"
-    )
+    matches = [net for net, pins in design.NETS.items() if (ref, pad) in pins]
+    assert len(matches) == 1, f"{ref}.{pad} must belong to exactly one net; found {matches}"
     return matches[0]
 
 
@@ -448,11 +442,7 @@ def _move_pin(
     pin: tuple[str, str],
     target_net: str,
 ) -> None:
-    source_nets = [
-        net
-        for net, pins in design.NETS.items()
-        if pin in pins
-    ]
+    source_nets = [net for net, pins in design.NETS.items() if pin in pins]
     assert len(source_nets) == 1, pin
     design.NETS[source_nets[0]].remove(pin)
     design.NETS[target_net].append(pin)
@@ -528,9 +518,7 @@ def test_every_populated_rev_c_part_has_an_smt_assembly_class(
     }
     assert populated
     assert {
-        ref: component[4]
-        for ref, component in populated.items()
-        if component[4] not in {"Basic", "Extended"}
+        ref: component[4] for ref, component in populated.items() if component[4] not in {"Basic", "Extended"}
     } == {}
 
 
@@ -570,19 +558,12 @@ def test_rev_c_preserves_rj45_signal_mapping_and_marks_spares_nc(
         "8": "+8V_RAW",
     }
     for ref, pin6_net in (("J1", "CONS6"), ("J2", "MOT6")):
-        actual = {
-            pad: _net_for(design, ref, pad)
-            for pad in expected
-        }
+        actual = {pad: _net_for(design, ref, pad) for pad in expected}
         assert actual == expected
         assert _net_for(design, ref, "6") == pin6_net
 
     assert {("J2", "9"), ("J2", "10")} <= set(design.NC)
-    assert all(
-        ("J2", spare) not in pins
-        for pins in design.NETS.values()
-        for spare in ("9", "10")
-    )
+    assert all(("J2", spare) not in pins for pins in design.NETS.values() for spare in ("9", "10"))
 
 
 def _u6_equations(
@@ -594,9 +575,7 @@ def _u6_equations(
     equations: dict[str, frozenset[str]] = {}
     for input_a, input_b, output in (("1", "2", "7"), ("5", "6", "3")):
         output_net = _net_for(design, "U6", output)
-        assert output_net not in equations, (
-            f"both U6 channels cannot drive {output_net}"
-        )
+        assert output_net not in equations, f"both U6 channels cannot drive {output_net}"
         equations[output_net] = frozenset(
             {
                 _net_for(design, "U6", input_a),
@@ -615,12 +594,7 @@ def _file_state(path: Path) -> tuple[int, int, str]:
 def _csv_refs(path: Path, column: str) -> set[str]:
     with path.open(newline="", encoding="utf-8") as handle:
         rows = csv.DictReader(handle)
-        return {
-            ref.strip()
-            for row in rows
-            for ref in row[column].split(",")
-            if ref.strip()
-        }
+        return {ref.strip() for row in rows for ref in row[column].split(",") if ref.strip()}
 
 
 def test_design_import_does_not_mutate_generated_artifacts(
@@ -644,9 +618,7 @@ def test_design_import_does_not_mutate_generated_artifacts(
 
 
 def test_usb_is_data_only_and_d2_is_absent(design: SimpleNamespace) -> None:
-    assert "D2" not in design.COMPONENTS, (
-        "Rev B deletes the USB-to-VIN ORing diode D2"
-    )
+    assert "D2" not in design.COMPONENTS, "Rev B deletes the USB-to-VIN ORing diode D2"
 
     assert _pins(design, "VBUS") == {
         ("J3", "A4"),
@@ -689,16 +661,8 @@ def test_all_local_input_power_is_downstream_of_d1(
 def test_rj45_power_and_ground_pass_throughs_remain_direct(
     design: SimpleNamespace,
 ) -> None:
-    assert {
-        _net_for(design, connector, pad)
-        for connector in ("J1", "J2")
-        for pad in ("2", "8")
-    } == {"+8V_RAW"}
-    assert {
-        _net_for(design, connector, pad)
-        for connector in ("J1", "J2")
-        for pad in ("1", "7")
-    } == {"GND"}
+    assert {_net_for(design, connector, pad) for connector in ("J1", "J2") for pad in ("2", "8")} == {"+8V_RAW"}
+    assert {_net_for(design, connector, pad) for connector in ("J1", "J2") for pad in ("1", "7")} == {"GND"}
     assert _pins(design, "+8V_RAW") == {
         ("J1", "2"),
         ("J1", "8"),
@@ -776,6 +740,7 @@ def test_new_resistors_have_the_approved_values_and_roles(
         "R29": ("10k", {"VBUS", "GND"}),
         "R30": ("10k", {"+3V3", "VBUS_PRESENT_N"}),
         "R31": ("10k", {"+3V3", "IO0"}),
+        "R32": ("4.7k", {"TREAD_OK", "TREAD_OK_MCU"}),
     }
 
     for ref, (value, nets) in expected.items():
@@ -839,39 +804,33 @@ def test_supervisor_and_both_hardware_and_gate_equations(
         ("R20", "1"),
         ("C19", "1"),
     }
-    assert {
-        pin for pin in _pins(design, "RELAY_CMD") if pin[0] != "U6"
-    } == {
+    assert {pin for pin in _pins(design, "RELAY_CMD") if pin[0] != "U6"} == {
         ("U1", "23"),
         ("R23", "1"),
     }
-    assert {
-        pin for pin in _pins(design, "TREAD_OK") if pin[0] != "U6"
-    } == {
-        ("U1", "6"),
+    assert {pin for pin in _pins(design, "TREAD_OK") if pin[0] != "U6"} == {
         ("U4", "1"),
         ("U4", "6"),
         ("R21", "2"),
         ("R22", "1"),
+        ("R32", "1"),
         ("TP7", "1"),
     }
-    assert {
-        pin for pin in _pins(design, "RELAY_GATE") if pin[0] != "U6"
-    } == {
+    assert _pins(design, "TREAD_OK_MCU") == {
+        ("U1", "6"),
+        ("R32", "2"),
+    }
+    assert {pin for pin in _pins(design, "RELAY_GATE") if pin[0] != "U6"} == {
         ("U5", "3"),
         ("R9", "1"),
         ("R24", "1"),
         ("TP8", "1"),
     }
-    assert {
-        pin for pin in _pins(design, "TX_ENABLE") if pin[0] != "U6"
-    } == {
+    assert {pin for pin in _pins(design, "TX_ENABLE") if pin[0] != "U6"} == {
         ("U1", "8"),
         ("R27", "1"),
     }
-    assert {
-        pin for pin in _pins(design, "TX_GATE") if pin[0] != "U6"
-    } == {
+    assert {pin for pin in _pins(design, "TX_GATE") if pin[0] != "U6"} == {
         ("U7", "1"),
         ("R28", "1"),
         ("TP10", "1"),
@@ -934,14 +893,8 @@ def test_k1_uses_one_transfer_pole_and_one_dry_feedback_pole(
         ("K1", "3"),
         ("D6", "1"),
     }
-    assert {
-        pad: _net_for(design, "K1", pad)
-        for pad in ("2", "3", "4")
-    } == {"2": "CONS6", "3": "MOT6", "4": "TX_DRV"}
-    assert {
-        pad: _net_for(design, "K1", pad)
-        for pad in ("5", "6", "7")
-    } == {
+    assert {pad: _net_for(design, "K1", pad) for pad in ("2", "3", "4")} == {"2": "CONS6", "3": "MOT6", "4": "TX_DRV"}
+    assert {pad: _net_for(design, "K1", pad) for pad in ("5", "6", "7")} == {
         "5": "K1_NO_FB",
         "6": "GND",
         "7": "K1_NC_FB",
@@ -963,10 +916,7 @@ def test_k1_uses_one_transfer_pole_and_one_dry_feedback_pole(
 
 
 def test_u7_isolates_esp_tx_before_the_relay(design: SimpleNamespace) -> None:
-    assert {
-        pad: _net_for(design, "U7", pad)
-        for pad in ("1", "2", "3", "4", "5")
-    } == {
+    assert {pad: _net_for(design, "U7", pad) for pad in ("1", "2", "3", "4", "5")} == {
         "1": "TX_GATE",
         "2": "ESP_TX",
         "3": "GND",
@@ -984,10 +934,11 @@ def test_u7_isolates_esp_tx_before_the_relay(design: SimpleNamespace) -> None:
 def test_q2_reports_vbus_without_powering_an_esp_gpio(
     design: SimpleNamespace,
 ) -> None:
-    assert {
-        pad: _net_for(design, "Q2", pad)
-        for pad in ("1", "2", "3")
-    } == {"1": "VBUS", "2": "GND", "3": "VBUS_PRESENT_N"}
+    assert {pad: _net_for(design, "Q2", pad) for pad in ("1", "2", "3")} == {
+        "1": "VBUS",
+        "2": "GND",
+        "3": "VBUS_PRESENT_N",
+    }
     assert _pins(design, "VBUS_PRESENT_N") == {
         ("Q2", "3"),
         ("R30", "2"),
@@ -1017,7 +968,7 @@ def test_rev_b_gpio_assignments(design: SimpleNamespace) -> None:
     expected = {
         "4": "K1_NC_FB",
         "5": "K1_NO_FB",
-        "6": "TREAD_OK",
+        "6": "TREAD_OK_MCU",
         "7": "VBUS_PRESENT_N",
         "8": "TX_ENABLE",
         "9": "PIN3_RX",
@@ -1028,10 +979,7 @@ def test_rev_b_gpio_assignments(design: SimpleNamespace) -> None:
         "31": "STATUS_LED",
     }
 
-    assert {
-        pad: _net_for(design, "U1", pad)
-        for pad in expected
-    } == expected
+    assert {pad: _net_for(design, "U1", pad) for pad in expected} == expected
     assert _net_for(design, "R31", "1") == "+3V3"
     assert _net_for(design, "R31", "2") == "IO0"
 
@@ -1134,11 +1082,7 @@ def test_validate_rejects_unknown_pin_type(
 def test_all_non_passive_pin_types_match_independent_contract(
     design: SimpleNamespace,
 ) -> None:
-    actual = {
-        pin: pin_type
-        for pin, pin_type in design.PIN_TYPES.items()
-        if pin_type != "passive"
-    }
+    actual = {pin: pin_type for pin, pin_type in design.PIN_TYPES.items() if pin_type != "passive"}
 
     assert len(EXPECTED_ACTIVE_PIN_TYPES) == 84
     assert actual == EXPECTED_ACTIVE_PIN_TYPES
@@ -1159,14 +1103,11 @@ def test_validate_locks_u2_bootstrap_pin_as_passive(
 
     derived_overrides = dict(mutated._PIN_TYPE_OVERRIDES)
     derived_overrides[pin] = "power_out"
-    mutated.validate.__globals__["_PIN_TYPE_OVERRIDES"] = (
-        derived_overrides
-    )
+    mutated.validate.__globals__["_PIN_TYPE_OVERRIDES"] = derived_overrides
 
     with _assert_design_invalid(
         mutated,
-        r"PIN_TYPES active lock U2\.6.*"
-        r"actual=power_out.*expected=passive",
+        r"PIN_TYPES active lock U2\.6.*" r"actual=power_out.*expected=passive",
     ):
         mutated.validate()
 
@@ -1191,14 +1132,11 @@ def test_validate_uses_independent_active_pin_type_oracle(
 
     derived_overrides = dict(mutated._PIN_TYPE_OVERRIDES)
     derived_overrides[pin] = "passive"
-    mutated.validate.__globals__["_PIN_TYPE_OVERRIDES"] = (
-        derived_overrides
-    )
+    mutated.validate.__globals__["_PIN_TYPE_OVERRIDES"] = derived_overrides
 
     with _assert_design_invalid(
         mutated,
-        rf"PIN_TYPES active lock.*{pin[0]}.*{pin[1]}.*"
-        rf"actual=passive.*expected={expected_type}",
+        rf"PIN_TYPES active lock.*{pin[0]}.*{pin[1]}.*" rf"actual=passive.*expected={expected_type}",
     ):
         mutated.validate()
 
@@ -1267,8 +1205,7 @@ def test_validate_rejects_direct_vbus_power_bridge(
 
     with _assert_design_invalid(
         mutated,
-        r"VBUS isolation lock C11\.2.*"
-        r"actual=\+3V3.*expected=GND",
+        r"VBUS isolation lock C11\.2.*" r"actual=\+3V3.*expected=GND",
     ):
         mutated.validate()
 
@@ -1288,8 +1225,7 @@ def test_validate_rejects_two_hop_vbus_power_bridge(
 
     with _assert_design_invalid(
         mutated,
-        r"VBUS isolation lock C11\.2.*"
-        r"actual=VBUS_BRIDGE.*expected=GND",
+        r"VBUS isolation lock C11\.2.*" r"actual=VBUS_BRIDGE.*expected=GND",
     ):
         mutated.validate()
 
@@ -1308,8 +1244,7 @@ def test_validate_requires_vbus_lock_for_every_adjacent_terminal(
 
     with _assert_design_invalid(
         mutated,
-        r"VBUS isolation lock coverage.*"
-        r"missing=.*C11.*3.*extra=",
+        r"VBUS isolation lock coverage.*" r"missing=.*C11.*3.*extra=",
     ):
         mutated.validate()
 
@@ -1366,8 +1301,7 @@ def test_validate_rejects_usb_polarity_swaps(
 
     with _assert_design_invalid(
         mutated,
-        rf"USB polarity lock {diagnostic}.*"
-        rf"actual={actual_net}.*expected={expected_net}",
+        rf"USB polarity lock {diagnostic}.*" rf"actual={actual_net}.*expected={expected_net}",
     ):
         mutated.validate()
 
@@ -1380,8 +1314,7 @@ def test_validate_rejects_relay_gate_bypass(
 
     with _assert_design_invalid(
         mutated,
-        r"relay safety lock U5\.3.*"
-        r"actual=RELAY_CMD.*expected=RELAY_GATE",
+        r"relay safety lock U5\.3.*" r"actual=RELAY_CMD.*expected=RELAY_GATE",
     ):
         mutated.validate()
 
@@ -1394,8 +1327,7 @@ def test_validate_rejects_tx_gate_bypass(
 
     with _assert_design_invalid(
         mutated,
-        r"TX gate safety lock U7\.1.*"
-        r"actual=TX_ENABLE.*expected=TX_GATE",
+        r"TX gate safety lock U7\.1.*" r"actual=TX_ENABLE.*expected=TX_GATE",
     ):
         mutated.validate()
 
@@ -1409,8 +1341,7 @@ def test_validate_rejects_tx_buffer_bypass(
 
     with _assert_design_invalid(
         mutated,
-        r"TX buffer safety lock R6\.1.*"
-        r"actual=ESP_TX.*expected=TX_BUF",
+        r"TX buffer safety lock R6\.1.*" r"actual=ESP_TX.*expected=TX_BUF",
     ):
         mutated.validate()
 
@@ -1432,9 +1363,7 @@ def test_validation_lock_oracles_are_immutable(
 
     assert isinstance(design._PART_LOCKS["C2"][4], tuple)
     assert isinstance(design._PART_LOCKS["C3"][4], tuple)
-    assert design._PART_LOCKS["C2"][4] is not (
-        design._PART_LOCKS["C3"][4]
-    )
+    assert design._PART_LOCKS["C2"][4] is not (design._PART_LOCKS["C3"][4])
 
 
 def test_optimized_python_still_rejects_invalid_design(

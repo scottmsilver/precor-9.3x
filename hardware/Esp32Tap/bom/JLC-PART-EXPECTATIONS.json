@@ -75,6 +75,11 @@
       "model": "0603WAF3300T5E",
       "package": "0603"
     },
+    "C23162": {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "model": "0603WAF4701T5E",
+      "package": "0603"
+    },
     "C23186": {
       "footprint": "Resistor_SMD:R_0603_1608Metric",
       "model": "0603WAF5101T5E",
@@ -179,11 +184,6 @@
       "footprint": "Connector_Molex:Molex_Micro-Fit_3.0_43045-1010_2x05-1MP_P3.00mm_Horizontal",
       "model": "430451010",
       "package": "SMD,P=3mm,Surface Mount，Right Angle"
-    },
-    "C72477": {
-      "footprint": "Capacitor_SMD:CP_Elec_6.3x7.7",
-      "model": "RVT1E101M0607",
-      "package": "SMD,D6.3xL7.7mm"
     },
     "C7519": {
       "footprint": "Package_TO_SOT_SMD:SOT-23-6",

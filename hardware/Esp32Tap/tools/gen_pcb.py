@@ -24,11 +24,10 @@ from typing import Any, Iterable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import design
-import power_intent
 import pcbnew
-from pcbnew import FromMM as MM
+import power_intent
 from pcbnew import VECTOR2I
-
+from pcbnew import FromMM as MM
 
 design.validate()
 
@@ -71,6 +70,7 @@ SAFETY_RELAY_PRIORITY = (
     "TX_DRV",
     "TX_BUF",
     "TREAD_OK",
+    "TREAD_OK_MCU",
     "RELAY_CMD",
     "RELAY_GATE",
     "RELAY_SW",
@@ -122,10 +122,7 @@ MANUAL_NETS = USB_NETS | {
 U1_CLUSTER_PRIORITY = tuple(
     net
     for net, endpoints in design.NETS.items()
-    if any(
-        ref == "U1" or ref in U1_COUPLED_REFS
-        for ref, _ in endpoints
-    )
+    if any(ref == "U1" or ref in U1_COUPLED_REFS for ref, _ in endpoints)
     and net not in MANUAL_NETS
     and net not in SAFETY_RELAY_PRIORITY
     and net not in {"+8V_RAW", "+8V_F", "VIN", "+3V3"}
@@ -242,6 +239,10 @@ PLACE = {
     "R29": (80.0, 48.0, 0),
     "R30": (80.0, 45.0, 0),
     "R31": (90.0, 13.0, 90),
+    # TREAD_OK -> IO6 series isolation resistor (review finding B2). Placed
+    # next to the U6/R27/R28 TREAD_OK cluster with clear courtyard spacing
+    # from R28, U7, and C21; the single TREAD_OK_MCU stub runs out to U1.6.
+    "R32": (56.5, 30.0, 0),
     "C1": (43.5, 49.5, 0),
     "C2": (50.0, 52.0, 0),
     "C3": (63.5, 43.5, 0),
@@ -307,18 +308,7 @@ LOCKED_DFM_ESCAPES = {
     key: (
         point[0],
         round(
-            math.floor(
-                (
-                    point[1]
-                    + (
-                        U1_PROFILE_SHIFT_Y
-                        if key in U1_COUPLED_ESCAPE_KEYS
-                        else 0.0
-                    )
-                )
-                / GRID
-            )
-            * GRID,
+            math.floor((point[1] + (U1_PROFILE_SHIFT_Y if key in U1_COUPLED_ESCAPE_KEYS else 0.0)) / GRID) * GRID,
             6,
         ),
     )
@@ -366,15 +356,7 @@ def slow_net_order() -> list[str]:
     nets = [net for net in design.NETS if net not in MANUAL_NETS]
     nets.sort(
         key=lambda net: (
-            (
-                0
-                if net in priority
-                else 1
-                if net in cluster
-                else 2
-                if net in power
-                else 3
-            ),
+            (0 if net in priority else 1 if net in cluster else 2 if net in power else 3),
             priority.get(net, cluster.get(net, len(priority))),
             -len(design.NETS[net]),
             net,
@@ -396,11 +378,7 @@ def point_segment_distance(
         0.0,
         min(
             1.0,
-            (
-                (point[0] - start[0]) * dx
-                + (point[1] - start[1]) * dy
-            )
-            / length_squared,
+            ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / length_squared,
         ),
     )
     projection = (
@@ -421,9 +399,7 @@ def segments_intersect(
         q: tuple[float, float],
         r: tuple[float, float],
     ) -> float:
-        return (q[0] - p[0]) * (r[1] - p[1]) - (
-            q[1] - p[1]
-        ) * (r[0] - p[0])
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
 
     def on_segment(
         p: tuple[float, float],
@@ -432,9 +408,7 @@ def segments_intersect(
     ) -> bool:
         return (
             min(p[0], r[0]) - 1e-9 <= q[0] <= max(p[0], r[0]) + 1e-9
-            and min(p[1], r[1]) - 1e-9
-            <= q[1]
-            <= max(p[1], r[1]) + 1e-9
+            and min(p[1], r[1]) - 1e-9 <= q[1] <= max(p[1], r[1]) + 1e-9
         )
 
     values = (
@@ -505,28 +479,17 @@ class Generator:
             item = pcbnew.NETINFO_ITEM(self.board, name)
             self.board.Add(item)
             self.nets[name] = item
-        self.pad_net = {
-            endpoint: name
-            for name, endpoints in design.NETS.items()
-            for endpoint in endpoints
-        }
+        self.pad_net = {endpoint: name for name, endpoints in design.NETS.items() for endpoint in endpoints}
         self.pad_net.update(
             {
-                (ref, pad): (
-                    f"unconnected-({ref}-"
-                    f"{design.COMPONENTS[ref][7][pad]}-Pad{pad})"
-                )
+                (ref, pad): (f"unconnected-({ref}-" f"{design.COMPONENTS[ref][7][pad]}-Pad{pad})")
                 for ref, pad in design.NC
             }
         )
         self.footprints: dict[str, Any] = {}
-        self.track_records: list[
-            tuple[tuple[float, float], tuple[float, float], str, float, int]
-        ] = []
+        self.track_records: list[tuple[tuple[float, float], tuple[float, float], str, float, int]] = []
         self.via_records: list[tuple[tuple[float, float], str]] = []
-        self.via_geometry: dict[
-            tuple[tuple[float, float], str], tuple[float, float]
-        ] = {}
+        self.via_geometry: dict[tuple[tuple[float, float], str], tuple[float, float]] = {}
         self.pad_objects: dict[tuple[str, str], list[Any]] = defaultdict(list)
         self.occupied: dict[int, dict[tuple[int, int], set[str]]] = {
             IN2: defaultdict(set),
@@ -536,9 +499,7 @@ class Generator:
             IN2: set(),
             B: set(),
         }
-        self.front_pad_obstacles: list[
-            tuple[float, float, float, float, str]
-        ] = []
+        self.front_pad_obstacles: list[tuple[float, float, float, float, str]] = []
 
     def custom_switch_footprint(self, name: str) -> Any:
         """Build the exact Alps SKRP land pattern from the official drawing."""
@@ -609,14 +570,9 @@ class Generator:
         missing = set(design.COMPONENTS) - set(PLACE)
         extra = set(PLACE) - set(design.COMPONENTS)
         if missing or extra:
-            raise ValueError(
-                f"placement mismatch missing={sorted(missing)} "
-                f"extra={sorted(extra)}"
-            )
+            raise ValueError(f"placement mismatch missing={sorted(missing)} " f"extra={sorted(extra)}")
         for ref, component in design.COMPONENTS.items():
-            value, library, name, lcsc, jlc_class, cost, description, _ = (
-                component
-            )
+            value, library, name, lcsc, jlc_class, cost, description, _ = component
             footprint = self.load_footprint(library, name)
             if footprint is None:
                 raise ValueError(f"cannot load {library}:{name}")
@@ -624,9 +580,7 @@ class Generator:
             footprint.SetReference(ref)
             footprint.SetValue(value)
             footprint.SetDNP(ref in design.DNP)
-            footprint.SetExcludedFromBOM(
-                ref in design.DNP or jlc_class == "none"
-            )
+            footprint.SetExcludedFromBOM(ref in design.DNP or jlc_class == "none")
             footprint.SetField("LCSC", lcsc)
             footprint.SetField("JLC Class", jlc_class)
             footprint.SetField("Unit Cost USD", f"{cost:.3f}")
@@ -661,9 +615,7 @@ class Generator:
             )
             if footprint is None:
                 raise ValueError("cannot load M2.5 mounting-hole footprint")
-            footprint.SetFPIDAsString(
-                "MountingHole:MountingHole_2.7mm_M2.5"
-            )
+            footprint.SetFPIDAsString("MountingHole:MountingHole_2.7mm_M2.5")
             footprint.SetReference(reference)
             footprint.SetValue("M2.5")
             footprint.SetPosition(absolute(position))
@@ -738,9 +690,7 @@ class Generator:
             if math.dist(point, existing) < 1e-6:
                 if existing_net == net:
                     return
-                raise ValueError(
-                    f"conflicting vias at {point}: {existing_net} and {net}"
-                )
+                raise ValueError(f"conflicting vias at {point}: {existing_net} and {net}")
         via = pcbnew.PCB_VIA(self.board)
         via.SetPosition(absolute(point))
         via.SetWidth(MM(size))
@@ -857,10 +807,7 @@ class Generator:
                 index += 1
                 position = local(pad.GetPosition())
                 drill = pad.GetDrillSize()
-                half = (
-                    max(pcbnew.ToMM(drill.x), pcbnew.ToMM(drill.y)) / 2
-                    + 0.30
-                )
+                half = max(pcbnew.ToMM(drill.x), pcbnew.ToMM(drill.y)) / 2 + 0.30
                 self.add_rule_area(
                     f"NPTH_CLEARANCE_{ref}_{index}",
                     [
@@ -1282,9 +1229,7 @@ class Generator:
             node = (grid_index(locked[0]), grid_index(locked[1]))
             target = grid_point(node)
             if target != locked:
-                raise RuntimeError(
-                    f"locked escape for {ref}.{pad.GetNumber()} is off-grid"
-                )
+                raise RuntimeError(f"locked escape for {ref}.{pad.GetNumber()} is off-grid")
             checks = {
                 "inside": self.node_inside(node),
                 "in2": self.cell_allowed(node, IN2, net),
@@ -1299,8 +1244,7 @@ class Generator:
             }
             if not all(checks.values()):
                 raise RuntimeError(
-                    f"locked escape unavailable for "
-                    f"{ref}.{pad.GetNumber()} {net} at {target}: {checks}"
+                    f"locked escape unavailable for " f"{ref}.{pad.GetNumber()} {net} at {target}: {checks}"
                 )
             return target, [point, target]
         if (ref, str(pad.GetNumber())) == ("J1", "3"):
@@ -1330,21 +1274,15 @@ class Generator:
         for radius in range(0, 30):
             for dx in range(-radius, radius + 1):
                 for dy in (-radius, radius):
-                    candidates.append(
-                        (abs(dx) + abs(dy), preferred[0] + dx, preferred[1] + dy)
-                    )
+                    candidates.append((abs(dx) + abs(dy), preferred[0] + dx, preferred[1] + dy))
             for dy in range(-radius + 1, radius):
                 for dx in (-radius, radius):
-                    candidates.append(
-                        (abs(dx) + abs(dy), preferred[0] + dx, preferred[1] + dy)
-                    )
+                    candidates.append((abs(dx) + abs(dy), preferred[0] + dx, preferred[1] + dy))
             for _, ix, iy in sorted(set(candidates)):
                 candidate = (ix, iy)
                 if not self.node_inside(candidate):
                     continue
-                if self.cell_allowed(candidate, IN2, net) and self.cell_allowed(
-                    candidate, B, net
-                ):
+                if self.cell_allowed(candidate, IN2, net) and self.cell_allowed(candidate, B, net):
                     target = grid_point(candidate)
                     if not self.via_allowed(target, net):
                         continue
@@ -1352,9 +1290,7 @@ class Generator:
                         [point, (target[0], point[1]), target],
                         [point, (point[0], target[1]), target],
                     )
-                    if abs(point[0] - target[0]) < abs(
-                        point[1] - target[1]
-                    ):
+                    if abs(point[0] - target[0]) < abs(point[1] - target[1]):
                         doglegs = tuple(reversed(doglegs))
                     for dogleg in doglegs:
                         if all(
@@ -1374,15 +1310,10 @@ class Generator:
         point: tuple[float, float],
         net: str,
     ) -> bool:
-        for x, y, half_width, half_height, pad_net in (
-            self.front_pad_obstacles
-        ):
+        for x, y, half_width, half_height, pad_net in self.front_pad_obstacles:
             if pad_net == net:
                 continue
-            if (
-                abs(point[0] - x) < half_width + 0.50
-                and abs(point[1] - y) < half_height + 0.50
-            ):
+            if abs(point[0] - x) < half_width + 0.50 and abs(point[1] - y) < half_height + 0.50:
                 return False
 
         for footprint in self.footprints.values():
@@ -1398,18 +1329,20 @@ class Generator:
             distance = math.dist(point, existing)
             if distance < 1e-6 and existing_net == net:
                 continue
-            existing_size, existing_drill = self.via_geometry[
-                (existing, existing_net)
-            ]
+            existing_size, existing_drill = self.via_geometry[(existing, existing_net)]
             if distance < max(
                 0.30 + existing_size / 2 + CLEARANCE,
                 0.15 + existing_drill / 2 + 0.25,
             ):
                 return False
 
+        # Every via this generator places is a full through-hole (F.Cu to
+        # B.Cu), so it carries copper on every layer of the stackup, not
+        # just F.Cu. Clearance to a manually-routed track on an inner layer
+        # (e.g. a MANUAL_NETS pass-through on In2.Cu) matters exactly as
+        # much as clearance to a front-copper track; checking only F here
+        # let a via land on top of an inner-layer track with no margin.
         for start, end, track_net, width, layer in self.track_records:
-            if layer != F:
-                continue
             distance = point_segment_distance(point, start, end)
             if track_net == net:
                 if 1e-6 < distance < 0.30 + width / 2:
@@ -1435,34 +1368,23 @@ class Generator:
                 start[0] + (end[0] - start[0]) * fraction,
                 start[1] + (end[1] - start[1]) * fraction,
             )
-            for x, y, half_width, half_height, pad_net in (
-                self.front_pad_obstacles
-            ):
+            for x, y, half_width, half_height, pad_net in self.front_pad_obstacles:
                 if pad_net == net:
                     continue
-                if (
-                    abs(point[0] - x) < half_width + expansion
-                    and abs(point[1] - y) < half_height + expansion
-                ):
+                if abs(point[0] - x) < half_width + expansion and abs(point[1] - y) < half_height + expansion:
                     return False
 
-        for other_start, other_end, track_net, other_width, layer in (
-            self.track_records
-        ):
+        for other_start, other_end, track_net, other_width, layer in self.track_records:
             if layer != F or track_net == net:
                 continue
-            if segment_distance(start, end, other_start, other_end) < (
-                width / 2 + other_width / 2 + CLEARANCE
-            ):
+            if segment_distance(start, end, other_start, other_end) < (width / 2 + other_width / 2 + CLEARANCE):
                 return False
 
         for via, via_net in self.via_records:
             if via_net == net:
                 continue
             via_size, _ = self.via_geometry[(via, via_net)]
-            if point_segment_distance(via, start, end) < (
-                via_size / 2 + width / 2 + CLEARANCE
-            ):
+            if point_segment_distance(via, start, end) < (via_size / 2 + width / 2 + CLEARANCE):
                 return False
         return True
 
@@ -1591,11 +1513,7 @@ class Generator:
         for start, end, net, width, layer in self.track_records:
             if layer in ROUTING_LAYERS:
                 self.mark_segment(start, end, width, (layer,), net)
-            elif (
-                layer == F
-                and net in USB_NETS
-                and max(start[0], end[0]) >= 69.5
-            ):
+            elif layer == F and net in USB_NETS and max(start[0], end[0]) >= 69.5:
                 # The low-speed router places 0.60 mm vias on this grid.
                 # Reserve the complete USB-to-via centre distance required by
                 # the 0.8 mm unrelated-copper rule, not merely the USB trace
@@ -1695,10 +1613,7 @@ class Generator:
                     continue
                 if not self.cell_allowed(node, layer, net):
                     continue
-                if (
-                    next_layer_index != layer_index
-                    and not self.via_allowed(grid_point(node), net)
-                ):
+                if next_layer_index != layer_index and not self.via_allowed(grid_point(node), net):
                     continue
                 next_state = (nx, ny, next_layer_index)
                 new_cost = cost + step_cost
@@ -1715,8 +1630,7 @@ class Generator:
                     ),
                 )
         raise RuntimeError(
-            f"autorouter cannot connect {net}; starts={len(starts)} "
-            f"goals={len(goals)} visited={visited}"
+            f"autorouter cannot connect {net}; starts={len(starts)} " f"goals={len(goals)} visited={visited}"
         )
 
     def emit_grid_path(
@@ -1780,31 +1694,18 @@ class Generator:
         if len(unique) < 2:
             return
         allowed_layers = ROUTING_LAYERS
-        tree: set[tuple[int, int, int]] = {
-            (unique[0][0], unique[0][1], index)
-            for index in range(len(allowed_layers))
-        }
+        tree: set[tuple[int, int, int]] = {(unique[0][0], unique[0][1], index) for index in range(len(allowed_layers))}
         remaining = set(unique[1:])
         while remaining:
             endpoint = min(
                 remaining,
-                key=lambda node: min(
-                    abs(node[0] - tree_node[0])
-                    + abs(node[1] - tree_node[1])
-                    for tree_node in tree
-                ),
+                key=lambda node: min(abs(node[0] - tree_node[0]) + abs(node[1] - tree_node[1]) for tree_node in tree),
             )
-            starts = {
-                (endpoint[0], endpoint[1], index)
-                for index in range(len(allowed_layers))
-            }
+            starts = {(endpoint[0], endpoint[1], index) for index in range(len(allowed_layers))}
             path = self.astar(starts, tree, net, allowed_layers)
             additions = self.emit_grid_path(path, net, allowed_layers)
             tree.update(additions)
-            tree.update(
-                (endpoint[0], endpoint[1], index)
-                for index in range(len(allowed_layers))
-            )
+            tree.update((endpoint[0], endpoint[1], index) for index in range(len(allowed_layers)))
             remaining.remove(endpoint)
 
     def route_slow_nets(self) -> None:
@@ -1858,7 +1759,6 @@ class Generator:
         text(19.5, 15.5, "PIN 1", 1.0)
         text(26.5, 48.0, "D1 K", 1.0, 90.0)
         text(35.0, 48.0, "K D3", 1.0)
-        text(43.0, 44.4, "+ C1", 1.0)
         text(22.5, 19.2, "K1 P1", 1.0)
         text(91.0, 21.0, "LED1 K", 1.0)
         text(77.0, 53.0, "K LED2", 1.0)

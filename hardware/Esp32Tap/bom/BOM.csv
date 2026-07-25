@@ -55,7 +55,8 @@ SKRPACE010,SW2,SW_SPST_SKRPACE010,C139797,Extended,1,0.060,0.060,ALPSALPINE SKRP
 10k,R29,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,USB VBUS discharge
 10k,R30,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,VBUS_PRESENT_N pull-up
 10k,R31,R_0603_1608Metric,C25804,Basic,1,0.002,0.002,GPIO0 boot pull-up
-100uF/25V,C1,CP_Elec_6.3x7.7,C72477,Extended,1,0.100,0.100,"Input bulk electrolytic, 100uF 25V, 6.3x7.7mm (ROQANG RVT1E101M0607 — matches the CP_Elec_6.3x7.7 footprint)"
+4.7k,R32,R_0603_1608Metric,C23162,Basic,1,0.002,0.002,TREAD_OK→IO6 series isolation: keeps a misconfigured GPIO from overriding the U4 window or contending with its open-drain (review finding B2)
+22uF/25V X7R 1210,C1,C_1210_3225Metric,C2918511,Extended,1,0.080,0.080,"Input bulk cap: JLC has no in-stock electrolytic for CP_Elec_6.3x7.7, so this reuses the C6/C7 1210 22uF/25V ceramic (SAMWHA CS3225X7R226K250NRL) — non-polarized, machine-placeable, and the board already carries 20uF+ of ceramic front-end bulk across C2/C3/C6/C7"
 10uF/25V X7R 1206,C2,C_1206_3216Metric,C14860,Extended,1,0.040,0.040,Input ceramic
 10uF/25V X7R 1206,C3,C_1206_3216Metric,C14860,Extended,1,0.040,0.040,Buck VIN ceramic (at pin)
 100nF,C4,C_0603_1608Metric,C14663,Basic,1,0.004,0.004,Buck VIN HF bypass

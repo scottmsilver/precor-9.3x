@@ -332,8 +332,7 @@ COMPONENTS = {
         "C139797",
         "Extended",
         0.06,
-        "ALPSALPINE SKRPACE010 reel SMD tactile switch — reset (EN); "
-        "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
+        "ALPSALPINE SKRPACE010 reel SMD tactile switch — reset (EN); " "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
         {"1": "A", "2": "B"},
     ),
     "SW2": (
@@ -343,8 +342,7 @@ COMPONENTS = {
         "C139797",
         "Extended",
         0.06,
-        "ALPSALPINE SKRPACE010 reel SMD tactile switch — boot (IO0); "
-        "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
+        "ALPSALPINE SKRPACE010 reel SMD tactile switch — boot (IO0); " "PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF",
         {"1": "A", "2": "B"},
     ),
     "F1": (
@@ -681,16 +679,31 @@ COMPONENTS = {
         "GPIO0 boot pull-up",
         {"1": "1", "2": "2"},
     ),
+    "R32": (
+        "4.7k",
+        "Resistor_SMD",
+        "R_0603_1608Metric",
+        "C23162",
+        "Basic",
+        0.002,
+        "TREAD_OK→IO6 series isolation: keeps a misconfigured GPIO "
+        "from overriding the U4 window or contending with its "
+        "open-drain (review finding B2)",
+        {"1": "1", "2": "2"},
+    ),
     "C1": (
-        "100uF/25V",
+        "22uF/25V X7R 1210",
         "Capacitor_SMD",
-        "CP_Elec_6.3x7.7",
-        "C72477",
+        "C_1210_3225Metric",
+        "C2918511",
         "Extended",
-        0.10,
-        "Input bulk electrolytic, 100uF 25V, 6.3x7.7mm (ROQANG "
-        "RVT1E101M0607 — matches the CP_Elec_6.3x7.7 footprint)",
-        {"1": "+", "2": "-"},
+        0.08,
+        "Input bulk cap: JLC has no in-stock electrolytic for "
+        "CP_Elec_6.3x7.7, so this reuses the C6/C7 1210 22uF/25V "
+        "ceramic (SAMWHA CS3225X7R226K250NRL) — non-polarized, "
+        "machine-placeable, and the board already carries 20uF+ of "
+        "ceramic front-end bulk across C2/C3/C6/C7",
+        {"1": "1", "2": "2"},
     ),
     "C2": (
         "10uF/25V X7R 1206",
@@ -773,7 +786,16 @@ COMPONENTS = {
         {"1": "1", "2": "2"},
     ),
     "C10": ("1uF", "Capacitor_SMD", "C_0603_1608Metric", "C15849", "Basic", 0.006, "EN reset RC", {"1": "1", "2": "2"}),
-    "C11": ("100nF", "Capacitor_SMD", "C_0603_1608Metric", "C14663", "Basic", 0.004, "VBUS bypass", {"1": "1", "2": "2"}),
+    "C11": (
+        "100nF",
+        "Capacitor_SMD",
+        "C_0603_1608Metric",
+        "C14663",
+        "Basic",
+        0.004,
+        "VBUS bypass",
+        {"1": "1", "2": "2"},
+    ),
     "C12": (
         "56pF C0G 0603",
         "Capacitor_SMD",
@@ -881,13 +903,76 @@ COMPONENTS = {
     "TP4": ("GND", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "GND test pad", {"1": "1"}),
     "TP5": ("VIN", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Protected VIN test pad", {"1": "1"}),
     "TP6": ("+5V_RLY", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Relay-supply test pad", {"1": "1"}),
-    "TP7": ("TREAD_OK", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Voltage-window permission test pad", {"1": "1"}),
-    "TP8": ("RELAY_GATE", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Hardware relay-gate test pad", {"1": "1"}),
-    "TP9": ("RELAY_SW", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Relay transistor collector test pad", {"1": "1"}),
-    "TP10": ("TX_GATE", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Hardware transmit-gate test pad", {"1": "1"}),
-    "TP11": ("TX_DRV", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Relay transmit-drive test pad", {"1": "1"}),
-    "TP12": ("K1_NC_FB", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Relay normally-closed feedback test pad", {"1": "1"}),
-    "TP13": ("K1_NO_FB", "TestPoint", "TestPoint_Pad_1.5x1.5mm", "", "none", 0, "Relay normally-open feedback test pad", {"1": "1"}),
+    "TP7": (
+        "TREAD_OK",
+        "TestPoint",
+        "TestPoint_Pad_1.5x1.5mm",
+        "",
+        "none",
+        0,
+        "Voltage-window permission test pad",
+        {"1": "1"},
+    ),
+    "TP8": (
+        "RELAY_GATE",
+        "TestPoint",
+        "TestPoint_Pad_1.5x1.5mm",
+        "",
+        "none",
+        0,
+        "Hardware relay-gate test pad",
+        {"1": "1"},
+    ),
+    "TP9": (
+        "RELAY_SW",
+        "TestPoint",
+        "TestPoint_Pad_1.5x1.5mm",
+        "",
+        "none",
+        0,
+        "Relay transistor collector test pad",
+        {"1": "1"},
+    ),
+    "TP10": (
+        "TX_GATE",
+        "TestPoint",
+        "TestPoint_Pad_1.5x1.5mm",
+        "",
+        "none",
+        0,
+        "Hardware transmit-gate test pad",
+        {"1": "1"},
+    ),
+    "TP11": (
+        "TX_DRV",
+        "TestPoint",
+        "TestPoint_Pad_1.5x1.5mm",
+        "",
+        "none",
+        0,
+        "Relay transmit-drive test pad",
+        {"1": "1"},
+    ),
+    "TP12": (
+        "K1_NC_FB",
+        "TestPoint",
+        "TestPoint_Pad_1.5x1.5mm",
+        "",
+        "none",
+        0,
+        "Relay normally-closed feedback test pad",
+        {"1": "1"},
+    ),
+    "TP13": (
+        "K1_NO_FB",
+        "TestPoint",
+        "TestPoint_Pad_1.5x1.5mm",
+        "",
+        "none",
+        0,
+        "Relay normally-open feedback test pad",
+        {"1": "1"},
+    ),
 }
 
 # net name -> list of (ref, pad)
@@ -1037,13 +1122,17 @@ NETS = {
     "TREAD_OK": [
         ("U4", "1"),
         ("U4", "6"),
-        ("U1", "6"),
         ("U6", "2"),
         ("U6", "6"),
         ("R21", "2"),
         ("R22", "1"),
+        ("R32", "1"),
         ("TP7", "1"),
     ],
+    # Series isolation between the U4 window-comparator open-drain output
+    # and the ESP32-S3 GPIO: a misconfigured push-pull IO6 can't force the
+    # interlock high or contend with U4's open-drain (review finding B2).
+    "TREAD_OK_MCU": [("U1", "6"), ("R32", "2")],
     "RELAY_CMD": [("U1", "23"), ("U6", "1"), ("R23", "1")],
     "RELAY_GATE": [("U6", "7"), ("U5", "3"), ("R9", "1"), ("R24", "1"), ("TP8", "1")],
     "+5V_RLY": [("U5", "5"), ("C16", "1"), ("K1", "1"), ("D4", "1"), ("TP6", "1")],
@@ -1165,100 +1254,100 @@ _PIN_TYPE_OVERRIDES = {
     ("Q2", "3"): "open_collector",
 }
 _PIN_TYPE_OVERRIDES.update({pin: "no_connect" for pin in NC})
-_PIN_TYPE_OVERRIDES = MappingProxyType(
-    dict(_PIN_TYPE_OVERRIDES)
-)
+_PIN_TYPE_OVERRIDES = MappingProxyType(dict(_PIN_TYPE_OVERRIDES))
 
 # Independent validation oracle.  Keep this literal separate from the table
 # used to construct PIN_TYPES so changing both the derived output and its
 # construction overrides cannot silently weaken ERC semantics.
-_ACTIVE_PIN_TYPE_LOCKS = MappingProxyType({
-    ("U1", "1"): "power_in",
-    ("U1", "2"): "power_in",
-    ("U1", "3"): "input",
-    ("U1", "4"): "input",
-    ("U1", "5"): "input",
-    ("U1", "6"): "input",
-    ("U1", "7"): "input",
-    ("U1", "8"): "output",
-    ("U1", "9"): "input",
-    ("U1", "10"): "output",
-    ("U1", "11"): "input",
-    ("U1", "12"): "no_connect",
-    ("U1", "13"): "bidirectional",
-    ("U1", "14"): "bidirectional",
-    ("U1", "15"): "no_connect",
-    ("U1", "16"): "no_connect",
-    ("U1", "17"): "no_connect",
-    ("U1", "18"): "no_connect",
-    ("U1", "19"): "no_connect",
-    ("U1", "20"): "no_connect",
-    ("U1", "21"): "no_connect",
-    ("U1", "22"): "no_connect",
-    ("U1", "23"): "output",
-    ("U1", "24"): "no_connect",
-    ("U1", "25"): "no_connect",
-    ("U1", "26"): "no_connect",
-    ("U1", "27"): "input",
-    ("U1", "28"): "no_connect",
-    ("U1", "29"): "no_connect",
-    ("U1", "30"): "no_connect",
-    ("U1", "31"): "output",
-    ("U1", "32"): "no_connect",
-    ("U1", "33"): "no_connect",
-    ("U1", "34"): "no_connect",
-    ("U1", "35"): "no_connect",
-    ("U1", "36"): "input",
-    ("U1", "37"): "output",
-    ("U1", "38"): "no_connect",
-    ("U1", "39"): "no_connect",
-    ("U1", "40"): "power_in",
-    ("U1", "41"): "power_in",
-    ("U2", "1"): "power_in",
-    ("U2", "2"): "power_out",
-    ("U2", "3"): "power_in",
-    ("U2", "4"): "input",
-    ("U2", "5"): "input",
-    ("U2", "6"): "passive",
-    ("U3", "1"): "bidirectional",
-    ("U3", "2"): "power_in",
-    ("U3", "3"): "bidirectional",
-    ("U3", "4"): "bidirectional",
-    ("U3", "5"): "power_in",
-    ("U3", "6"): "bidirectional",
-    ("U4", "1"): "open_collector",
-    ("U4", "2"): "power_in",
-    ("U4", "3"): "input",
-    ("U4", "4"): "input",
-    ("U4", "5"): "power_in",
-    ("U4", "6"): "open_collector",
-    ("U5", "1"): "power_in",
-    ("U5", "2"): "power_in",
-    ("U5", "3"): "input",
-    ("U5", "4"): "no_connect",
-    ("U5", "5"): "power_out",
-    ("U6", "1"): "input",
-    ("U6", "2"): "input",
-    ("U6", "3"): "output",
-    ("U6", "4"): "power_in",
-    ("U6", "5"): "input",
-    ("U6", "6"): "input",
-    ("U6", "7"): "output",
-    ("U6", "8"): "power_in",
-    ("U7", "1"): "input",
-    ("U7", "2"): "input",
-    ("U7", "3"): "power_in",
-    ("U7", "4"): "tri_state",
-    ("U7", "5"): "power_in",
-    ("Q1", "1"): "input",
-    ("Q1", "3"): "open_collector",
-    ("Q2", "1"): "input",
-    ("Q2", "3"): "open_collector",
-    ("J2", "9"): "no_connect",
-    ("J2", "10"): "no_connect",
-    ("J3", "A8"): "no_connect",
-    ("J3", "B8"): "no_connect",
-})
+_ACTIVE_PIN_TYPE_LOCKS = MappingProxyType(
+    {
+        ("U1", "1"): "power_in",
+        ("U1", "2"): "power_in",
+        ("U1", "3"): "input",
+        ("U1", "4"): "input",
+        ("U1", "5"): "input",
+        ("U1", "6"): "input",
+        ("U1", "7"): "input",
+        ("U1", "8"): "output",
+        ("U1", "9"): "input",
+        ("U1", "10"): "output",
+        ("U1", "11"): "input",
+        ("U1", "12"): "no_connect",
+        ("U1", "13"): "bidirectional",
+        ("U1", "14"): "bidirectional",
+        ("U1", "15"): "no_connect",
+        ("U1", "16"): "no_connect",
+        ("U1", "17"): "no_connect",
+        ("U1", "18"): "no_connect",
+        ("U1", "19"): "no_connect",
+        ("U1", "20"): "no_connect",
+        ("U1", "21"): "no_connect",
+        ("U1", "22"): "no_connect",
+        ("U1", "23"): "output",
+        ("U1", "24"): "no_connect",
+        ("U1", "25"): "no_connect",
+        ("U1", "26"): "no_connect",
+        ("U1", "27"): "input",
+        ("U1", "28"): "no_connect",
+        ("U1", "29"): "no_connect",
+        ("U1", "30"): "no_connect",
+        ("U1", "31"): "output",
+        ("U1", "32"): "no_connect",
+        ("U1", "33"): "no_connect",
+        ("U1", "34"): "no_connect",
+        ("U1", "35"): "no_connect",
+        ("U1", "36"): "input",
+        ("U1", "37"): "output",
+        ("U1", "38"): "no_connect",
+        ("U1", "39"): "no_connect",
+        ("U1", "40"): "power_in",
+        ("U1", "41"): "power_in",
+        ("U2", "1"): "power_in",
+        ("U2", "2"): "power_out",
+        ("U2", "3"): "power_in",
+        ("U2", "4"): "input",
+        ("U2", "5"): "input",
+        ("U2", "6"): "passive",
+        ("U3", "1"): "bidirectional",
+        ("U3", "2"): "power_in",
+        ("U3", "3"): "bidirectional",
+        ("U3", "4"): "bidirectional",
+        ("U3", "5"): "power_in",
+        ("U3", "6"): "bidirectional",
+        ("U4", "1"): "open_collector",
+        ("U4", "2"): "power_in",
+        ("U4", "3"): "input",
+        ("U4", "4"): "input",
+        ("U4", "5"): "power_in",
+        ("U4", "6"): "open_collector",
+        ("U5", "1"): "power_in",
+        ("U5", "2"): "power_in",
+        ("U5", "3"): "input",
+        ("U5", "4"): "no_connect",
+        ("U5", "5"): "power_out",
+        ("U6", "1"): "input",
+        ("U6", "2"): "input",
+        ("U6", "3"): "output",
+        ("U6", "4"): "power_in",
+        ("U6", "5"): "input",
+        ("U6", "6"): "input",
+        ("U6", "7"): "output",
+        ("U6", "8"): "power_in",
+        ("U7", "1"): "input",
+        ("U7", "2"): "input",
+        ("U7", "3"): "power_in",
+        ("U7", "4"): "tri_state",
+        ("U7", "5"): "power_in",
+        ("Q1", "1"): "input",
+        ("Q1", "3"): "open_collector",
+        ("Q2", "1"): "input",
+        ("Q2", "3"): "open_collector",
+        ("J2", "9"): "no_connect",
+        ("J2", "10"): "no_connect",
+        ("J3", "A8"): "no_connect",
+        ("J3", "B8"): "no_connect",
+    }
+)
 
 PIN_TYPES = {
     (ref, pad): _PIN_TYPE_OVERRIDES.get((ref, pad), "passive")
@@ -1378,16 +1467,18 @@ _PART_LOCKS = {
     "C20": ("100nF", "Capacitor_SMD", "C_0603_1608Metric", "C14663", _TWO_PIN_LOCK),
     "C21": ("100nF", "Capacitor_SMD", "C_0603_1608Metric", "C14663", _TWO_PIN_LOCK),
 }
-_PART_LOCKS = MappingProxyType({
-    ref: (
-        lock[0],
-        lock[1],
-        lock[2],
-        lock[3],
-        tuple(sorted(lock[4].items())),
-    )
-    for ref, lock in _PART_LOCKS.items()
-})
+_PART_LOCKS = MappingProxyType(
+    {
+        ref: (
+            lock[0],
+            lock[1],
+            lock[2],
+            lock[3],
+            tuple(sorted(lock[4].items())),
+        )
+        for ref, lock in _PART_LOCKS.items()
+    }
+)
 del _TWO_PIN_LOCK
 
 _NET_LOCKS = {
@@ -1429,13 +1520,14 @@ _NET_LOCKS = {
     "TREAD_OK": {
         ("U4", "1"),
         ("U4", "6"),
-        ("U1", "6"),
         ("U6", "2"),
         ("U6", "6"),
         ("R21", "2"),
         ("R22", "1"),
+        ("R32", "1"),
         ("TP7", "1"),
     },
+    "TREAD_OK_MCU": {("U1", "6"), ("R32", "2")},
     "RELAY_CMD": {("U1", "23"), ("U6", "1"), ("R23", "1")},
     "RELAY_GATE": {("U6", "7"), ("U5", "3"), ("R9", "1"), ("R24", "1"), ("TP8", "1")},
     "+5V_RLY": {("U5", "5"), ("C16", "1"), ("K1", "1"), ("D4", "1"), ("TP6", "1")},
@@ -1452,10 +1544,7 @@ _NET_LOCKS = {
     "MOT6": {("J2", "6"), ("K1", "3"), ("D6", "1")},
     "VBUS_PRESENT_N": {("Q2", "3"), ("R30", "2"), ("U1", "7")},
 }
-_NET_LOCKS = MappingProxyType({
-    net: frozenset(pads)
-    for net, pads in _NET_LOCKS.items()
-})
+_NET_LOCKS = MappingProxyType({net: frozenset(pads) for net, pads in _NET_LOCKS.items()})
 
 _TERMINAL_NET_LOCKS = {
     "R15": {"USB_DN_MCU", "USB_DN_R"},
@@ -1466,6 +1555,7 @@ _TERMINAL_NET_LOCKS = {
     "R20": {"OV_SENSE", "GND"},
     "R21": {"+3V3", "TREAD_OK"},
     "R22": {"TREAD_OK", "GND"},
+    "R32": {"TREAD_OK", "TREAD_OK_MCU"},
     "R23": {"RELAY_CMD", "GND"},
     "R24": {"RELAY_GATE", "GND"},
     "R25": {"+3V3", "K1_NC_FB"},
@@ -1491,162 +1581,175 @@ _TERMINAL_NET_LOCKS = {
     "U7": {"TX_GATE", "ESP_TX", "GND", "TX_BUF", "+3V3"},
     "Q2": {"VBUS", "GND", "VBUS_PRESENT_N"},
 }
-_TERMINAL_NET_LOCKS = MappingProxyType({
-    ref: frozenset(nets)
-    for ref, nets in _TERMINAL_NET_LOCKS.items()
-})
+_TERMINAL_NET_LOCKS = MappingProxyType({ref: frozenset(nets) for ref, nets in _TERMINAL_NET_LOCKS.items()})
 
-_VBUS_ADJACENT_PIN_NET_LOCKS = MappingProxyType({
-    ("J3", "A1"): "GND",
-    ("J3", "A4"): "VBUS",
-    ("J3", "A5"): "CC1",
-    ("J3", "A6"): "USB_DP",
-    ("J3", "A7"): "USB_DN",
-    ("J3", "A8"): "<NC>",
-    ("J3", "A9"): "VBUS",
-    ("J3", "A12"): "GND",
-    ("J3", "B1"): "GND",
-    ("J3", "B4"): "VBUS",
-    ("J3", "B5"): "CC2",
-    ("J3", "B6"): "USB_DP",
-    ("J3", "B7"): "USB_DN",
-    ("J3", "B8"): "<NC>",
-    ("J3", "B9"): "VBUS",
-    ("J3", "B12"): "GND",
-    ("J3", "S1"): "GND",
-    ("U3", "1"): "USB_DN",
-    ("U3", "2"): "GND",
-    ("U3", "3"): "USB_DP",
-    ("U3", "4"): "USB_DP_MCU",
-    ("U3", "5"): "VBUS",
-    ("U3", "6"): "USB_DN_MCU",
-    ("C11", "1"): "VBUS",
-    ("C11", "2"): "GND",
-    ("R29", "1"): "VBUS",
-    ("R29", "2"): "GND",
-    ("Q2", "1"): "VBUS",
-    ("Q2", "2"): "GND",
-    ("Q2", "3"): "VBUS_PRESENT_N",
-})
-_VBUS_ADJACENT_REFS = frozenset({
-    "J3",
-    "U3",
-    "C11",
-    "R29",
-    "Q2",
-})
+_VBUS_ADJACENT_PIN_NET_LOCKS = MappingProxyType(
+    {
+        ("J3", "A1"): "GND",
+        ("J3", "A4"): "VBUS",
+        ("J3", "A5"): "CC1",
+        ("J3", "A6"): "USB_DP",
+        ("J3", "A7"): "USB_DN",
+        ("J3", "A8"): "<NC>",
+        ("J3", "A9"): "VBUS",
+        ("J3", "A12"): "GND",
+        ("J3", "B1"): "GND",
+        ("J3", "B4"): "VBUS",
+        ("J3", "B5"): "CC2",
+        ("J3", "B6"): "USB_DP",
+        ("J3", "B7"): "USB_DN",
+        ("J3", "B8"): "<NC>",
+        ("J3", "B9"): "VBUS",
+        ("J3", "B12"): "GND",
+        ("J3", "S1"): "GND",
+        ("U3", "1"): "USB_DN",
+        ("U3", "2"): "GND",
+        ("U3", "3"): "USB_DP",
+        ("U3", "4"): "USB_DP_MCU",
+        ("U3", "5"): "VBUS",
+        ("U3", "6"): "USB_DN_MCU",
+        ("C11", "1"): "VBUS",
+        ("C11", "2"): "GND",
+        ("R29", "1"): "VBUS",
+        ("R29", "2"): "GND",
+        ("Q2", "1"): "VBUS",
+        ("Q2", "2"): "GND",
+        ("Q2", "3"): "VBUS_PRESENT_N",
+    }
+)
+_VBUS_ADJACENT_REFS = frozenset(
+    {
+        "J3",
+        "U3",
+        "C11",
+        "R29",
+        "Q2",
+    }
+)
 
-_POWER_PIN_NET_LOCKS = MappingProxyType({
-    ("U1", "1"): "GND",
-    ("U1", "2"): "+3V3",
-    ("U1", "40"): "GND",
-    ("U1", "41"): "GND",
-    ("U2", "1"): "GND",
-    ("U2", "2"): "SW_NODE",
-    ("U2", "3"): "VIN",
-    ("U2", "4"): "FB",
-    ("U2", "5"): "BUCK_EN",
-    ("U2", "6"): "BST",
-    ("U3", "2"): "GND",
-    ("U3", "5"): "VBUS",
-    ("U4", "2"): "GND",
-    ("U4", "5"): "VIN",
-    ("U5", "1"): "VIN",
-    ("U5", "2"): "GND",
-    ("U5", "4"): "<NC>",
-    ("U5", "5"): "+5V_RLY",
-    ("U6", "4"): "GND",
-    ("U6", "8"): "+3V3",
-    ("U7", "3"): "GND",
-    ("U7", "5"): "+3V3",
-    ("Q2", "1"): "VBUS",
-    ("Q2", "2"): "GND",
-    ("Q2", "3"): "VBUS_PRESENT_N",
-    ("K1", "1"): "+5V_RLY",
-    ("K1", "8"): "RELAY_SW",
-})
+_POWER_PIN_NET_LOCKS = MappingProxyType(
+    {
+        ("U1", "1"): "GND",
+        ("U1", "2"): "+3V3",
+        ("U1", "40"): "GND",
+        ("U1", "41"): "GND",
+        ("U2", "1"): "GND",
+        ("U2", "2"): "SW_NODE",
+        ("U2", "3"): "VIN",
+        ("U2", "4"): "FB",
+        ("U2", "5"): "BUCK_EN",
+        ("U2", "6"): "BST",
+        ("U3", "2"): "GND",
+        ("U3", "5"): "VBUS",
+        ("U4", "2"): "GND",
+        ("U4", "5"): "VIN",
+        ("U5", "1"): "VIN",
+        ("U5", "2"): "GND",
+        ("U5", "4"): "<NC>",
+        ("U5", "5"): "+5V_RLY",
+        ("U6", "4"): "GND",
+        ("U6", "8"): "+3V3",
+        ("U7", "3"): "GND",
+        ("U7", "5"): "+3V3",
+        ("Q2", "1"): "VBUS",
+        ("Q2", "2"): "GND",
+        ("Q2", "3"): "VBUS_PRESENT_N",
+        ("K1", "1"): "+5V_RLY",
+        ("K1", "8"): "RELAY_SW",
+    }
+)
 
-_USB_PIN_NET_LOCKS = MappingProxyType({
-    ("J3", "A6"): "USB_DP",
-    ("J3", "B6"): "USB_DP",
-    ("J3", "A7"): "USB_DN",
-    ("J3", "B7"): "USB_DN",
-    ("U3", "1"): "USB_DN",
-    ("U3", "3"): "USB_DP",
-    ("U3", "4"): "USB_DP_MCU",
-    ("U3", "6"): "USB_DN_MCU",
-})
+_USB_PIN_NET_LOCKS = MappingProxyType(
+    {
+        ("J3", "A6"): "USB_DP",
+        ("J3", "B6"): "USB_DP",
+        ("J3", "A7"): "USB_DN",
+        ("J3", "B7"): "USB_DN",
+        ("U3", "1"): "USB_DN",
+        ("U3", "3"): "USB_DP",
+        ("U3", "4"): "USB_DP_MCU",
+        ("U3", "6"): "USB_DN_MCU",
+    }
+)
 
-_SAFETY_PIN_NET_LOCKS = MappingProxyType({
-    ("U1", "4"): "K1_NC_FB",
-    ("U1", "5"): "K1_NO_FB",
-    ("U1", "6"): "TREAD_OK",
-    ("U1", "7"): "VBUS_PRESENT_N",
-    ("U1", "8"): "TX_ENABLE",
-    ("U1", "10"): "ESP_TX",
-    ("U1", "23"): "RELAY_CMD",
-    ("U4", "1"): "TREAD_OK",
-    ("U4", "2"): "GND",
-    ("U4", "3"): "UV_SENSE",
-    ("U4", "4"): "OV_SENSE",
-    ("U4", "5"): "VIN",
-    ("U4", "6"): "TREAD_OK",
-    ("U5", "1"): "VIN",
-    ("U5", "2"): "GND",
-    ("U5", "3"): "RELAY_GATE",
-    ("U5", "4"): "<NC>",
-    ("U5", "5"): "+5V_RLY",
-    ("U6", "1"): "RELAY_CMD",
-    ("U6", "2"): "TREAD_OK",
-    ("U6", "3"): "TX_GATE",
-    ("U6", "4"): "GND",
-    ("U6", "5"): "TX_ENABLE",
-    ("U6", "6"): "TREAD_OK",
-    ("U6", "7"): "RELAY_GATE",
-    ("U6", "8"): "+3V3",
-    ("U7", "1"): "TX_GATE",
-    ("U7", "2"): "ESP_TX",
-    ("U7", "3"): "GND",
-    ("U7", "4"): "TX_BUF",
-    ("U7", "5"): "+3V3",
-    ("Q1", "1"): "Q1_B",
-    ("Q1", "2"): "GND",
-    ("Q1", "3"): "RELAY_SW",
-    ("K1", "1"): "+5V_RLY",
-    ("K1", "2"): "CONS6",
-    ("K1", "3"): "MOT6",
-    ("K1", "4"): "TX_DRV",
-    ("K1", "5"): "K1_NO_FB",
-    ("K1", "6"): "GND",
-    ("K1", "7"): "K1_NC_FB",
-    ("K1", "8"): "RELAY_SW",
-    ("D4", "1"): "+5V_RLY",
-    ("D4", "2"): "RELAY_SW",
-    ("R6", "1"): "TX_BUF",
-    ("R6", "2"): "TX_DRV",
-    ("R9", "1"): "RELAY_GATE",
-    ("R9", "2"): "Q1_B",
-    ("R10", "1"): "Q1_B",
-    ("R10", "2"): "GND",
-})
+_SAFETY_PIN_NET_LOCKS = MappingProxyType(
+    {
+        ("U1", "4"): "K1_NC_FB",
+        ("U1", "5"): "K1_NO_FB",
+        ("U1", "6"): "TREAD_OK_MCU",
+        ("U1", "7"): "VBUS_PRESENT_N",
+        ("U1", "8"): "TX_ENABLE",
+        ("U1", "10"): "ESP_TX",
+        ("U1", "23"): "RELAY_CMD",
+        ("U4", "1"): "TREAD_OK",
+        ("U4", "2"): "GND",
+        ("U4", "3"): "UV_SENSE",
+        ("U4", "4"): "OV_SENSE",
+        ("U4", "5"): "VIN",
+        ("U4", "6"): "TREAD_OK",
+        ("U5", "1"): "VIN",
+        ("U5", "2"): "GND",
+        ("U5", "3"): "RELAY_GATE",
+        ("U5", "4"): "<NC>",
+        ("U5", "5"): "+5V_RLY",
+        ("U6", "1"): "RELAY_CMD",
+        ("U6", "2"): "TREAD_OK",
+        ("U6", "3"): "TX_GATE",
+        ("U6", "4"): "GND",
+        ("U6", "5"): "TX_ENABLE",
+        ("U6", "6"): "TREAD_OK",
+        ("U6", "7"): "RELAY_GATE",
+        ("U6", "8"): "+3V3",
+        ("U7", "1"): "TX_GATE",
+        ("U7", "2"): "ESP_TX",
+        ("U7", "3"): "GND",
+        ("U7", "4"): "TX_BUF",
+        ("U7", "5"): "+3V3",
+        ("Q1", "1"): "Q1_B",
+        ("Q1", "2"): "GND",
+        ("Q1", "3"): "RELAY_SW",
+        ("K1", "1"): "+5V_RLY",
+        ("K1", "2"): "CONS6",
+        ("K1", "3"): "MOT6",
+        ("K1", "4"): "TX_DRV",
+        ("K1", "5"): "K1_NO_FB",
+        ("K1", "6"): "GND",
+        ("K1", "7"): "K1_NC_FB",
+        ("K1", "8"): "RELAY_SW",
+        ("D4", "1"): "+5V_RLY",
+        ("D4", "2"): "RELAY_SW",
+        ("R6", "1"): "TX_BUF",
+        ("R6", "2"): "TX_DRV",
+        ("R9", "1"): "RELAY_GATE",
+        ("R9", "2"): "Q1_B",
+        ("R10", "1"): "Q1_B",
+        ("R10", "2"): "GND",
+        ("R32", "1"): "TREAD_OK",
+        ("R32", "2"): "TREAD_OK_MCU",
+    }
+)
 
 _EXPECTED_DNP = frozenset({"C13", "C14"})
-_ALLOWED_PIN_TYPES = frozenset({
-    "power_in",
-    "power_out",
-    "input",
-    "output",
-    "open_collector",
-    "tri_state",
-    "passive",
-    "bidirectional",
-    "no_connect",
-})
-_VALUE_LOCKS = MappingProxyType({
-    "R7": ("10k", "C25804"),
-    "R8": ("10k", "C25804"),
-    "C11": ("100nF", "C14663"),
-})
+_ALLOWED_PIN_TYPES = frozenset(
+    {
+        "power_in",
+        "power_out",
+        "input",
+        "output",
+        "open_collector",
+        "tri_state",
+        "passive",
+        "bidirectional",
+        "no_connect",
+    }
+)
+_VALUE_LOCKS = MappingProxyType(
+    {
+        "R7": ("10k", "C25804"),
+        "R8": ("10k", "C25804"),
+        "C11": ("100nF", "C14663"),
+    }
+)
 
 
 class DesignValidationError(ValueError):
@@ -1680,14 +1783,13 @@ def _require_pin_net_locks(used, locks, label):
         actual = used.get((ref, pad), "<missing>")
         require(
             actual == expected,
-            f"{label} {ref}.{pad}: actual={actual}; "
-            f"expected={expected}",
+            f"{label} {ref}.{pad}: actual={actual}; " f"expected={expected}",
         )
 
 
 def _safety_lock_label(ref, pad):
     pin = (ref, pad)
-    if ref in {"K1", "Q1", "D4", "R9", "R10", "U5"} or pin in {
+    if ref in {"K1", "Q1", "D4", "R9", "R10", "U5", "R32"} or pin in {
         ("U1", "4"),
         ("U1", "5"),
         ("U1", "6"),
@@ -1726,8 +1828,7 @@ def _require_safety_pin_net_locks(used):
         label = _safety_lock_label(ref, pad)
         require(
             actual == expected,
-            f"{label} {ref}.{pad}: actual={actual}; "
-            f"expected={expected}",
+            f"{label} {ref}.{pad}: actual={actual}; " f"expected={expected}",
         )
 
 
@@ -1776,10 +1877,7 @@ def validate():
             f"NC pin {ref}.{pad} also in net {used.get(key)}",
         )
         used[key] = "<NC>"
-    missing = [
-        f"{ref}.{pad}"
-        for ref, pad in sorted(component_pins - used.keys())
-    ]
+    missing = [f"{ref}.{pad}" for ref, pad in sorted(component_pins - used.keys())]
     require(
         not missing,
         f"pins with no net and no NC: {missing}",
@@ -1798,57 +1896,35 @@ def validate():
         f"missing={_sorted_for_message(pin_type_missing)}; "
         f"extra={_sorted_for_message(pin_type_extra)}",
     )
-    unknown_pin_types = {
-        pin_type
-        for pin_type in PIN_TYPES.values()
-        if pin_type not in _ALLOWED_PIN_TYPES
-    }
+    unknown_pin_types = {pin_type for pin_type in PIN_TYPES.values() if pin_type not in _ALLOWED_PIN_TYPES}
     require(
         not unknown_pin_types,
-        "PIN_TYPES unknown KiCad types: "
-        f"{_sorted_for_message(unknown_pin_types)}",
+        "PIN_TYPES unknown KiCad types: " f"{_sorted_for_message(unknown_pin_types)}",
     )
-    expected_pin_types = {
-        pin: _PIN_TYPE_OVERRIDES.get(pin, "passive")
-        for pin in component_pins
-    }
+    expected_pin_types = {pin: _PIN_TYPE_OVERRIDES.get(pin, "passive") for pin in component_pins}
     derived_mismatches = [
-        f"{ref}.{pad}: actual={PIN_TYPES[(ref, pad)]}; "
-        f"expected={expected_pin_types[(ref, pad)]}"
+        f"{ref}.{pad}: actual={PIN_TYPES[(ref, pad)]}; " f"expected={expected_pin_types[(ref, pad)]}"
         for ref, pad in sorted(component_pins)
         if PIN_TYPES[(ref, pad)] != expected_pin_types[(ref, pad)]
     ]
     require(
         not derived_mismatches,
-        "PIN_TYPES derived table mismatch: "
-        f"{derived_mismatches}",
+        "PIN_TYPES derived table mismatch: " f"{derived_mismatches}",
     )
 
     for (ref, pad), expected_type in _ACTIVE_PIN_TYPE_LOCKS.items():
         actual_type = PIN_TYPES.get((ref, pad), "<missing>")
         require(
             actual_type == expected_type,
-            f"PIN_TYPES active lock {ref}.{pad}: "
-            f"actual={actual_type}; expected={expected_type}",
+            f"PIN_TYPES active lock {ref}.{pad}: " f"actual={actual_type}; expected={expected_type}",
         )
-    actual_nonpassive = {
-        pin: pin_type
-        for pin, pin_type in PIN_TYPES.items()
-        if pin_type != "passive"
-    }
-    unexpected_nonpassive = (
-        actual_nonpassive.keys() - _ACTIVE_PIN_TYPE_LOCKS.keys()
-    )
+    actual_nonpassive = {pin: pin_type for pin, pin_type in PIN_TYPES.items() if pin_type != "passive"}
+    unexpected_nonpassive = actual_nonpassive.keys() - _ACTIVE_PIN_TYPE_LOCKS.keys()
     require(
         not unexpected_nonpassive,
-        "PIN_TYPES active lock has unexpected non-passive pins: "
-        f"extra={_sorted_for_message(unexpected_nonpassive)}",
+        "PIN_TYPES active lock has unexpected non-passive pins: " f"extra={_sorted_for_message(unexpected_nonpassive)}",
     )
-    actual_no_connect = {
-        pin
-        for pin, pin_type in PIN_TYPES.items()
-        if pin_type == "no_connect"
-    }
+    actual_no_connect = {pin for pin, pin_type in PIN_TYPES.items() if pin_type == "no_connect"}
     _require_exact_set(
         actual_no_connect,
         set(NC),
@@ -1866,27 +1942,16 @@ def validate():
         component = COMPONENTS[ref]
         require(component[0] == "DNP", f"DNP {ref} must have value DNP")
         require(
-            component[3] == ""
-            and component[4] == "DNP"
-            and component[5] == 0,
-            f"DNP {ref} is populated: LCSC={component[3]!r}; "
-            f"class={component[4]!r}; cost={component[5]!r}",
+            component[3] == "" and component[4] == "DNP" and component[5] == 0,
+            f"DNP {ref} is populated: LCSC={component[3]!r}; " f"class={component[4]!r}; cost={component[5]!r}",
         )
-    dnp_valued = {
-        ref
-        for ref, component in COMPONENTS.items()
-        if component[0] == "DNP"
-    }
+    dnp_valued = {ref for ref, component in COMPONENTS.items() if component[0] == "DNP"}
     _require_exact_set(
         dnp_valued,
         _EXPECTED_DNP,
         "DNP-valued component mismatch",
     )
-    dnp_metadata = {
-        ref
-        for ref, component in COMPONENTS.items()
-        if component[4] == "DNP"
-    }
+    dnp_metadata = {ref for ref, component in COMPONENTS.items() if component[4] == "DNP"}
     _require_exact_set(
         dnp_metadata,
         _EXPECTED_DNP,
@@ -1908,15 +1973,13 @@ def validate():
         )
         require(
             actual == expected,
-            f"{ref} part/package/pad lock mismatch: "
-            f"actual={actual}; expected={expected}",
+            f"{ref} part/package/pad lock mismatch: " f"actual={actual}; expected={expected}",
         )
     for ref, expected in _VALUE_LOCKS.items():
         actual = (COMPONENTS[ref][0], COMPONENTS[ref][3])
         require(
             actual == expected,
-            f"{ref} value lock mismatch: "
-            f"actual={actual}; expected={expected}",
+            f"{ref} value lock mismatch: " f"actual={actual}; expected={expected}",
         )
 
     _require_pin_net_locks(
@@ -1929,11 +1992,7 @@ def validate():
         _USB_PIN_NET_LOCKS,
         "USB polarity lock",
     )
-    vbus_adjacent_component_pins = {
-        (ref, pad)
-        for ref in _VBUS_ADJACENT_REFS
-        for pad in COMPONENTS[ref][7]
-    }
+    vbus_adjacent_component_pins = {(ref, pad) for ref in _VBUS_ADJACENT_REFS for pad in COMPONENTS[ref][7]}
     _require_exact_set(
         set(_VBUS_ADJACENT_PIN_NET_LOCKS),
         vbus_adjacent_component_pins,
@@ -1954,10 +2013,7 @@ def validate():
             f"net topology lock {net}",
         )
     for ref, expected_nets in _TERMINAL_NET_LOCKS.items():
-        actual_nets = {
-            used[(ref, pad)]
-            for pad in COMPONENTS[ref][7]
-        }
+        actual_nets = {used[(ref, pad)] for pad in COMPONENTS[ref][7]}
         _require_exact_set(
             actual_nets,
             expected_nets,
@@ -1969,11 +2025,7 @@ def validate():
     board_power_rails = {"+8V_RAW", "+8V_F", "VIN", "+3V3", "+5V_RLY"}
     vbus_refs = {ref for ref, _pad in NETS["VBUS"]}
     for ref in vbus_refs:
-        terminal_nets = {
-            used[(ref, pad)]
-            for pad in COMPONENTS[ref][7]
-            if used[(ref, pad)] != "<NC>"
-        }
+        terminal_nets = {used[(ref, pad)] for pad in COMPONENTS[ref][7] if used[(ref, pad)] != "<NC>"}
         forbidden_rails = terminal_nets & board_power_rails
         require(
             not forbidden_rails,
@@ -1986,14 +2038,11 @@ def validate():
         used[("U5", "4")] == "<NC>",
         "U5.4 must remain deliberately unconnected",
     )
-    actual_gpio_map = {
-        pad: used[("U1", pad)]
-        for pad in ("4", "5", "6", "7", "8", "9", "10", "11", "23", "27", "31")
-    }
+    actual_gpio_map = {pad: used[("U1", pad)] for pad in ("4", "5", "6", "7", "8", "9", "10", "11", "23", "27", "31")}
     expected_gpio_map = {
         "4": "K1_NC_FB",
         "5": "K1_NO_FB",
-        "6": "TREAD_OK",
+        "6": "TREAD_OK_MCU",
         "7": "VBUS_PRESENT_N",
         "8": "TX_ENABLE",
         "9": "PIN3_RX",
@@ -2005,18 +2054,12 @@ def validate():
     }
     require(
         actual_gpio_map == expected_gpio_map,
-        "U1 GPIO map mismatch: "
-        f"actual={actual_gpio_map}; expected={expected_gpio_map}",
+        "U1 GPIO map mismatch: " f"actual={actual_gpio_map}; expected={expected_gpio_map}",
     )
-    rj45_ground_nets = {
-        used[(connector, pad)]
-        for connector in ("J1", "J2")
-        for pad in ("1", "7")
-    }
+    rj45_ground_nets = {used[(connector, pad)] for connector in ("J1", "J2") for pad in ("1", "7")}
     require(
         rj45_ground_nets == {"GND"},
-        "RJ45 ground pass-through mismatch: "
-        f"actual={rj45_ground_nets}; expected={{'GND'}}",
+        "RJ45 ground pass-through mismatch: " f"actual={rj45_ground_nets}; expected={{'GND'}}",
     )
     actual_u6_equations = {
         used[("U6", "7")]: frozenset({used[("U6", "1")], used[("U6", "2")]}),
@@ -2028,9 +2071,7 @@ def validate():
     }
     require(
         actual_u6_equations == expected_u6_equations,
-        "U6 gate equation mismatch: "
-        f"actual={actual_u6_equations}; "
-        f"expected={expected_u6_equations}",
+        "U6 gate equation mismatch: " f"actual={actual_u6_equations}; " f"expected={expected_u6_equations}",
     )
     actual_d4_nets = {
         used[("D4", "1")],
@@ -2042,13 +2083,9 @@ def validate():
     }
     require(
         actual_d4_nets == expected_d4_nets,
-        "D4 coil-clamp mismatch: "
-        f"actual={actual_d4_nets}; expected={expected_d4_nets}",
+        "D4 coil-clamp mismatch: " f"actual={actual_d4_nets}; expected={expected_d4_nets}",
     )
-    actual_k1_contacts = {
-        pad: used[("K1", pad)]
-        for pad in ("2", "3", "4", "5", "6", "7")
-    }
+    actual_k1_contacts = {pad: used[("K1", pad)] for pad in ("2", "3", "4", "5", "6", "7")}
     expected_k1_contacts = {
         "2": "CONS6",
         "3": "MOT6",
@@ -2063,10 +2100,7 @@ def validate():
         f"actual={actual_k1_contacts}; "
         f"expected={expected_k1_contacts}",
     )
-    actual_u7_map = {
-        pad: used[("U7", pad)]
-        for pad in ("1", "2", "3", "4", "5")
-    }
+    actual_u7_map = {pad: used[("U7", pad)] for pad in ("1", "2", "3", "4", "5")}
     expected_u7_map = {
         "1": "TX_GATE",
         "2": "ESP_TX",
@@ -2076,8 +2110,7 @@ def validate():
     }
     require(
         actual_u7_map == expected_u7_map,
-        "U7 transmit-isolation mismatch: "
-        f"actual={actual_u7_map}; expected={expected_u7_map}",
+        "U7 transmit-isolation mismatch: " f"actual={actual_u7_map}; expected={expected_u7_map}",
     )
     return True
 

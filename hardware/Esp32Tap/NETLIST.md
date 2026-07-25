@@ -65,7 +65,8 @@ hand-editing this file.
 | R29 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | USB VBUS discharge |
 | R30 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | VBUS_PRESENT_N pull-up |
 | R31 | 10k | Resistor_SMD:R_0603_1608Metric | C25804 | Basic | GPIO0 boot pull-up |
-| C1 | 100uF/25V | Capacitor_SMD:CP_Elec_6.3x7.7 | C72477 | Extended | Input bulk electrolytic, 100uF 25V, 6.3x7.7mm (ROQANG RVT1E101M0607 — matches the CP_Elec_6.3x7.7 footprint) |
+| R32 | 4.7k | Resistor_SMD:R_0603_1608Metric | C23162 | Basic | TREAD_OK→IO6 series isolation: keeps a misconfigured GPIO from overriding the U4 window or contending with its open-drain (review finding B2) |
+| C1 | 22uF/25V X7R 1210 | Capacitor_SMD:C_1210_3225Metric | C2918511 | Extended | Input bulk cap: JLC has no in-stock electrolytic for CP_Elec_6.3x7.7, so this reuses the C6/C7 1210 22uF/25V ceramic (SAMWHA CS3225X7R226K250NRL) — non-polarized, machine-placeable, and the board already carries 20uF+ of ceramic front-end bulk across C2/C3/C6/C7 |
 | C2 | 10uF/25V X7R 1206 | Capacitor_SMD:C_1206_3216Metric | C14860 | Extended | Input ceramic |
 | C3 | 10uF/25V X7R 1206 | Capacitor_SMD:C_1206_3216Metric | C14860 | Extended | Buck VIN ceramic (at pin) |
 | C4 | 100nF | Capacitor_SMD:C_0603_1608Metric | C14663 | Basic | Buck VIN HF bypass |
@@ -104,10 +105,10 @@ hand-editing this file.
 
 Every physical connection is listed as `reference.pad (pin-name)`.
 
-* **GND** — `J1.1` (GND_A), `J1.7` (GND_B), `J2.1` (GND_A), `J2.7` (GND_B), `J3.A1` (GND), `J3.B1` (GND), `J3.A12` (GND), `J3.B12` (GND), `J3.S1` (SHIELD), `U1.1` (GND), `U1.40` (GND), `U1.41` (GND_EPAD), `U2.1` (GND), `U3.2` (GND), `U4.2` (GND), `U5.2` (GND), `U6.4` (GND), `U7.3` (GND), `K1.6` (COM_B), `Q1.2` (E), `Q2.2` (S), `R2.2` (2), `R4.2` (2), `R5.2` (2), `R10.2` (2), `R14.1` (1), `R18.2` (2), `R20.2` (2), `R22.2` (2), `R23.2` (2), `R24.2` (2), `R27.2` (2), `R28.2` (2), `R29.2` (2), `C1.2` (-), `C2.2` (2), `C3.2` (2), `C4.2` (2), `C6.2` (2), `C7.2` (2), `C8.2` (2), `C9.2` (2), `C10.2` (2), `C11.2` (2), `C13.2` (2), `C14.2` (2), `C15.2` (2), `C16.2` (2), `C17.2` (2), `C18.2` (2), `C19.2` (2), `C20.2` (2), `C21.2` (2), `D3.2` (A), `D5.2` (2), `D6.2` (2), `D7.2` (2), `LED1.1` (K), `LED2.1` (K), `SW1.2` (B), `SW2.2` (B), `TP4.1` (1)
+* **GND** — `J1.1` (GND_A), `J1.7` (GND_B), `J2.1` (GND_A), `J2.7` (GND_B), `J3.A1` (GND), `J3.B1` (GND), `J3.A12` (GND), `J3.B12` (GND), `J3.S1` (SHIELD), `U1.1` (GND), `U1.40` (GND), `U1.41` (GND_EPAD), `U2.1` (GND), `U3.2` (GND), `U4.2` (GND), `U5.2` (GND), `U6.4` (GND), `U7.3` (GND), `K1.6` (COM_B), `Q1.2` (E), `Q2.2` (S), `R2.2` (2), `R4.2` (2), `R5.2` (2), `R10.2` (2), `R14.1` (1), `R18.2` (2), `R20.2` (2), `R22.2` (2), `R23.2` (2), `R24.2` (2), `R27.2` (2), `R28.2` (2), `R29.2` (2), `C1.2` (2), `C2.2` (2), `C3.2` (2), `C4.2` (2), `C6.2` (2), `C7.2` (2), `C8.2` (2), `C9.2` (2), `C10.2` (2), `C11.2` (2), `C13.2` (2), `C14.2` (2), `C15.2` (2), `C16.2` (2), `C17.2` (2), `C18.2` (2), `C19.2` (2), `C20.2` (2), `C21.2` (2), `D3.2` (A), `D5.2` (2), `D6.2` (2), `D7.2` (2), `LED1.1` (K), `LED2.1` (K), `SW1.2` (B), `SW2.2` (B), `TP4.1` (1)
 * **+8V_RAW** — `J1.2` (P8V_A), `J1.8` (P8V_B), `J2.2` (P8V_A), `J2.8` (P8V_B), `F1.1` (1)
 * **+8V_F** — `F1.2` (2), `D1.2` (A)
-* **VIN** — `D1.1` (K), `D3.1` (K), `U2.3` (VIN), `U4.5` (VDD), `U5.1` (IN), `C1.1` (+), `C2.1` (1), `C3.1` (1), `C4.1` (1), `C15.1` (1), `C17.1` (1), `R3.1` (1), `R17.1` (1), `R19.1` (1), `TP5.1` (1)
+* **VIN** — `D1.1` (K), `D3.1` (K), `U2.3` (VIN), `U4.5` (VDD), `U5.1` (IN), `C1.1` (1), `C2.1` (1), `C3.1` (1), `C4.1` (1), `C15.1` (1), `C17.1` (1), `R3.1` (1), `R17.1` (1), `R19.1` (1), `TP5.1` (1)
 * **BUCK_EN** — `U2.5` (EN), `R3.2` (2), `R14.2` (2)
 * **SW_NODE** — `U2.2` (SW), `L1.1` (1), `C5.2` (2)
 * **BST** — `U2.6` (BOOT), `C5.1` (1)
@@ -134,7 +135,8 @@ Every physical connection is listed as `reference.pad (pin-name)`.
 * **PIN5_SAFETY** — `J1.5` (PIN5_SAFETY), `J2.5` (PIN5_SAFETY)
 * **UV_SENSE** — `U4.3` (INA+), `R17.2` (2), `R18.1` (1), `C18.1` (1)
 * **OV_SENSE** — `U4.4` (INB-), `R19.2` (2), `R20.1` (1), `C19.1` (1)
-* **TREAD_OK** — `U4.1` (OUTA), `U4.6` (OUTB), `U1.6` (IO6), `U6.2` (1B), `U6.6` (2B), `R21.2` (2), `R22.1` (1), `TP7.1` (1)
+* **TREAD_OK** — `U4.1` (OUTA), `U4.6` (OUTB), `U6.2` (1B), `U6.6` (2B), `R21.2` (2), `R22.1` (1), `R32.1` (1), `TP7.1` (1)
+* **TREAD_OK_MCU** — `U1.6` (IO6), `R32.2` (2)
 * **RELAY_CMD** — `U1.23` (IO21), `U6.1` (1A), `R23.1` (1)
 * **RELAY_GATE** — `U6.7` (1Y), `U5.3` (EN), `R9.1` (1), `R24.1` (1), `TP8.1` (1)
 * **+5V_RLY** — `U5.5` (OUT), `C16.1` (1), `K1.1` (COIL+), `D4.1` (K), `TP6.1` (1)
@@ -167,6 +169,7 @@ Every physical connection is listed as `reference.pad (pin-name)`.
 * **Treadmill permission:** U4 monitors protected VIN and its open-drain
   outputs form TREAD_OK. U6 requires TREAD_OK for both RELAY_GATE and
   TX_GATE, so firmware commands alone cannot enable either path.
+* **TREAD_OK/IO6 isolation:** R32 is a series resistor between TREAD_OK and TREAD_OK_MCU (U1 IO6 only), so a misconfigured push-pull GPIO cannot force the interlock high or contend with U4's open-drain output; U4/U6/R21/R22/TP7 stay directly on TREAD_OK (review finding B2).
 * **Relay control:** U5 enables the +5V_RLY coil supply and Q1 enables
   the low side. These are series hardware controls driven by RELAY_GATE;
   loss of permission removes coil power.
@@ -184,7 +187,7 @@ Every physical connection is listed as `reference.pad (pin-name)`.
   no footprint and are excluded from BOM/CPL; they add no PCB copper.
 * **Harness interfaces:** J1 is Molex 430450809/C240838 with 430250800 housing; J2 is Molex 430451010/C563827 with 430251000 housing. Both use 430300001 terminals. The 8- and 10-position housings are physically incompatible; J2 pads 9/10 are deliberately NC.
 * **Release status:** PROVISIONAL_REQUIRES_LIVE_BOM_CPL_PROOF; public catalog identity is not an order-ready placement result.
-* **GPIO map:** IO4=K1_NC_FB, IO5=K1_NO_FB, IO6=TREAD_OK,
+* **GPIO map:** IO4=K1_NC_FB, IO5=K1_NO_FB, IO6=TREAD_OK_MCU,
   IO7=VBUS_PRESENT_N, IO15=TX_ENABLE, IO16=UART2 RX,
   IO17=UART1 TX, IO18=UART1 RX, IO21=RELAY_CMD, IO38=status LED.
   Native USB remains on IO19/IO20.
