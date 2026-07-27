@@ -203,17 +203,45 @@ The running screen draws a full-bleed background photo; all text/widgets over it
 - **ProgramState**: manages interval execution with 1s tick loop, pause/skip/extend support, encouragement milestones (25/50/75%)
 - **GPX import**: `POST /api/gpx/upload` parses GPX routes into incline-based interval programs
 
+### Persistence (SQLite)
+
+All user data lives in a SQLite DB (`treadmill.db`, override with `TREADMILL_DB`) owned by
+`python/db.py` (`TreadmillDB`). Tables: `profiles`, `runs`, `saved_workouts`,
+`program_history`, `coach_messages`, `app_state`. **Everything is scoped per profile** —
+the app is multi-user (see Profiles below). Legacy flat files (`program_history.json`,
+`run_history.json`, `saved_workouts.json`, `user_profile.json`) are imported once on first
+boot and renamed `*.migrated`; they are never written again.
+
 ### Program History
 
-Recently generated/loaded programs are saved to `program_history.json` (max 10 entries). Programs are deduplicated by name. History is accessible via REST API and shown as a horizontal scroll in the UI.
+Recently generated/loaded programs go to the `program_history` table, capped at
+`MAX_HISTORY` (20) per profile. Programs are deduplicated by name. Accessible via REST API
+and shown as a horizontal scroll in the UI.
 
 ### Run History
 
-Completed and in-progress sessions are persisted to `run_history.json` (max 200 entries). Records are created 30 seconds into a session (as `end_reason: "in_progress"`), updated every 30 seconds with current metrics (elapsed, distance, calories), and finalized when the session ends with the actual end reason (`user_stop`, `program_complete`, `disconnect`). This ensures run data survives server crashes. Records include `program_fingerprint` for matching runs to workouts.
+Completed and in-progress sessions are persisted to the `runs` table (no insert-time cap;
+`GET /api/runs` returns the most recent 200). Records are created once a session passes 5s
+elapsed (as `end_reason: "in_progress"`), saved every 30 seconds with current metrics
+(elapsed, distance, calories), and finalized when the session ends with the actual end
+reason (`user_stop`, `program_complete`, `disconnect`). This ensures run data survives
+server crashes. Records include `program_fingerprint` for matching runs to workouts.
 
 ### Saved Workouts
 
-Users can save favorite programs from history to `saved_workouts.json` for permanent access. Saved workouts persist independently of the rolling history window and track usage stats (times used, last used). Accessible via REST API and shown in a "My Workouts" section in the Kotlin/Android UI.
+Users can save favorite programs from history to the `saved_workouts` table (uncapped) for
+permanent access. Saved workouts persist independently of the rolling history window and
+track usage stats (times used, last used). Accessible via REST API and shown in a "My
+Workouts" section in the Kotlin/Android UI.
+
+### Profiles
+
+The app is multi-user. Each profile owns its runs, saved workouts, program history, coach
+messages, and an optional avatar image (stored as a BLOB). A **guest mode** lets someone
+run without creating a profile; guest data can be converted into a real profile afterwards.
+Profile switching is blocked mid-session. The Android app opens on a profile picker, so the
+`/api/profiles*` and `/api/profile/*` endpoints are required for the app to get past its
+first screen.
 
 ### Auto Proxy/Emulate Mode
 
@@ -241,16 +269,16 @@ make test-pi
 # Full pre-commit gate: local unit tests + Pi hardware tests
 make test-all
 
-# FTMS Rust unit tests (27 tests, protocol encoding/decoding)
+# FTMS Rust unit tests (33 tests: protocol encoding/decoding + alive-signal logic)
 cd rust/ftms && cargo test
 
-# FTMS debug integration tests (17 tests, requires ftms-daemon + treadmill_io running on Pi)
+# FTMS debug integration tests (19 tests, requires ftms-daemon + treadmill_io running on Pi)
 cd rust/ftms && cargo test --test debug_integration -- --ignored --test-threads=1
 
-# FTMS BLE integration tests (18 tests, requires hci1 USB dongle on Pi)
+# FTMS BLE integration tests (8 tests, requires hci1 USB dongle on Pi)
 make test-ftms-ble   # or: ssh rpi 'sudo bash ~/treadmill/rust/ftms/tests/ble_integration.sh'
 
-# HRM Rust unit tests (14 tests, HR parsing + config)
+# HRM Rust unit tests (16 tests, HR parsing + config)
 cd rust/hrm && cargo test
 
 # HRM Python client tests (6 tests, mock daemon)
@@ -265,6 +293,13 @@ python3 -m pytest python/tests/test_live_program.py -v
 # All non-hardware Python tests
 python3 -m pytest python/tests -m "not hardware" -v
 ```
+
+Other unit-tested modules not named above: `test_db.py` (SQLite persistence),
+`test_profile_adversarial.py` (multi-profile isolation + guest mode),
+`test_session.py` / `test_session_ws.py` (run records, heartbeat, WS session frames),
+`test_background_advice.py`, `test_extract_intent.py`. The voice suite
+(`test_voice_commands.py` + `voice_test_cases.py` + `generate_voice_audio.py`) needs a live
+Gemini API key and is nondeterministic — exclude it with `-m "not hardware and not voice"`.
 
 Note: `make test` automatically stops the `treadmill-io` service before running (to free the socket) and restarts it after, even if tests fail.
 
@@ -288,13 +323,20 @@ Note: `make test` automatically stops the `treadmill-io` service before running 
 | `/api/program/stop` | POST | Stop program, zero speed/incline |
 | `/api/program/pause` | POST | Toggle pause/resume |
 | `/api/program/skip` | POST | Skip to next interval |
+| `/api/program/prev` | POST | Go back to the previous interval |
 | `/api/program/extend` | POST | Adjust current interval. Body: `{"seconds": <int>}` |
+| `/api/program/adjust-duration` | POST | Adjust total duration of a manual program |
+| `/api/program/quick-start` | POST | Build a single-interval manual program and start it immediately |
+| `/api/session` | GET | Active workout session state (elapsed, distance, calories) |
+| `/api/reset` | POST | Full reset: stop belt, clear program, zero session |
 
 ### History & Import
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/programs/history` | GET | List recent programs (max 10) |
+| `/api/programs/history` | GET | List recent programs (max 20) |
 | `/api/programs/history/{id}/load` | POST | Reload a saved program |
+| `/api/programs/history/{id}/resume` | POST | Resume a history entry from its saved position |
+| `/api/runs` | GET | List run records for the active profile (most recent 200) |
 | `/api/gpx/upload` | POST | Upload GPX route file (multipart form) |
 
 ### Saved Workouts
@@ -305,6 +347,20 @@ Note: `make test` automatically stops the `treadmill-io` service before running 
 | `/api/workouts/{id}` | PUT | Rename a workout. Body: `{"name": "..."}` |
 | `/api/workouts/{id}` | DELETE | Delete a saved workout |
 | `/api/workouts/{id}/load` | POST | Load a saved workout into the program engine |
+
+### Profiles
+The Android app opens on a profile picker — these endpoints are required for it to reach the Lobby.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/profiles` | GET / POST | List profiles / create a profile |
+| `/api/profiles/{id}` | PUT / DELETE | Rename or update / delete a profile |
+| `/api/profiles/{id}/avatar` | POST / GET / DELETE | Upload, fetch, or clear a profile avatar image |
+| `/api/profile/active` | GET | Active profile + `guest_mode` flag |
+| `/api/profile/select` | POST | Switch active profile (rejected mid-session) |
+| `/api/profile/guest` | POST | Enter guest mode |
+| `/api/profile/guest/convert` | POST | Convert guest-session data into a real profile |
+| `/api/user` | GET / PUT | Legacy shim: weight/vest of the active profile |
 
 ### Heart Rate Monitor
 | Endpoint | Method | Description |
@@ -321,10 +377,25 @@ Note: `make test` automatically stops the `treadmill-io` service before running 
 | `/api/tool` | POST | Generic tool execution (used by voice clients). Body: `{"name": "...", "args": {...}, "context": "..."}`. Forwards to `_exec_fn()`. |
 | `/api/background/advise` | POST | Get cached Gemini overlay prior for a background. Body: `{"image_hash":"...","image_b64":"..."}` |
 
+### Voice
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/chat/voice` | POST | Voice turn: transcribe audio, respond as the coach |
+| `/api/tts` | POST | Gemini TTS speech synthesis |
+| `/api/voice/prompt/{prompt_id}` | GET | Fetch a canned voice-injection prompt |
+| `/api/voice/extract-intent` | POST | Recover a function call from Gemini Live "thinks aloud" text |
+
+### Client Support
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/config` | GET | Client config: ephemeral Gemini Live token, tool declarations |
+| `/api/device-log` | POST | Accept debug logs from iOS/Android clients |
+| `/api/log` | GET | Tail the `treadmill_io` log |
+
 ### WebSocket
 | Endpoint | Description |
 |----------|-------------|
-| `/ws` | Real-time KV data stream + program state updates. Receives JSON messages with `type: "status"` or `type: "program"`. |
+| `/ws` | Real-time state stream. Broadcasts JSON messages with `type`: `"status"` (treadmill + profile state), `"program"` (interval program state), `"session"` (active workout metrics), `"kv"` (raw motor/console key-value pairs — the Debug screen's live feed), `"connection"` (treadmill_io connect/disconnect), `"hr"` (heart rate). |
 
 ## Code Review Standards
 
@@ -400,7 +471,9 @@ All C++ code in `cpp/` must follow these rules. The environment is resource-cons
 
 **Python clients** (`python/treadmill_client.py`, `python/hrm_client.py`): Thin IPC wrappers to daemon sockets. No business logic.
 
-**Workout DB** (`python/workout_db.py`): In-memory SQLite read-only query interface for Gemini. Populated from JSON files + live active program. No HTTP, no business logic.
+**Persistence** (`python/db.py`): `TreadmillDB` — the SQLite store (`treadmill.db`) behind all user data: profiles, runs, saved workouts, program history, coach messages, avatar BLOBs, plus one-time JSON migration. Profile-scoped. No HTTP, no business logic.
+
+**Workout DB** (`python/workout_db.py`): In-memory SQLite read-only query interface for Gemini. Populated from `TreadmillDB` (history, workouts, runs) for the active profile, plus the live active program. No HTTP, no business logic.
 
 **Program engine** (`python/program_engine.py`): Interval execution + Gemini API. No HTTP, no GPIO, no imports from server.
 
