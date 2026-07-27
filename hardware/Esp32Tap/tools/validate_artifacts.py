@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the checked-in Rev D manufacturing artifacts without pcbnew.
+"""Validate the checked-in Rev E manufacturing artifacts without pcbnew.
 
 The physical board is inspected across a JSON boundary by ``inspect_kicad.py``
 under KiCad's system Python.  Everything in this program uses only the normal
@@ -93,7 +93,7 @@ def inspect_board() -> dict[str, Any]:
 
 
 def validate_geometry(board: dict[str, Any]) -> None:
-    require(board["revision"] == "D", "PCB revision is not D")
+    require(board["revision"] == "E", "PCB revision is not E")
     require(
         board["copper_layers"] == EXPECTED_LAYERS,
         f"copper layer set differs: {board['copper_layers']}",
@@ -332,7 +332,7 @@ def main() -> int:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
     print(
-        "PASS: Rev D board, stackup, routing, parity, assembly, " "and fabrication artifacts are internally consistent"
+        "PASS: Rev E board, stackup, routing, parity, assembly, " "and fabrication artifacts are internally consistent"
     )
     return 0
 

@@ -1,4 +1,4 @@
-// Esp32Tap two-part enclosure — parametric, sized to the Rev D board.
+// Esp32Tap two-part enclosure — parametric, sized to the Rev E board.
 // Coordinates follow the PCB: origin = board top-left corner, +X right,
 // +Y toward the bottom edge (the PCB "top edge" carries the antenna
 // overhang).  Board-position parameters below are taken directly from
@@ -22,39 +22,44 @@ ant_x0       = 69.0;    // physical U1 F.Fab antenna span in board X
 ant_x1       = 87.0;
 ant_air_gap  = 15.0;    // plastic/air void from antenna edge to inner wall
 
-// Rev D: J1/J2 are both the Molex 441440003 right-angle SMD RJ45 jack
-// (LCSC C585890) — the exact footprint anchors from inspect_kicad.  Unlike
-// Rev C's two different Micro-Fit part numbers, J1 and J2 are now the
-// identical part, edge-mounted with the mating opening facing off the
-// board's X=0 edge (rotation places the jack's local -Y, the pin/opening
-// side, onto world -X — see gen_pcb.py PLACE).  There is no mechanical
-// keying between console and motor any more: both apertures are
-// identical, standard 8P8C openings.  CONSOLE/MOTOR silkscreen is the
-// only differentiator; a mis-plugged cable is a labeling/procedure risk
-// now, not something this CAD rejects.
-j1_yc = 18.0;
+// Rev E: J1/J2 are both the Molex 441440003 right-angle SMD RJ45 jack
+// (LCSC C585890) — the exact footprint anchors from inspect_kicad.  One
+// jack per short edge: J1 (CONSOLE) opens off the board's X=0 edge and J2
+// (MOTOR) opens off the X=board_l edge, so the installed box reads
+// console -> motor left to right, and both jacks sit on the same
+// Y=40 axis (straight passthrough).  Each jack's mating face is FLUSH
+// with its board edge (the body extends inboard from there), so the
+// port sits clr + wall = 4.5 mm behind the exterior wall face.  Both
+// apertures are identical, unkeyed 8P8C openings on OPPOSITE walls;
+// CONSOLE/MOTOR silkscreen plus the physical cable run direction are
+// the differentiators — a mis-plugged cable is a labeling/procedure
+// risk, not something this CAD rejects.
+j1_yc = 40.0;
 j2_yc = 40.0;
 // Fabrication-body bbox from inspect_kicad (identical for J1 and J2 —
-// same part): Y width (across the row of 8 pins) and X depth (pin row to
-// the rear mechanical-tab cap).
+// same part): Y width (across the row of 8 pins) and X depth (mating
+// face at the board edge to the rear mechanical-tab cap, inboard).
 rj45_body_w     = 15.48;
 rj45_body_depth = 17.17;
 rj45_body_h     = 13.4;  // jack shell height above the board (datasheet)
 // Panel aperture: clears the mating 8P8C plug shell plus finger
 // clearance for the latch tab — not the full jack body, which sits
-// inside the case, recessed a few mm behind the wall.
+// inside the case with its mating face at the board edge.
 aperture_w = 16.0;
 aperture_h = 14.0;
 latch_clearance = 6.0;          // straight insertion/extraction depth
 cable_bend_radius = 18.0;       // external cable bend service envelope
-cable_exit_direction = -1.0;    // both jacks open outward through X-min
+cable_exit_direction = -1.0;    // J1 opens outward through X-min
+j2_cable_exit_direction = 1.0;  // J2 opens outward through X-max
 
-// USB-C on the X=board_l wall.  The receptacle face sits at the board edge,
-// 4.5 mm behind the exterior wall face (2.5 wall + 2.0 clearance), so the
-// wall aperture must pass the CABLE OVERMOLD, not just the plug shell —
-// otherwise no standard cable can mate.  13 x 8 covers typical overmolds
-// (<=12 x 6.5) and doubles as the plug-alignment funnel.
-usb_yc = 39.5;
+// USB-C on the Y=board_w (bottom) wall.  The receptacle face sits at the
+// board edge, wall + bot_clr = 11.5 mm behind the exterior wall face, so
+// the wall aperture must pass the CABLE OVERMOLD all the way to the board
+// edge — otherwise no standard cable can mate.  13 x 8 covers typical
+// overmolds (<=12 x 6.5) and doubles as the plug-alignment funnel; the
+// deeper tunnel needs an overmold at least ~12 mm long, which every
+// standard moulded USB-C cable provides.
+usb_xc = 83.6;
 usb_w = 9.4;
 usb_h = 3.4;
 usb_om_w = 13.0;
@@ -65,7 +70,7 @@ mh = [[20.0, 6.0], [48.0, 6.0], [92.0, 55.0]];
 
 // LED light pipes + button access (X, Y) in board coords
 led1 = [79.0, 12.97];   // status (green)
-led2 = [32.5, 44.5];    // power (red)
+led2 = [41.2, 55.4];    // power (red)
 sw1  = [42.0, 7.0];     // EN / reset
 sw2  = [91.0, 20.0];    // BOOT
 
@@ -126,11 +131,20 @@ module rrect(l, w, h, r) {
 // Straight, unkeyed 8P8C wall aperture: clears the mating plug shell plus
 // finger clearance for the latch tab, tunneling from the exterior face
 // through latch_clearance past the board edge so a plug can seat against
-// the board-mounted jack (recessed rj45_body_depth-ish behind the wall)
-// and still be pinched/extracted without touching the aperture wall.
+// the board-mounted jack (whose mating face is flush with the board
+// edge, i.e. wall + clr = 4.5 mm behind the exterior face) and still be
+// pinched/extracted without touching the aperture wall.
 module rj45_wall_aperture(yc) {
   aperture_z = bz0 + board_t - 0.3;
   translate([-1, wall + by0 + yc - aperture_w/2, aperture_z])
+    cube([wall + bx0 + latch_clearance + 2, aperture_w, aperture_h]);
+}
+
+// Rev E: identical aperture through the opposite (X=out_l) wall for J2.
+module rj45_wall_aperture_right(yc) {
+  aperture_z = bz0 + board_t - 0.3;
+  translate([out_l - wall - bx0 - latch_clearance - 1,
+             wall + by0 + yc - aperture_w/2, aperture_z])
     cube([wall + bx0 + latch_clearance + 2, aperture_w, aperture_h]);
 }
 
@@ -141,6 +155,14 @@ module rj45_wall_aperture(yc) {
 // sweep.
 module rj45_plug_service_envelope(yc) {
   translate([-cable_bend_radius,
+             wall + by0 + yc - aperture_w/2,
+             bz0 + board_t - 0.3])
+    cube([cable_bend_radius + wall + bx0 + latch_clearance,
+          aperture_w, aperture_h]);
+}
+
+module rj45_plug_service_envelope_right(yc) {
+  translate([out_l - wall - bx0 - latch_clearance,
              wall + by0 + yc - aperture_w/2,
              bz0 + board_t - 0.3])
     cube([cable_bend_radius + wall + bx0 + latch_clearance,
@@ -167,17 +189,18 @@ module base() {
     // main cavity
     translate([wall, wall, wall]) rrect(int_l, int_w, int_h + 1, 2);
 
-    // RJ45 wall apertures (both jacks are the identical part; unkeyed).
+    // RJ45 wall apertures (identical unkeyed part, one per short wall).
     rj45_wall_aperture(j1_yc);
-    rj45_wall_aperture(j2_yc);
+    rj45_wall_aperture_right(j2_yc);
 
-    // USB-C aperture, X = out_l wall — overmold-sized (see parameter note):
-    // the receptacle is recessed 4.5 mm behind the exterior face, so the
-    // opening passes the cable overmold all the way to the board edge.
-    translate([out_l - wall - clr - 1,
-               wall + by0 + usb_yc - usb_om_w/2,
+    // USB-C aperture, Y = out_w (bottom) wall — overmold-sized (see the
+    // parameter note): the receptacle is recessed wall + bot_clr behind
+    // the exterior face, so the opening passes the cable overmold all the
+    // way to the board edge.
+    translate([wall + bx0 + usb_xc - usb_om_w/2,
+               out_w - wall - bot_clr - 1,
                bz0 + board_t + usb_h/2 - usb_om_h/2])
-      cube([wall + clr + 2, usb_om_w, usb_om_h]);
+      cube([usb_om_w, wall + bot_clr + 2, usb_om_h]);
 
     // side vents (both long walls, away from the antenna end)
     for (i = [0:4]) {
@@ -273,5 +296,5 @@ else {
   translate([0, out_w + 12, 0]) lid();
   // Transparent preview-only service volumes; excluded from base/lid STLs.
   %rj45_plug_service_envelope(j1_yc);
-  %rj45_plug_service_envelope(j2_yc);
+  %rj45_plug_service_envelope_right(j2_yc);
 }

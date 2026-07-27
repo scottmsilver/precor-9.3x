@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the project-local Rev D footprint libraries."""
+"""Generate the project-local Rev E footprint libraries."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def main() -> None:
         SWITCH,
     )
     atomic_write(ROOT / "kicad" / "fp-lib-table", TABLE)
-    print("wrote project-local Rev D footprint libraries")
+    print("wrote project-local Rev E footprint libraries")
 
 
 if __name__ == "__main__":

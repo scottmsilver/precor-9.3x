@@ -196,14 +196,14 @@ def test_no_active_rev_a_or_release_ready_claims(
     )
 
 
-def test_rev_d_handoff_states_power_firmware_and_release_boundaries(
+def test_rev_e_handoff_states_power_firmware_and_release_boundaries(
     esp32tap_dir: Path,
 ) -> None:
     handoff = (esp32tap_dir / "AI-HANDOFF.md").read_text(encoding="utf-8")
     required = (
         "Status: HOLD",
         "current-limited +8 V bench power",
-        "USB alone cannot power or program Rev D",
+        "USB alone cannot power or program Rev E",
         "executable **host reference**, not production",
         "one 4 s manual total-silence lease",
         "complete valid parsed frame",

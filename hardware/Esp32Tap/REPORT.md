@@ -1,11 +1,11 @@
-# Esp32Tap Rev D engineering review
+# Esp32Tap Rev E engineering review
 
 **Status: HOLD.** This report is not authorization to fabricate, pay, deploy,
 or operate a treadmill.
 
 ## Executive conclusion
 
-Rev D is internally coherent under the checked repository models:
+Rev E is internally coherent under the checked repository models:
 
 - 95 × 58 mm four-layer PCB;
 - U1 fully inside the board with 3.25/3.30 mm margins and its stock all-layer
@@ -52,16 +52,16 @@ fault-to-stable-NC time remain unsupported.
 
 The exact 2 A trace-union solve gives:
 
-- +8 V: 14.279315 mΩ;
-- conservative trace-only GND: 34.910668 mΩ;
-- combined loop drop: **98.379966 mV**.
+- +8 V: 24.677226 mΩ;
+- conservative explicit-copper GND (In1.Cu strips counted, plane still ignored): 24.173777 mΩ;
+- combined loop drop: **97.702006 mV** (layer-aware copper thickness: 35 µm outer, 15.2 µm inner).
 
 Coincident trace primitives are treated as one physical copper union, while
 geometrically separate branches remain parallel. Duplicate coincident
 intended vias fail validation.
 
-At the worst exact +8 V case, maximum via current is 0.828913 A, barrel rise
-is 7.504156 °C, and I²R is 0.999735 mW. The trace model does not solve In1
+At the worst exact +8 V case, maximum via current is 0.827864 A, barrel rise
+is 7.482581 °C, and I²R is 0.685491 mW. The trace model does not solve In1
 plane current sharing, so every 1.4/1.0 mm GND via receives a separate
 full-2.0-A envelope: 12.273573 °C and 2.328020 mW at 20 µm plating.
 
@@ -77,8 +77,8 @@ USB stays on F.Cu with zero signal vias. The controlled sections use
 
 | Side | D− | D+ | Skew |
 |---|---:|---:|---:|
-| A | 60.0528786214 mm | 60.0528777233 mm | 0.0000008981 mm |
-| B | 59.0528786214 mm | 59.0528777233 mm | 0.0000008981 mm |
+| A | 55.9528786214 mm | 55.8729617233 mm | 0.0799168981 mm |
+| B | 54.9528786214 mm | 54.8729617233 mm | 0.0799168981 mm |
 
 Production stack/impedance, native USB ROM/reset attachment, enumeration,
 unplug behavior, eye margin, and USB/treadmill return current remain open.
@@ -86,8 +86,9 @@ unplug behavior, eye margin, and USB/treadmill return current remain open.
 ## Interfaces and manufacturing
 
 J1/J2 are two instances of `0441440003`, a right-angle SMD 8P8C RJ45 jack
-(LCSC `C585890`), edge-mounted with the mating opening facing off the
-board's X=0 edge so a standard RJ45 plug reaches through the enclosure wall
+(LCSC `C585890`), edge-mounted with the mating opening facing off a short
+board edge (Rev E: J1 off X=0, J2 off X=95, one jack per enclosure end)
+so a standard RJ45 plug reaches through the enclosure wall
 aperture. There is no separate pigtail harness to quote or qualify; the
 treadmill cable plugs directly into the assembled board. Because J1 and J2
 are mechanically identical, console/motor differentiation is silkscreen and

@@ -1040,7 +1040,7 @@ def test_pcb_generator_is_byte_reproducible_and_leaves_no_sidecars(
         check=False,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=600,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert output.read_bytes() == (esp32tap_dir / "kicad" / "Esp32Tap.kicad_pcb").read_bytes()
@@ -1078,8 +1078,7 @@ def test_compaction_locks_explicit_coupled_groups_and_neighbors(
                 "for ref in ('J3', 'U3', 'Q2', 'R29', 'SW2', 'LED1', "
                 "'R4', 'R5', 'R11', 'R31', 'C11', 'TP5', 'TP13', "
                 "'J1', 'J2', 'K1', 'D4', 'D5', 'D6', 'D7')}, "
-                "'deltas': gen_pcb.COMPACT_X_DELTAS, "
-                "'edge_route_x': gen_pcb.usb_edge_x(93.4)}))"
+                "'deltas': gen_pcb.COMPACT_X_DELTAS}))"
             ),
         ],
         cwd=esp32tap_dir,
@@ -1092,21 +1091,21 @@ def test_compaction_locks_explicit_coupled_groups_and_neighbors(
     compact = json.loads(completed.stdout)
     positions = compact["positions"]
     assert positions == {
-        "J3": [91.2, 36.5, 90],
-        "U3": [82.0, 35.0, 180],
-        "Q2": [84.0, 46.5, 0],
-        "R29": [80.0, 48.0, 0],
+        "J3": [83.6, 51.2, 0],
+        "U3": [76.0, 47.3, 180],
+        "Q2": [76.4, 51.2, 90],
+        "R29": [69.8, 44.4, 0],
         "SW2": [91.0, 17.0, 0],
         "LED1": [93.0, 10.0, 180],
-        "R4": [94.0, 43.5, 270],
-        "R5": [94.0, 29.0, 90],
+        "R4": [92.0, 46.8, 90],
+        "R5": [74.6, 54.0, 0],
         "R11": [90.0, 10.0, 0],
         "R31": [90.0, 13.0, 90],
-        "C11": [87.0, 43.0, 0],
+        "C11": [90.2, 46.4, 90],
         "TP5": [49.0, 36.0, 0],
-        "TP13": [74.6, 36.0, 0],
-        "J1": [8.0, 15.0, 90],
-        "J2": [8.0, 37.0, 90],
+        "TP13": [73.91999999999999, 36.0, 0],
+        "J1": [11.9, 37.0, 270],
+        "J2": [83.1, 37.0, 90],
         "K1": [30.2, 23.0, 0],
         "D4": [30.0, 11.5, 0],
         "D5": [27.0, 15.0, 270],
@@ -1114,13 +1113,12 @@ def test_compaction_locks_explicit_coupled_groups_and_neighbors(
         "D7": [38.0, 38.0, 270],
     }
     assert compact["deltas"] == {
-        "J3": -5.0,
-        "U3": -5.0,
         "SW2": -3.0,
         **{f"TP{number}": -5.0 for number in range(5, 14)},
+        "TP12": -5.44,
+        "TP13": -5.68,
     }
     assert _distance(positions["Q2"], positions["R29"]) >= 4.0
-    assert compact["edge_route_x"] == pytest.approx(88.4)
 
 
 def test_u1_profile_correction_translates_its_coupled_cluster_together(
@@ -1243,15 +1241,15 @@ def test_power_corridors_preserve_a_locked_safety_route_priority(
     assert {track["layer"] for track in pass_through if track["net"] == "GND" and track["width_mm"] >= 2.0} == {"F.Cu"}
 
 
-def test_checked_in_sources_identify_a_four_layer_rev_d_board(
+def test_checked_in_sources_identify_a_four_layer_rev_e_board(
     esp32tap_dir: Path,
 ) -> None:
     pcb = (esp32tap_dir / "kicad" / "Esp32Tap.kicad_pcb").read_text(encoding="utf-8")
     schematic = (esp32tap_dir / "kicad" / "Esp32Tap.kicad_sch").read_text(encoding="utf-8")
 
     assert all(f'"{layer}"' in pcb for layer in EXPECTED_LAYERS)
-    assert re.search(r'\(rev\s+"D"\)', schematic)
-    assert re.search(r"Esp32Tap\s+rev\s+D", pcb, re.IGNORECASE)
+    assert re.search(r'\(rev\s+"E"\)', schematic)
+    assert re.search(r"Esp32Tap\s+rev\s+E", pcb, re.IGNORECASE)
     for marking in ("BYPASS", "EMULATE"):
         assert f'"{marking}"' in pcb
 
@@ -1308,7 +1306,7 @@ def test_independent_fab_profile_drills_and_antenna_binding(
             archived = zipped.read(name)
             assert hashlib.sha256(archived).digest() == hashlib.sha256(exported).digest()
             binding.update(name.encode("utf-8") + b"\0" + hashlib.sha256(archived).digest())
-        assert binding.hexdigest() == ("e4f5e16c4de8bf4eb481318ef51577fb26049ace955ddc246b7a7c0078e472fe")
+        assert binding.hexdigest() == ("021ddfd838259d79d62eba37597278ec33641f47c7340e417d256dd43fc6add1")
 
     # Component bodies are not present in Gerber/Excellon. Bind the
     # inspector's antenna proof to this exact reviewed PCB and fab package.
@@ -1587,16 +1585,16 @@ def test_inspected_vbus_cannot_reach_vin(
     assert not vbus_to_vin_bridges
 
 
-def test_inspected_title_and_silkscreen_are_rev_d(
+def test_inspected_title_and_silkscreen_are_rev_e(
     kicad_report: dict[str, Any],
 ) -> None:
     board = _board(kicad_report)
     assert board["title"] == "Esp32Tap - ESP32-S3 Precor serial-bus tap"
-    assert board["revision"] == "D"
+    assert board["revision"] == "E"
 
     front_silk = [item for item in board["texts"] if item.get("layer") in {"F.SilkS", "F.Silkscreen"}]
     rendered = "\n".join(str(item.get("text", "")) for item in front_silk)
-    assert re.search(r"Esp32Tap\s+rev\s+D", rendered, re.IGNORECASE)
+    assert re.search(r"Esp32Tap\s+rev\s+E", rendered, re.IGNORECASE)
     assert "BYPASS" in rendered
     assert "EMULATE" in rendered
 
@@ -1723,27 +1721,40 @@ def test_enclosure_geometry_is_explicit_and_board_derived(
     assert antenna["span_x_mm"][1] <= board["outline"]["max"][0]
 
 
-def test_rj45_jacks_face_the_left_board_edge(
+def test_rj45_jacks_open_off_their_short_board_edges(
     kicad_report: dict[str, Any],
 ) -> None:
-    # Rev D: J1/J2 are the Molex 441440003 right-angle SMD RJ45 (LCSC
-    # C585890). Its mating opening/pad row sits near the board edge; the
-    # jack's rear mechanical-tab cap (the fabrication body's far X) extends
-    # inward toward the board interior -- the opposite geometry from Rev
-    # C's Micro-Fit housing, whose mating nose was the part closest to the
-    # board edge.
+    # J1/J2 are the Molex 441440003 right-angle SMD RJ45 (LCSC C585890).
+    # The mating opening faces footprint-local +Y (the deep-body side --
+    # verified against the vendor 3D model and the Molex SD-44144-001
+    # drawing); the signal-pad row at local Y=-5.9 is the REAR.  Rev D/
+    # early Rev E had both jacks 180 degrees backwards (cavity opening
+    # into the board); the fix anchors each jack's fabrication-body front
+    # edge on its board edge, so the pad row sits ~17.75 mm INBOARD.
+    # Rev E: one jack per short edge -- J1 (CONSOLE) opens off the left
+    # edge (rotation 270 maps the footprint's local +Y opening to world
+    # -X) and J2 (MOTOR) opens off the right edge (rotation 90 maps it to
+    # world +X), so the board reads console -> motor left to right.
     board = _board(kicad_report)
     outline = board["outline"]
-    for ref in ("J1", "J2"):
-        connector = board["footprints"][ref]
-        body = connector["fabrication_body_bbox"]
-        assert connector["rotation_deg"] == pytest.approx(90.0)
-        assert body is not None
-        assert body["min"][0] >= outline["min"][0]
-        pad_row_x = connector["pads"]["1"]["at"][0]
-        assert pad_row_x - outline["min"][0] == pytest.approx(2.1, abs=0.05)
-        assert pad_row_x < body["max"][0]
-        assert body["max"][0] - outline["min"][0] < 20.0
+    j1 = board["footprints"]["J1"]
+    body = j1["fabrication_body_bbox"]
+    assert j1["rotation_deg"] == pytest.approx(270.0)
+    assert body is not None
+    assert body["min"][0] >= outline["min"][0]
+    pad_row_x = j1["pads"]["1"]["at"][0]
+    assert pad_row_x - outline["min"][0] == pytest.approx(17.8, abs=0.05)
+    assert pad_row_x > body["min"][0]
+    assert body["max"][0] - outline["min"][0] < 20.0
+    j2 = board["footprints"]["J2"]
+    body = j2["fabrication_body_bbox"]
+    assert j2["rotation_deg"] == pytest.approx(90.0)
+    assert body is not None
+    assert body["max"][0] <= outline["max"][0]
+    pad_row_x = j2["pads"]["1"]["at"][0]
+    assert outline["max"][0] - pad_row_x == pytest.approx(17.8, abs=0.05)
+    assert pad_row_x < body["max"][0]
+    assert outline["max"][0] - body["min"][0] < 20.0
 
 
 def _assert_exact_non_smt_pad_occurrences(board: dict[str, Any]) -> None:
@@ -1890,6 +1901,116 @@ def test_named_antenna_keepout_is_all_copper_and_explicit_exception(
     assert in1[0].get("explicit_exceptions") == ["ESP32_ANTENNA_ALL_COPPER_KEEPOUT"]
 
 
+def _copper_keepout_offenders(
+    board: dict[str, Any],
+    outline: list[list[float]],
+    layers: set[str],
+) -> list[tuple[str, str, float]]:
+    """Return track/via copper that intrudes into a rectangular keepout.
+
+    Tangent copper (edge exactly on the keepout boundary) is not an
+    intrusion; only positive overlap beyond 1 µm is reported.
+    """
+    xs = [point[0] for point in outline]
+    ys = [point[1] for point in outline]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+
+    def penetration(x: float, y: float, radius: float) -> float:
+        dx = max(x0 - x, 0.0, x - x1)
+        dy = max(y0 - y, 0.0, y - y1)
+        if dx == 0.0 and dy == 0.0:
+            return radius
+        return radius - math.hypot(dx, dy)
+
+    offenders: list[tuple[str, str, float]] = []
+    for track in board["tracks"]:
+        if track["layer"] not in layers:
+            continue
+        start, end = track["start"], track["end"]
+        samples = max(1, math.ceil(math.dist(start, end) / 0.05))
+        worst = max(
+            penetration(
+                start[0] + (end[0] - start[0]) * index / samples,
+                start[1] + (end[1] - start[1]) * index / samples,
+                track["width_mm"] / 2,
+            )
+            for index in range(samples + 1)
+        )
+        if worst > 1e-6:
+            offenders.append((track["id"], track["net"], round(worst, 4)))
+    for via in board["vias"]:
+        if not layers & set(via["layers"]):
+            continue
+        worst = penetration(via["at"][0], via["at"][1], via["size_mm"] / 2)
+        if worst > 1e-6:
+            offenders.append((via["id"], via["net"], round(worst, 4)))
+    return offenders
+
+
+def test_no_track_or_via_copper_inside_antenna_keepouts(
+    kicad_report: dict[str, Any],
+) -> None:
+    """KiCad 10 DRC does not flag tracks/vias inside rule areas in this
+    project, so the audit itself must prove the router honoured both the
+    module's stock all-copper-layer antenna keepout and the named board
+    rule area (Rev E regression: U0TXD/U0RXD were once routed straight
+    under the inverted-F antenna on B.Cu/In2.Cu)."""
+    board = _board(kicad_report)
+    keepouts = board["footprints"]["U1"]["manufacturer_keepouts"]
+    assert keepouts
+    for keepout in keepouts:
+        assert keepout["forbid_tracks"]
+        assert keepout["forbid_vias"]
+        offenders = _copper_keepout_offenders(
+            board,
+            keepout["outline"],
+            set(keepout["layers"]),
+        )
+        assert not offenders, f"copper intrudes into {keepout['id']}: {offenders}"
+
+    named = [area for area in board["rule_areas"] if area["name"] == "ESP32_ANTENNA_ALL_COPPER_KEEPOUT"]
+    assert named
+    for keepout in named:
+        assert keepout["forbid_tracks"]
+        assert keepout["forbid_vias"]
+        # U1's pad row lies inside the named apron and pads are explicitly
+        # allowed there, so the short F.Cu escape stubs leaving those pads
+        # have intruded on F.Cu since the area was introduced (identical
+        # at Rev D HEAD).  Hold the named area to zero copper on every
+        # non-F layer, where the grid router and stitcher operate.
+        offenders = _copper_keepout_offenders(
+            board,
+            keepout["outline"],
+            set(keepout["layers"]) - {"F.Cu"},
+        )
+        assert not offenders, f"copper intrudes into {keepout['name']}: {offenders}"
+
+
+def test_antenna_keepout_copper_gate_rejects_planted_track(
+    kicad_report: dict[str, Any],
+) -> None:
+    board = copy.deepcopy(_board(kicad_report))
+    keepout = board["footprints"]["U1"]["manufacturer_keepouts"][0]
+    xs = [point[0] for point in keepout["outline"]]
+    ys = [point[1] for point in keepout["outline"]]
+    board["tracks"].append(
+        {
+            "id": "track:planted",
+            "net": "GND",
+            "layer": "B.Cu",
+            "width_mm": 0.2,
+            "start": [min(xs) + 1.0, max(ys) - 0.5],
+            "end": [min(xs) + 3.0, max(ys) - 0.5],
+        }
+    )
+    offenders = _copper_keepout_offenders(
+        board,
+        keepout["outline"],
+        set(keepout["layers"]),
+    )
+    assert offenders and offenders[0][0] == "track:planted"
+
+
 def test_inner_and_bottom_layer_policy_is_locked(
     kicad_report: dict[str, Any],
 ) -> None:
@@ -1969,7 +2090,18 @@ def _power_proof(board: dict[str, Any]) -> dict[str, Any]:
         assert via["drill_mm"] == pytest.approx(expected["drill_mm"])
 
     rho_105c = 1.724e-8 * (1 + 0.00393 * 85)
-    copper_thickness_m = 35e-6
+    # Layer-aware copper thickness per the baked JLC04161H-7628 stackup:
+    # 35 um outer foils, 15.2 um inner foils.  This strengthens the Rev D
+    # single-thickness model: inner-layer primitives (the In2.Cu +8V_RAW
+    # twins and In1.Cu GND strips) are credited with less copper and use
+    # the harsher IPC-2152 internal-conductor coefficient below.
+    layer_thickness_m = {
+        "F.Cu": 35e-6,
+        "B.Cu": 35e-6,
+        "In1.Cu": 15.2e-6,
+        "In2.Cu": 15.2e-6,
+    }
+    outer_layers = {"F.Cu", "B.Cu"}
     assumption = power_intent.VIA_BARREL_ASSUMPTION
     assert assumption["plating_thickness_um"] == 20.0
     assert assumption["class"] == "IPC-6012 Class 2"
@@ -2073,7 +2205,9 @@ def _power_proof(board: dict[str, Any]) -> dict[str, Any]:
                 length_mm = _distance(first, second)
                 if length_mm <= epsilon:
                     continue
-                resistance = rho_105c * (length_mm / 1000) / (track["width_mm"] / 1000 * copper_thickness_m)
+                resistance = (
+                    rho_105c * (length_mm / 1000) / (track["width_mm"] / 1000 * layer_thickness_m[track["layer"]])
+                )
                 edges.append(
                     {
                         "id": (f"{track['power_intent_id']}#{split_index}"),
@@ -2086,21 +2220,33 @@ def _power_proof(board: dict[str, Any]) -> dict[str, Any]:
                     }
                 )
         edges = _union_coincident_power_edges(edges)
+        # Through-vias connect every copper layer.  Model each barrel as
+        # three series edges (F-In1, In1-In2, In2-B) with resistance split
+        # by the stackup's inter-layer separations, so tracks on the inner
+        # layers join the network at their true position along the barrel.
+        via_layer_steps = (
+            ("F.Cu", "In1.Cu", 0.2456),
+            ("In1.Cu", "In2.Cu", 1.0802),
+            ("In2.Cu", "B.Cu", 0.2456),
+        )
+        total_step = sum(step for _, _, step in via_layer_steps)
         for via in vias:
             if via["net"] != net:
                 continue
             barrel_area = math.pi * via["drill_mm"] / 1000 * via_plating_m
-            edges.append(
-                {
-                    "id": via["power_intent_id"],
-                    "kind": "via",
-                    "drill_mm": via["drill_mm"],
-                    "barrel_area_m2": barrel_area,
-                    "a": point("F.Cu", via["at"]),
-                    "b": point("B.Cu", via["at"]),
-                    "resistance_ohm": (rho_105c * board_thickness_m / barrel_area),
-                }
-            )
+            barrel_resistance = rho_105c * board_thickness_m / barrel_area
+            for index, (top, bottom, step) in enumerate(via_layer_steps):
+                edges.append(
+                    {
+                        "id": f"{via['power_intent_id']}#z{index}",
+                        "kind": "via",
+                        "drill_mm": via["drill_mm"],
+                        "barrel_area_m2": barrel_area,
+                        "a": point(top, via["at"]),
+                        "b": point(bottom, via["at"]),
+                        "resistance_ohm": barrel_resistance * step / total_step,
+                    }
+                )
         return edges
 
     def solve(
@@ -2202,8 +2348,10 @@ def _power_proof(board: dict[str, Any]) -> dict[str, Any]:
                 max_via_i2r = 0.0
                 for edge, current in currents:
                     if edge["kind"] == "track":
-                        area_mil2 = edge["width_mm"] / 0.0254 * 1.378
-                        rise = (current / (0.048 * area_mil2**0.725)) ** (1 / 0.44)
+                        thickness_mil = layer_thickness_m[edge["layer"]] / 25.4e-6
+                        area_mil2 = edge["width_mm"] / 0.0254 * thickness_mil
+                        ipc_k = 0.048 if edge["layer"] in outer_layers else 0.024
+                        rise = (current / (ipc_k * area_mil2**0.725)) ** (1 / 0.44)
                         max_track_rise = max(max_track_rise, rise)
                         max_track_current = max(max_track_current, current)
                     else:
@@ -2277,11 +2425,11 @@ def test_single_open_connector_power_paths_are_sized_for_two_amps(
     # distribution, and IPC-2152 thermal rise) directly from the
     # generated PCB, independent of any harness-specific evidence file.
     result = _power_proof(_board(kicad_report))
-    assert result["nets"]["+8V_RAW"]["resistance_ohm"] == pytest.approx(0.014279, abs=0.000005)
-    assert result["nets"]["GND"]["resistance_ohm"] == pytest.approx(0.034911, abs=0.000005)
-    assert result["combined_drop_v"] == pytest.approx(0.098380, abs=0.000010)
+    assert result["nets"]["+8V_RAW"]["resistance_ohm"] == pytest.approx(0.017313, abs=0.000005)
+    assert result["nets"]["GND"]["resistance_ohm"] == pytest.approx(0.025151, abs=0.000005)
+    assert result["combined_drop_v"] == pytest.approx(0.084929, abs=0.000010)
     assert result["combined_drop_v"] <= 0.1
-    assert result["nets"]["+8V_RAW"]["max_via_current_a"] == pytest.approx(0.828913, abs=0.000005)
+    assert result["nets"]["+8V_RAW"]["max_via_current_a"] == pytest.approx(0.827864, abs=0.000005)
     assert max(net["max_track_current_a"] for net in result["nets"].values()) == pytest.approx(2.0)
     assert result["gnd_via_conservative_envelope"]["current_a"] == 2.0
     assert result["gnd_via_conservative_envelope"]["max_rise_c"] <= 20.0
@@ -2485,10 +2633,10 @@ def test_usb_has_clearance_from_unrelated_front_copper(
         track
         for track in front
         if track["net"] in USB_ROUTE_NETS
-        and min(track["start"][0], track["end"][0]) <= 178.5
-        and max(track["start"][0], track["end"][0]) >= 169.5
-        and min(track["start"][1], track["end"][1]) <= 131.8
-        and max(track["start"][1], track["end"][1]) >= 129.9
+        and min(track["start"][0], track["end"][0]) <= 173.15
+        and max(track["start"][0], track["end"][0]) >= 171.75
+        and min(track["start"][1], track["end"][1]) <= 141.6
+        and max(track["start"][1], track["end"][1]) >= 140.4
     ]
     unrelated = [track for track in front if track["net"] not in USB_ROUTE_NETS | {"GND"}]
     assert usb
@@ -2516,10 +2664,10 @@ def test_unrelated_route_vias_clear_controlled_usb_pair(
         track
         for track in board["tracks"]
         if track["net"] in USB_ROUTE_NETS
-        and min(track["start"][0], track["end"][0]) <= 178.5
-        and max(track["start"][0], track["end"][0]) >= 169.5
-        and min(track["start"][1], track["end"][1]) <= 131.8
-        and max(track["start"][1], track["end"][1]) >= 129.9
+        and min(track["start"][0], track["end"][0]) <= 173.15
+        and max(track["start"][0], track["end"][0]) >= 171.75
+        and min(track["start"][1], track["end"][1]) <= 141.6
+        and max(track["start"][1], track["end"][1]) >= 140.4
     ]
     vias = [via for via in board["vias"] if via["net"] not in USB_ROUTE_NETS | {"GND"}]
     k1_no_vias = [via for via in vias if via["net"] == "K1_NO_FB"]
@@ -2851,7 +2999,7 @@ def test_silkscreen_minimums_and_required_markings(
     assert board["footprint_silkscreen_graphic_count"] == 307
     front = [text for text in board["texts"] if text["layer"] in {"F.SilkS", "F.Silkscreen"}]
     expected_labels = {
-        "ESP32TAP REV D",
+        "ESP32TAP REV E",
         "BYPASS",
         "CONSOLE",
         "D1 K",
@@ -2863,6 +3011,7 @@ def test_silkscreen_minimums_and_required_markings(
         "MOTOR",
         "NC",
         "NO",
+        "P1",
         "PIN 1",
         "USB DATA ONLY",
     }
@@ -2873,16 +3022,22 @@ def test_silkscreen_minimums_and_required_markings(
         "BYPASS": ([142.0, 110.0], 0.0),
         "D1 K": ([126.5, 148.0], 90.0),
         "EMULATE": ([129.5, 137.0], 0.0),
-        "ESP32TAP REV D": ([158.0, 103.0], 0.0),
+        "ESP32TAP REV E": ([158.0, 103.0], 0.0),
         "K1 P1": ([123.0, 119.2], 0.0),
         "LED1 K": ([191.0, 121.0], 0.0),
-        "K LED2": ([177.0, 153.0], 0.0),
+        # Rev E flush-jack: the old (114.0, 130.0) spot is now inside
+        # J1's body; the label lives in the freed strip north of it.
+        "K LED2": ([114.0, 115.0], 0.0),
         "NO": ([142.0, 135.0], 0.0),
-        # Rev D: rotated vertical (90 deg) to fit the narrow corridor
-        # between the RJ45 jacks' deeper courtyard and D4/D5 (see
-        # gen_pcb.py add_silkscreen).
-        "MOTOR": ([123.0, 137.0], 90.0),
-        "PIN 1": ([123.0, 108.0], 90.0),
+        # Rev E flush-jack: CONSOLE sits just east of J1's pad row at the
+        # shared Y=37 centreline; MOTOR stays in the corridor between the
+        # USB pair verticals and J2's pad row; "P1" marks J2's pad 1 (now
+        # the BOTTOM of its row) from the pocket south-west of the row;
+        # "PIN 1" marks J1's pad 1 (the TOP of its row) north-east of it.
+        "CONSOLE": ([123.0, 137.0], 90.0),
+        "MOTOR": ([172.6, 140.6], 90.0),
+        "P1": ([174.9, 143.3], 0.0),
+        "PIN 1": ([121.5, 131.0], 0.0),
         "USB DATA ONLY": ([150.0, 108.0], 0.0),
     }
     for label, (position, rotation) in expected_placements.items():

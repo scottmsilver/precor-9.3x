@@ -1,4 +1,4 @@
-# Esp32Tap Rev D — handoff and advice for Claude
+# Esp32Tap Rev E — handoff and advice for Claude
 
 **Status: HOLD. Do not submit an order, add the design to a production cart,
 authorize substitutions, or pay. Do not connect an Emulate-capable build to
@@ -7,21 +7,28 @@ the treadmill.**
 Claude: preserve the distinction between repository evidence, vendor evidence,
 and physical evidence. A passing model is not an assembled-treadmill result.
 
-## Rev D facts that must not regress
+## Rev E facts that must not regress
 
 - The finished board is **95.0 × 58.0 mm**, four layers, on the modeled
   `JLC04161H-7628` stack.
 - U1 is fully inside the finished outline. Its locked body-to-edge margins are
   **3.25 mm and 3.30 mm**. Its stock manufacturer keepout forbids tracks,
   vias, pads, footprints, and zone fill on every copper layer.
+- KiCad DRC does **not** police rule-area track/via intrusions in this
+  project, so `gen_pcb.py`'s grid router blocks the stock U1 keepout itself
+  and `test_no_track_or_via_copper_inside_antenna_keepouts` audits the
+  finished board to zero track/via copper inside it. The UART probe pads
+  TP1/TP2 live beside U1's east pad column for this reason — at their old
+  west-edge home the U0TXD/U0RXD links had to cross the antenna strip.
 - J1/J2 are the identical right-angle **SMT Molex 0441440003** (LCSC
   `C585890`) 8P8C RJ45 jack, edge-mounted with the mating opening facing off
-  the board's X=0 edge. There is no separate pigtail harness and no
+  a short board edge — Rev E: J1 (CONSOLE) off the left edge and J2
+  (MOTOR) off the right edge. There is no separate pigtail harness and no
   mechanical keying between console and motor; CONSOLE/MOTOR silkscreen is
   the only differentiator.
 - The treadmill cable's +8 V conductors are the board's only power source.
   USB-C is native USB data plus VBUS presence detection only. It cannot power
-  VIN, +3V3, +5V_RLY, or K1. **USB alone cannot power or program Rev D.**
+  VIN, +3V3, +5V_RLY, or K1. **USB alone cannot power or program Rev E.**
   Programming requires USB data and **current-limited +8 V bench power**.
 - USB is not galvanically isolated. Measure host-to-treadmill ground potential
   and connection current and review bonding/isolation before simultaneous
@@ -36,21 +43,23 @@ Gerbers.
 
 ## Exact repository evidence
 
-- The exact 2 A PCB trace-union solve is **98.379966 mV** supply-plus-return:
-  +8 V is 14.279315 mΩ and the conservative trace-only GND return is
-  34.910668 mΩ.
-- The +8 V solve's maximum via current is **0.828913 A**; its conservative
-  IPC-2221 internal-barrel rise is **7.504156 °C** and I²R is
-  **0.999735 mW**.
+- The exact 2 A PCB trace-union solve is **97.702006 mV** supply-plus-return:
+  +8 V is 24.677226 mΩ and the conservative explicit-copper GND return
+  (dedicated In1.Cu strips; the plane itself is still ignored) is
+  24.173777 mΩ. Rev E spans the full board (J2 moved to the right edge);
+  the model is layer-aware (35 µm outer, 15.2 µm inner copper).
+- The +8 V solve's maximum via current is **0.827864 A**; its conservative
+  IPC-2221 internal-barrel rise is **7.482581 °C** and I²R is
+  **0.685491 mW**.
 - Every intended GND stitching via is 1.4/1.0 mm. Because the In1 plane is not
   solved exactly, each is independently qualified at the full 2.0 A:
   **12.273573 °C** rise and **2.328020 mW** I²R using a conservative
   **20 µm** barrel. JLC's live quote/DFM must confirm IPC-6012 Class 2
   20 µm average hole copper; the repository does not prove delivered plating.
 - USB shortest paths are:
-  D− A/B = 60.0528786214/59.0528786214 mm and
-  D+ A/B = 60.0528777233/59.0528777233 mm. Per-side D+/D− skew is
-  0.0000008981 mm. Signals stay on F.Cu with zero signal vias; controlled
+  D− A/B = 55.9528786214/54.9528786214 mm and
+  D+ A/B = 55.8729617233/54.8729617233 mm. Per-side D+/D− skew is
+  0.0799168981 mm (gate 0.5 mm). Signals stay on F.Cu with zero signal vias; controlled
   sections use 0.2906 mm copper and 0.2000 mm edge gap.
 - The simulation gate has **eight decks**. Each runs three times on host
   ngspice 42 and pinned offline Docker ngspice 39.
@@ -133,7 +142,7 @@ harness list is: `RJ45_SINGLE_OPEN_2A`, `MINIMUM_VIN`, `SOURCE_IMPEDANCE`,
 - production firmware, security, WDT/brownout evidence, and safety matrix.
 
 The existing operator-observed JLCDFM JSON is bound to an older exact archive.
-Preserve it as historical evidence; do not relabel it as review of Rev D's
+Preserve it as historical evidence; do not relabel it as review of Rev E's
 current bytes. First treadmill contact remains Proxy-only with relay
 energization compiled out.
 

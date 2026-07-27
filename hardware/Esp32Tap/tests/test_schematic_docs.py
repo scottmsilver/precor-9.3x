@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-SCHEMATIC_TITLE = "Esp32Tap Rev D - ESP32-S3 Precor serial-bus tap"
+SCHEMATIC_TITLE = "Esp32Tap Rev E - ESP32-S3 Precor serial-bus tap"
 SCHEMATIC_DATE = "2026-07-24"
 GENERATED_SCHEMATIC_FILES = (
     "Esp32Tap.kicad_sch",
@@ -155,10 +155,10 @@ def test_schematic_title_block_identifies_rev_d(
 ) -> None:
     title_block = _child(schematic, "title_block")
     assert _atom(_child(title_block, "title")[1]) == SCHEMATIC_TITLE
-    assert _atom(_child(title_block, "rev")[1]) == "D"
+    assert _atom(_child(title_block, "rev")[1]) == "E"
     assert _atom(_child(title_block, "date")[1]) == SCHEMATIC_DATE
     comments = {int(comment[1]): str(_atom(comment[2])) for comment in _children(title_block, "comment")}
-    assert comments[1] == "Status: generated Rev D typed schematic"
+    assert comments[1] == "Status: generated Rev E typed schematic"
     assert comments[2] == "Source of truth: tools/design.py"
 
 

@@ -21,11 +21,11 @@
   "antenna_axial_envelope": "15 mm air/plastic from physical ESP antenna edge to inner wall",
   "connector_centers_mm": [
     [
-      8.0,
-      18.0
+      11.9,
+      40.0
     ],
     [
-      8.0,
+      83.1,
       40.0
     ]
   ],
@@ -34,8 +34,8 @@
     15.48
   ],
   "usb_center_mm": [
-    91.2,
-    39.5
+    83.6,
+    54.2
   ],
   "switch_centers_mm": [
     [
@@ -50,7 +50,7 @@
   "rj45_jack": {
     "mpn": "441440003",
     "lcsc": "C585890",
-    "note": "Rev D: J1 and J2 are the identical unshielded right-angle SMD 8P8C jack, edge-mounted with the mating opening facing off the board edge. There is no mechanical keying between console and motor any more; CONSOLE/MOTOR silkscreen is the only differentiator.",
+    "note": "Rev E: J1 and J2 are the identical unshielded right-angle SMD 8P8C jack, one per short board edge -- J1 (CONSOLE) opens off X=0 and J2 (MOTOR) opens off X=board_l with both mating faces FLUSH with their board edges and both jacks centred on the same Y=40 enclosure axis (straight passthrough), so the installed box reads console to motor left to right. There is no mechanical keying between console and motor; CONSOLE/MOTOR silkscreen and the cable run direction are the differentiators.",
     "body_width_mm": 15.48,
     "body_depth_mm": 17.17,
     "body_height_mm": 13.4,
@@ -62,9 +62,9 @@
   "external_cable_bend_service_radius_mm": 18.0,
   "closure": "TOOL_LESS_SNAP_LATCH_WITH_OPTIONAL_SUPPLIED_M3",
   "artifacts": {
-    "enclosure/esp32tap_case.scad": "5105df1c9f6c369d02db82c68013d7a892383cd7b874fa35a8fff73495894c31",
-    "enclosure/esp32tap_base.stl": "424f54d01e6b05ee66f717ebece51dd360dee2268af46a4e0fbe6b8bfd00bc32",
-    "enclosure/esp32tap_lid.stl": "dceda9ed05d40ae223d6dfe68f464d909a5982b2dfad88c50bbf7296226239c7"
+    "enclosure/esp32tap_case.scad": "ba02443d9543224171e3720d0d6bb2451aeeb47edcb41bc75b9b16bdd6017b34",
+    "enclosure/esp32tap_base.stl": "1396a586083f3b1b823eb8254922180e8e63e05e15c8c02b79f6e50b3b2ed718",
+    "enclosure/esp32tap_lid.stl": "8b8c0d8ccc043cdd017fe8340ea51cf5c1c8178e053da94f9642c11eed06a26f"
   },
   "physical_gates": [
     "actual board and connector fit",

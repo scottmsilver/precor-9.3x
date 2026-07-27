@@ -1,4 +1,4 @@
-# Esp32Tap Rev D validation record
+# Esp32Tap Rev E validation record
 
 **Status: HOLD.** Passing repository gates establish internal consistency
 under declared models, not vendor acceptance or physical treadmill behavior.
@@ -20,9 +20,9 @@ offline Docker ngspice 39, and three repetitions of every simulation deck.
 
 | Area | Result | Repository-supported statement |
 |---|---|---|
-| Schematic | PASS | Typed Rev D schematic; ERC policy clean |
+| Schematic | PASS | Typed Rev E schematic; ERC policy clean |
 | PCB | PASS | 95 × 58 mm, four layers, exact net/pad parity, DRC/parity clean |
-| Antenna | PASS | U1 fully on-board; 3.25/3.30 mm margins; exact stock all-layer keepout |
+| Antenna | PASS | U1 fully on-board; 3.25/3.30 mm margins; exact stock all-layer keepout, router-blocked and audited to zero track/via copper |
 | USB | PASS | F.Cu-only, no signal vias, cycle-free planar topology, both A/B paths matched |
 | Power | PASS under model | Exact 2 A trace-union solve plus conservative independent GND-via envelope |
 | Assembly | PASS | Design↔schematic↔PCB↔BOM↔CPL identity and placement parity |
@@ -35,14 +35,15 @@ offline Docker ngspice 39, and three repetitions of every simulation deck.
 - Finished outline: 95.0 × 58.0 mm.
 - U1 body-to-finished-edge margins: 3.25 and 3.30 mm.
 - J1/J2: identical Molex `0441440003` right-angle SMD 8P8C RJ45 jacks (LCSC
-  `C585890`), edge-mounted with the mating opening facing off the board's
-  X=0 edge; no external pigtail hardware. There is no mechanical keying
+  `C585890`), edge-mounted with the mating opening facing off a short
+  board edge (Rev E: J1 off X=0, J2 off X=95); no external pigtail
+  hardware. There is no mechanical keying
   between the console and motor interfaces — CONSOLE/MOTOR silkscreen plus
   housing color are the only differentiator.
 - USB shortest paths:
-  D− A/B 60.0528786214/59.0528786214 mm,
-  D+ A/B 60.0528777233/59.0528777233 mm.
-- D+/D− per-side skew: 0.0000008981 mm.
+  D− A/B 55.9528786214/54.9528786214 mm,
+  D+ A/B 55.8729617233/54.8729617233 mm.
+- D+/D− per-side skew: 0.0799168981 mm (gate 0.5 mm).
 - Controlled USB geometry: 0.2906 mm width and 0.2000 mm edge gap.
 
 ## Exact PCB power model
@@ -51,13 +52,13 @@ At 2.0 A the emitted-copper planar-union solve gives:
 
 | Quantity | Result |
 |---|---:|
-| +8 V resistance | 14.279315 mΩ |
-| Conservative trace-only GND resistance | 34.910668 mΩ |
-| Supply-plus-return drop | 98.379966 mV |
-| +8 V maximum via current | 0.828913 A |
-| +8 V maximum via rise | 7.504156 °C |
-| +8 V maximum via I²R | 0.999735 mW |
-| Maximum track rise (either net) | 6.660309 °C |
+| +8 V resistance | 24.677226 mΩ |
+| Conservative explicit-copper GND resistance | 24.173777 mΩ |
+| Supply-plus-return drop | 97.702006 mV |
+| +8 V maximum via current | 0.827864 A |
+| +8 V maximum via rise | 7.482581 °C |
+| +8 V maximum via I²R | 0.685491 mW |
+| Maximum track rise (either net) | 6.660685 °C |
 
 The graph splits intersections and collinear overlaps, unions coincident
 same-layer copper, preserves distinct parallel routes, and rejects duplicate

@@ -1,4 +1,4 @@
-# Esp32Tap Rev B: works-and-fits assessment
+# Esp32Tap Rev E: works-and-fits assessment
 
 **Status: HOLD.** The digital artifacts agree with one another and the
 enclosure geometry fits the generated PCB model. Nothing in this document
@@ -14,7 +14,7 @@ replaces a vendor preview or a physical verification build.
 | Do the behavioral models meet their declared numeric assertions? | Yes, on host ngspice 42 and pinned Docker ngspice 39 |
 | Does the checked PCB geometry fit the checked enclosure geometry? | Yes, under mesh and functional-probe validation |
 | Is production firmware implemented and physically tested? | No |
-| Was the exact archive observed completing JLC's online PCB DFM analysis? | Yes; the operator-recorded raw counts preserve four generic slot dangers and their engineering disposition, leaving zero unresolved actionable dangers |
+| Was the exact current archive observed completing JLC's online PCB DFM analysis? | No. An operator-recorded analysis is retained for a superseded archive only (`vendor/JLC-DFM-REVIEW.json` is `NOT_REVIEWED_EXACT_ARCHIVE`); the current archive must be re-uploaded before its DFM state is evidence |
 | Has JLC production engineering accepted placement, stackup, carrier, THT process, or substitutions? | No |
 | Has any assembled board been powered or connected to a treadmill? | No |
 
@@ -42,44 +42,46 @@ failure modes and relay contact timing remain outside that proof.
 
 | Feature | Checked value |
 |---|---|
-| Outline | 100.0 × 55.0 mm |
+| Outline | 95.0 × 58.0 mm |
 | Copper layers | F.Cu, In1.Cu, In2.Cu, B.Cu |
 | Finished thickness metadata | 1.59 mm |
 | Reference plane | One In1.Cu GND zone, continuous below USB except normal antipads; antenna keepout |
-| ESP32 antenna span | X 69.0–87.0 mm in board coordinates |
-| Antenna overhang | 6.3 mm beyond the board edge |
-| USB pair | F.Cu only; no signal vias; 0.2906/0.2000 mm controlled run plus four short 0.20 mm breakouts |
-| Mounting holes | MH1 (2.9, 26.5), MH2 (97.0, 3.0), MH3 (97.0, 52.0) mm |
+| ESP32 antenna span | X 69.0–87.0 mm in board coordinates, fully on-board (physical antenna edge 3.3 mm inside the board edge) |
+| Antenna copper exclusion | Module's stock all-copper-layer keepout is track/via-free on every layer (audited), plus the named on-board rule area |
+| RJ45 jacks | One per short edge: J1 (CONSOLE) opens off X=0, J2 (MOTOR) opens off X=95 |
+| USB pair | F.Cu only; no signal vias; 0.2906/0.2000 mm controlled run plus four short 0.20 mm breakouts; J3 on the bottom edge |
+| UART probe pads | TP1/TP2 beside U1's east pad column (short local links; they no longer cross the board) |
+| Mounting holes | MH1 (20.0, 6.0), MH2 (48.0, 6.0), MH3 (92.0, 55.0) mm (outline-minimum coordinates) |
 
 The board validator checks exact route topology, keepouts, layer use,
 decoupling/ground-via proximity, test access, silkscreen, BOM/CPL parity, and
-fabrication membership. An operator also observed the exact archive complete
-online JLCDFM analysis; the SHA-bound record is not vendor-signed or
-independent upload-provenance evidence. A production field-solver result and
-written stack/impedance acceptance are still required.
+fabrication membership. The retained operator DFM record applies to a
+superseded archive; the current exact archive has not been re-uploaded, and a
+production field-solver result and written stack/impedance acceptance are
+still required.
 
 ## Enclosure fit
 
-The board top-left corner sits at enclosure-interior coordinate (2.0, 21.3)
-mm. The 21.3 mm offset consists of 6.3 mm module overhang plus 15.0 mm axial
-clearance beyond the antenna end; it is not a 15 mm all-direction clearance.
+Numbers below restate the current model record in
+[`enclosure/DIMENSIONS.md`](enclosure/DIMENSIONS.md), which is maintained with
+the meshes and is the authoritative geometry table.
 
 | Fit item | Checked result |
 |---|---|
-| Interior cavity | 104.0 × 85.3 × 21.1 mm |
-| Board side clearance | 2.0 mm each X side |
-| Bottom-edge clearance | 9.0 mm |
-| Board underside above floor | 5.5 mm |
-| RJ45 above-board headroom | 1.9 mm below lid lip |
-| RJ45 centers | 12.445 and 41.445 mm, derived from PCB pads |
-| USB-C | 13.0 × 8.0 mm overmold aperture; receptacle face recessed 4.5 mm behind exterior |
-| Antenna end | 15.0 mm axial plastic/air clearance, no conductive finish or hardware |
+| Interior cavity | 99.0 × 78.7 × 21.1 mm |
+| Board | 95.0 × 58.0 × 1.6 mm, 2.0 mm clearance each X side |
+| PCB under-clearance / headroom | 3.0 / 16.5 mm |
+| RJ45 apertures | One per end wall (J1 X-min, J2 X-max), identical 16.0 × 14.0 mm openings for the 15.48 × 13.4 mm jack body |
+| USB-C | 13.0 × 8.0 mm overmold aperture through the bottom-edge wall |
+| Antenna end | 15.0 mm axial plastic/air void beyond the physical antenna edge, no conductive finish or hardware |
 | Base/lid | One connected, watertight, winding-consistent body each |
 
-The RJ45 receptacle faces are about 2.7 mm behind the exterior wall. The
-apertures are intended for ordinary unbooted or slim-boot 8P8C plugs; arbitrary
-oversize molded boots are not claimed. USB access is sized so a normal cable
-overmold enters the wall recess.
+Because both jacks are the identical unshielded 8P8C part there is no
+mechanical keying between console and motor; the CONSOLE/MOTOR silkscreen and
+the opposite-end cable exits are the only differentiators. The apertures are
+intended for ordinary unbooted or slim-boot 8P8C plugs; arbitrary oversize
+molded boots are not claimed. USB access is sized so a normal cable overmold
+enters the wall recess.
 
 The meshes prove geometry, not manufacturing outcome. Resin shrink, warp,
 surface finish, screw retention, cable latch access, and installed service
@@ -87,19 +89,20 @@ clearance must be checked on physical parts.
 
 ## RF and installation
 
-Every copper layer is excluded beneath the module antenna, and the enclosure
-adds 15 mm axial clearance beyond its end. Keep the antenna end away from the
-metal motor hood and do not select metal-filled or conductively coated
-material. These precautions do not predict BLE/Wi-Fi range; perform an
-installed RSSI and coexistence survey.
+Every copper layer is excluded beneath the module antenna (the router now
+honours the module's stock keepout, and an audit test holds it to zero
+track/via copper), and the enclosure adds a 15 mm axial void beyond the
+antenna edge. Keep the antenna end away from the metal motor hood and do not
+select metal-filled or conductively coated material. These precautions do not
+predict BLE/Wi-Fi range; perform an installed RSSI and coexistence survey.
 
 ## What must happen next
 
 1. Regenerate and pass the canonical repository gate from clean sources.
 2. Refresh the exact JLC stock snapshot.
-3. Complete the JLC PCBA BOM/CPL placement preview and obtain engineering
-   confirmation for stackup/impedance, the RJ45 fixture/process, and the
-   antenna-overhang carrier.
+3. Upload the current exact archive to JLC DFM analysis, then complete the
+   JLC PCBA BOM/CPL placement preview and obtain engineering confirmation for
+   stackup/impedance, the RJ45 fixture/process, and the antenna carrier.
 4. Obtain JLC3DP mesh/material/DFM confirmation.
 5. If the owner authorizes a verification build, perform the staged bench
    program in `VALIDATION.md` and `firmware/PLAN.md`.

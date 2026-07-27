@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the Rev D case against versioned PCB geometry and welded STLs."""
+"""Validate the Rev E case against versioned PCB geometry and welded STLs."""
 
 from __future__ import annotations
 
@@ -19,11 +19,14 @@ import numpy as np
 import trimesh
 
 OPENSCAD_IMAGE = "openscad/openscad@sha256:" "147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37"
-EXPECTED_CONNECTOR_CENTERS = ((8.0, 18.0), (8.0, 40.0))
-# Rev D: J1 and J2 are the identical Molex 441440003 RJ45 jack, so both
+# Rev E flush-jack: both RJ45s share the Y=40 axis (straight passthrough)
+# with mating faces flush with the short board edges; the footprint
+# anchors sit ~11.9 mm inboard (the body extends from the edge inward).
+EXPECTED_CONNECTOR_CENTERS = ((11.9, 40.0), (83.1, 40.0))
+# J1 and J2 are the identical Molex 441440003 RJ45 jack, so both
 # fabrication-body widths (from inspect_kicad) are the same value.
 EXPECTED_CONNECTOR_BODY_WIDTHS = (15.48, 15.48)
-EXPECTED_USB_CENTER = (91.2, 39.5)
+EXPECTED_USB_CENTER = (83.6, 54.2)
 EXPECTED_SWITCH_CENTERS = ((42.0, 7.0), (91.0, 20.0))
 EXPECTED_MOUNTING_HOLES = ((20.0, 6.0), (48.0, 6.0), (92.0, 55.0))
 REQUIRED_SCALARS = (
@@ -44,7 +47,8 @@ REQUIRED_SCALARS = (
     "latch_clearance",
     "cable_bend_radius",
     "cable_exit_direction",
-    "usb_yc",
+    "j2_cable_exit_direction",
+    "usb_xc",
     "usb_h",
     "usb_om_w",
     "usb_om_h",
@@ -289,7 +293,7 @@ def derive_board_geometry(report: dict[str, Any]) -> dict[str, Any]:
         "connector_body_widths_mm": connector_body_widths,
         "rj45_centers_y_mm": tuple(center[1] for center in connector_centers),
         "usb_center_mm": (usb[0] - origin[0], usb[1] - origin[1]),
-        "usb_center_y_mm": usb[1] - origin[1],
+        "usb_center_x_mm": usb[0] - origin[0],
         "switch_centers_mm": switches,
         "mounting_holes_mm": mounting,
         "antenna_overhang_mm": origin[1] - antenna_edge,
@@ -337,7 +341,7 @@ def validate_fit(
         )
     for axis, actual in enumerate(geometry["usb_center_mm"]):
         _close(actual, EXPECTED_USB_CENTER[axis], f"J3 PCB axis {axis}", 0.01)
-    _close(parameters["usb_yc"], geometry["usb_center_y_mm"], "J3 center", 0.01)
+    _close(parameters["usb_xc"], geometry["usb_center_x_mm"], "J3 center", 0.01)
     for index, (actual, expected) in enumerate(
         zip(
             geometry["switch_centers_mm"],
@@ -382,7 +386,13 @@ def validate_fit(
     _close(
         parameters["cable_exit_direction"],
         -1.0,
-        "outward cable exit direction",
+        "J1 outward cable exit direction",
+        1e-6,
+    )
+    _close(
+        parameters["j2_cable_exit_direction"],
+        1.0,
+        "J2 outward cable exit direction",
         1e-6,
     )
     if parameters["latch_clearance"] < 6.0:
@@ -392,7 +402,9 @@ def validate_fit(
     _close(parameters["snap_clearance"], 0.3, "snap-latch clearance", 1e-6)
     for module_name in (
         "rj45_wall_aperture",
+        "rj45_wall_aperture_right",
         "rj45_plug_service_envelope",
+        "rj45_plug_service_envelope_right",
         "snap_latch",
     ):
         if f"module {module_name}" not in source:
@@ -637,24 +649,28 @@ def validate_functional_geometry(
     aperture_width = parameters["aperture_w"]
     aperture_height = parameters["aperture_h"]
     aperture_z = board_z + parameters["board_t"] - 0.3
-    for index, center_y in enumerate(
+    # Rev E: one jack per short wall -- J1 opens through X=0, J2 through
+    # X=outer_length.
+    jack_walls = ((1, 0.0, wall / 2), (2, outer_length, outer_length - wall / 2))
+    for (index, shell_x, probe_x), center_y in zip(
+        jack_walls,
         geometry["rj45_centers_y_mm"],
-        start=1,
+        strict=True,
     ):
         shell_y = wall + board_y - wall + center_y
-        rj45_centers.append([0.0, shell_y, aperture_z + aperture_height / 2])
+        rj45_centers.append([shell_x, shell_y, aperture_z + aperture_height / 2])
         half_width = aperture_width / 2
         points = [
-            [wall / 2, shell_y, aperture_z + aperture_height / 2],
-            [wall / 2, shell_y - half_width + 0.3, aperture_z + 0.3],
+            [probe_x, shell_y, aperture_z + aperture_height / 2],
+            [probe_x, shell_y - half_width + 0.3, aperture_z + 0.3],
             [
-                wall / 2,
+                probe_x,
                 shell_y + half_width - 0.3,
                 aperture_z + aperture_height - 0.3,
             ],
-            [wall / 2, shell_y + half_width + 0.3, aperture_z + aperture_height / 2],
-            [wall / 2, shell_y, aperture_z - 0.3],
-            [wall / 2, shell_y, aperture_z + aperture_height + 0.3],
+            [probe_x, shell_y + half_width + 0.3, aperture_z + aperture_height / 2],
+            [probe_x, shell_y, aperture_z - 0.3],
+            [probe_x, shell_y, aperture_z + aperture_height + 0.3],
         ]
         _expect_occupancy(
             base,
@@ -666,7 +682,7 @@ def validate_functional_geometry(
             base,
             [
                 [x, y, z]
-                for x in (0.0, wall)
+                for x in ((0.0, wall) if shell_x == 0.0 else (outer_length - wall, outer_length))
                 for y in (
                     shell_y - half_width,
                     shell_y + half_width,
@@ -680,26 +696,27 @@ def validate_functional_geometry(
         )
         probe_count += len(points)
 
-    usb_y = board_y + geometry["usb_center_y_mm"]
+    # Rev E: USB-C opens through the Y=outer_width (bottom) wall.
+    usb_x = board_x + geometry["usb_center_x_mm"]
     usb_z = board_z + parameters["board_t"] + parameters["usb_h"] / 2 - parameters["usb_om_h"] / 2
     usb_half_width = parameters["usb_om_w"] / 2
     usb_points = [
-        [outer_length - wall / 2, usb_y, usb_z + parameters["usb_om_h"] / 2],
-        [outer_length - wall / 2, usb_y - usb_half_width + 0.3, usb_z + 0.3],
+        [usb_x, outer_width - wall / 2, usb_z + parameters["usb_om_h"] / 2],
+        [usb_x - usb_half_width + 0.3, outer_width - wall / 2, usb_z + 0.3],
         [
-            outer_length - wall / 2,
-            usb_y + usb_half_width - 0.3,
+            usb_x + usb_half_width - 0.3,
+            outer_width - wall / 2,
             usb_z + parameters["usb_om_h"] - 0.3,
         ],
         [
-            outer_length - wall / 2,
-            usb_y + usb_half_width + 0.3,
+            usb_x + usb_half_width + 0.3,
+            outer_width - wall / 2,
             usb_z + parameters["usb_om_h"] / 2,
         ],
-        [outer_length - wall / 2, usb_y, usb_z - 0.3],
+        [usb_x, outer_width - wall / 2, usb_z - 0.3],
         [
-            outer_length - wall / 2,
-            usb_y,
+            usb_x,
+            outer_width - wall / 2,
             usb_z + parameters["usb_om_h"] + 0.3,
         ],
     ]
@@ -713,10 +730,10 @@ def validate_functional_geometry(
         base,
         [
             [x, y, z]
-            for x in (outer_length - wall, outer_length)
-            for y in (
-                usb_y - usb_half_width,
-                usb_y + usb_half_width,
+            for y in (outer_width - wall, outer_width)
+            for x in (
+                usb_x - usb_half_width,
+                usb_x + usb_half_width,
             )
             for z in (
                 usb_z,
@@ -908,8 +925,8 @@ def validate_functional_geometry(
         "probe_count": probe_count,
         "rj45_aperture_centers_shell_mm": rj45_centers,
         "usb_aperture_center_shell_mm": [
-            outer_length,
-            usb_y,
+            usb_x,
+            outer_width,
             usb_z + parameters["usb_om_h"] / 2,
         ],
         "mounting_post_centers_shell_mm": mounting_centers,
@@ -932,9 +949,12 @@ def validate_functional_geometry(
                 "aperture_width": parameters["aperture_w"],
                 "aperture_height": parameters["aperture_h"],
                 "extraction_clearance": parameters["latch_clearance"],
-                "cable_exit_direction_x": parameters["cable_exit_direction"],
+                "cable_exit_direction_x": direction,
             }
-            for _ in ("J1", "J2")
+            for direction in (
+                parameters["cable_exit_direction"],
+                parameters["j2_cable_exit_direction"],
+            )
         ],
         "closure": "TOOL_LESS_SNAP_LATCH_WITH_OPTIONAL_SUPPLIED_M3",
     }
