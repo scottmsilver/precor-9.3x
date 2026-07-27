@@ -26,21 +26,25 @@ ant_air_gap  = 15.0;    // plastic/air void from antenna edge to inner wall
 // (LCSC C585890) — the exact footprint anchors from inspect_kicad.  One
 // jack per short edge: J1 (CONSOLE) opens off the board's X=0 edge and J2
 // (MOTOR) opens off the X=board_l edge, so the installed box reads
-// console -> motor left to right.  Both apertures are identical, unkeyed
-// 8P8C openings on OPPOSITE walls; CONSOLE/MOTOR silkscreen plus the
-// physical cable run direction are the differentiators — a mis-plugged
-// cable is a labeling/procedure risk, not something this CAD rejects.
-j1_yc = 18.0;
+// console -> motor left to right, and both jacks sit on the same
+// Y=40 axis (straight passthrough).  Each jack's mating face is FLUSH
+// with its board edge (the body extends inboard from there), so the
+// port sits clr + wall = 4.5 mm behind the exterior wall face.  Both
+// apertures are identical, unkeyed 8P8C openings on OPPOSITE walls;
+// CONSOLE/MOTOR silkscreen plus the physical cable run direction are
+// the differentiators — a mis-plugged cable is a labeling/procedure
+// risk, not something this CAD rejects.
+j1_yc = 40.0;
 j2_yc = 40.0;
 // Fabrication-body bbox from inspect_kicad (identical for J1 and J2 —
-// same part): Y width (across the row of 8 pins) and X depth (pin row to
-// the rear mechanical-tab cap).
+// same part): Y width (across the row of 8 pins) and X depth (mating
+// face at the board edge to the rear mechanical-tab cap, inboard).
 rj45_body_w     = 15.48;
 rj45_body_depth = 17.17;
 rj45_body_h     = 13.4;  // jack shell height above the board (datasheet)
 // Panel aperture: clears the mating 8P8C plug shell plus finger
 // clearance for the latch tab — not the full jack body, which sits
-// inside the case, recessed a few mm behind the wall.
+// inside the case with its mating face at the board edge.
 aperture_w = 16.0;
 aperture_h = 14.0;
 latch_clearance = 6.0;          // straight insertion/extraction depth
@@ -127,8 +131,9 @@ module rrect(l, w, h, r) {
 // Straight, unkeyed 8P8C wall aperture: clears the mating plug shell plus
 // finger clearance for the latch tab, tunneling from the exterior face
 // through latch_clearance past the board edge so a plug can seat against
-// the board-mounted jack (recessed rj45_body_depth-ish behind the wall)
-// and still be pinched/extracted without touching the aperture wall.
+// the board-mounted jack (whose mating face is flush with the board
+// edge, i.e. wall + clr = 4.5 mm behind the exterior face) and still be
+// pinched/extracted without touching the aperture wall.
 module rj45_wall_aperture(yc) {
   aperture_z = bz0 + board_t - 0.3;
   translate([-1, wall + by0 + yc - aperture_w/2, aperture_z])

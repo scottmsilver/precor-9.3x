@@ -35,29 +35,29 @@ def _sample_report() -> dict[str, object]:
                 "height_mm": 58.0,
             },
             "footprints": {
-                # Rev D: J1 and J2 are both the Molex 441440003 RJ45 jack
-                # (LCSC C585890) — identical part, so identical
-                # fabrication_body_bbox size (only the board-Y offset
-                # differs). Values are the real inspect_kicad.py output for
-                # the generated Rev D board.
+                # J1 and J2 are both the Molex 441440003 RJ45 jack (LCSC
+                # C585890) — identical part on the shared Y=37 board axis,
+                # each with its mating face flush with a short board edge
+                # (the body extends inboard, pad rows ~17.8 mm inside).
+                # Values are the real inspect_kicad.py output for the
+                # generated flush-jack Rev E board.
                 "J1": {
-                    "at": [108.0, 115.0],
+                    "at": [111.9, 137.0],
                     "fabrication_body_bbox": {
-                        "min": [102.73, 107.21],
-                        "max": [119.9, 122.69],
+                        "min": [100.0, 129.31],
+                        "max": [117.17, 144.79],
                     },
-                    "pads": {str(index): {"at": [102.1, 119.45 - 1.27 * (index - 1)]} for index in range(1, 9)},
+                    "pads": {str(index): {"at": [117.8, 132.55 + 1.27 * (index - 1)]} for index in range(1, 9)},
                 },
-                # Rev E: J2 sits on the right short edge (rotation 270),
-                # so its pad row is at board X max - 2.1 and pad 1 is the
-                # TOP of the row.
+                # J2 (rotation 90) opens off the right edge; pad 1 is the
+                # BOTTOM of its row.
                 "J2": {
-                    "at": [187.0, 137.0],
+                    "at": [183.1, 137.0],
                     "fabrication_body_bbox": {
-                        "min": [175.1, 129.31],
-                        "max": [192.27, 144.79],
+                        "min": [177.83, 129.21],
+                        "max": [195.0, 144.69],
                     },
-                    "pads": {str(index): {"at": [192.9, 132.55 + 1.27 * (index - 1)]} for index in range(1, 9)},
+                    "pads": {str(index): {"at": [177.2, 141.45 - 1.27 * (index - 1)]} for index in range(1, 9)},
                 },
                 "J3": {"at": [183.6, 151.2], "pads": {}},
                 "SW1": {"at": [142.0, 104.0], "pads": {}},
@@ -108,7 +108,7 @@ def test_scad_encodes_rev_c_air_gap_and_overlapping_posts(
     assert parameters["post_inset"] == pytest.approx(3.25)
     assert parameters["ant_x0"] == pytest.approx(69.0)
     assert parameters["ant_x1"] == pytest.approx(87.0)
-    assert parameters["j1_yc"] == pytest.approx(18.0)
+    assert parameters["j1_yc"] == pytest.approx(40.0)
     assert parameters["j2_yc"] == pytest.approx(40.0)
     assert "post_inset = post_d / 2 - post_wall_overlap;" in source
     assert source.count("wall+post_inset") == 4
@@ -186,7 +186,7 @@ def test_board_geometry_derives_connector_centers_independently() -> None:
     geometry = validate_enclosure.derive_board_geometry(_sample_report())
 
     assert geometry["board_size_mm"] == pytest.approx([95.0, 58.0])
-    assert geometry["rj45_centers_y_mm"] == pytest.approx([18.0, 40.0])
+    assert geometry["rj45_centers_y_mm"] == pytest.approx([40.0, 40.0])
     assert geometry["usb_center_x_mm"] == pytest.approx(83.6)
     for actual, expected in zip(
         geometry["mounting_holes_mm"],
@@ -364,7 +364,7 @@ def test_rev_c_geometry_is_derived_from_inspector_report() -> None:
     assert geometry["board_size_mm"] == pytest.approx([95.0, 58.0])
     for actual, expected in zip(
         geometry["connector_centers_mm"],
-        [[8.0, 18.0], [87.0, 40.0]],
+        [[11.9, 40.0], [83.1, 40.0]],
         strict=True,
     ):
         assert actual == pytest.approx(expected)
@@ -393,7 +393,7 @@ def test_rev_d_source_encodes_rj45_aperture_and_service_contract(
     assert parameters["board_l"] == pytest.approx(95.0)
     assert parameters["board_w"] == pytest.approx(58.0)
     assert parameters["ant_overhang"] == pytest.approx(-3.3)
-    assert parameters["j1_yc"] == pytest.approx(18.0)
+    assert parameters["j1_yc"] == pytest.approx(40.0)
     assert parameters["j2_yc"] == pytest.approx(40.0)
     assert parameters["rj45_body_w"] == pytest.approx(15.48)
     assert parameters["rj45_body_depth"] == pytest.approx(17.17)

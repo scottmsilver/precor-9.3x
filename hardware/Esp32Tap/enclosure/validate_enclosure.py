@@ -19,8 +19,11 @@ import numpy as np
 import trimesh
 
 OPENSCAD_IMAGE = "openscad/openscad@sha256:" "147e48525bec392bcf628d7a6d5ea4ccac71b16251952328f86e1061cbf47c37"
-EXPECTED_CONNECTOR_CENTERS = ((8.0, 18.0), (87.0, 40.0))
-# Rev D: J1 and J2 are the identical Molex 441440003 RJ45 jack, so both
+# Rev E flush-jack: both RJ45s share the Y=40 axis (straight passthrough)
+# with mating faces flush with the short board edges; the footprint
+# anchors sit ~11.9 mm inboard (the body extends from the edge inward).
+EXPECTED_CONNECTOR_CENTERS = ((11.9, 40.0), (83.1, 40.0))
+# J1 and J2 are the identical Molex 441440003 RJ45 jack, so both
 # fabrication-body widths (from inspect_kicad) are the same value.
 EXPECTED_CONNECTOR_BODY_WIDTHS = (15.48, 15.48)
 EXPECTED_USB_CENTER = (83.6, 54.2)
@@ -679,9 +682,7 @@ def validate_functional_geometry(
             base,
             [
                 [x, y, z]
-                for x in (
-                    (0.0, wall) if shell_x == 0.0 else (outer_length - wall, outer_length)
-                )
+                for x in ((0.0, wall) if shell_x == 0.0 else (outer_length - wall, outer_length))
                 for y in (
                     shell_y - half_width,
                     shell_y + half_width,

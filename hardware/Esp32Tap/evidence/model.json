@@ -6,7 +6,7 @@
       "claim": "Rev C enclosure CAD fit and RJ45 aperture geometry",
       "method": "OpenSCAD canonical render, inspector-bound dimensional validation, manifold mesh checks, and functional occupancy probes; physical fit remains open",
       "artifact_path": "model/rev-c-enclosure.json",
-      "artifact_sha256": "ab7c8edf3d24172a000b4f4e04420a54ee335c3252e6a3a05da7fc1107f55bee"
+      "artifact_sha256": "5f0f8fbb84e2b1725fd79ff5e5ac7807a8a045d760b529097bf074a74f4a529b"
     }
   ]
 }

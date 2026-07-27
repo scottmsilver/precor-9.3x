@@ -23,8 +23,8 @@ Coordinates use the PCB outline minimum as `(0, 0)`.
 | Item | Inspector-derived value |
 |---|---|
 | Board | 95.0 × 58.0 × 1.6 mm |
-| J1 footprint anchor / body width | (8.0, 18.0) / 15.48 mm |
-| J2 footprint anchor / body width | (87.0, 40.0) / 15.48 mm |
+| J1 footprint anchor / body width | (11.9, 40.0) / 15.48 mm |
+| J2 footprint anchor / body width | (83.1, 40.0) / 15.48 mm |
 | J3 USB-C center | (83.6, 54.2) mm |
 | SW1 / SW2 centers | (42.0, 7.0) / (91.0, 20.0) mm |
 | U1 physical antenna edge | 3.3 mm inside board Y=0 |
@@ -33,7 +33,9 @@ Coordinates use the PCB outline minimum as `(0, 0)`.
 
 J1 and J2 are the identical Molex 0441440003 right-angle SMD 8P8C RJ45 jack
 (LCSC C585890), so their body widths (and every RJ45 dimension below) are
-the same value; Rev E places one jack per short edge (J1 left, J2 right). The mounting locations
+the same value; Rev E places one jack per short edge (J1 left, J2 right),
+both centred on the same Y=40 axis with each mating face FLUSH with its
+board edge (the body extends inboard from the edge). The mounting locations
 reproduce the versioned inspection report exactly; this is modeled
 geometry, not delivered fit evidence.
 
@@ -60,8 +62,9 @@ proof that a delivered cable fits an installed treadmill.
 ## RJ45 wall apertures
 
 Both jacks are the identical, unshielded 8P8C part, edge-mounted with the
-mating opening facing off a short board edge (Rev E: J1 opens off X=0,
-J2 off X=95 — see `gen_pcb.py` `PLACE`).
+mating opening facing off a short board edge and the mating face flush
+with it, wall + clr = 4.5 mm behind the exterior wall face (Rev E: J1
+opens off X=0, J2 off X=95 — see `gen_pcb.py` `PLACE`).
 There is no mechanical keying between console and motor any more: both
 apertures are identical, straight 16.0 × 14.0 mm openings that clear the
 15.48 × 13.4 mm jack body by 0.26 mm on width. CONSOLE/MOTOR silkscreen is
@@ -78,7 +81,7 @@ The jack (Molex 0441440003 / LCSC C585890) mechanical envelope:
 | Item | Value |
 |---|---|
 | Body width | 15.48 mm |
-| Body depth (board edge to rear mechanical-tab cap) | 17.17 mm |
+| Body depth (mating face at the board edge to the inboard rear mechanical-tab cap) | 17.17 mm |
 | Body height above board | 13.4 mm |
 | Aperture (width × height) | 16.0 × 14.0 mm |
 | Latch/extraction clearance | 6.0 mm |
@@ -95,8 +98,8 @@ physical gates.
 
 | Mesh | Byte SHA-256 | Canonical geometry SHA-256 | Volume | Bounds |
 |---|---|---|---:|---|
-| `esp32tap_base.stl` | `424f54d01e6b05ee66f717ebece51dd360dee2268af46a4e0fbe6b8bfd00bc32` | `817efa8de7af36e9306a4a15bfe3b69a1c1e73fc47d7b54a40f1105aa22760c9` | 43,414.399 mm³ | −6…112 × −1.2…83.7 × 0…23.6 mm |
-| `esp32tap_lid.stl` | `dceda9ed05d40ae223d6dfe68f464d909a5982b2dfad88c50bbf7296226239c7` | `cd9d13dd46ca09035dad29a626d7c18d2688f8a468ebfe559381c19ba7149160` | 27,060.858 mm³ | 0…104 × 0…83.7 × 0…4.2 mm |
+| `esp32tap_base.stl` | `1396a586083f3b1b823eb8254922180e8e63e05e15c8c02b79f6e50b3b2ed718` | `1e109aedba97785dc65e21c9f52fb7e7914b50d702fcc56d099f05c5f2c05bc1` | 43,414.399 mm³ | −6…112 × −1.2…83.7 × 0…23.6 mm |
+| `esp32tap_lid.stl` | `8b8c0d8ccc043cdd017fe8340ea51cf5c1c8178e053da94f9642c11eed06a26f` | `39d5f1f75a25ca9b5d6e3328556357d34c5ae0d24bd0a58713c86effb5d900da` | 27,060.858 mm³ | 0…104 × 0…83.7 × 0…4.2 mm |
 
 Both meshes are single positive-volume, watertight, winding-consistent
 manifolds with exactly two faces per welded edge. Eighty-five occupancy and

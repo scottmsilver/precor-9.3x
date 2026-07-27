@@ -1104,8 +1104,8 @@ def test_compaction_locks_explicit_coupled_groups_and_neighbors(
         "C11": [90.2, 46.4, 90],
         "TP5": [49.0, 36.0, 0],
         "TP13": [73.91999999999999, 36.0, 0],
-        "J1": [8.0, 15.0, 90],
-        "J2": [87.0, 37.0, 270],
+        "J1": [11.9, 37.0, 270],
+        "J2": [83.1, 37.0, 90],
         "K1": [30.2, 23.0, 0],
         "D4": [30.0, 11.5, 0],
         "D5": [27.0, 15.0, 270],
@@ -1306,7 +1306,7 @@ def test_independent_fab_profile_drills_and_antenna_binding(
             archived = zipped.read(name)
             assert hashlib.sha256(archived).digest() == hashlib.sha256(exported).digest()
             binding.update(name.encode("utf-8") + b"\0" + hashlib.sha256(archived).digest())
-        assert binding.hexdigest() == ("89b68774143782dd013791336e5bec9a68b57fa8403807c4d70323927a76a6d3")
+        assert binding.hexdigest() == ("021ddfd838259d79d62eba37597278ec33641f47c7340e417d256dd43fc6add1")
 
     # Component bodies are not present in Gerber/Excellon. Bind the
     # inspector's antenna proof to this exact reviewed PCB and fab package.
@@ -1721,38 +1721,39 @@ def test_enclosure_geometry_is_explicit_and_board_derived(
     assert antenna["span_x_mm"][1] <= board["outline"]["max"][0]
 
 
-def test_rj45_jacks_face_the_left_board_edge(
+def test_rj45_jacks_open_off_their_short_board_edges(
     kicad_report: dict[str, Any],
 ) -> None:
-    # Rev D: J1/J2 are the Molex 441440003 right-angle SMD RJ45 (LCSC
-    # C585890). Its mating opening/pad row sits near the board edge; the
-    # jack's rear mechanical-tab cap (the fabrication body's far X) extends
-    # inward toward the board interior -- the opposite geometry from Rev
-    # C's Micro-Fit housing, whose mating nose was the part closest to the
-    # board edge.
+    # J1/J2 are the Molex 441440003 right-angle SMD RJ45 (LCSC C585890).
+    # The mating opening faces footprint-local +Y (the deep-body side --
+    # verified against the vendor 3D model and the Molex SD-44144-001
+    # drawing); the signal-pad row at local Y=-5.9 is the REAR.  Rev D/
+    # early Rev E had both jacks 180 degrees backwards (cavity opening
+    # into the board); the fix anchors each jack's fabrication-body front
+    # edge on its board edge, so the pad row sits ~17.75 mm INBOARD.
     # Rev E: one jack per short edge -- J1 (CONSOLE) opens off the left
-    # edge (rotation 90 maps the footprint's local -Y opening to world -X)
-    # and J2 (MOTOR) opens off the right edge (rotation 270 maps it to
+    # edge (rotation 270 maps the footprint's local +Y opening to world
+    # -X) and J2 (MOTOR) opens off the right edge (rotation 90 maps it to
     # world +X), so the board reads console -> motor left to right.
     board = _board(kicad_report)
     outline = board["outline"]
     j1 = board["footprints"]["J1"]
     body = j1["fabrication_body_bbox"]
-    assert j1["rotation_deg"] == pytest.approx(90.0)
+    assert j1["rotation_deg"] == pytest.approx(270.0)
     assert body is not None
     assert body["min"][0] >= outline["min"][0]
     pad_row_x = j1["pads"]["1"]["at"][0]
-    assert pad_row_x - outline["min"][0] == pytest.approx(2.1, abs=0.05)
-    assert pad_row_x < body["max"][0]
+    assert pad_row_x - outline["min"][0] == pytest.approx(17.8, abs=0.05)
+    assert pad_row_x > body["min"][0]
     assert body["max"][0] - outline["min"][0] < 20.0
     j2 = board["footprints"]["J2"]
     body = j2["fabrication_body_bbox"]
-    assert j2["rotation_deg"] == pytest.approx(270.0)
+    assert j2["rotation_deg"] == pytest.approx(90.0)
     assert body is not None
     assert body["max"][0] <= outline["max"][0]
     pad_row_x = j2["pads"]["1"]["at"][0]
-    assert outline["max"][0] - pad_row_x == pytest.approx(2.1, abs=0.05)
-    assert pad_row_x > body["min"][0]
+    assert outline["max"][0] - pad_row_x == pytest.approx(17.8, abs=0.05)
+    assert pad_row_x < body["max"][0]
     assert outline["max"][0] - body["min"][0] < 20.0
 
 
@@ -2424,9 +2425,9 @@ def test_single_open_connector_power_paths_are_sized_for_two_amps(
     # distribution, and IPC-2152 thermal rise) directly from the
     # generated PCB, independent of any harness-specific evidence file.
     result = _power_proof(_board(kicad_report))
-    assert result["nets"]["+8V_RAW"]["resistance_ohm"] == pytest.approx(0.024677, abs=0.000005)
-    assert result["nets"]["GND"]["resistance_ohm"] == pytest.approx(0.024174, abs=0.000005)
-    assert result["combined_drop_v"] == pytest.approx(0.097702, abs=0.000010)
+    assert result["nets"]["+8V_RAW"]["resistance_ohm"] == pytest.approx(0.017313, abs=0.000005)
+    assert result["nets"]["GND"]["resistance_ohm"] == pytest.approx(0.025151, abs=0.000005)
+    assert result["combined_drop_v"] == pytest.approx(0.084929, abs=0.000010)
     assert result["combined_drop_v"] <= 0.1
     assert result["nets"]["+8V_RAW"]["max_via_current_a"] == pytest.approx(0.827864, abs=0.000005)
     assert max(net["max_track_current_a"] for net in result["nets"].values()) == pytest.approx(2.0)
@@ -3024,14 +3025,19 @@ def test_silkscreen_minimums_and_required_markings(
         "ESP32TAP REV E": ([158.0, 103.0], 0.0),
         "K1 P1": ([123.0, 119.2], 0.0),
         "LED1 K": ([191.0, 121.0], 0.0),
-        "K LED2": ([114.0, 130.0], 0.0),
+        # Rev E flush-jack: the old (114.0, 130.0) spot is now inside
+        # J1's body; the label lives in the freed strip north of it.
+        "K LED2": ([114.0, 115.0], 0.0),
         "NO": ([142.0, 135.0], 0.0),
-        # Rev E: MOTOR follows J2 to the right edge (vertical, in the
-        # corridor between the USB pair verticals and J2's courtyard);
-        # "P1" marks J2's pad 1 from the strip north of its courtyard.
+        # Rev E flush-jack: CONSOLE sits just east of J1's pad row at the
+        # shared Y=37 centreline; MOTOR stays in the corridor between the
+        # USB pair verticals and J2's pad row; "P1" marks J2's pad 1 (now
+        # the BOTTOM of its row) from the pocket south-west of the row;
+        # "PIN 1" marks J1's pad 1 (the TOP of its row) north-east of it.
+        "CONSOLE": ([123.0, 137.0], 90.0),
         "MOTOR": ([172.6, 140.6], 90.0),
-        "P1": ([188.5, 127.7], 0.0),
-        "PIN 1": ([123.0, 108.0], 90.0),
+        "P1": ([174.9, 143.3], 0.0),
+        "PIN 1": ([121.5, 131.0], 0.0),
         "USB DATA ONLY": ([150.0, 108.0], 0.0),
     }
     for label, (position, rotation) in expected_placements.items():

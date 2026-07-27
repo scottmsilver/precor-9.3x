@@ -162,8 +162,6 @@ PLANNED_ROUTE_RESERVATIONS = (
     ("VIN", ((39.8, 38.6), (39.8, 38.6))),
     ("Q1_B", ((37.6, 17.2), (36.4, 14.4), (34.4, 13.2))),
     ("K1_NO_FB", ((35.2, 32.8), (35.2, 32.8))),
-    ("PIN4_PASS", ((6.8, 15.6), (6.8, 16.0))),
-    ("PIN5_SAFETY", ((6.8, 14.4), (9.4, 14.4))),
     ("EN", ((66.4, 12.4), (61.6, 12.4), (60.4, 14.8))),
 )
 
@@ -191,6 +189,20 @@ PLANNED_U7_ESCAPES = {
     "5": ((60.4, 22.4), "+3V3"),
 }
 
+# J2's four signal pads escape east UNDER the jack body into the box
+# bounded by the +8V_RAW bus (x=79.55, vias need >=1.5 mm), the GND
+# meet/rowtie column (x=85.1), the gnd-strip-a tail (y=35.6, vias need
+# >=1.49 mm), and the J2.1 contact stub (y=41.45).  Four L-shaped
+# doglegs fit exactly when the vertical legs step east with pad depth
+# (so no leg crosses another pad's horizontal); plan the slots like
+# U6's so route order cannot strand the last net.
+PLANNED_J2_ESCAPES = {
+    "3": (81.2, 38.8),
+    "4": (81.6, 38.0),
+    "5": (82.4, 37.6),
+    "6": (83.2, 37.2),
+}
+
 # JLC DFM reports same-net pad/via proximity and mask-opening artefacts even
 # when KiCad's electrical DRC accepts them.  Lock only the reported endpoint
 # escapes so the manufacturing geometry stays deterministic while preserving
@@ -204,6 +216,15 @@ LOCKED_DFM_ESCAPES = {
     ("L1", "2"): (67.2, 51.2),
 }
 
+# The CONSOLE silkscreen label (23.0, 37.0, vertical) sits in the busy
+# corridor east of J1's pad row where the router legitimately wants
+# layer-change vias; a via HOLE under a silk label violates the
+# fabrication-clearance audit (>=0.25 mm from mask/hole openings).
+# Reserve the label's bounding box (with hole-radius+clearance margin
+# rounded to the 0.4 mm routing grid) against via placement only --
+# tracks are mask-covered and may run beneath silk freely.
+SILK_VIA_KEEPOUTS = ((21.8, 33.0, 24.3, 41.0),)
+
 CUSTOM_FOOTPRINT_SOURCES: dict[tuple[str, str], tuple[str, str]] = {}
 
 
@@ -212,18 +233,23 @@ CUSTOM_FOOTPRINT_SOURCES: dict[tuple[str, str], tuple[str, str]] = {}
 # supervisor, relay, and converter loops probeable.
 PLACE = {
     # Rev D introduced the Molex 441440003 right-angle SMD RJ45 (LCSC
-    # C585890).  The jack's mating opening faces local -Y; at rotation=90
-    # that maps to world -X (off the left edge) and at rotation=270 to
-    # world +X (off the right edge).  X=8.0 / X=87.0 set the pad row
-    # ~2.1 mm inside the board edge.  Rev E: J2 (MOTOR) moves to the RIGHT
-    # short edge so the board reads console -> motor left to right; its
-    # deep courtyard (X 75.3-92.2, Y 29.4-44.6) displaced the whole USB-C
-    # cluster to the bottom edge and the VBUS_PRESENT divider/LED2/R12/
-    # TP3/TP4 out of the corner.  J1's Y stays 15.0 (clears MH1's keepout);
-    # J2's Y=37.0 centres the jack between the antenna keepout (top) and
-    # MH3 (bottom-right).
-    "J1": (8.0, 15.0, 90),
-    "J2": (87.0, 37.0, 270),
+    # C585890).  The jack's mating opening faces local +Y -- the deep-body
+    # side, verified against both the vendor 3D model and the Molex
+    # SD-44144-001 drawing (the signal-pad row at local Y=-5.9 is the
+    # REAR; the port cavity opens through the local Y=+11.69 face).  At
+    # rotation=270 local +Y maps to world -X (off the left edge) and at
+    # rotation=90 to world +X (off the right edge).  X anchors put the
+    # F.Fab body-front bounding box (centreline +11.85 plus the 0.05 mm
+    # half line width) exactly on the board edge -- the same
+    # fab-body-exactly-inside-outline discipline as J3 -- so the physical
+    # mating face sits flush (0.21 mm inside): the pad rows land ~17.8 mm
+    # INBOARD of each edge and the entry copper lives under the jack
+    # shells (see power_intent.py).  Rev E: J2 (MOTOR) is on the RIGHT
+    # short edge so the board reads console -> motor left to right, and
+    # both jacks share Y=37.0 -- a straight passthrough centred between
+    # the antenna keepout (top) and MH3 (bottom-right).
+    "J1": (11.9, 37.0, 270),
+    "J2": (83.1, 37.0, 90),
     # Rev E: USB-C moved to the bottom edge (opening faces +Y / world
     # bottom).  X=83.6 keeps its courtyard clear of MH3's courtyard
     # (x>=89.0); Y=51.2 puts the fabrication body exactly inside the
@@ -381,6 +407,11 @@ LOCKED_DFM_ESCAPES[("C10", "1")] = (60.0, 16.0)
 # Reserve TX_GATE immediately above it so the safety route is not displaced
 # by the later U1 cluster or the shifted USB pair.
 LOCKED_DFM_ESCAPES[("TP10", "1")] = (63.2, 39.2)
+# U1.1's generic GND stitch used to land just west of the antenna keepout;
+# the keepout width-margin now blocks that cell and the ring search would
+# otherwise drift onto C9.2's pad (JLC same-net pad/via proximity).  Pin it
+# in the clear pocket south-west of C9.2, outside the module keepout.
+LOCKED_DFM_ESCAPES[("U1", "1")] = (66.8, 6.8)
 
 
 def local(point: Any) -> tuple[float, float]:
@@ -1107,7 +1138,9 @@ class Generator:
         a4 = self.pad("J3", "A4")
         a9 = self.pad("J3", "A9")
         vbus_west = (a4[0], 46.05)
-        vbus_east = (a9[0], 44.9)
+        # Rev E flush-jack: 44.9 -> 45.3 keeps the via barrel 0.2 mm clear
+        # of J2's relocated mechanical tab pad 9 (copper to (86.445, 44.62)).
+        vbus_east = (a9[0], 45.3)
         self.add_track([a4, vbus_west], "VBUS", 0.30)
         self.add_track([a9, vbus_east], "VBUS", 0.30)
         u35 = self.pad("U3", "5")
@@ -1207,15 +1240,15 @@ class Generator:
     def add_shifted_u1_bus_route(self) -> None:
         """Preserve the qualified CONS6 tree after the coupled U1 shift."""
         escapes = {
-            # Rev D: J1 pad 6 sits in the tight 1.27 mm RJ45 pitch row
-            # (see power_intent.py); escape straight out at the pad's own
-            # Y to X=8.0 instead of the old long F.Cu diagonal, which
-            # crossed the new power contacts. Onward routing is on IN2
-            # (see below), so the F.Cu stub only needs to clear +8V_RAW's
-            # main bus (X=5.3, a via clearance concern along its entire
-            # length) and GND's via cluster (X=7.35-10.35, but only at
-            # its own Y -- 13.1 sits clear of any GND contact's Y).
-            ("J1", "6"): (6.8, 13.1),
+            # J1 pad 6 sits in the tight 1.27 mm RJ45 pitch row (see
+            # power_intent.py); escape straight WEST under the jack body
+            # at the pad's own Y.  X=13.2 threads the under-body via
+            # field: >=1.5 mm from the +8V_RAW B.Cu bus (X=15.45) and the
+            # GND branch column (X=11.4), and leaves the X~13.6 escape
+            # column free for J1 pads 3-5.  Onward routing is on IN2 (see
+            # below): west to X=8.6 (between the GND via columns and the
+            # SMD tab pad), then north past the whole cluster.
+            ("J1", "6"): (13.2, 38.9),
             ("D5", "1"): (27.2, 13.2),
             ("K1", "2"): (25.6, 22.4),
             # Rev E: lifted from (62.0, 19.6) so the CONS6 In2 leg rides
@@ -1229,6 +1262,8 @@ class Generator:
         self.add_track(
             [
                 escapes[("J1", "6")],
+                (8.6, 38.9),
+                (8.6, 16.0),
                 (20.0, 16.0),
                 junction,
                 escapes[("R7", "1")],
@@ -1345,19 +1380,25 @@ class Generator:
                     f"locked escape unavailable for " f"{ref}.{pad.GetNumber()} {net} at {target}: {checks}"
                 )
             return target, [point, target]
-        if (ref, str(pad.GetNumber())) == ("J1", "3"):
-            desired = (16.4, 12.8)
-        elif ref in ("J1", "J2") and str(pad.GetNumber()) in {"3", "4", "5", "6"}:
+        if ref == "J2" and str(pad.GetNumber()) in PLANNED_J2_ESCAPES:
+            # J2's pads escape +X -- under the jack's own body -- because
+            # its interior side is walled by the fixture keepout (no
+            # through vias at x<77, y 33.8-38.2); the slots are planned
+            # (see PLANNED_J2_ESCAPES).
+            desired = PLANNED_J2_ESCAPES[str(pad.GetNumber())]
+        elif ref == "J1" and str(pad.GetNumber()) in {"3", "4", "5"}:
             # The RJ45's 1.27 mm pad pitch (see power_intent.py) makes the
             # generic center-relative heuristic below pick a too-close
             # escape (it measures "outward" from the footprint center,
             # which sits deep inside the jack shell, not from the pad row)
-            # -- push straight toward the board interior at the pad's own
-            # Y instead, comfortably past the JLC vendor pad-to-via
-            # clearance.  Rev E: J1 sits on the left edge (escape +X), J2
-            # on the right edge (escape -X).
-            direction = 4.0 if ref == "J1" else -4.0
-            desired = (point[0] + direction, point[1])
+            # -- push straight out at the pad's own Y instead, comfortably
+            # past the JLC vendor pad-to-via clearance.  J1's mating face
+            # is flush with the left edge, so its pad row faces the OPEN
+            # interior: escape +X (the under-body side is a walled pocket:
+            # +8V_RAW twin/bus columns plus the GND via rows would strand
+            # the vias there).  Pad 6 (CONS6) is routed manually in
+            # add_shifted_u1_bus_route.
+            desired = (point[0] + 4.0, point[1])
         elif (ref, str(pad.GetNumber())) == ("D7", "2"):
             # Keep D7's GND stitch out of U4.5's only escape gap between
             # the D and F ground strips.
@@ -1436,6 +1477,10 @@ class Generator:
         point: tuple[float, float],
         net: str,
     ) -> bool:
+        for x0, y0, x1, y1 in SILK_VIA_KEEPOUTS:
+            if x0 <= point[0] <= x1 and y0 <= point[1] <= y1:
+                return False
+
         for x, y, half_width, half_height, pad_net in self.front_pad_obstacles:
             if pad_net == net:
                 continue
@@ -1594,16 +1639,23 @@ class Generator:
                 xs = [pcbnew.ToMM(chain.CPoint(i).x) - OX for i in range(chain.PointCount())]
                 ys = [pcbnew.ToMM(chain.CPoint(i).y) - OY for i in range(chain.PointCount())]
                 module_keepouts.append((min(xs), min(ys), max(xs), max(ys), layers))
+        # The router places track CENTRES on grid cells, so a cell just
+        # outside an all-copper keepout can still push a wide track's edge
+        # (up to 0.3 mm for the 0.6 mm power nets) inside the zone.  One
+        # grid step of margin around the antenna zones keeps every routed
+        # width's copper fully outside (the audit measures true copper
+        # extents, not centrelines).
+        margin = GRID
         for ix in range(grid_index(0.8), grid_index(BOARD_W - 0.8) + 1):
             for iy in range(grid_index(0.8), grid_index(BOARD_H - 0.8) + 1):
                 x, y = grid_point((ix, iy))
-                if ax0 <= x <= ax1 and ay0 <= y <= ay1:
+                if ax0 - margin <= x <= ax1 + margin and ay0 - margin <= y <= ay1 + margin:
                     self.blocked[IN2].add((ix, iy))
                     self.blocked[B].add((ix, iy))
                 if fx0 <= x <= fx1 and fy0 <= y <= fy1:
                     self.blocked[B].add((ix, iy))
                 for kx0, ky0, kx1, ky1, layers in module_keepouts:
-                    if kx0 <= x <= kx1 and ky0 <= y <= ky1:
+                    if kx0 - margin <= x <= kx1 + margin and ky0 - margin <= y <= ky1 + margin:
                         for layer in layers:
                             self.blocked[layer].add((ix, iy))
 
@@ -1643,6 +1695,10 @@ class Generator:
                 self.mark_segment(start, end, 0.20, (IN2,), net, extra=0.30)
         for point, net in PLANNED_U7_ESCAPES.values():
             self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+        for number, point in PLANNED_J2_ESCAPES.items():
+            net = self.pad_net.get(("J2", number))
+            if net:
+                self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
         for number, point in PLANNED_U1_WEST_ESCAPES.items():
             net = self.pad_net.get(("U1", number))
             if net:
@@ -1948,17 +2004,18 @@ class Generator:
             item.SetTextAngle(pcbnew.EDA_ANGLE(rotation, pcbnew.DEGREES_T))
             self.board.Add(item)
 
-        # Rev D: J1/J2's RJ45 courtyards (X 2.8-19.7) are much deeper than
-        # Rev C's Micro-Fit headers, so CONSOLE/MOTOR/PIN 1 move into the
-        # clear corridor between the jack shells and D4/D5 (X~27-30),
-        # rotated vertical to fit the corridor's narrow (~7 mm) width.
-        text(23.0, 15.0, "CONSOLE", 1.0, 90.0)
-        # Rev E: MOTOR follows J2 to the right edge; it sits in the
-        # corridor between the USB pair verticals and J2's courtyard.
+        # Rev E: both jacks are flush with their short edges at Y=37, pad
+        # rows facing the interior.  CONSOLE sits east of J1's pad row
+        # and its x~21.6 escape-via column, vertical to fit the corridor
+        # before TP3/R25.
+        text(23.0, 37.0, "CONSOLE", 1.0, 90.0)
+        # MOTOR sits in the corridor between the USB pair verticals and
+        # J2's pad row.
         text(72.6, 40.6, "MOTOR", 1.0, 90.0)
-        # J2's pad 1 is the TOP of its row (Y=32.55); mark it from the
-        # clear strip north of the jack courtyard.
-        text(88.5, 27.7, "P1", 1.0)
+        # J2's pad 1 is the BOTTOM of its row (Y=41.45); mark it from the
+        # clear pocket south-west of the pad row, east of the USB pair
+        # verticals and MOTOR.
+        text(74.9, 43.3, "P1", 1.0)
         text(58.0, 3.0, "Esp32Tap rev E", 1.2)
         # Placement locks keep every fabrication label at least 0.5 mm from
         # the nominal installed component bodies as well as mask openings.
@@ -1967,7 +2024,9 @@ class Generator:
         text(29.5, 37.0, "EMULATE", 1.0)
         text(42.0, 35.0, "NO", 1.0)
         text(50.0, 8.0, "USB DATA ONLY", 1.0)
-        text(23.0, 8.0, "PIN 1", 1.0, 90.0)
+        # J1's pad 1 is the TOP of its row (Y=32.55); mark it from the
+        # clear pocket north-east of the pad row, west of R25/K1.
+        text(21.5, 31.0, "PIN 1", 1.0)
         text(26.5, 48.0, "D1 K", 1.0, 90.0)
         text(35.0, 48.0, "K D3", 1.0)
         # Rev D: 22.5 -> 23.0 -- J1's RJ45 fabrication body now reaches to
@@ -1977,7 +2036,9 @@ class Generator:
         # between that and K1 pad 1's soldermask (>=0.25 mm needed there).
         text(23.0, 19.2, "K1 P1", 1.0)
         text(91.0, 21.0, "LED1 K", 1.0)
-        text(14.0, 30.0, "K LED2", 1.0)
+        # Rev E flush-jack: (14.0, 30.0) is now inside J1's body; the
+        # label moves to the free strip north of the jack.
+        text(14.0, 15.0, "K LED2", 1.0)
 
     def fill_and_save(self) -> None:
         filler = pcbnew.ZONE_FILLER(self.board)
