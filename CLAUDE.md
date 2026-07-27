@@ -259,7 +259,7 @@ This logic lives in the C binary (not Python) so that mode transitions work even
 ## Testing
 
 ```bash
-# C++ unit tests (132 tests including DMA guard, runs from cpp/)
+# C++ unit tests (148 tests including DMA guard + config parsing, runs from cpp/)
 make test
 
 # Deploy to Pi, build, restart binary, run hardware integration tests

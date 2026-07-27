@@ -26,7 +26,8 @@ TEST_LIB_OBJS = $(patsubst %.cpp,$(OBJ_TEST_DIR)/%.test.o,$(TEST_LIB_SRCS))
 # Individual test binaries (each has its own main via doctest)
 TEST_NAMES = test_kv_protocol test_ipc_protocol test_ring_buffer \
              test_mode_state test_emulation test_integration \
-             test_ipc_server test_controller_live test_dma_guard
+             test_ipc_server test_controller_live test_dma_guard \
+             test_config
 TEST_BINS = $(addprefix $(TEST_DIR)/,$(TEST_NAMES))
 
 TARGET = $(BUILD)/treadmill_io
@@ -71,6 +72,10 @@ $(TEST_DIR)/test_controller_live: $(TEST_DIR)/test_controller_live.o $(TEST_LIB_
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
 $(TEST_DIR)/test_dma_guard: $(TEST_DIR)/test_dma_guard.o $(OBJ_TEST_DIR)/gpio/dma_guard.test.o | $(TEST_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
+
+# config.h is header-only (inline functions) — no companion .test.o needed
+$(TEST_DIR)/test_config: $(TEST_DIR)/test_config.o | $(TEST_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $^ -pthread -lrt
 
 # Directory creation
