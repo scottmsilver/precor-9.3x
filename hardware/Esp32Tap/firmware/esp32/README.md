@@ -50,6 +50,16 @@ grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig
 # and >=15 s of guest uptime with NO task-WDT trigger / panic / reboot.
 tools/qemu_smoke.sh
 
+# QEMU behavioral harness (docker + pytest): builds the default image AND
+# an ESP32TAP_QEMU_TEST image (build_qemu_test/), injects console/motor
+# KV streams over the QEMU serial chardevs, and asserts proxy passivity,
+# console-freshness semantics, gap-safe emulate entry ordering, console
+# takeover, and on-MCU clamps via the SafetyController audit ring; also
+# re-runs the unmodified qemu_smoke.sh on the default build and proves
+# the test surface is absent from the production binary.
+# See tools/qemu_harness/README.md.
+tools/qemu_harness/run.sh
+
 # Artifact-level RTTI gate: no typeinfo symbols for firmware classes in
 # the linked ELF (verifies the -fno-rtti property on the artifact itself,
 # not just the flag plumbing).

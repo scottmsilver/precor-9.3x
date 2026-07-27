@@ -58,6 +58,7 @@ cpp/tests/test_*_cov
 
 # Build staging directory (matches build/ at any depth, incl. kotlin/app/build)
 build/
+hardware/Esp32Tap/firmware/esp32/build_qemu_test/
 
 # Rust build artifacts
 **/target/

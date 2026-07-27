@@ -93,6 +93,13 @@ extern "C" void app_main(void) {
     xTaskCreatePinnedToCore(esp32tap::interval_executor_task,
                             "interval_exec", 4096, &g_ctx, 5, nullptr, 0);
 
+#if defined(ESP32TAP_QEMU_TEST)
+    // Behavioral-harness shim task (tools/qemu_harness). The banner makes
+    // a test image unmistakable: scripted safety IO, motor tap on UART0.
+    ESP_LOGW(TAG, "esp32tap QEMU-TEST build (never flash to hardware)");
+    esp32tap::qemu_test::start_qemu_test_task(&g_ctx);
+#endif
+
     if (kTiersEnabled) {
         esp32tap::tiers::FtmsTier::start();
         esp32tap::tiers::HrmTier::start();

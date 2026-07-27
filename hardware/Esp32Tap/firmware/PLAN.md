@@ -410,3 +410,58 @@ motor hood (antenna at board edge + plastic enclosure + air gap;
 site-survey before final enclosure placement); +8 V rail sourcing capacity
 under worst-case motor load (WIRING-checklist measurement before first
 connect).
+
+---
+
+*Status note (2026-07-27, QEMU behavioral harness):* the firmware now has a
+headless behavioral verification vehicle ahead of the bench rig:
+`esp32/tools/qemu_harness/run.sh` builds the default image plus a second
+`build_qemu_test/` image (`idf.py -B build_qemu_test -DESP32TAP_QEMU_TEST=1
+build`) and drives scenario suites S1–S6 under the pinned esp-QEMU
+(espressif/idf:release-v5.5): proxy passivity over real try5 capture replay
++ synthetic 14-key cycles + malformed-frame fuzz, console-silence semantics
+(benign in Proxy, `emergency:console_stale` while emulating), the full
+gap-safe emulate-entry audit ordering (`tx_enable_on` before `relay_cmd_on`,
+zero-first wire cycle, 5-burst/14-key coverage), console takeover
+(`emergency:console_takeover`, no latched fault), and on-MCU clamp
+rejection/acceptance at the exact 120/30 limits. Observability is the
+SafetyController audit ring drained to UART0 (`QTAUDIT`) — the same event
+strings the host suite asserts. The `ESP32TAP_QEMU_TEST` surface lives
+entirely in `esp32/main/qemu_test/` plus two `#if`-selected type aliases in
+`firmware_context.h` and one guarded block in `app_main.cpp`; it exists
+because the pinned QEMU provably hard-wires only uart0/uart1 chardevs
+(UART2 unwireable → motor tap remapped to UART0 RX under the flag) and its
+GPIO model has no drivable inputs (→ scripted K1/TREAD_OK/VBUS with a 2 ms
+break-before-make relay model). The default build is byte-identical in
+behavior: S6 re-runs the unmodified `tools/qemu_smoke.sh` and proves the
+production binary contains none of `QTAUDIT`/`QTSTATE`/`qemu_test`. None of
+this is bench evidence; Status stays **HOLD** and every M2/M3 bench gate
+remains open.
+
+*Status note (2026-07-27, harness evidentiary hardening):* review findings
+on the QEMU harness were closed by strengthening its evidence, not the
+firmware: `QTSTATE` now reports the shim-OBSERVED IO-boundary levels
+(`io_relay`/`io_tx`, what `set_relay_cmd`/`set_tx_enable` last drove — so
+relay/TX assertions are no longer controller self-reports) plus `t_us`
+(guest clock at snapshot), which the scenarios use for hard guest-time
+bounds: S2b brackets `emergency:console_stale` to 1.2–4.0 s guest after a
+verified still-EMULATING/no-prior-emergency pre-stop sample (a
+`CONSOLE_FRESH_US` regression to ≥4 s or a premature freshness kill now
+fails, not just "fires eventually"), and S3 bounds 25 emulate bursts to
+≤8 s guest (a burst-cadence regression past ~330 ms/burst fails; the
+wall-clock mean-gap check stays advisory). A new `QT k1
+<auto|stuck|bypass|emulate|open|closed>` scripting verb reaches the
+fail-closed feedback paths the always-succeeding K1 model never could:
+S7a proves a stuck relay fails the entry closed at the 10 ms feedback
+deadline (`emergency:entry_feedback_timeout`, latched fault, zero wire
+bytes, re-entry refused after healing + fresh lease), S7b proves
+mid-EMULATING pole loss (`emergency:relay_feedback_invalid`) releases
+relay+TX at the IO boundary and silences the wire. The batch-emitted
+entry-intent audit labels (`command_zero`..`wait_entry_gap`) are now
+documented as intent markers, with actuation evidence carried by the
+feedback-qualification events, `io_relay`/`io_tx`, and the byte-level TX
+capture. All shim changes stay inside `esp32/main/qemu_test/`; the
+default build re-passed the unmodified smoke and the strings gate
+(including the new `io_relay`/`io_tx`/`k1` surface: absent from the
+production binary). Full harness (S1–S7), host suite, and repo pytest all
+green. Still no bench evidence; Status stays **HOLD**.

@@ -16,20 +16,35 @@
 #include "esp32_uart_port.h"
 #include "safety/safety_controller.h"
 
+#if defined(ESP32TAP_QEMU_TEST)
+#include "qemu_test/qemu_test_shim.h"
+#endif
+
 namespace esp32tap {
+
+#if defined(ESP32TAP_QEMU_TEST)
+// QEMU behavioral-test image only (tools/qemu_harness): scripted K1
+// feedback / TREAD_OK / VBUS, motor tap remapped to UART0 RX (UART2 has
+// no chardev in the pinned QEMU). Never flash to hardware.
+using SafetyIoImpl = qemu_test::QemuTestSafetyIo;
+using MotorTapImpl = qemu_test::QemuTestMotorTap;
+#else
+using SafetyIoImpl = esp_hal::Esp32SafetyIo;
+using MotorTapImpl = esp_hal::MotorTapUart;
+#endif
 
 struct FirmwareContext {
     esp_hal::Esp32Clock clock;
-    esp_hal::Esp32SafetyIo safety_io;
+    SafetyIoImpl safety_io;
     esp_hal::ConsoleMotorUart console_uart;  // UART1: console RX + motor TX
-    esp_hal::MotorTapUart motor_tap;         // UART2: motor RX tap
+    MotorTapImpl motor_tap;                  // UART2: motor RX tap
 
     std::mutex controller_mu;
     safety::SafetyController controller;
 
     ModeStateMachine mode;
     SerialReader<esp_hal::ConsoleMotorUart> console_reader{console_uart};
-    SerialReader<esp_hal::MotorTapUart> motor_reader{motor_tap};
+    SerialReader<MotorTapImpl> motor_reader{motor_tap};
     SerialWriter<esp_hal::ConsoleMotorUart> motor_writer{console_uart};
     EmulationCycle<esp_hal::ConsoleMotorUart> emulate_cycle{motor_writer, mode};
 
