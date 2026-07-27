@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export and atomically publish the Esp32Tap Rev D fabrication package.
+"""Export and atomically publish the Esp32Tap Rev E fabrication package.
 
 The deterministic fabrication transform normalizes KiCad's volatile
 timestamps and removes the complete component-attributed top-legend suffix
@@ -845,7 +845,7 @@ def _validate_profile_geometry(payload: str) -> None:
         tuple(sorted((bottom_left, top_left))),
     }
     if segments != expected_segments:
-        raise FabExportError("Esp32Tap-Edge_Cuts.gm1 profile must be the closed " "95.0 x 58.0 mm Rev D rectangle")
+        raise FabExportError("Esp32Tap-Edge_Cuts.gm1 profile must be the closed " "95.0 x 58.0 mm Rev E rectangle")
 
 
 def _validate_drill_artwork(drill: str) -> None:
@@ -955,7 +955,7 @@ def validate_stage(
     *,
     require_normalized: bool = False,
 ) -> None:
-    """Fail closed unless the directory is the exact Rev D four-layer package."""
+    """Fail closed unless the directory is the exact Rev E four-layer package."""
     if directory.is_symlink() or not directory.is_dir():
         raise FabExportError(f"fabrication stage is not a directory: {directory}")
     entries = list(directory.iterdir())
@@ -1106,7 +1106,7 @@ def validate_stage(
         for filename, function in JOB_FUNCTIONS.items()
     }
     if job_attributes != expected_job_attributes:
-        raise FabExportError("Gerber job file/function/polarity mapping is not the exact " "Rev D set")
+        raise FabExportError("Gerber job file/function/polarity mapping is not the exact " "Rev E set")
     general = job.get("GeneralSpecs")
     if not isinstance(general, dict):
         raise FabExportError("Gerber job GeneralSpecs must be an object")
@@ -1143,7 +1143,7 @@ def validate_stage(
         or general.get("ImpedanceControlled") is not REQUIRED_GENERAL_SPECS["ImpedanceControlled"]
     ):
         raise FabExportError(
-            "Gerber job GeneralSpecs differ from the locked Rev D "
+            "Gerber job GeneralSpecs differ from the locked Rev E "
             "size, layer count, thickness, finish, or impedance setting"
         )
     if require_normalized:
@@ -1441,7 +1441,7 @@ def main(arguments: Iterable[str] | None = None) -> int:
                 args.archive,
                 args.board.parent.parent,
             )
-            print(f"PASS: exact {len(EXPECTED_FAB_FILES)}-member " "Rev D fabrication package and assembly parity")
+            print(f"PASS: exact {len(EXPECTED_FAB_FILES)}-member " "Rev E fabrication package and assembly parity")
             return 0
         export_fab(
             board=args.board,

@@ -15,8 +15,13 @@
     (constraint diff_pair_gap (min 0.200mm) (max 0.200mm) (opt 0.200mm))
 )
 
+# Rev E: the pair's vertical corridor threads the TP12/TP13 fixture-pad
+# gap on its way from the bottom-edge USB-C to the MCU.  K1_NC_FB and
+# K1_NO_FB are static DC relay-contact monitors (no edges while USB is
+# active), so those two named nets are exempted from the 0.8 mm guard
+# band exactly like the GND reference; every other net keeps it.
 (rule "USB_90R_JLC04161H unrelated-copper exclusion"
     (layer "F.Cu")
-    (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.Type == 'Track' && A.NetClass == 'USB_90R_JLC04161H' && B.NetClass != 'USB_90R_JLC04161H' && B.NetName != 'GND'")
+    (condition "A.intersectsArea('USB_90R_CONTROLLED_CORRIDOR') && A.Type == 'Track' && A.NetClass == 'USB_90R_JLC04161H' && B.NetClass != 'USB_90R_JLC04161H' && B.NetName != 'GND' && B.NetName != 'K1_NC_FB' && B.NetName != 'K1_NO_FB'")
     (constraint clearance (min 0.8mm))
 )

@@ -25,7 +25,7 @@
       18.0
     ],
     [
-      8.0,
+      87.0,
       40.0
     ]
   ],
@@ -34,8 +34,8 @@
     15.48
   ],
   "usb_center_mm": [
-    91.2,
-    39.5
+    83.6,
+    54.2
   ],
   "switch_centers_mm": [
     [
@@ -50,7 +50,7 @@
   "rj45_jack": {
     "mpn": "441440003",
     "lcsc": "C585890",
-    "note": "Rev D: J1 and J2 are the identical unshielded right-angle SMD 8P8C jack, edge-mounted with the mating opening facing off the board edge. There is no mechanical keying between console and motor any more; CONSOLE/MOTOR silkscreen is the only differentiator.",
+    "note": "Rev E: J1 and J2 are the identical unshielded right-angle SMD 8P8C jack, one per short board edge -- J1 (CONSOLE) opens off X=0 and J2 (MOTOR) opens off X=board_l, so the installed box reads console to motor left to right. There is no mechanical keying between console and motor; CONSOLE/MOTOR silkscreen and the cable run direction are the differentiators.",
     "body_width_mm": 15.48,
     "body_depth_mm": 17.17,
     "body_height_mm": 13.4,
@@ -62,9 +62,9 @@
   "external_cable_bend_service_radius_mm": 18.0,
   "closure": "TOOL_LESS_SNAP_LATCH_WITH_OPTIONAL_SUPPLIED_M3",
   "artifacts": {
-    "enclosure/esp32tap_case.scad": "5105df1c9f6c369d02db82c68013d7a892383cd7b874fa35a8fff73495894c31",
-    "enclosure/esp32tap_base.stl": "424f54d01e6b05ee66f717ebece51dd360dee2268af46a4e0fbe6b8bfd00bc32",
-    "enclosure/esp32tap_lid.stl": "dceda9ed05d40ae223d6dfe68f464d909a5982b2dfad88c50bbf7296226239c7"
+    "enclosure/esp32tap_case.scad": "6915aafab6f1cc8813dc042d656f7c824d21d27053cbbc63f21f872f97b94f8e",
+    "enclosure/esp32tap_base.stl": "33d81eeb413adeb9d1f16a3e897055129b635e3f41767a83867afd8f044721a1",
+    "enclosure/esp32tap_lid.stl": "17ca83f269f18543a0cc1e4a26d496abadd1762a0c001a2d3b3514f887556528"
   },
   "physical_gates": [
     "actual board and connector fit",

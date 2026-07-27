@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Generate the Esp32Tap Rev D four-layer PCB from ``design.py``.
+"""Generate the Esp32Tap Rev E four-layer PCB from ``design.py``.
 
 Critical current loops, feedback, and USB are explicit routes.  Remaining
 low-speed nets use a deterministic two-routing-layer grid search: vertical
@@ -146,6 +146,51 @@ PLANNED_U6_ESCAPES = {
     "7": ((52.0, 21.6), "RELAY_GATE"),
     "8": ((51.2, 20.8), "+3V3"),
 }
+# Rev E: the +8V_RAW trunk plus the relocated J2 turn the supervisor belt
+# (x 44-70, y 20-27) and its two north-south crossing windows into scarce
+# resources.  The high-priority safety nets blanket them first, so the
+# known-late nets that must cross get deterministic pre-reserved slots
+# (marked as owned grid cells, exactly like PLANNED_U6_ESCAPES).
+# In2-only: the belt's B rows stay free so other east-west traffic can
+# still cross these columns on B.Cu.
+PLANNED_ROUTE_RESERVATIONS = (
+    ("TX_ENABLE", ((50.0, 27.2), (50.0, 23.2))),
+    ("+5V_RLY", ((52.2, 33.2), (52.2, 28.2), (46.0, 28.2), (46.0, 24.2), (40.4, 24.2), (40.4, 26.4))),
+    ("TX_GATE", ((63.2, 33.6), (63.2, 26.4))),
+    ("+3V3", ((46.4, 20.0), (50.8, 20.0))),
+    ("VIN", ((37.6, 42.4), (37.6, 43.0))),
+    ("VIN", ((39.8, 38.6), (39.8, 38.6))),
+    ("Q1_B", ((37.6, 17.2), (36.4, 14.4), (34.4, 13.2))),
+    ("K1_NO_FB", ((35.2, 32.8), (35.2, 32.8))),
+    ("PIN4_PASS", ((6.8, 15.6), (6.8, 16.0))),
+    ("PIN5_SAFETY", ((6.8, 14.4), (9.4, 14.4))),
+    ("EN", ((66.4, 12.4), (61.6, 12.4), (60.4, 14.8))),
+)
+
+# U1's west pad column escapes into the narrow x~68 alley between the
+# C13/C14 DNP stubs and the module's own pad field; assign the slots
+# deterministically so late cluster nets are not stranded.
+PLANNED_U1_WEST_ESCAPES = {
+    "3": (68.4, 12.8),
+    "4": (67.2, 12.0),
+    "6": (68.0, 14.8),
+    "8": (68.0, 16.4),
+    "9": (68.0, 17.6),
+    "10": (68.4, 19.2),
+    "11": (68.4, 20.4),
+    "12": (68.0, 21.2),
+}
+
+# U7 sits in the most contested part of the supervisor belt; its four
+# signal pads get planned escapes exactly like U6's so the early bulk
+# routes cannot strand them (pad 3 is GND and uses the generic stitcher).
+PLANNED_U7_ESCAPES = {
+    "1": ((55.6, 23.2), "TX_GATE"),
+    "2": ((54.8, 22.2), "ESP_TX"),
+    "4": ((60.4, 24.8), "TX_BUF"),
+    "5": ((60.4, 22.4), "+3V3"),
+}
+
 # JLC DFM reports same-net pad/via proximity and mask-opening artefacts even
 # when KiCad's electrical DRC accepts them.  Lock only the reported endpoint
 # escapes so the manufacturing geometry stays deterministic while preserving
@@ -154,11 +199,9 @@ LOCKED_DFM_ESCAPES = {
     ("C10", "1"): (61.2, 11.2),
     ("R13", "2"): (61.2, 11.2),
     ("C9", "2"): (65.2, 1.2),
-    ("R12", "2"): (75.2, 48.8),
     ("R22", "1"): (43.6, 40.8),
     ("R8", "2"): (64.4, 9.2),
     ("L1", "2"): (67.2, 51.2),
-    ("R30", "2"): (81.6, 44.0),
 }
 
 CUSTOM_FOOTPRINT_SOURCES: dict[tuple[str, str], tuple[str, str]] = {}
@@ -168,28 +211,36 @@ CUSTOM_FOOTPRINT_SOURCES: dict[tuple[str, str], tuple[str, str]] = {}
 # the RJ45/enclosure geometry, keep RF/USB clear of power, and make the
 # supervisor, relay, and converter loops probeable.
 PLACE = {
-    # Rev D: Molex 441440003 right-angle SMD RJ45 (LCSC C585890).  The
-    # jack's mating opening faces local -Y; at rotation=90 that maps to
-    # world -X, i.e. off the board's left edge (see kicad/models/ + the
-    # gen_footprints RJ45_SMD entry).  X=8.0 sets the pad row ~2.1 mm and
-    # the courtyard ~2.8 mm inside the board edge (clean edge clearance,
-    # shallow enclosure-wall standoff).  J1's Y moved 11.0 -> 15.0 versus
-    # Rev C's Micro-Fit so the deeper RJ45 shell (courtyard to X=19.7)
-    # clears MH1's keepout (X 17.0-23.0, Y 0.0-6.0); J2 keeps Y=37.0 since
-    # nothing else sits in its footprint's larger footprint there.
+    # Rev D introduced the Molex 441440003 right-angle SMD RJ45 (LCSC
+    # C585890).  The jack's mating opening faces local -Y; at rotation=90
+    # that maps to world -X (off the left edge) and at rotation=270 to
+    # world +X (off the right edge).  X=8.0 / X=87.0 set the pad row
+    # ~2.1 mm inside the board edge.  Rev E: J2 (MOTOR) moves to the RIGHT
+    # short edge so the board reads console -> motor left to right; its
+    # deep courtyard (X 75.3-92.2, Y 29.4-44.6) displaced the whole USB-C
+    # cluster to the bottom edge and the VBUS_PRESENT divider/LED2/R12/
+    # TP3/TP4 out of the corner.  J1's Y stays 15.0 (clears MH1's keepout);
+    # J2's Y=37.0 centres the jack between the antenna keepout (top) and
+    # MH3 (bottom-right).
     "J1": (8.0, 15.0, 90),
-    "J2": (8.0, 37.0, 90),
-    "J3": (96.2, 36.5, 90),
+    "J2": (87.0, 37.0, 270),
+    # Rev E: USB-C moved to the bottom edge (opening faces +Y / world
+    # bottom).  X=83.6 keeps its courtyard clear of MH3's courtyard
+    # (x>=89.0); Y=51.2 puts the fabrication body exactly inside the
+    # Y=55 outline.
+    "J3": (83.6, 51.2, 0),
     "U1": (78.0, 6.45, 0),
     "K1": (30.2, 23.0, 0),
     "U2": (60.0, 48.5, 180),
-    "U3": (87.0, 35.0, 180),
+    # Rev E: ESD array west of J3, input pads (1/2/3) on its east column
+    # facing the connector, MCU pads (4/5/6) facing the west corridor.
+    "U3": (76.0, 47.3, 180),
     "U4": (35.0, 42.0, 0),
     "U5": (37.0, 25.0, 0),
     "U6": (48.0, 22.0, 0),
     "U7": (58.0, 24.0, 0),
     "Q1": (35.0, 15.5, 0),
-    "Q2": (84.0, 46.5, 0),
+    "Q2": (76.4, 51.2, 90),
     "D1": (27.5, 52.5, 180),
     "D3": (35.0, 52.0, 0),
     "D4": (30.0, 11.5, 0),
@@ -197,7 +248,8 @@ PLACE = {
     "D6": (29.0, 47.0, 270),
     "D7": (38.0, 38.0, 270),
     "LED1": (93.0, 10.0, 180),
-    "LED2": (77.0, 50.0, 0),
+    # Rev E: LED2/R12 move to the vacated left-middle area (old J2 zone).
+    "LED2": (41.2, 52.4, 0),
     "SW1": (42.0, 4.0, 0),
     "SW2": (94.0, 17.0, 0),
     "F1": (20.5, 52.5, 0),
@@ -206,15 +258,15 @@ PLACE = {
     "R2": (55.0, 47.5, 180),
     "R3": (50.0, 45.0, 0),
     "R14": (50.0, 48.0, 0),
-    "R4": (94.0, 43.5, 270),
-    "R5": (94.0, 29.0, 90),
+    "R4": (92.0, 46.8, 90),
+    "R5": (74.6, 54.0, 0),
     "R6": (39.0, 14.0, 0),
     "R7": (64.0, 13.0, 0),
     "R8": (64.0, 10.5, 0),
     "R9": (38.5, 19.0, 90),
     "R10": (42.0, 18.5, 0),
     "R11": (90.0, 10.0, 0),
-    "R12": (74.0, 50.0, 0),
+    "R12": (44.4, 52.4, 0),
     "R13": (60.0, 12.0, 90),
     "R15": (66.5, 15.5, 0),
     "R16": (66.5, 17.5, 0),
@@ -226,12 +278,14 @@ PLACE = {
     "R22": (45.0, 42.0, 0),
     "R23": (47.0, 27.0, 0),
     "R24": (47.0, 30.0, 0),
-    "R25": (33.5, 31.0, 90),
+    # Rev E: horizontal, west of K1, so its escape vias sit beside the
+    # +8V_RAW B.Cu trunk corridor instead of inside it.
+    "R25": (26.6, 33.0, 0),
     "R26": (35.2, 35.0, 90),
     "R27": (52.0, 27.0, 0),
     "R28": (52.0, 30.0, 0),
-    "R29": (80.0, 48.0, 0),
-    "R30": (80.0, 45.0, 0),
+    "R29": (69.8, 44.4, 0),
+    "R30": (69.8, 49.5, 0),
     "R31": (90.0, 13.0, 90),
     # TREAD_OK -> IO6 series isolation resistor (review finding B2). Placed
     # next to the U6/R27/R28 TREAD_OK cluster with clear courtyard spacing
@@ -242,26 +296,32 @@ PLACE = {
     "C3": (63.5, 43.5, 0),
     "C4": (62.0, 45.5, 0),
     "C5": (61.1, 51.1, 0),
-    "C6": (70.0, 47.0, 0),
+    # Rev E: 0.2 west so the USB pair vertical corridor clears pad 2.
+    "C6": (69.8, 47.0, 0),
     "C7": (70.0, 52.0, 0),
     "C8": (66.5, 6.5, 90),
     "C9": (66.5, 2.0, 90),
     "C10": (60.0, 8.0, 90),
-    "C11": (87.0, 43.0, 0),
+    "C11": (90.2, 46.4, 90),
     "C12": (57.0, 43.0, 0),
     "C13": (67.3, 12.8, 90),
     "C14": (67.3, 20.0, 270),
     "C15": (37.0, 21.5, 0),
     "C16": (41.0, 25.0, 90),
-    "C17": (35.0, 38.5, 0),
+    "C17": (35.0, 39.4, 0),
     "C18": (32.0, 45.0, 0),
     "C19": (38.0, 45.0, 0),
     "C20": (48.0, 19.5, 0),
     "C21": (58.0, 21.5, 0),
-    "TP1": (35.0, 3.0, 0),
-    "TP2": (35.0, 6.0, 0),
-    "TP3": (74.0, 43.0, 0),
-    "TP4": (77.0, 43.0, 0),
+    # Rev E: the UART probe pads sit in the clear strip east of U1 (below
+    # SW2's courtyard, above J2's) so U0TXD/U0RXD stay short local links.
+    # Their old home (35.0, 3.0/6.0) forced two full-width crossings of
+    # the top edge, which the module's stock antenna keepout (blocked in
+    # initialise_router_obstacles) no longer permits.
+    "TP1": (92.0, 24.4, 0),
+    "TP2": (92.0, 27.2, 0),
+    "TP3": (22.0, 44.0, 0),
+    "TP4": (22.0, 47.6, 0),
     "TP5": (54.0, 36.0, 0),
     "TP6": (57.2, 36.0, 0),
     "TP7": (60.4, 36.0, 0),
@@ -274,10 +334,14 @@ PLACE = {
 }
 
 COMPACT_X_DELTAS = {
-    "J3": -5.0,
-    "U3": -5.0,
     "SW2": -3.0,
     **{f"TP{number}": -5.0 for number in range(5, 14)},
+    # Rev E: J2's deep courtyard reaches X=75.275 and the USB pair's
+    # vertical corridor threads the TP12/TP13 gap; both test pads shift
+    # west a little further so pad copper, courtyards, and the 90-ohm
+    # pair all clear each other.
+    "TP12": -5.44,
+    "TP13": -5.68,
 }
 
 # Preserve every qualified Rev B coordinate that already fits the compact
@@ -317,11 +381,6 @@ LOCKED_DFM_ESCAPES[("C10", "1")] = (60.0, 16.0)
 # Reserve TX_GATE immediately above it so the safety route is not displaced
 # by the later U1 cluster or the shifted USB pair.
 LOCKED_DFM_ESCAPES[("TP10", "1")] = (63.2, 39.2)
-
-
-def usb_edge_x(x: float) -> float:
-    """Translate routing geometry tied to the compacted USB-edge cluster."""
-    return x - 5.0
 
 
 def local(point: Any) -> tuple[float, float]:
@@ -454,7 +513,7 @@ class Generator:
         settings.m_MinTrackWidth = MM(0.20)
         title = self.board.GetTitleBlock()
         title.SetTitle("Esp32Tap - ESP32-S3 Precor serial-bus tap")
-        title.SetRevision("D")
+        title.SetRevision("E")
         title.SetCompany("precor-9.3x")
         title.SetComment(0, "STACKUP: JLC04161H-7628")
         title.SetComment(
@@ -781,10 +840,10 @@ class Generator:
         self.add_rule_area(
             "USB_90R_CONTROLLED_CORRIDOR",
             [
-                (69.5, 23.3 + USB_ROUTE_SHIFT_Y),
-                (usb_edge_x(83.5), 23.3 + USB_ROUTE_SHIFT_Y),
-                (usb_edge_x(83.5), 25.2 + USB_ROUTE_SHIFT_Y),
-                (69.5, 25.2 + USB_ROUTE_SHIFT_Y),
+                (71.75, 33.0),
+                (73.15, 33.0),
+                (73.15, 37.0),
+                (71.75, 37.0),
             ],
             (F,),
             footprints=False,
@@ -904,47 +963,56 @@ class Generator:
         )
 
     def add_usb_routes(self) -> None:
-        # Connector fan-out keeps the interleaved reversible contacts on F.Cu.
-        # D+ joins on the inboard side and leaves below the contact field; D-
-        # joins on the outboard side and leaves above it.  The two paths never
-        # cross despite the reversible A/B contact ordering.
+        # Rev E: J3 sits on the bottom edge at (83.6, 51.2) rot 0 with U3
+        # directly north-west at (76.0, 47.3) rot 180.  Connector fan-out
+        # keeps the interleaved reversible contacts on F.Cu: D- (B7/A7)
+        # joins on the outboard (south) side and dives under the connector
+        # NPTH keepouts to reach U3.1 on the ESD array's east column; D+
+        # (A6/B6) joins on the inboard (north) side and runs along y=45.4
+        # to U3.3.  The two paths never cross despite the reversible A/B
+        # contact ordering.
         a7, b7 = self.pad("J3", "A7"), self.pad("J3", "B7")
         a6, b6 = self.pad("J3", "A6"), self.pad("J3", "B6")
         u31, u33 = self.pad("U3", "1"), self.pad("U3", "3")
-        dn_x = usb_edge_x(93.4)
-        self.add_track([a7, (dn_x, a7[1])], "USB_DN", 0.20)
-        self.add_track([b7, (dn_x, b7[1])], "USB_DN", 0.20)
+        dn_join_y = 48.9
+        self.add_track([b7, (b7[0], dn_join_y)], "USB_DN", 0.20)
+        self.add_track([a7, (a7[0], dn_join_y)], "USB_DN", 0.20)
         self.add_track(
             [
-                (dn_x, a7[1]),
-                (dn_x, b7[1]),
+                (b7[0], dn_join_y),
+                (a7[0], dn_join_y),
             ],
             "USB_DN",
             USB_CONTROLLED_WIDTH,
         )
         self.add_track(
             [
-                (dn_x, b7[1]),
-                (90.0, b7[1]),
-                (90.0, 42.0),
-                (83.8, 42.0),
-                (83.8, u31[1]),
+                (b7[0], dn_join_y),
+                (b7[0], 49.9),
+                (78.2, 49.9),
+                (78.2, u31[1]),
                 u31,
             ],
             "USB_DN",
             USB_CONTROLLED_WIDTH,
         )
-        dp_x = usb_edge_x(90.9)
-        self.add_track([a6, (dp_x, a6[1])], "USB_DP", 0.20)
-        self.add_track([b6, (dp_x, b6[1])], "USB_DP", 0.20)
+        dp_join_y = 46.0
+        self.add_track([a6, (a6[0], dp_join_y)], "USB_DP", 0.20)
+        self.add_track([b6, (b6[0], dp_join_y)], "USB_DP", 0.20)
         self.add_track(
             [
-                (dp_x, a6[1]),
-                (dp_x, b6[1]),
-                (usb_edge_x(90.4), b6[1]),
-                (usb_edge_x(90.4), 34.6),
-                (usb_edge_x(89.6), 34.6),
-                (usb_edge_x(89.6), u33[1]),
+                (b6[0], dp_join_y),
+                (a6[0], dp_join_y),
+            ],
+            "USB_DP",
+            USB_CONTROLLED_WIDTH,
+        )
+        self.add_track(
+            [
+                (b6[0], dp_join_y),
+                (b6[0], 45.4),
+                (79.4, 45.4),
+                (79.4, u33[1]),
                 u33,
             ],
             "USB_DP",
@@ -953,19 +1021,29 @@ class Generator:
 
         # Long post-ESD pair.  The central parallel run uses the official
         # JLC04161H-7628 90-ohm result: 0.2906 mm copper plus a 0.2000 mm
-        # edge gap gives 0.4906 mm centre-to-centre separation.
+        # edge gap gives 0.4906 mm centre-to-centre separation.  From U3
+        # the pair exits west, turns north through the TP12/TP13 gap
+        # (verticals at x=72.755 / 73.245), and rejoins the qualified Rev D
+        # west-side geometry at y=30.6 / 31.09.  Length matching happens on
+        # the D- member (serpentine east of R15) because the D+ member's
+        # J3-side and U3-side legs are both shorter.
         u36, u34 = self.pad("U3", "6"), self.pad("U3", "4")
         r151, r161 = self.pad("R15", "1"), self.pad("R16", "1")
         dp_y = 24.000 + USB_ROUTE_SHIFT_Y
         dn_y = dp_y + USB_CENTER_SPACING
-        dp_outer_x = usb_edge_x(83.2 + USB_CENTER_SPACING)
+        dp_x = 72.45 + USB_CENTER_SPACING / 2
+        dn_x = 72.45 - USB_CENTER_SPACING / 2
         self.add_track(
             [
                 u36,
-                (usb_edge_x(83.2), u36[1]),
-                (usb_edge_x(83.2), dn_y),
-                (76.0, dn_y),
+                (dn_x, u36[1]),
+                (dn_x, 45.0),
+                (dn_x, 42.4),
+                (dn_x, 39.2),
+                (dn_x, dn_y),
                 (69.5, dn_y),
+                (68.4, dn_y),
+                (65.0, dn_y),
                 (61.99, dn_y),
                 (61.99, r151[1]),
                 r151,
@@ -976,26 +1054,22 @@ class Generator:
         self.add_track(
             [
                 u34,
-                (dp_outer_x, u34[1]),
-                (dp_outer_x, dp_y),
-                (usb_edge_x(83.2), dp_y),
-                (76.0, dp_y),
-                (76.0, 27.515),
-                (75.2, 27.515),
-                (75.2, 29.8),
-                (74.4, 29.8),
-                (74.4, 27.515),
-                (73.6, 27.515),
-                (73.6, 29.8),
-                (72.8, 29.8),
-                (72.8, 27.515),
-                (72.0, 27.515),
-                (72.0, 29.8),
-                (71.2, 29.8),
-                (71.2, 27.515),
-                (70.4, 27.515),
-                (70.4, dp_y),
-                (69.5, dp_y),
+                (dp_x, u34[1]),
+                (dp_x, 45.0),
+                (dp_x, 42.4),
+                (dp_x, 39.2),
+                (dp_x, dp_y),
+                (71.6, dp_y),
+                (71.6, 28.9),
+                (70.8, 28.9),
+                (70.8, 29.8),
+                (70.0, 29.8),
+                (70.0, 28.9),
+                (69.2, 28.9),
+                (69.2, 29.8),
+                (68.4, 29.8),
+                (68.4, dp_y),
+                (65.0, dp_y),
                 (62.483742, dp_y),
                 (62.483742, r161[1]),
                 r161,
@@ -1027,103 +1101,107 @@ class Generator:
             nearest = min(shell, key=lambda candidate: math.dist(contact, candidate))
             self.add_track([contact, nearest], "GND", 0.30)
 
-        # VBUS is only sensed by U3.  Bring both reversible connector contact
-        # groups down to In2 immediately so they do not cut across the USB
-        # pair fan-out on the front layer.
-        vbus_lower = (usb_edge_x(90.4), 33.2)
-        vbus_upper = (usb_edge_x(90.4), 39.6)
-        vbus_esd = (usb_edge_x(85.2), self.pad("U3", "5")[1])
-        self.add_track(
-            [
-                self.pad("J3", "A9"),
-                (usb_edge_x(90.4), self.pad("J3", "A9")[1]),
-                (usb_edge_x(90.4), vbus_lower[1]),
-                vbus_lower,
-            ],
-            "VBUS",
-            0.30,
-        )
-        self.add_track(
-            [
-                self.pad("J3", "A4"),
-                (usb_edge_x(90.4), self.pad("J3", "A4")[1]),
-                (usb_edge_x(90.4), vbus_upper[1]),
-                vbus_upper,
-            ],
-            "VBUS",
-            0.30,
-        )
-        self.add_track([self.pad("U3", "5"), vbus_esd], "VBUS", 0.30)
-        for point in (vbus_lower, vbus_upper, vbus_esd):
+        # VBUS is only sensed by U3.  Both reversible connector contact
+        # groups drop onto a B.Cu spine that runs below the connector,
+        # feeding U3.5, C11, Q2's gate, and the R29 bleed.
+        a4 = self.pad("J3", "A4")
+        a9 = self.pad("J3", "A9")
+        vbus_west = (a4[0], 46.05)
+        vbus_east = (a9[0], 44.9)
+        self.add_track([a4, vbus_west], "VBUS", 0.30)
+        self.add_track([a9, vbus_east], "VBUS", 0.30)
+        u35 = self.pad("U3", "5")
+        u35_via = (73.8, 47.3)
+        self.add_track([u35, u35_via], "VBUS", 0.30)
+        for point in (vbus_west, vbus_east, u35_via):
             self.add_via(point, "VBUS")
+        # B.Cu spine: U3.5 -> south lane (y=49.9, below the connector NPTH
+        # keepouts, between the shell-stake rows) -> east riser to the two
+        # connector contact vias, with spurs to Q2.1, C11.1, and R29.1.
+        q21 = self.pad("Q2", "1")
+        q21_via = (76.4, 52.9)
+        self.add_track([q21, (q21[0], 52.9), q21_via], "VBUS", 0.25)
+        self.add_via(q21_via, "VBUS")
+        c111 = self.pad("C11", "1")
+        c111_via = (90.2, 47.9)
+        self.add_track([c111, c111_via], "VBUS", 0.25)
+        self.add_via(c111_via, "VBUS")
+        r291 = self.pad("R29", "1")
+        r291_via = (67.8, 44.9)
+        self.add_track([r291, (67.8, r291[1]), r291_via], "VBUS", 0.25)
+        self.add_via(r291_via, "VBUS")
         self.add_track(
-            [vbus_lower, vbus_esd, vbus_upper],
-            "VBUS",
-            0.30,
-            IN2,
-        )
-
-        cc_routes = (
-            (
-                "CC1",
-                self.pad("J3", "A5"),
-                (usb_edge_x(90.5), 38.2),
-                self.pad("R4", "1"),
-                (92.4, self.pad("R4", "1")[1]),
-            ),
-            (
-                "CC2",
-                self.pad("J3", "B5"),
-                (usb_edge_x(93.4), self.pad("J3", "B5")[1]),
-                self.pad("R5", "1"),
-                (92.4, self.pad("R5", "1")[1]),
-            ),
-        )
-        for net, contact, contact_via, resistor, resistor_via in cc_routes:
-            self.add_track(
-                [
-                    contact,
-                    (contact_via[0], contact[1]),
-                    contact_via,
-                ],
-                net,
-                0.20,
-            )
-            self.add_track([resistor, resistor_via], net, 0.20)
-            self.add_via(contact_via, net)
-            self.add_via(resistor_via, net)
-            inner_points = [contact_via, resistor_via]
-            if net == "CC1":
-                inner_points = [
-                    contact_via,
-                    (86.0, contact_via[1]),
-                    (86.0, resistor_via[1]),
-                    resistor_via,
-                ]
-            else:
-                inner_points = [
-                    contact_via,
-                    (90.0, contact_via[1]),
-                    (90.0, resistor_via[1]),
-                    resistor_via,
-                ]
-            self.add_track(inner_points, net, 0.20, B)
-
-        vbus_loads = (
-            (self.pad("C11", "1"), (84.8, self.pad("C11", "1")[1])),
-            (self.pad("Q2", "1"), (81.8, self.pad("Q2", "1")[1])),
-            (self.pad("R29", "1"), (78.0, self.pad("R29", "1")[1])),
-        )
-        load_vias: list[tuple[float, float]] = []
-        for pad_point, via_point in vbus_loads:
-            self.add_track([pad_point, via_point], "VBUS", 0.25)
-            self.add_via(via_point, "VBUS")
-            load_vias.append(via_point)
-        self.add_track(
-            [vbus_esd, *load_vias],
+            [
+                r291_via,
+                (67.8, 45.4),
+                u35_via,
+                (73.8, 49.9),
+                (76.4, 49.9),
+                (85.0, 49.9),
+                (88.9, 49.9),
+                (88.9, 45.9),
+                (86.05, 45.9),
+                vbus_east,
+            ],
             "VBUS",
             0.30,
             B,
+        )
+        self.add_track([q21_via, (76.4, 49.9)], "VBUS", 0.30, B)
+        self.add_track([(88.9, 47.9), c111_via], "VBUS", 0.30, B)
+        self.add_track(
+            [
+                vbus_east,
+                (82.6, 44.9),
+                (81.15, 45.75),
+                vbus_west,
+            ],
+            "VBUS",
+            0.30,
+            B,
+        )
+
+        # CC pull-downs: R4 east of the connector, R5 south-west of it.
+        # CC2 crosses the VBUS spine on In2.Cu (CC nets carry no layer
+        # policy restriction).
+        a5 = self.pad("J3", "A5")
+        cc1_contact_via = (82.1, 49.0)
+        self.add_track([a5, (a5[0], 48.7), cc1_contact_via], "CC1", 0.20)
+        self.add_via(cc1_contact_via, "CC1")
+        r41 = self.pad("R4", "1")
+        cc1_r_via = (91.6, 47.9)
+        self.add_track([r41, (92.0, 47.9), cc1_r_via], "CC1", 0.20)
+        self.add_via(cc1_r_via, "CC1")
+        self.add_track(
+            [
+                cc1_contact_via,
+                (82.1, 44.0),
+                (90.8, 44.0),
+                (91.6, 45.0),
+                cc1_r_via,
+            ],
+            "CC1",
+            0.20,
+            IN2,
+        )
+        b5 = self.pad("J3", "B5")
+        cc2_contact_via = (b5[0], 46.0)
+        self.add_track([b5, cc2_contact_via], "CC2", 0.20)
+        self.add_via(cc2_contact_via, "CC2")
+        r51 = self.pad("R5", "1")
+        cc2_r_via = (74.4, 54.0)
+        self.add_track([r51, cc2_r_via], "CC2", 0.20)
+        self.add_via(cc2_r_via, "CC2")
+        self.add_track(
+            [
+                cc2_contact_via,
+                (85.35, 53.8),
+                (74.4, 53.8),
+                cc2_r_via,
+            ],
+            "CC2",
+            0.20,
+            IN2,
         )
 
     def add_shifted_u1_bus_route(self) -> None:
@@ -1137,10 +1215,12 @@ class Generator:
             # main bus (X=5.3, a via clearance concern along its entire
             # length) and GND's via cluster (X=7.35-10.35, but only at
             # its own Y -- 13.1 sits clear of any GND contact's Y).
-            ("J1", "6"): (8.0, 13.1),
+            ("J1", "6"): (6.8, 13.1),
             ("D5", "1"): (27.2, 13.2),
             ("K1", "2"): (25.6, 22.4),
-            ("R7", "1"): (62.0, 19.6),
+            # Rev E: lifted from (62.0, 19.6) so the CONS6 In2 leg rides
+            # y~18.4 and leaves the y 19.2-20.4 rows to the U1<->U6 bus.
+            ("R7", "1"): (62.4, 18.4),
         }
         for endpoint, via in escapes.items():
             self.add_track([self.pad(*endpoint), via], "CONS6", 0.20)
@@ -1172,7 +1252,9 @@ class Generator:
 
     def add_two_amp_power_routes(self) -> None:
         """Emit only the exact, reviewable redundant power-copper intent."""
-        layer_ids = {"F.Cu": F, "B.Cu": B}
+        # Rev E: the full-board pass-through adds In2.Cu twins (+8V_RAW)
+        # and In1.Cu strips (GND, merging with the plane).
+        layer_ids = {"F.Cu": F, "In1.Cu": IN1, "In2.Cu": IN2, "B.Cu": B}
         for route in power_intent.ROUTES:
             self.add_track(
                 route["points"],
@@ -1189,18 +1271,22 @@ class Generator:
             )
 
     def add_vbus_present_route(self) -> None:
+        # Rev E: Q2/R30 live south of the relocated USB cluster.  The In2
+        # spine runs north at x=75.8 (through the U1 escape row -- laid
+        # before the router, so those escapes spiral around it) and turns
+        # west at y=23.0 to U1.7's via.
         escapes = {
             ("U1", "7"): (
                 (70.8, 15.6),
                 [self.pad("U1", "7"), (70.8, 15.41), (70.8, 15.6)],
             ),
             ("R30", "2"): (
-                (81.6, 44.0),
-                [self.pad("R30", "2"), (81.6, 44.0)],
+                (72.0, 49.5),
+                [self.pad("R30", "2"), (72.0, 49.5)],
             ),
             ("Q2", "3"): (
-                (86.0, 46.4),
-                [self.pad("Q2", "3"), (86.0, 46.5), (86.0, 46.4)],
+                (76.4, 49.2),
+                [self.pad("Q2", "3"), (76.4, 49.2)],
             ),
         }
         for via, dogleg in escapes.values():
@@ -1208,10 +1294,20 @@ class Generator:
             self.add_via(via, "VBUS_PRESENT_N")
         self.add_track(
             [
-                escapes[("U1", "7")][0],
-                (70.0, 40.0),
                 escapes[("R30", "2")][0],
+                (75.8, 49.5),
+                (75.8, 23.0),
+                (70.8, 23.0),
+                escapes[("U1", "7")][0],
+            ],
+            "VBUS_PRESENT_N",
+            0.20,
+            IN2,
+        )
+        self.add_track(
+            [
                 escapes[("Q2", "3")][0],
+                (75.8, 49.2),
             ],
             "VBUS_PRESENT_N",
             0.20,
@@ -1252,21 +1348,41 @@ class Generator:
         if (ref, str(pad.GetNumber())) == ("J1", "3"):
             desired = (16.4, 12.8)
         elif ref in ("J1", "J2") and str(pad.GetNumber()) in {"3", "4", "5", "6"}:
-            # Rev D: the RJ45's 1.27 mm pad pitch (see power_intent.py)
-            # makes the generic center-relative heuristic below pick a
-            # too-close escape (it measures "outward" from the footprint
-            # center, which sits deep inside the jack shell, not from the
-            # pad row) -- push straight out at the pad's own Y instead,
-            # comfortably past the JLC vendor pad-to-via clearance.
-            desired = (point[0] + 4.0, point[1])
+            # The RJ45's 1.27 mm pad pitch (see power_intent.py) makes the
+            # generic center-relative heuristic below pick a too-close
+            # escape (it measures "outward" from the footprint center,
+            # which sits deep inside the jack shell, not from the pad row)
+            # -- push straight toward the board interior at the pad's own
+            # Y instead, comfortably past the JLC vendor pad-to-via
+            # clearance.  Rev E: J1 sits on the left edge (escape +X), J2
+            # on the right edge (escape -X).
+            direction = 4.0 if ref == "J1" else -4.0
+            desired = (point[0] + direction, point[1])
+        elif (ref, str(pad.GetNumber())) == ("D7", "2"):
+            # Keep D7's GND stitch out of U4.5's only escape gap between
+            # the D and F ground strips.
+            desired = (38.6, 38.6)
+        elif (ref, str(pad.GetNumber())) == ("C13", "2"):
+            # Keep C13's GND stitch out of the single-file U1 west escape
+            # column (it otherwise walls U1.9/U1.10 in).
+            desired = (66.0, 18.0)
+        elif (ref, str(pad.GetNumber())) == ("U4", "5"):
+            # VIN pad boxed between the D/F ground strips' via-exclusion
+            # bands; escape east into the local gap opened by strip F's
+            # dodge around U4.
+            desired = (37.6, 42.8)
         elif (ref, str(pad.GetNumber())) == ("R26", "2"):
             desired = (35.2, 32.8)
+        elif ref == "U1" and str(pad.GetNumber()) in PLANNED_U1_WEST_ESCAPES:
+            desired = PLANNED_U1_WEST_ESCAPES[str(pad.GetNumber())]
         elif (ref, str(pad.GetNumber())) == ("U1", "5"):
             desired = (68.4, 18.0 + U1_PROFILE_SHIFT_Y)
         elif (ref, str(pad.GetNumber())) == ("U1", "7"):
             desired = (70.8, 15.6)
         elif ref == "U6":
             desired = PLANNED_U6_ESCAPES[str(pad.GetNumber())][0]
+        elif ref == "U7" and str(pad.GetNumber()) in PLANNED_U7_ESCAPES:
+            desired = PLANNED_U7_ESCAPES[str(pad.GetNumber())][0]
         elif ref.startswith("TP") and 5 <= int(ref[2:]) <= 13:
             desired = (point[0], 32.8)
         else:
@@ -1340,9 +1456,13 @@ class Generator:
             if distance < 1e-6 and existing_net == net:
                 continue
             existing_size, existing_drill = self.via_geometry[(existing, existing_net)]
-            if distance < max(
-                0.30 + existing_size / 2 + CLEARANCE,
-                0.15 + existing_drill / 2 + 0.25,
+            if (
+                distance
+                < max(
+                    0.30 + existing_size / 2 + CLEARANCE,
+                    0.15 + existing_drill / 2 + 0.25,
+                )
+                - 1e-6
             ):
                 return False
 
@@ -1358,7 +1478,7 @@ class Generator:
                 if 1e-6 < distance < 0.30 + width / 2:
                     return False
                 continue
-            if distance < 0.30 + width / 2 + CLEARANCE:
+            if distance < 0.30 + width / 2 + CLEARANCE - 1e-6:
                 return False
         return True
 
@@ -1387,7 +1507,7 @@ class Generator:
         for other_start, other_end, track_net, other_width, layer in self.track_records:
             if layer != F or track_net == net:
                 continue
-            if segment_distance(start, end, other_start, other_end) < (width / 2 + other_width / 2 + CLEARANCE):
+            if segment_distance(start, end, other_start, other_end) < (width / 2 + other_width / 2 + CLEARANCE) - 1e-6:
                 return False
 
         for via, via_net in self.via_records:
@@ -1455,6 +1575,25 @@ class Generator:
     def initialise_router_obstacles(self) -> None:
         ax0, ay0, ax1, ay1 = ANTENNA_KEEPOUT
         fx0, fy0, fx1, fy1 = FIXTURE_KEEPOUT
+        # The ESP32-S3-WROOM-1 module (and any other stock footprint) embeds
+        # the manufacturer's own all-copper-layer rule areas — for U1 that is
+        # the antenna keepout spanning the whole top edge strip.  KiCad DRC
+        # does not flag rule-area track intrusions in this project, so the
+        # grid router must honour those zones itself or it will lay tracks
+        # under the inverted-F antenna (this happened in the first Rev E
+        # reroute: U0TXD/U0RXD crossed the antenna at y=5.6).
+        module_keepouts: list[tuple[float, float, float, float, tuple[int, ...]]] = []
+        for footprint in self.footprints.values():
+            for zone in footprint.Zones():
+                if not zone.GetIsRuleArea() or not zone.GetDoNotAllowTracks():
+                    continue
+                layers = tuple(layer for layer in ROUTING_LAYERS if zone.IsOnLayer(layer))
+                if not layers:
+                    continue
+                chain = zone.Outline().COutline(0)
+                xs = [pcbnew.ToMM(chain.CPoint(i).x) - OX for i in range(chain.PointCount())]
+                ys = [pcbnew.ToMM(chain.CPoint(i).y) - OY for i in range(chain.PointCount())]
+                module_keepouts.append((min(xs), min(ys), max(xs), max(ys), layers))
         for ix in range(grid_index(0.8), grid_index(BOARD_W - 0.8) + 1):
             for iy in range(grid_index(0.8), grid_index(BOARD_H - 0.8) + 1):
                 x, y = grid_point((ix, iy))
@@ -1463,6 +1602,10 @@ class Generator:
                     self.blocked[B].add((ix, iy))
                 if fx0 <= x <= fx1 and fy0 <= y <= fy1:
                     self.blocked[B].add((ix, iy))
+                for kx0, ky0, kx1, ky1, layers in module_keepouts:
+                    if kx0 <= x <= kx1 and ky0 <= y <= ky1:
+                        for layer in layers:
+                            self.blocked[layer].add((ix, iy))
 
         for footprint in self.footprints.values():
             for pad in footprint.Pads():
@@ -1495,6 +1638,19 @@ class Generator:
 
         for point, net in PLANNED_U6_ESCAPES.values():
             self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+        for net, points in PLANNED_ROUTE_RESERVATIONS:
+            for start, end in zip(points, points[1:]):
+                self.mark_segment(start, end, 0.20, (IN2,), net, extra=0.30)
+        for point, net in PLANNED_U7_ESCAPES.values():
+            self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+        for number, point in PLANNED_U1_WEST_ESCAPES.items():
+            net = self.pad_net.get(("U1", number))
+            if net:
+                self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
+        for (ref, number), point in LOCKED_DFM_ESCAPES.items():
+            net = self.pad_net.get((ref, number))
+            if net:
+                self.mark_circle(point, 0.50, ROUTING_LAYERS, net)
 
         for (ref, number), pads in self.pad_objects.items():
             net = self.pad_net.get((ref, number))
@@ -1523,20 +1679,30 @@ class Generator:
         for start, end, net, width, layer in self.track_records:
             if layer in ROUTING_LAYERS:
                 self.mark_segment(start, end, width, (layer,), net)
-            elif layer == F and net in USB_NETS and max(start[0], end[0]) >= 69.5:
-                # The low-speed router places 0.60 mm vias on this grid.
-                # Reserve the complete USB-to-via centre distance required by
-                # the 0.8 mm unrelated-copper rule, not merely the USB trace
-                # width.  Without the via radius here, a grid node can be
-                # legal to A* yet fail the final board DRC.
-                self.mark_segment(
-                    start,
-                    end,
-                    width,
-                    ROUTING_LAYERS,
-                    net,
-                    extra=USB_UNRELATED_CLEARANCE + ROUTER_VIA_RADIUS,
-                )
+            elif layer == F and net in USB_NETS and min(start[0], end[0]) >= 71.0 and max(start[0], end[0]) <= 75.5:
+                # Only the controlled vertical corridor (x~72.4-73.6 plus
+                # its U3-side entry stubs) carries the 0.8 mm
+                # unrelated-copper contract, and only across the corridor
+                # window's y-span; reserving every USB stub at this width
+                # would wall off the U1 escape region and the south-east
+                # crossing columns.  The low-speed router places 0.60 mm
+                # vias on this grid, so the fat portion reserves the
+                # complete USB-to-via centre distance required by the
+                # 0.8 mm unrelated-copper rule, not merely the USB trace
+                # width.  Outside the window the thin reservation plus the
+                # normal DRC clearance checks suffice.
+                if max(start[1], end[1]) >= 32.5 and min(start[1], end[1]) <= 37.5:
+                    clip_a = (start[0], min(max(start[1], 32.5), 43.2))
+                    clip_b = (end[0], min(max(end[1], 32.5), 43.2))
+                    self.mark_segment(
+                        clip_a,
+                        clip_b,
+                        width,
+                        ROUTING_LAYERS,
+                        net,
+                        extra=USB_UNRELATED_CLEARANCE + ROUTER_VIA_RADIUS,
+                    )
+                self.mark_segment(start, end, width, ROUTING_LAYERS, net)
         for point, net in self.via_records:
             size, _ = self.via_geometry[(point, net)]
             self.mark_circle(
@@ -1639,8 +1805,11 @@ class Generator:
                         next_state,
                     ),
                 )
+        start_points = sorted({grid_point((state[0], state[1])) for state in starts})
         raise RuntimeError(
-            f"autorouter cannot connect {net}; starts={len(starts)} " f"goals={len(goals)} visited={visited}"
+            f"autorouter cannot connect {net}; starts={len(starts)} "
+            f"goals={len(goals)} visited={visited} "
+            f"start_points={start_points[:6]}"
         )
 
     def emit_grid_path(
@@ -1719,8 +1888,31 @@ class Generator:
             remaining.remove(endpoint)
 
     def route_slow_nets(self) -> None:
-        for net in slow_net_order():
-            self.route_net(net)
+        # GEN_PCB_DEBUG_DUMP is a router-debugging aid: set it to any value
+        # to dump the emitted copper and the grid ownership maps to /tmp on
+        # a routing failure, or set it to a net name to stop deterministically
+        # just before that net routes (the dump then shows the exact state
+        # its A* search would see).  It never affects a successful build.
+        debug = os.environ.get("GEN_PCB_DEBUG_DUMP")
+        try:
+            for net in slow_net_order():
+                if debug == net:
+                    raise RuntimeError(f"debug stop before routing {net}")
+                self.route_net(net)
+        except RuntimeError:
+            if debug:
+                with open("/tmp/genpcb_tracks.txt", "w") as handle:
+                    for start, end, net, width, layer in self.track_records:
+                        handle.write(f"{net}\t{layer}\t{start}\t{end}\t{width}\n")
+                    for point, net in self.via_records:
+                        handle.write(f"VIA\t{net}\t{point}\n")
+                with open("/tmp/genpcb_cells.txt", "w") as handle:
+                    for layer in ROUTING_LAYERS:
+                        for node in sorted(self.blocked[layer]):
+                            handle.write(f"BLOCKED\t{layer}\t{grid_point(node)}\n")
+                        for node, owners in sorted(self.occupied[layer].items()):
+                            handle.write(f"OWNED\t{layer}\t{grid_point(node)}\t{sorted(owners)}\n")
+            raise
 
     def add_ground_connections(self) -> None:
         for ref, number in design.NETS["GND"]:
@@ -1761,8 +1953,13 @@ class Generator:
         # clear corridor between the jack shells and D4/D5 (X~27-30),
         # rotated vertical to fit the corridor's narrow (~7 mm) width.
         text(23.0, 15.0, "CONSOLE", 1.0, 90.0)
-        text(23.0, 37.0, "MOTOR", 1.0, 90.0)
-        text(58.0, 3.0, "Esp32Tap rev D", 1.2)
+        # Rev E: MOTOR follows J2 to the right edge; it sits in the
+        # corridor between the USB pair verticals and J2's courtyard.
+        text(72.6, 40.6, "MOTOR", 1.0, 90.0)
+        # J2's pad 1 is the TOP of its row (Y=32.55); mark it from the
+        # clear strip north of the jack courtyard.
+        text(88.5, 27.7, "P1", 1.0)
+        text(58.0, 3.0, "Esp32Tap rev E", 1.2)
         # Placement locks keep every fabrication label at least 0.5 mm from
         # the nominal installed component bodies as well as mask openings.
         text(42.0, 10.0, "BYPASS", 1.0)
@@ -1780,7 +1977,7 @@ class Generator:
         # between that and K1 pad 1's soldermask (>=0.25 mm needed there).
         text(23.0, 19.2, "K1 P1", 1.0)
         text(91.0, 21.0, "LED1 K", 1.0)
-        text(77.0, 53.0, "K LED2", 1.0)
+        text(14.0, 30.0, "K LED2", 1.0)
 
     def fill_and_save(self) -> None:
         filler = pcbnew.ZONE_FILLER(self.board)

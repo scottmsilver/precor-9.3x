@@ -48,15 +48,18 @@ def _sample_report() -> dict[str, object]:
                     },
                     "pads": {str(index): {"at": [102.1, 119.45 - 1.27 * (index - 1)]} for index in range(1, 9)},
                 },
+                # Rev E: J2 sits on the right short edge (rotation 270),
+                # so its pad row is at board X max - 2.1 and pad 1 is the
+                # TOP of the row.
                 "J2": {
-                    "at": [108.0, 137.0],
+                    "at": [187.0, 137.0],
                     "fabrication_body_bbox": {
-                        "min": [102.73, 129.21],
-                        "max": [119.9, 144.69],
+                        "min": [175.1, 129.31],
+                        "max": [192.27, 144.79],
                     },
-                    "pads": {str(index): {"at": [102.1, 141.45 - 1.27 * (index - 1)]} for index in range(1, 9)},
+                    "pads": {str(index): {"at": [192.9, 132.55 + 1.27 * (index - 1)]} for index in range(1, 9)},
                 },
-                "J3": {"at": [191.2, 136.5], "pads": {}},
+                "J3": {"at": [183.6, 151.2], "pads": {}},
                 "SW1": {"at": [142.0, 104.0], "pads": {}},
                 "SW2": {"at": [191.0, 117.0], "pads": {}},
                 "MH1": {"at": [120.0, 103.0], "pads": {}},
@@ -184,7 +187,7 @@ def test_board_geometry_derives_connector_centers_independently() -> None:
 
     assert geometry["board_size_mm"] == pytest.approx([95.0, 58.0])
     assert geometry["rj45_centers_y_mm"] == pytest.approx([18.0, 40.0])
-    assert geometry["usb_center_y_mm"] == pytest.approx(39.5)
+    assert geometry["usb_center_x_mm"] == pytest.approx(83.6)
     for actual, expected in zip(
         geometry["mounting_holes_mm"],
         [[20.0, 6.0], [48.0, 6.0], [92.0, 55.0]],
@@ -361,12 +364,12 @@ def test_rev_c_geometry_is_derived_from_inspector_report() -> None:
     assert geometry["board_size_mm"] == pytest.approx([95.0, 58.0])
     for actual, expected in zip(
         geometry["connector_centers_mm"],
-        [[8.0, 18.0], [8.0, 40.0]],
+        [[8.0, 18.0], [87.0, 40.0]],
         strict=True,
     ):
         assert actual == pytest.approx(expected)
     assert geometry["connector_body_widths_mm"] == pytest.approx([15.48, 15.48])
-    assert geometry["usb_center_mm"] == pytest.approx([91.2, 39.5])
+    assert geometry["usb_center_mm"] == pytest.approx([83.6, 54.2])
     for actual, expected in zip(
         geometry["switch_centers_mm"],
         [[42.0, 7.0], [91.0, 20.0]],
@@ -398,11 +401,14 @@ def test_rev_d_source_encodes_rj45_aperture_and_service_contract(
     assert parameters["aperture_w"] == pytest.approx(16.0)
     assert parameters["aperture_h"] == pytest.approx(14.0)
     assert parameters["cable_exit_direction"] == pytest.approx(-1.0)
+    assert parameters["j2_cable_exit_direction"] == pytest.approx(1.0)
     assert parameters["cable_bend_radius"] == pytest.approx(18.0)
     assert parameters["latch_clearance"] >= 6.0
     assert parameters["snap_clearance"] == pytest.approx(0.3)
     assert "module rj45_wall_aperture" in source
+    assert "module rj45_wall_aperture_right" in source
     assert "module rj45_plug_service_envelope" in source
+    assert "module rj45_plug_service_envelope_right" in source
     assert "cable_exit_direction" in source
     assert "module snap_latch" in source
 

@@ -1,4 +1,4 @@
-# Esp32Tap Rev D enclosure dimensions and modeled validation
+# Esp32Tap Rev E enclosure dimensions and modeled validation
 
 **Status: HOLD.** The CAD and checked-in meshes pass deterministic model
 validation. Actual board/connector fit, delivered plug/latch/extraction
@@ -24,8 +24,8 @@ Coordinates use the PCB outline minimum as `(0, 0)`.
 |---|---|
 | Board | 95.0 × 58.0 × 1.6 mm |
 | J1 footprint anchor / body width | (8.0, 18.0) / 15.48 mm |
-| J2 footprint anchor / body width | (8.0, 40.0) / 15.48 mm |
-| J3 USB-C center | (91.2, 39.5) mm |
+| J2 footprint anchor / body width | (87.0, 40.0) / 15.48 mm |
+| J3 USB-C center | (83.6, 54.2) mm |
 | SW1 / SW2 centers | (42.0, 7.0) / (91.0, 20.0) mm |
 | U1 physical antenna edge | 3.3 mm inside board Y=0 |
 | U1 antenna span | X=69.0…87.0 mm |
@@ -33,7 +33,7 @@ Coordinates use the PCB outline minimum as `(0, 0)`.
 
 J1 and J2 are the identical Molex 0441440003 right-angle SMD 8P8C RJ45 jack
 (LCSC C585890), so their body widths (and every RJ45 dimension below) are
-the same value; only the board-Y anchor differs. The mounting locations
+the same value; Rev E places one jack per short edge (J1 left, J2 right). The mounting locations
 reproduce the versioned inspection report exactly; this is modeled
 geometry, not delivered fit evidence.
 
@@ -60,7 +60,8 @@ proof that a delivered cable fits an installed treadmill.
 ## RJ45 wall apertures
 
 Both jacks are the identical, unshielded 8P8C part, edge-mounted with the
-mating opening facing off the board's X=0 edge (see `gen_pcb.py` `PLACE`).
+mating opening facing off a short board edge (Rev E: J1 opens off X=0,
+J2 off X=95 — see `gen_pcb.py` `PLACE`).
 There is no mechanical keying between console and motor any more: both
 apertures are identical, straight 16.0 × 14.0 mm openings that clear the
 15.48 × 13.4 mm jack body by 0.26 mm on width. CONSOLE/MOTOR silkscreen is
@@ -81,11 +82,12 @@ The jack (Molex 0441440003 / LCSC C585890) mechanical envelope:
 | Body height above board | 13.4 mm |
 | Aperture (width × height) | 16.0 × 14.0 mm |
 | Latch/extraction clearance | 6.0 mm |
-| Cable exit direction | Enclosure X-min (both jacks) |
+| Cable exit direction | J1: enclosure X-min; J2: enclosure X-max |
 
-Both jacks' service volumes point toward enclosure X-min: the treadmill's
-own RJ45 cable exits outward, then retains an 18 mm minimum bend radius
-before reaching the enclosure wall. The service-volume geometry is model
+Each jack's service volume points outward through its own wall (J1
+toward enclosure X-min, J2 toward X-max): each treadmill RJ45 cable exits
+outward, then retains an 18 mm minimum bend radius before reaching the
+enclosure wall. The service-volume geometry is model
 evidence only; delivered plug seating, latch, and extraction checks remain
 physical gates.
 

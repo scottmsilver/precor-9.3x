@@ -1,4 +1,4 @@
-# Esp32Tap Rev D vendor procedure
+# Esp32Tap Rev E vendor procedure
 
 **Status: HOLD. Do not submit, add to a production cart, authorize a
 substitution, or pay.** This is a future review procedure, not purchase
@@ -105,4 +105,4 @@ Before purchase, obtain and archive:
 6. owner authorization for the specified verification quantity.
 
 After arrival, follow `README.md`, `VALIDATION.md`, and `firmware/PLAN.md`.
-USB alone cannot power Rev D. First treadmill contact is Proxy-only.
+USB alone cannot power Rev E. First treadmill contact is Proxy-only.
