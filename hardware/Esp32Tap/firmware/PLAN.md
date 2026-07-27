@@ -303,6 +303,15 @@ in TC1/TC2 inside the gate section below.
   `emulation` compiled for linux + ESP32; the existing `cpp/tests` doctest
   suite runs as the golden parity suite on both. UART loopback rig proves
   inverted 9600 8N1 both directions against a recorded Pi capture.
+  *Status note (2026-07-27):* the repository-closeable host-side half of
+  M1 is done — the portable core (`firmware/esp32/components/portable_core`,
+  forked from `cpp/` with per-file provenance) compiles for linux and
+  esp32s3, the forked `cpp/tests` doctest suite is green on the host, and
+  the new safety-controller host suite (C++ port of `safety_model.py`)
+  passes. The esp32s3 build is pinned to `espressif/idf:release-v5.5`
+  (the prescribed ESP-IDF 5.x; `-fno-rtti` verified applied via IDF's
+  `build/toolchain/cxxflags` response file). The UART loopback-rig half
+  of M1 and all bench items remain open; Status stays **HOLD**.
 * **M2 — serial engine on the bench rig (bench).** Loopback rig (two
   inverted bench UARTs, or a Pi running `python/tools/listen.py`, replaying
   recorded console bursts through J1/J2): hardware bridge continuity;
