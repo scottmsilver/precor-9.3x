@@ -6,8 +6,9 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
 run() { local n="$1"; shift
-  if "$@" >/tmp/sweep_$n.log 2>&1; then printf '%-14s PASS\n' "$n"
-  else printf '%-14s ***FAIL*** (see /tmp/sweep_%s.log)\n' "$n" "$n"; fail=1; fi; }
+  local t0=$(date +%s)
+  if "$@" >/tmp/sweep_$n.log 2>&1; then printf '%-14s PASS  %3ds\n' "$n" "$(( $(date +%s)-t0 ))"
+  else printf '%-14s ***FAIL*** %3ds (see /tmp/sweep_%s.log)\n' "$n" "$(( $(date +%s)-t0 ))" "$n"; fail=1; fi; }
 S=$(date +%s)
 run build      bash tools/build.sh
 run safety     cargo test --manifest-path safety_core/Cargo.toml -q
@@ -17,6 +18,6 @@ run normalexit env -C tools/qemu_scenarios python3 -m pytest test_normal_exit.py
 run httpentry  env -C tools/qemu_scenarios python3 -m pytest test_http_entry.py -q
 run profiles   env -C tools/qemu_scenarios python3 -m pytest test_profiles.py -q
 run smoke      bash tools/qemu_smoke.sh
-run scenarios  env -C tools/qemu_harness python3 -m pytest test_scenarios.py -q
+run scenarios  env -C tools/qemu_harness python3 -m pytest test_scenarios.py -q -n 4
 echo "SWEEP: $(( $(date +%s)-S ))s  $([ $fail -eq 0 ] && echo ALL GREEN || echo HAS FAILURES)"
 exit $fail

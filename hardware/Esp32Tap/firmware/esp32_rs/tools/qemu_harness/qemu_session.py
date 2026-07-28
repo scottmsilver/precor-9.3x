@@ -39,10 +39,53 @@ _QTSTATE_RE = re.compile(
 _HEARTBEAT_RE = re.compile(r"heartbeat uptime=(\d+)s")
 
 
+# Port allocation must be COLLISION-FREE ACROSS PARALLEL WORKERS, not merely
+# free-at-the-instant-we-looked.
+#
+# The previous implementation bound port 0, read the number, and closed the
+# socket — a textbook TOCTOU. The port is free again the moment it returns, so
+# two xdist workers could be handed the SAME port. QEMU then starts its serial
+# socket with `server=on,wait=on` and blocks forever waiting for a connection
+# that went to the other process, the boot banner never appears, and the test
+# fails 120 s later with "log pattern not seen". It reproduced roughly 1 run in
+# 3 at -n 4 and looked exactly like CPU starvation, which it was not — this
+# machine has 20 cores.
+#
+# Each worker now owns a disjoint 500-port band and hands out ports
+# sequentially within it, so two workers CANNOT collide by construction. The
+# bind check is kept as a guard against something outside the harness holding a
+# port, not as the mechanism.
+_PORT_BAND_BASE = 21000
+_PORT_BAND_SIZE = 500
+
+
+def _worker_index() -> int:
+    # xdist sets PYTEST_XDIST_WORKER to gw0, gw1, ... Serial runs get band 0.
+    w = os.environ.get("PYTEST_XDIST_WORKER", "")
+    digits = "".join(c for c in w if c.isdigit())
+    return int(digits) if digits else 0
+
+
+_next_port = [_PORT_BAND_BASE + _worker_index() * _PORT_BAND_SIZE]
+_port_lock = threading.Lock()
+
+
 def _free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    with _port_lock:
+        band_start = _PORT_BAND_BASE + _worker_index() * _PORT_BAND_SIZE
+        for _ in range(_PORT_BAND_SIZE):
+            port = _next_port[0]
+            _next_port[0] += 1
+            if _next_port[0] >= band_start + _PORT_BAND_SIZE:
+                _next_port[0] = band_start
+            with socket.socket() as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    s.bind(("127.0.0.1", port))
+                except OSError:
+                    continue  # someone outside the harness holds it
+            return port
+        raise HarnessError("no free port in worker band")
 
 
 class HarnessError(AssertionError):
@@ -96,6 +139,12 @@ class QemuSession:
             nic = (" -nic user,model=open_eth,hostfwd=tcp::%d-:8000"
                    % self.http_port)
         bdir = shlex.quote(self.build_dir)
+        # PER-SESSION FLASH IMAGE. Every session used to merge into the SAME
+        # build_qemu_test/qemu_flash.bin, so under xdist one session could boot
+        # from an image another was still rewriting: garbage image, no boot
+        # banner, and a 120 s "log pattern not seen" that looked like CPU
+        # starvation. It is not — this machine has 20 cores.
+        flash_img = "/tmp/qemu_flash.bin"
         # The emulated flash MUST be the size the app image header declares.
         # IDF's spi_flash init aborts ("Detected size(...) smaller than the
         # size in the binary image header(...). Probe failed.") and reboots
@@ -106,16 +155,16 @@ class QemuSession:
             "set -u; cd %s || exit 3; "
             "FS=$(sed -n 's/.*--flash_size \\([0-9A-Za-z]*\\).*/\\1/p' flash_args | head -1); "
             "[ -n \"$FS\" ] || { echo 'no --flash_size in flash_args' >&2; exit 3; }; "
-            "python -m esptool --chip esp32s3 merge_bin -o qemu_flash.bin "
+            "python -m esptool --chip esp32s3 merge_bin -o " + flash_img + " "
             '@flash_args --fill-flash-size "$FS" >/dev/null 2>&1 '
-            "|| python -m esptool --chip esp32s3 merge-bin -o qemu_flash.bin "
+            "|| python -m esptool --chip esp32s3 merge-bin -o " + flash_img + " "
             '@flash_args --pad-to-size "$FS" >/dev/null || exit 3; cd ..; '
             "exec qemu-system-xtensa -nographic -machine esp32s3 "
-            "-drive file=%s/qemu_flash.bin,if=mtd,format=raw "
+            "-drive file=" + flash_img + ",if=mtd,format=raw "
             "-serial tcp:127.0.0.1:%d,server=on,wait=on "
             "-serial tcp:127.0.0.1:%d,server=on,wait=on"
             "%s"
-        ) % (bdir, bdir, p0, p1, nic)
+        ) % (bdir, p0, p1, nic)
         self.proc = subprocess.Popen(
             [
                 "docker",
