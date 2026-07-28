@@ -174,7 +174,13 @@ fn main() {
                     match net::http::start() {
                         // EXACT STRING: the net harness waits on this before
                         // issuing its first request.
-                        Ok(_) => logi!("http server up on :{}", net::http::port()),
+                        Ok(h) => {
+                            match net::api::register(h) {
+                                Ok(()) => logi!("api routes registered"),
+                                Err(e) => logi!("net: api register failed ({})", e),
+                            }
+                            logi!("http server up on :{}", net::http::port());
+                        }
                         Err(e) => logi!("net: http start failed (err {})", e),
                     }
                 }

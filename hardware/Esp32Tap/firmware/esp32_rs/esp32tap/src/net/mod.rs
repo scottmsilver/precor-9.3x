@@ -20,6 +20,7 @@
 //! expansions are transcribed with the IDF v5.5 source line they came from. If
 //! IDF changes a default, that citation is what to re-check.
 
+pub mod api;
 pub mod http;
 
 use esp_idf_sys as sys;
