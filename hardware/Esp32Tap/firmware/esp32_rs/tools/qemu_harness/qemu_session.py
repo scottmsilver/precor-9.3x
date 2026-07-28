@@ -53,10 +53,16 @@ class QemuSession:
     """One booted firmware image under QEMU inside the pinned IDF docker
     image, with both serial chardevs connected over TCP."""
 
-    def __init__(self, esp32_dir: Path, build_dir: str, boot_timeout: float = 120.0, expect_shim: bool = True):
+    def __init__(self, esp32_dir: Path, build_dir: str, boot_timeout: float = 120.0,
+                 expect_shim: bool = True, net: bool = False):
         self.esp32_dir = Path(esp32_dir)
         self.build_dir = build_dir
         self.expect_shim = expect_shim
+        # `net` attaches QEMU's emulated openeth NIC and forwards a host
+        # port to the guest's :8000, so a scenario can drive the device
+        # over real HTTP instead of only through the QT serial shim.
+        self.net = net
+        self.http_port = None
         # qemu_smoke.sh convention: repo root is 4 parents up from esp32/.
         self.repo_root = self.esp32_dir.parents[3]
         self.rel = self.esp32_dir.relative_to(self.repo_root)
@@ -84,6 +90,11 @@ class QemuSession:
 
     def _start(self, boot_timeout: float) -> None:
         p0, p1 = _free_port(), _free_port()
+        nic = ""
+        if self.net:
+            self.http_port = _free_port()
+            nic = (" -nic user,model=open_eth,hostfwd=tcp::%d-:8000"
+                   % self.http_port)
         bdir = shlex.quote(self.build_dir)
         # The emulated flash MUST be the size the app image header declares.
         # IDF's spi_flash init aborts ("Detected size(...) smaller than the
@@ -103,7 +114,8 @@ class QemuSession:
             "-drive file=%s/qemu_flash.bin,if=mtd,format=raw "
             "-serial tcp:127.0.0.1:%d,server=on,wait=on "
             "-serial tcp:127.0.0.1:%d,server=on,wait=on"
-        ) % (bdir, bdir, p0, p1)
+            "%s"
+        ) % (bdir, bdir, p0, p1, nic)
         self.proc = subprocess.Popen(
             [
                 "docker",

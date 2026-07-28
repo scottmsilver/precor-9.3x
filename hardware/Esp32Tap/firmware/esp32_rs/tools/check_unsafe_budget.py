@@ -96,7 +96,7 @@ PRODUCTION_UNSAFE_LINES = 69
 # safe code), so this counts the C boundary and nothing else. When the
 # network tier ships, net/mod.rs moves to PRODUCTION_UNSAFE and BOTH
 # numbers get re-counted deliberately.
-QEMU_UNSAFE_LINES = 113
+QEMU_UNSAFE_LINES = 114
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

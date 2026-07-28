@@ -163,6 +163,10 @@ if [ "$ONLY" != "qemu" ]; then
     build_one ../build target/prod
 fi
 if [ "$ONLY" != "prod" ]; then
-    build_one ../build_qemu_test target/qemu --features "qemu-test${NET_FEATURE:+,net}"
+    # The QEMU-test image ALWAYS carries `net`: Slice 1/2 are network work and
+    # the scenarios drive the device over HTTP. Production never enables it
+    # until the tier is signed off, which is what keeps the safety image and
+    # its gates unaffected.
+    build_one ../build_qemu_test target/qemu --features qemu-test,net
 fi
 '

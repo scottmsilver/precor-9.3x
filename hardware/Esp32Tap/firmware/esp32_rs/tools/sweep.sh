@@ -14,6 +14,7 @@ run safety     cargo test --manifest-path safety_core/Cargo.toml -q
 run reqbudget  cargo test --manifest-path reqbudget/Cargo.toml -q
 run difftest   cargo test --manifest-path difftest/Cargo.toml -q
 run normalexit env -C tools/qemu_scenarios python3 -m pytest test_normal_exit.py -q
+run httpentry  env -C tools/qemu_scenarios python3 -m pytest test_http_entry.py -q
 run smoke      bash tools/qemu_smoke.sh
 run scenarios  env -C tools/qemu_harness python3 -m pytest test_scenarios.py -q
 echo "SWEEP: $(( $(date +%s)-S ))s  $([ $fail -eq 0 ] && echo ALL GREEN || echo HAS FAILURES)"

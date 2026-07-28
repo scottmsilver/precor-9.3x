@@ -21,7 +21,9 @@
 //! opinion about safety, which is exactly one opinion too many.
 
 use crate::context::lock;
+use crate::logi;
 use esp_idf_sys as sys;
+use safety_core::hal::SerialOut;
 use safety_core::safety::controller::{ConnectionIdentity, Transport};
 use safety_core::units::{InclineHalfPct, SpeedTenths};
 
@@ -293,6 +295,34 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
                 )
             };
             let ok = g.controller.command_motion(&id, sp, inc, now);
+
+            // AUTO-EMULATE, mirroring the Pi. CLAUDE.md: "Speed/incline
+            // command received -> auto-enables emulate mode", and that logic
+            // lives in the C binary precisely so a mode transition does not
+            // depend on the application tier being alive. A motion command
+            // that silently leaves the belt under console control would be a
+            // behaviour change from the machine this replaces.
+            //
+            // It is an ATTEMPT, never a demand: request_emulate enforces every
+            // precondition itself (TREAD_OK, BYPASS feedback, a fresh console,
+            // a qualified gap, idle-low TX, no latched fault). If any fails it
+            // refuses and records why, and we stay in Proxy — the safe state.
+            // The handler deliberately does not pre-check any of them; that
+            // would be a second opinion about safety.
+            //
+            // Policy lives here rather than in SafetyController because the
+            // controller is what the differential compares op-for-op against
+            // the C++ core; adding an auto-entry to it would fork the compared
+            // behaviour. When a second owner surface exists (BLE), this moves
+            // to a shared helper rather than being duplicated.
+            if ok && g.controller.mode() == safety_core::safety::controller::SafeMode::Proxy {
+                let idle_low = g.console_uart.tx_idle_low();
+                let entered = g.controller.request_emulate(&id, now, idle_low);
+                if entered {
+                    logi!("api: motion auto-entered emulate");
+                }
+            }
+
             g.apply_outputs();
             ok
         }
