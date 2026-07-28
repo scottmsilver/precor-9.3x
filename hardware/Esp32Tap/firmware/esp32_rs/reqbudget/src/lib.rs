@@ -175,9 +175,24 @@ pub fn in_flight() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate std;
+    use std::sync::{Mutex, MutexGuard};
+    use std::vec::Vec;
+
+    /// The pool is ONE global resource, and cargo runs tests on parallel
+    /// threads, so a test asserting `in_flight() == 0` can otherwise observe
+    /// another test's live lease. Serialising here is correct rather than
+    /// cosmetic: these tests are about the global invariant, so they must each
+    /// see the pool alone. (Found the honest way — an intermittent failure.)
+    static POOL_LOCK: Mutex<()> = Mutex::new(());
+
+    fn exclusive() -> MutexGuard<'static, ()> {
+        POOL_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn budget_bytes_is_visible_in_one_line() {
+        let _x = exclusive();
         // The whole point: the bound is arithmetic, not an emergent property.
         assert_eq!(budget_bytes(), 4 * 2048);
         assert_eq!(budget_bytes(), 8192);
@@ -185,6 +200,7 @@ mod tests {
 
     #[test]
     fn oversized_body_is_refused_before_anything_is_read() {
+        let _x = exclusive();
         assert_eq!(admit(SLOT_BYTES + 1).err(), Some(Refusal::TooLarge));
         assert_eq!(Refusal::TooLarge.status(), 413);
         assert_eq!(in_flight(), 0, "a refused request must not hold a slot");
@@ -192,6 +208,7 @@ mod tests {
 
     #[test]
     fn exhaustion_refuses_it_does_not_grow() {
+        let _x = exclusive();
         let mut held = alloc_all();
         assert_eq!(in_flight(), SLOTS as u32);
         assert_eq!(admit(1).err(), Some(Refusal::Busy));
@@ -202,6 +219,7 @@ mod tests {
 
     #[test]
     fn drop_reclaims_on_every_path_including_early_return() {
+        let _x = exclusive();
         fn rejected_midway() -> Result<(), ()> {
             let _lease = admit(64).map_err(|_| ())?;
             Err(()) // early return with the lease live
@@ -215,6 +233,7 @@ mod tests {
 
     #[test]
     fn repeated_requests_do_not_accumulate() {
+        let _x = exclusive();
         // 100k accepted+rejected cycles must leave the pool exactly as found —
         // this is the property whose absence let ~15 requests reboot the C++
         // device.
@@ -232,6 +251,7 @@ mod tests {
 
     #[test]
     fn leases_do_not_alias() {
+        let _x = exclusive();
         let mut a = admit(16).unwrap();
         let mut b = admit(16).unwrap();
         a.buf()[0] = 0xAA;
@@ -240,8 +260,6 @@ mod tests {
         assert_eq!(b.buf()[0], 0xBB);
     }
 
-    extern crate std;
-    use std::vec::Vec;
     fn alloc_all() -> Vec<Lease> {
         (0..SLOTS).map(|_| admit(1).unwrap()).collect()
     }
