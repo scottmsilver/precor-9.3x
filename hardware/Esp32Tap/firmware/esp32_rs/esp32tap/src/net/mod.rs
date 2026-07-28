@@ -21,6 +21,7 @@
 //! IDF changes a default, that citation is what to re-check.
 
 pub mod api;
+pub mod tls;
 pub mod http;
 
 use esp_idf_sys as sys;
