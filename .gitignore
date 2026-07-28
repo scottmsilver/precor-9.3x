@@ -123,3 +123,7 @@ provisioning/dietpi/dietpi-wifi.txt*
 
 # JLCPCB session cookies (secret — never commit)
 .jlc_cookies*.json
+
+# Per-session QEMU flash images now live inside the container (/tmp);
+# the old shared one is obsolete and build outputs are not source.
+hardware/Esp32Tap/firmware/esp32_rs/build*/qemu_flash*.bin
