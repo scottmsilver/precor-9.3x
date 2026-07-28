@@ -1,59 +1,79 @@
-"""A real mDNS/DNS-SD querier, plus the QEMU plumbing to reach the guest.
+"""Capture the device's REAL mDNS frames off the emulated wire, and decode them.
 
-WHY A QUERY AND NOT A PCAP. The strongest evidence would be capturing the
-guest's unsolicited multicast announcement with `-object filter-dump`. That is
-not available here and the reason is structural, not a missing flag: on the
-`esp32s3` machine `open_eth` is wired in by the machine itself via `-nic`, so
-there is no netdev id for a filter to bind to, and the pluggable form is
-refused outright --
+WHY A CAPTURE AND NOT A QUERY (this changed, and the reason is measured, not
+assumed). The first version of this module sent a UDP query into the guest
+through a slirp `hostfwd` and parsed the reply. It never got one, and the cause
+is structural — it cannot be fixed by waiting longer or retrying:
 
-    qemu-system-xtensa: -device open_eth,netdev=n0:
-        Parameter 'driver' expects a pluggable device type
+  * slirp does NOT translate the source address of a `hostfwd`-ed packet. Its
+    `sotranslate_in()` only rewrites when the socket's `so_faddr` is inside the
+    virtual network, and a hostfwd listener leaves `so_faddr` unset. The query
+    therefore arrives at the guest still claiming to come from 127.0.0.1.
+  * `espressif/mdns` drops that packet before it is even parsed.
+    `mdns_networking_lwip.c:_udp_recv()` matches the receiving interface and
+    then requires the SOURCE to be in that interface's subnet
+    (`src & netmask != ip & netmask` -> "packet source is not in the same
+    subnet" -> `break`, packet freed). 127.0.0.0 is not 10.0.2.0, so it is
+    discarded silently, with no log and no reply.
 
--- while `-object filter-dump,netdev=<id>` against every id `-nic` might have
-generated answers "Parameter 'netdev' expects a network backend id". QEMU's
-user-mode (slirp) backend also does not route multicast out to the host, so a
-host-side capture of the announcement is not possible either.
+  Confirmed by building the component with `CONFIG_MDNS_ENABLE_DEBUG_PRINTS=y`:
+  the responder printed its own announcement (`TX[0][0]: To: 224.0.0.251:5353`)
+  with the full record set, and printed NO `RX` line at all for the query. The
+  responder was healthy; the query never reached it.
 
-What IS possible, and is what this module does, is a genuine DNS-SD exchange:
-a UDP port is forwarded to the guest's 5353 and a real PTR query for
-`_treadmill._tcp.local` is sent to the responder. RFC 6762 §6.7 requires a
-responder that receives a query from a source port other than 5353 -- which is
-exactly what slirp's NAT produces -- to answer with a LEGACY UNICAST response,
-so the reply comes straight back. The bytes parsed below are the responder's
-actual DNS records: the same PTR/SRV/TXT that Android's `NsdManager` resolves.
+The earlier note here also claimed a capture was impossible because `-nic`
+leaves no netdev id for `-object filter-dump` to bind to. That is not true, and
+it was never tested: `-nic user,id=n0,model=open_eth,...` accepts an id, and
+`-object filter-dump,id=f0,netdev=n0,file=...` attaches to it and writes an
+ordinary pcap. Verified directly against the pinned esp-QEMU build.
+
+So this module takes the STRONGER evidence the first attempt reached for and
+gave up on: the actual Ethernet frames the device transmits. What the tests
+decode is the announcement `espressif/mdns` puts on the wire — the same
+multicast DNS-SD records Android's `NsdManager` receives — not a log line
+claiming it did.
+
+The capture is flushed by stopping QEMU with SIGTERM. `filter-dump` writes
+through buffered stdio and only `fclose`s during QEMU's normal cleanup, so the
+SIGKILL the base harness uses would throw the buffer away.
 """
 
 from __future__ import annotations
 
-import socket
+import shutil
 import struct
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qemu_harness"))
 
 import qemu_session  # noqa: E402
-from qemu_session import QemuSession, _free_port  # noqa: E402
+from qemu_session import HarnessError, QemuSession  # noqa: E402
 
 MDNS_PORT = 5353
 TYPE_A, TYPE_PTR, TYPE_TXT, TYPE_SRV = 1, 12, 16, 33
 
 
-class MdnsQemuSession(QemuSession):
-    """`QemuSession` plus a host UDP port forwarded to the guest's mDNS port.
+class MdnsCaptureSession(QemuSession):
+    """`QemuSession` plus a `filter-dump` pcap of everything the NIC carries.
 
-    The committed harness is byte-locked (`tools/verify_harness_copy.py`
-    asserts every file against `git show HEAD:`), so the extra QEMU argument
-    cannot be added by editing it. It is injected at the process-spawn boundary
+    The committed harness is byte-locked (`tools/verify_harness_copy.py` asserts
+    every file against `git show HEAD:`), so the extra QEMU arguments cannot be
+    added by editing it. They are injected at the process-spawn boundary
     instead: the harness builds one `bash -c` script string as the last element
-    of its docker argv, and this appends to that string. Nothing about the
-    harness's own behaviour changes.
+    of its docker argv, and this rewrites that string and adds one bind mount.
+    Nothing about the harness's own behaviour changes.
     """
 
     def __init__(self, *args, **kwargs):
-        self.mdns_port = _free_port()
+        # A per-session directory on the host, bind-mounted into the container.
+        # Per-session because sessions run in parallel under xdist, and a shared
+        # path is exactly the race the harness was fixed to remove.
+        self.capture_dir = Path(tempfile.mkdtemp(prefix="esp32tap-pcap-"))
+        self.pcap = self.capture_dir / "wire.pcap"
         super().__init__(*args, **kwargs)
 
     def _start(self, boot_timeout):
@@ -61,13 +81,24 @@ class MdnsQemuSession(QemuSession):
 
         def patched(argv, **kw):
             argv = list(argv)
-            # The harness already emitted `-nic user,model=open_eth,hostfwd=tcp:...`.
-            # QEMU takes only one such NIC, so the UDP forward is MERGED into
-            # that existing option rather than appended as a second one.
-            argv[-1] = argv[-1].replace(
-                "hostfwd=tcp::%d-:8000" % self.http_port,
-                "hostfwd=tcp::%d-:8000,hostfwd=udp::%d-:%d" % (self.http_port, self.mdns_port, MDNS_PORT),
+            # Give the machine's own NIC a netdev id, then attach the dump
+            # filter to it. `-nic` is the only way to configure an onboard NIC
+            # (`-device open_eth,netdev=...` is refused: "Parameter 'driver'
+            # expects a pluggable device type"), and it does accept `id=`.
+            script = argv[-1]
+            if "-nic user,model=open_eth," not in script:
+                raise HarnessError("harness did not emit the expected -nic option")
+            argv[-1] = (
+                script.replace(
+                    "-nic user,model=open_eth,",
+                    "-nic user,id=n0,model=open_eth,",
+                )
+                + " -object filter-dump,id=f0,netdev=n0,file=/pcap/wire.pcap"
             )
+            # Mount the capture directory. Inserted straight after `--rm`, i.e.
+            # among the docker flags and before the image name.
+            i = argv.index("--rm") + 1
+            argv[i:i] = ["-v", f"{self.capture_dir}:/pcap"]
             return real_popen(argv, **kw)
 
         qemu_session.subprocess.Popen = patched
@@ -76,23 +107,116 @@ class MdnsQemuSession(QemuSession):
         finally:
             qemu_session.subprocess.Popen = real_popen
 
+    def flush_capture(self, timeout: float = 30.0) -> bytes:
+        """Stop the guest cleanly and return the finished pcap.
+
+        SIGTERM, not SIGKILL: `filter-dump` uses buffered stdio and only flushes
+        when QEMU's object cleanup runs `fclose`. Killing outright loses every
+        packet still in the buffer, which reads as "the device never announced"
+        — a false negative indistinguishable from a real bug.
+        """
+        subprocess.run(
+            ["docker", "kill", "--signal=TERM", self.name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.proc is not None and self.proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        else:
+            raise HarnessError("QEMU did not exit on SIGTERM; capture not flushed")
+        if not self.pcap.exists():
+            raise HarnessError(f"no capture written at {self.pcap}")
+        return self.pcap.read_bytes()
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            shutil.rmtree(self.capture_dir, ignore_errors=True)
+
+
+# --- pcap -> mDNS payloads --------------------------------------------------
+
+
+def mdns_payloads(pcap: bytes) -> list[bytes]:
+    """Every UDP/5353 payload in an Ethernet pcap, in capture order.
+
+    Deliberately hand-rolled rather than pulled from a library: the parse is a
+    dozen fixed-offset reads and this must run wherever the harness runs.
+    """
+    if len(pcap) < 24:
+        raise ValueError("truncated pcap")
+    magic = struct.unpack("<I", pcap[:4])[0]
+    if magic == 0xA1B2C3D4:
+        endian = "<"
+    elif magic == 0xD4C3B2A1:
+        endian = ">"
+    else:
+        raise ValueError(f"not a pcap file (magic {magic:#x})")
+    linktype = struct.unpack(endian + "I", pcap[20:24])[0]
+    if linktype != 1:  # LINKTYPE_ETHERNET
+        raise ValueError(f"unexpected pcap linktype {linktype}")
+
+    out: list[bytes] = []
+    off = 24
+    while off + 16 <= len(pcap):
+        _ts, _us, caplen, _origlen = struct.unpack(endian + "IIII", pcap[off : off + 16])
+        off += 16
+        frame = pcap[off : off + caplen]
+        off += caplen
+        if len(frame) < 14:
+            continue
+        if struct.unpack("!H", frame[12:14])[0] != 0x0800:  # IPv4
+            continue
+        ip = frame[14:]
+        if len(ip) < 20 or (ip[0] >> 4) != 4:
+            continue
+        ihl = (ip[0] & 0x0F) * 4
+        if ip[9] != 17:  # UDP
+            continue
+        udp = ip[ihl:]
+        if len(udp) < 8:
+            continue
+        sport, dport, ulen = struct.unpack("!HHH", udp[:6])
+        if MDNS_PORT not in (sport, dport):
+            continue
+        out.append(udp[8:ulen])
+    return out
+
+
+def multicast_destinations(pcap: bytes) -> set[str]:
+    """Destination IPs of the captured mDNS frames.
+
+    Used to assert the announcement really went to the DNS-SD group rather than
+    to one host that happened to be listening.
+    """
+    dests: set[str] = set()
+    if len(pcap) < 24:
+        return dests
+    endian = "<" if struct.unpack("<I", pcap[:4])[0] == 0xA1B2C3D4 else ">"
+    off = 24
+    while off + 16 <= len(pcap):
+        _ts, _us, caplen, _origlen = struct.unpack(endian + "IIII", pcap[off : off + 16])
+        off += 16
+        frame = pcap[off : off + caplen]
+        off += caplen
+        if len(frame) < 34 or struct.unpack("!H", frame[12:14])[0] != 0x0800:
+            continue
+        ip = frame[14:]
+        ihl = (ip[0] & 0x0F) * 4
+        if ip[9] != 17 or len(ip) < ihl + 8:
+            continue
+        if MDNS_PORT not in struct.unpack("!HH", ip[ihl : ihl + 4]):
+            continue
+        dests.add(".".join(str(b) for b in ip[16:20]))
+    return dests
+
 
 # --- minimal DNS wire codec -------------------------------------------------
-
-
-def encode_name(name: str) -> bytes:
-    out = b""
-    for label in name.split("."):
-        if label:
-            out += bytes([len(label)]) + label.encode()
-    return out + b"\x00"
-
-
-def build_ptr_query(service: str, txid: int = 0x4242) -> bytes:
-    """One standard PTR question. No QU bit: the source port alone (slirp NATs
-    it away from 5353) is what obliges a legacy unicast reply."""
-    header = struct.pack("!HHHHHH", txid, 0x0000, 1, 0, 0, 0)
-    return header + encode_name(service) + struct.pack("!HH", TYPE_PTR, 1)
 
 
 def _read_name(buf: bytes, off: int) -> tuple[str, int]:
@@ -123,8 +247,8 @@ def _read_name(buf: bytes, off: int) -> tuple[str, int]:
 
 
 def parse_records(buf: bytes) -> list[dict]:
-    """Parse every resource record in a response into dicts."""
-    txid, flags, qd, an, ns, ar = struct.unpack("!HHHHHH", buf[:12])
+    """Parse every resource record in a DNS message into dicts."""
+    _txid, _flags, qd, an, ns, ar = struct.unpack("!HHHHHH", buf[:12])
     off = 12
     for _ in range(qd):
         _, off = _read_name(buf, off)
@@ -132,7 +256,7 @@ def parse_records(buf: bytes) -> list[dict]:
     out = []
     for _ in range(an + ns + ar):
         name, off = _read_name(buf, off)
-        rtype, rclass, _ttl, rdlen = struct.unpack("!HHIH", buf[off : off + 10])
+        rtype, _rclass, _ttl, rdlen = struct.unpack("!HHIH", buf[off : off + 10])
         off += 10
         rdata = buf[off : off + rdlen]
         rec = {"name": name, "type": rtype}
@@ -158,13 +282,14 @@ def parse_records(buf: bytes) -> list[dict]:
     return out
 
 
-def query(port: int, service: str = "_treadmill._tcp.local", timeout: float = 8.0):
-    """Send one PTR query to 127.0.0.1:`port` and return the parsed records."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(timeout)
-    try:
-        sock.sendto(build_ptr_query(service), ("127.0.0.1", port))
-        data, _ = sock.recvfrom(4096)
-        return data, parse_records(data)
-    finally:
-        sock.close()
+def announced_records(pcap: bytes) -> list[dict]:
+    """Every record the device announced, across all captured mDNS messages.
+
+    A message that will not parse is DROPPED, never repaired: the assertions
+    must operate on records that were genuinely on the wire, and a lenient
+    decoder is how a test starts passing on garbage.
+    """
+    records: list[dict] = []
+    for payload in mdns_payloads(pcap):
+        records.extend(parse_records(payload))
+    return records

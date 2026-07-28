@@ -51,19 +51,28 @@ IGNORE_NAMES = {"__pycache__", ".pytest_cache"}
 # small harness edit" cannot ride along unnoticed.
 ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
     "qemu_session.py": (
-        "ea41350c257d008204b1c81a6ece9cbe200b682d5ce05cfd70232783fdf1c376",
-        "(a) `-icount shift=auto,sleep=off`: esp-QEMU otherwise drives the "
-        "guest monotonic clock from HOST WALL TIME, so host scheduling "
-        "preemption is charged against the firmware's microsecond-scale "
-        "safety deadlines (measured: identical guest work read 3.7x more "
-        "guest time under host oversubscription, blowing the 10 ms "
-        "RELAY_FEEDBACK_DEADLINE_US and failing a different scenario each "
-        "run). With icount, guest time advances with executed instructions, "
-        "so every deadline keeps its full instruction budget under any host "
-        "load. (b) the emulated flash is padded to the size the image header "
+        "4b97e987235c840bed2ce5b75bef765bfc16be4cff06aaaf1ff6d2af1e267ae9",
+        "(a) the emulated flash is padded to the size the image header "
         "declares (read from the build's own flash_args) instead of a "
         "hard-coded 2MB; a header that claims more flash than the emulated "
-        "part has makes IDF spi_flash init abort and reboot forever.",
+        "part has makes IDF spi_flash init abort and reboot forever, and it "
+        "is written to a PER-SESSION path inside the container so two "
+        "sessions cannot boot from an image the other is still rewriting. "
+        "(b) `net=True` attaches the emulated openeth NIC and forwards a host "
+        "port to the guest's :8000 — purely ADDITIVE: it is off by default "
+        "and no existing scenario passes it. (c) PORT LEASING: ports come "
+        "from a flock'd lease file rather than bind-port-0-and-close, which "
+        "was a TOCTOU that handed two concurrent runs the same port and cost "
+        "a 120 s phantom 'guest never booted'. (d) WRITES ARE WHOLE: "
+        "`socket.sendall` on these 0.5 s-timeout sockets raises AFTER a "
+        "partial write without reporting the offset, so back-pressure "
+        "truncated a console frame and the pacer's `except OSError: return` "
+        "then killed the stimulus for the rest of the session, silently; "
+        "writes now track their own offset against an explicit deadline and "
+        "a dead pacer or capture thread is RE-RAISED at the next waiter "
+        "instead of being reported as a firmware fault 30 s later. "
+        "None of (a)-(d) touches an assertion, a bound, a comparison or a "
+        "control flow of any scenario.",
     ),
 }
 
@@ -202,6 +211,33 @@ def main() -> int:
         if name not in expected:
             problems.append(f"LEG2 EXTRA {name} — a new file appeared in the committed harness")
 
+    # --- LEG 2b: the OTHER committed gate script, anchored the same way ----
+    # SMOKE_ALLOWED sat here unread for its whole life. A byte-lock nothing
+    # evaluates is not a byte-lock, so it is evaluated now.
+    smoke_live = REPO_ROOT / SMOKE_REL
+    smoke_deviated = False
+    if not smoke_live.is_file():
+        problems.append(f"LEG2 MISSING {SMOKE_REL}")
+    else:
+        want, got = _sha(head_blob_at(SMOKE_REL)), _sha(smoke_live.read_bytes())
+        if want != got:
+            pinned, why = SMOKE_ALLOWED
+            if got != pinned:
+                problems.append(
+                    f"LEG2 PIN MISMATCH qemu_smoke.sh — deviates from HEAD by something "
+                    f"other than the approved patch\n           pinned {pinned}\n"
+                    f"           live   {got}"
+                )
+            else:
+                smoke_deviated = True
+                show_diff(
+                    head_blob_at(SMOKE_REL).decode(),
+                    smoke_live.read_text(),
+                    "qemu_smoke.sh",
+                    why,
+                    SMOKE_REL,
+                )
+
     if problems:
         print("verify_harness_copy: FAIL", file=sys.stderr)
         for p in problems:
@@ -212,7 +248,8 @@ def main() -> int:
     print(
         f"verify_harness_copy: OK — copy == live for {len(expected)}/{len(expected)} files; "
         f"live == HEAD for {unchanged}/{len(expected)}, "
-        f"{len(deviations)} approved strengthening ({', '.join(deviations) or 'none'})"
+        f"{len(deviations)} approved strengthening ({', '.join(deviations) or 'none'}); "
+        f"qemu_smoke.sh {'approved-deviation' if smoke_deviated else '== HEAD'}"
     )
     return 0
 

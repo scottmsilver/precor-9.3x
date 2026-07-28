@@ -1,0 +1,277 @@
+//! THE ONE PATH TO THE BELT.
+//!
+//! Two surfaces can command motion — an HTTP request and the interval
+//! executor — and there is exactly one function that lets either of them do
+//! it: [`command`]. Same clamps (the controller's), same lease, same
+//! entry choreography, same `apply_outputs()`. Neither surface can reach
+//! `SafetyController::command_motion` without coming through here, because
+//! neither surface holds an identity of its own: the identities live in
+//! `Guarded` and are minted only by this module.
+//!
+//! WHY IT IS NOT IN `net/api.rs`. The executor runs in every build; the
+//! network tier is behind `feature = "net"`. If this logic lived in the HTTP
+//! handler, a non-net build would need a second copy of it, and a second copy
+//! is a second opinion about how the belt is commanded.
+//!
+//! WHY IT IS NOT IN `SafetyController`. The controller is what the
+//! differential compares op-for-op against the C++ core and `safety_model.py`.
+//! Lease bookkeeping and the auto-emulate policy have no counterpart there, so
+//! putting them in would fork the compared behaviour — the same reasoning the
+//! auto-emulate comment in `net/api.rs` already gives.
+//!
+//! # The lease, and why the identity is REUSED
+//!
+//! `SafetyController::connect` emergency-stops when a NEW generation arrives
+//! for a connection that already owns the lease (`owner_superseded`): speed
+//! zero, relay off, TX off, mode PROXY. That is correct for a genuinely new
+//! socket replacing an old one — and catastrophic if a surface mints a fresh
+//! generation per command, because then every command tears the relay down and
+//! builds it back up.
+//!
+//! That is precisely what the first version of the HTTP handler did. It went
+//! unnoticed because the only scenario covering it issues ONE request; the
+//! second request would have relay-cycled the treadmill mid-stride. The
+//! executor makes it unmissable — it commands on every interval boundary.
+//!
+//! So an identity is minted ONCE per session and reused while it still owns
+//! the lease. A new generation is minted only when ownership has actually been
+//! lost (an emergency stop, a console takeover, the other surface taking
+//! over), which is exactly when a new connection is the honest description.
+
+// COMPILER-ENFORCED unsafe containment: this module decides what the belt is
+// told, so it may not contain a single unsafe token.
+#![forbid(unsafe_code)]
+
+use crate::context::Guarded;
+use crate::logi;
+use safety_core::hal::SerialOut;
+use safety_core::safety::controller::{ConnectionIdentity, SafeMode, Transport};
+use safety_core::units::{InclineHalfPct, Micros, SpeedTenths};
+
+/// Identifies the HTTP tier as an owner.
+pub const HTTP_HANDLE: i32 = 0x48_54_54_50; // "HTTP"
+
+/// Identifies the interval executor as an owner.
+///
+/// NOT 1: the QEMU shim's scripted owner is `EXECUTOR:1` and scenarios S3/S5/S7
+/// match `lease_acquired:EXECUTOR:1:` by prefix. A distinct handle keeps
+/// `ConnectionIdentity::same_connection` false between the two, so the shim and
+/// a running program can never be mistaken for each other in the audit ring.
+pub const EXECUTOR_HANDLE: i32 = 2;
+
+/// Which surface is asking. Also selects its owner state — passing the state
+/// itself would need a second mutable borrow of `Guarded`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Surface {
+    Http,
+    Executor,
+}
+
+impl Surface {
+    const fn base(self) -> (Transport, i32) {
+        match self {
+            Surface::Http => (Transport::Wss, HTTP_HANDLE),
+            Surface::Executor => (Transport::Executor, EXECUTOR_HANDLE),
+        }
+    }
+}
+
+/// One surface's connection bookkeeping. Lives inside `Guarded`, so it is
+/// unreachable without the safety lock — the same construction that puts
+/// `SafetyIoImpl` in there.
+#[derive(Clone, Copy, Debug)]
+pub struct Owner {
+    /// Monotonic, never reused. `i64` to match `Generation`.
+    generation: i64,
+    /// The identity currently in play, if any.
+    current: Option<ConnectionIdentity>,
+}
+
+impl Owner {
+    pub const fn new() -> Self {
+        Owner {
+            generation: 0,
+            current: None,
+        }
+    }
+    /// The identity this surface last minted, whether or not it still owns
+    /// the lease. Read-only; used by the executor to ask the controller
+    /// questions about its own session.
+    pub fn identity(&self) -> Option<ConnectionIdentity> {
+        self.current
+    }
+}
+
+impl Default for Owner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Why a command could not be issued. Maps onto an HTTP status so a handler
+/// cannot invent a fourth outcome.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reject {
+    /// The other surface holds the lease. While a program runs, the executor
+    /// owns the belt and a manual command is refused rather than fighting it.
+    NotOwner,
+    /// The controller refused the motion: out of clamp, or a latched fault.
+    /// It has already recorded WHY in the audit ring.
+    Refused,
+    /// `i64` generations exhausted. Unreachable (2^63 commands) and still
+    /// handled, because unreachable is not the same as cannot-panic under
+    /// `panic = "abort"`.
+    GenerationExhausted,
+}
+
+fn owner_mut(g: &mut Guarded, surface: Surface) -> &mut Owner {
+    match surface {
+        Surface::Http => &mut g.http_owner,
+        Surface::Executor => &mut g.executor_owner,
+    }
+}
+
+pub fn owner(g: &Guarded, surface: Surface) -> &Owner {
+    match surface {
+        Surface::Http => &g.http_owner,
+        Surface::Executor => &g.executor_owner,
+    }
+}
+
+/// Return an identity that owns the lease right now, taking it if necessary.
+fn hold_lease(
+    g: &mut Guarded,
+    surface: Surface,
+    now: Micros,
+) -> Result<ConnectionIdentity, Reject> {
+    // Still ours? Reuse it. This is the branch that keeps a running program
+    // from relay-cycling the treadmill once a second — see the module header.
+    if let Some(id) = owner(g, surface).identity() {
+        if g.controller.owner() == Some(id) {
+            return Ok(id);
+        }
+    }
+
+    let (transport, handle) = surface.base();
+    let next = owner(g, surface)
+        .generation
+        .checked_add(1)
+        .ok_or(Reject::GenerationExhausted)?;
+    let id = ConnectionIdentity::new(transport, handle, next).ok_or(Reject::GenerationExhausted)?;
+    {
+        let o = owner_mut(g, surface);
+        o.generation = next;
+        o.current = Some(id);
+    }
+    if !g.controller.connect(&id) || !g.controller.acquire(&id, now) {
+        // The controller recorded the reason. Most commonly: the OTHER surface
+        // holds the lease (`lease_rejected:already_owned`).
+        return Err(Reject::NotOwner);
+    }
+    Ok(id)
+}
+
+/// Command speed and incline as `surface`, through the full safety path.
+///
+/// Returns `Ok(())` only when the controller ACCEPTED the motion. The caller
+/// never pre-validates: deciding whether a motion is safe is the controller's
+/// job, and a caller that helpfully checked first would be a second opinion.
+pub fn command(
+    g: &mut Guarded,
+    surface: Surface,
+    speed: SpeedTenths,
+    incline: InclineHalfPct,
+    now: Micros,
+) -> Result<(), Reject> {
+    let id = hold_lease(g, surface, now)?;
+    if !g.controller.command_motion(&id, speed, incline, now) {
+        g.apply_outputs();
+        return Err(Reject::Refused);
+    }
+
+    // AUTO-EMULATE, mirroring the Pi. CLAUDE.md: "Speed/incline command
+    // received -> auto-enables emulate mode", and that logic lives below the
+    // application tier precisely so a mode transition does not depend on the
+    // application tier being alive.
+    //
+    // It is an ATTEMPT, never a demand: `request_emulate` enforces every
+    // precondition itself (TREAD_OK, BYPASS feedback, a fresh console, a
+    // qualified gap, idle-low TX, no latched fault). If any fails it refuses,
+    // records why, and we stay in Proxy — the safe state.
+    if g.controller.mode() == SafeMode::Proxy {
+        let idle_low = g.console_uart.tx_idle_low();
+        if g.controller.request_emulate(&id, now, idle_low) {
+            // RE-ASSERT THE INTENT. `request_emulate` sets commanded motion to
+            // ZERO — PLAN "enter at zero", correct and non-negotiable — which
+            // discards the motion accepted three lines above. Nothing else
+            // re-sends it, so before this line a single `POST /api/speed 3.0`
+            // from PROXY entered emulate and then left the belt at ZERO: the
+            // user's command was silently swallowed and only a SECOND request
+            // moved the belt.
+            //
+            // The interval executor made it undeniable — a program whose first
+            // interval is ten minutes long would have stood still for ten
+            // minutes — but the defect was already there on the HTTP path.
+            // `test_http_entry.py` did not catch it because it asserts only
+            // that the first frames are zeros, which is true either way.
+            //
+            // PLAN STEP 6 IS NOT WEAKENED BY THIS. The zero-frame guarantee is
+            // enforced by the emulate CYCLE's entry gate, which arms on the
+            // rising edge of a new `EmulateSessionId` and refuses to transmit
+            // anything but a complete zero frame first — not by whatever
+            // happens to be in `speed_tenths`. The scenario asserts the first
+            // `[hmph:...]` on the wire after the transfer is `[hmph:0]` with a
+            // nonzero speed commanded, which is exactly this case.
+            let _ = g.controller.command_motion(&id, speed, incline, now);
+            logi!("control: {} auto-entered emulate", surface_name(surface));
+        }
+    }
+
+    g.apply_outputs();
+    Ok(())
+}
+
+/// Give the belt back: PLAN normal exit (zero frame, gap, relay off, TX off,
+/// lease released) when emulating, a plain lease drop when not.
+///
+/// Called when a program ends — completed, stopped or reset. Without it the
+/// executor's `NoDeadline` lease would be held forever and no HTTP request
+/// could ever command the belt again.
+///
+/// A no-op unless this surface actually owns the lease right now, so calling
+/// it twice, or after a fail-closed stop already took the belt away, is safe.
+///
+/// THE IDENTITY IS DELIBERATELY NOT FORGOTTEN. `hold_lease`'s reuse check
+/// (`controller.owner() == Some(id)`) is the single source of truth about
+/// whether this surface still owns the belt, and it is correct in both
+/// outcomes: if the exit completed the lease is gone and the next command
+/// mints a fresh generation against a free lease; if the exit is still in
+/// flight the lease is still ours and the next command reuses the identity
+/// instead of superseding it — which would emergency-stop mid-exit.
+pub fn release(g: &mut Guarded, surface: Surface, now: Micros) -> bool {
+    let Some(id) = owner(g, surface).identity() else {
+        return false;
+    };
+    if g.controller.owner() != Some(id) {
+        return false;
+    }
+    let released = match g.controller.mode() {
+        // `request_normal_exit` refuses when not Emulating, and there is no
+        // other non-emergency way to drop a lease. In Proxy the "emergency" is
+        // nominal — the relay is already open and TX already silent, so this
+        // only zeroes commanded motion and releases ownership. The audit line
+        // reads `emergency:owner_disconnect`, which is the honest description
+        // of what happened: the owner went away.
+        SafeMode::Proxy => g.controller.disconnect(&id, now),
+        _ => g.controller.request_normal_exit(&id, now),
+    };
+    g.apply_outputs();
+    released
+}
+
+const fn surface_name(s: Surface) -> &'static str {
+    match s {
+        Surface::Http => "http",
+        Surface::Executor => "executor",
+    }
+}

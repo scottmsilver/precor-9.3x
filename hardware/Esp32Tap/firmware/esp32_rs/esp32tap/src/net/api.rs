@@ -1,11 +1,17 @@
 //! Slice 2 — the control path.
 //!
-//! `/api/status`, `/api/speed`, `/api/incline`. Every one of them goes through
-//! `SafetyController` by exactly the same route the QEMU shim uses: lock
-//! `guarded`, call the controller with an owner identity, `apply_outputs()`.
-//! There is deliberately NO second path to the belt — an HTTP request is just
-//! another owner, subject to the same clamps, the same lease, and the same
-//! entry/exit choreography.
+//! `/api/status`, `/api/speed`, `/api/incline`. The two that move the belt do
+//! it through `crate::control::command` — the SAME function the interval
+//! executor calls, so there is one lease, one set of clamps, one auto-emulate
+//! policy and one `apply_outputs()` for the whole firmware. An HTTP request is
+//! just another owner.
+//!
+//! The lease bookkeeping that used to live here moved into `control.rs` with
+//! a bug fixed on the way: this handler minted a NEW connection generation per
+//! request, and `SafetyController::connect` emergency-stops when a fresh
+//! generation supersedes a lease-holding one. The second POST to `/api/speed`
+//! would therefore have dropped the relay and re-entered emulate. One scenario
+//! issuing one request never saw it; `test_program.py` now asserts it directly.
 //!
 //! ADMISSION BEFORE PARSING. Every body-bearing endpoint calls
 //! `reqbudget::admit()` first. If the declared length will not fit a slot it is
@@ -21,21 +27,19 @@
 //! opinion about safety, which is exactly one opinion too many.
 
 use crate::context::lock;
-use crate::logi;
+use crate::control::{self, Surface};
 use esp_idf_sys as sys;
-use safety_core::hal::SerialOut;
-use safety_core::safety::controller::{ConnectionIdentity, Transport};
 use safety_core::units::{InclineHalfPct, SpeedTenths};
-
-/// Handle identifying the HTTP tier as an owner. Distinct from the executor's,
-/// so the audit trail says which surface commanded the belt.
-const HTTP_HANDLE: i32 = 0x48_54_54_50; // "HTTP"
 
 /// Largest body we will read on a command endpoint. Well under a budget slot;
 /// `{"value":12.5}` is 15 bytes.
-const MAX_CMD_BODY: usize = 128;
+pub(crate) const MAX_CMD_BODY: usize = 128;
 
-fn respond(req: *mut sys::httpd_req_t, status: &core::ffi::CStr, body: &[u8]) -> sys::esp_err_t {
+pub(crate) fn respond(
+    req: *mut sys::httpd_req_t,
+    status: &core::ffi::CStr,
+    body: &[u8],
+) -> sys::esp_err_t {
     // SAFETY: `req` is live for the call; `status` and `body` outlive it (both
     // are borrowed from the caller's frame or `'static`). IDF copies what it
     // sends before returning.
@@ -53,7 +57,10 @@ fn respond(req: *mut sys::httpd_req_t, status: &core::ffi::CStr, body: &[u8]) ->
 /// Read the request body into a budgeted slot, or answer the refusal ourselves.
 ///
 /// Returns `None` when the request has already been answered.
-fn read_body(req: *mut sys::httpd_req_t, out: &mut [u8; MAX_CMD_BODY]) -> Option<usize> {
+pub(crate) fn read_body(
+    req: *mut sys::httpd_req_t,
+    out: &mut [u8; MAX_CMD_BODY],
+) -> Option<usize> {
     // SAFETY: reading a scalar field of a live request.
     let declared = unsafe { (*req).content_len };
 
@@ -120,7 +127,7 @@ fn read_body(req: *mut sys::httpd_req_t, out: &mut [u8; MAX_CMD_BODY]) -> Option
 /// Accepts `12`, `12.5`, `12.50`; returns hundredths (1250). Deliberately
 /// hand-rolled and total: no allocation, no panic path, and a malformed body
 /// yields `None` rather than a default that would silently command something.
-fn parse_value_hundredths(body: &[u8]) -> Option<i32> {
+pub(crate) fn parse_value_hundredths(body: &[u8]) -> Option<i32> {
     let pos = body.windows(5).position(|w| w == b"value")?;
     let mut i = pos + 5;
     while i < body.len() && (body[i] == b'"' || body[i] == b':' || body[i] == b' ') {
@@ -156,23 +163,6 @@ fn parse_value_hundredths(body: &[u8]) -> Option<i32> {
     }
     let v = whole.checked_mul(100)?.checked_add(frac)?;
     Some(if neg { -v } else { v })
-}
-
-/// Monotonic generation for the HTTP owner.
-///
-/// `checked_add` and an `Option`, never `+= 1` and `expect`: this build is
-/// panic=abort, so ANY reachable panic drops the relay. Overflow is
-/// unreachable, but unreachable is not the same as cannot-panic — the same
-/// reasoning the QEMU shim applies.
-// AtomicU32, not U64: Xtensa has no native 64-bit atomics. Overflow needs
-// 2^32 commands and is still handled rather than assumed away.
-static HTTP_GENERATION: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
-fn next_identity() -> Option<ConnectionIdentity> {
-    use core::sync::atomic::Ordering;
-    let g = HTTP_GENERATION.fetch_add(1, Ordering::Relaxed).checked_add(1)?;
-    // ConnectionIdentity takes an i64 generation.
-    ConnectionIdentity::new(Transport::Wss, HTTP_HANDLE, g as i64)
 }
 
 /// GET /api/status — read-only, no lease, no belt effect.
@@ -267,78 +257,56 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
         );
     };
 
-    let accepted = {
+    let outcome = {
         let mut g = lock(&crate::CTX.guarded);
         let now = crate::CTX.clock.now();
-        // Take/refresh ownership, exactly as the shim and executor do.
-        let Some(id) = next_identity() else {
-            return respond(
-                req,
-                c"503 Service Unavailable",
-                br#"{"ok":false,"error":"generation exhausted"}"#,
-            );
-        };
-        if !g.controller.connect(&id) || !g.controller.acquire(&id, now) {
-            false
+        // Convert to the controller's units and let IT clamp. Speed is tenths
+        // of mph; incline is half-percent. The axis not being set is carried
+        // through unchanged, read from the controller rather than remembered.
+        let (sp, inc) = if is_incline {
+            (
+                g.controller.speed_tenths(),
+                InclineHalfPct::new(hundredths * 2 / 100),
+            )
         } else {
-            // Convert to the controller's units and let IT clamp. Speed is
-            // tenths of mph; incline is half-percent.
-            let (sp, inc) = if is_incline {
-                (
-                    g.controller.speed_tenths(),
-                    InclineHalfPct::new(hundredths * 2 / 100),
-                )
-            } else {
-                (
-                    SpeedTenths::new(hundredths / 10),
-                    g.controller.incline_half_percent(),
-                )
-            };
-            let ok = g.controller.command_motion(&id, sp, inc, now);
-
-            // AUTO-EMULATE, mirroring the Pi. CLAUDE.md: "Speed/incline
-            // command received -> auto-enables emulate mode", and that logic
-            // lives in the C binary precisely so a mode transition does not
-            // depend on the application tier being alive. A motion command
-            // that silently leaves the belt under console control would be a
-            // behaviour change from the machine this replaces.
-            //
-            // It is an ATTEMPT, never a demand: request_emulate enforces every
-            // precondition itself (TREAD_OK, BYPASS feedback, a fresh console,
-            // a qualified gap, idle-low TX, no latched fault). If any fails it
-            // refuses and records why, and we stay in Proxy — the safe state.
-            // The handler deliberately does not pre-check any of them; that
-            // would be a second opinion about safety.
-            //
-            // Policy lives here rather than in SafetyController because the
-            // controller is what the differential compares op-for-op against
-            // the C++ core; adding an auto-entry to it would fork the compared
-            // behaviour. When a second owner surface exists (BLE), this moves
-            // to a shared helper rather than being duplicated.
-            if ok && g.controller.mode() == safety_core::safety::controller::SafeMode::Proxy {
-                let idle_low = g.console_uart.tx_idle_low();
-                let entered = g.controller.request_emulate(&id, now, idle_low);
-                if entered {
-                    logi!("api: motion auto-entered emulate");
-                }
-            }
-
-            g.apply_outputs();
-            ok
-        }
+            (
+                SpeedTenths::new(hundredths / 10),
+                g.controller.incline_half_percent(),
+            )
+        };
+        // THE ONE PATH TO THE BELT — the same call the interval executor
+        // makes. Lease, clamps, auto-emulate and apply_outputs all live there,
+        // so an HTTP request is just another owner and this handler contains
+        // no opinion about safety at all.
+        control::command(&mut g, Surface::Http, sp, inc, now)
     };
 
-    if accepted {
-        respond(req, c"200 OK", br#"{"ok":true}"#)
-    } else {
-        // The controller refused — clamp violation, no lease, wrong mode, or a
-        // latched fault. It has already recorded WHY in the audit ring; the
-        // handler does not second-guess or paraphrase it.
-        respond(
+    match outcome {
+        Ok(()) => respond(req, c"200 OK", br#"{"ok":true}"#),
+        // A program owns the belt. Refusing is the deliberate answer: the
+        // alternative is taking the lease from the executor, which
+        // emergency-stops it — relay open, belt dead, mid-stride. The Pi
+        // resolves this by SPLITTING the running manual program at the new
+        // speed (`ProgramState.split_for_manual`); that behaviour needs its
+        // own slice and is not pretended at here.
+        Err(control::Reject::NotOwner) => respond(
+            req,
+            c"409 Conflict",
+            br#"{"ok":false,"error":"a program owns the belt; pause or stop it first"}"#,
+        ),
+        // The controller refused — clamp violation, wrong mode, or a latched
+        // fault. It has already recorded WHY in the audit ring; the handler
+        // does not second-guess or paraphrase it.
+        Err(control::Reject::Refused) => respond(
             req,
             c"409 Conflict",
             br#"{"ok":false,"error":"rejected by safety controller"}"#,
-        )
+        ),
+        Err(control::Reject::GenerationExhausted) => respond(
+            req,
+            c"503 Service Unavailable",
+            br#"{"ok":false,"error":"generation exhausted"}"#,
+        ),
     }
 }
 

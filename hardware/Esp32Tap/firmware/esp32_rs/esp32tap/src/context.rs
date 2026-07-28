@@ -75,6 +75,15 @@ pub struct Guarded {
     /// hold a borrow across each other.
     pub scratch_raw: [u8; SCRATCH_RAW_BYTES],
     pub scratch_pairs: [KvPair; SCRATCH_PAIRS],
+    /// Connection bookkeeping for the two surfaces that may command motion.
+    ///
+    /// INSIDE THE LOCK BY CONSTRUCTION, for the same reason `io` is: taking a
+    /// lease and commanding motion must be one atomic act, or two surfaces can
+    /// interleave between `acquire` and `command_motion` and the belt ends up
+    /// owned by one and commanded by the other. `crate::control` is the only
+    /// module that writes them.
+    pub http_owner: crate::control::Owner,
+    pub executor_owner: crate::control::Owner,
 }
 
 pub const SCRATCH_RAW_BYTES: usize = 512;
@@ -95,6 +104,8 @@ impl Guarded {
             motor_parse: ParseBuf::new(),
             scratch_raw: [0u8; SCRATCH_RAW_BYTES],
             scratch_pairs: [KvPair::empty(); SCRATCH_PAIRS],
+            http_owner: crate::control::Owner::new(),
+            executor_owner: crate::control::Owner::new(),
         }
     }
 
@@ -161,6 +172,24 @@ pub struct FirmwareContext {
     pub guarded: Mutex<Guarded>,
     /// Separate lock: `uart_wait_tx_done` blocks ~50 ms at 9600 baud.
     pub writer: Mutex<MotorWriter>,
+    /// The loaded workout and where it has got to.
+    ///
+    /// ITS OWN LOCK, and there is a MANDATORY ORDER: `program` is taken
+    /// BEFORE `guarded`, never the other way round. Two holders exist — the
+    /// interval executor task and the HTTP program endpoints — and both need
+    /// the tick decision and the resulting belt command to be one atomic act,
+    /// or a `POST /api/program/stop` can land between "the tick decided to
+    /// start interval 3" and "the belt was told", leaving the belt running
+    /// after a stop.
+    ///
+    /// Nothing takes `guarded` and then wants `program`, which is what makes
+    /// the order sufficient rather than merely stated: the serial engine, the
+    /// emulate cycle, the QEMU shim and the motion endpoints never touch a
+    /// program at all.
+    ///
+    /// NOT inside `Guarded`: a ~1 KB program and the 1 s tick have no business
+    /// widening the critical section that the 5 ms serial loop contends for.
+    pub program: Mutex<program_core::ProgramState>,
     pub clock: Esp32Clock,
 }
 
@@ -169,6 +198,7 @@ impl FirmwareContext {
         FirmwareContext {
             guarded: Mutex::new(Guarded::new()),
             writer: Mutex::new(MotorWriter::new()),
+            program: Mutex::new(program_core::ProgramState::new()),
             clock: Esp32Clock::new(),
         }
     }

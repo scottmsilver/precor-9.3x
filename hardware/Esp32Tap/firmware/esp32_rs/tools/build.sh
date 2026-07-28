@@ -137,7 +137,35 @@ ARGS
 
     echo "-- $outdir --"
     ls -l "$outdir"
-    echo "app image: $(stat -c%s "$outdir/esp32tap.bin") bytes (factory partition = 2097152)"
+    # FACTORY PARTITION FIT — a real gate, not a label.
+    #
+    # This line used to print a HARD-CODED "factory partition = 2097152",
+    # which was wrong: the custom 8 MB table does not apply under esp-idf-sys,
+    # so the generated table is the stock 2 MB single-app one whose factory
+    # partition is 1 MB. Every headroom figure derived from the old number was
+    # out by 2x. Parse the table we just wrote instead, and FAIL rather than
+    # produce an image that cannot be flashed — the qemu-test image is at 80%
+    # and this is now the binding constraint.
+    python - "$outdir" <<'"'"'PYFIT'"'"'
+import pathlib, struct, sys
+d = pathlib.Path(sys.argv[1])
+tbl = d.joinpath("partition-table.bin").read_bytes()
+factory = None
+for i in range(0, len(tbl), 32):
+    e = tbl[i:i+32]
+    if e[:2] != b"\xaa\x50":
+        continue
+    _, ptype, _, _, size = struct.unpack("<HBBII", e[:12])
+    if ptype == 0:  # app
+        factory = size
+        break
+if factory is None:
+    sys.exit("FATAL: no app partition in the generated partition table")
+img = d.joinpath("esp32tap.bin").stat().st_size
+print(f"app image: {img} bytes / {factory} factory partition ({img*100//factory}%)")
+if img > factory:
+    sys.exit(f"FATAL: image does not fit the factory partition ({img} > {factory})")
+PYFIT
 
     {
         # The mandated grep, kept verbatim as the first line of defence...

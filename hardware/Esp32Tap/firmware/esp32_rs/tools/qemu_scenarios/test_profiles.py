@@ -3,24 +3,23 @@
 Asserts the shapes the Kotlin models actually decode, not merely that the
 endpoints answer 200.
 """
-import json, sys, urllib.request
+
+import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qemu_harness"))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "qemu_harness"))
+import httpc  # noqa: E402
 from conftest import *  # noqa: F401,F403,E402
 
-
-def http(sess, method, path, body=None):
-    url = f"http://127.0.0.1:{sess.http_port}{path}"
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return r.status, json.loads(r.read().decode())
+# HTTPS-only since Slice 3 — see httpc.py for why verification is off.
+http = httpc.request
 
 
 def test_app_can_get_past_the_profile_picker(qemu):
     s = qemu(net=True)
-    s.wait_log(r"http server up on :8000", timeout=120)
+    s.wait_log(r"https server up on :8000", timeout=180)
 
     # The picker lists profiles.
     st, profiles = http(s, "GET", "/api/profiles")

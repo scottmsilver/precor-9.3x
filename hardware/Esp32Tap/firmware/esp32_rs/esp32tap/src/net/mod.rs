@@ -23,12 +23,14 @@
 pub mod api;
 pub mod tls;
 pub mod http;
+pub mod mdns;
+pub mod program;
 
 use esp_idf_sys as sys;
 
 pub type NetResult = Result<(), sys::esp_err_t>;
 
-fn check(err: sys::esp_err_t) -> NetResult {
+pub(crate) fn check(err: sys::esp_err_t) -> NetResult {
     if err == sys::ESP_OK {
         Ok(())
     } else {
@@ -157,16 +159,26 @@ pub fn bring_up() -> NetResult {
     check(eth_start(handle))
 }
 
+/// The default Ethernet netif, or null if it does not exist.
+///
+/// `ETH_DEF` is the ifkey `ESP_NETIF_DEFAULT_ETH` assigns; looking the handle
+/// up by key rather than threading the pointer out of [`bring_up`] keeps the
+/// netif owned by IDF end to end.
+pub(crate) fn eth_netif() -> *mut sys::esp_netif_t {
+    // SAFETY: the key is a `'static` NUL-terminated literal read for the call;
+    // the returned handle is owned by IDF and only ever passed back to it.
+    unsafe { sys::esp_netif_get_handle_from_ifkey(c"ETH_DEF".as_ptr()) }
+}
+
 /// Current IPv4 address of the Ethernet netif, or 0 if none is bound.
 fn eth_ipv4() -> u32 {
-    // SAFETY: `esp_netif_get_handle_from_ifkey` returns a handle owned by IDF
-    // which we only read; `ip_info` is fully written by the callee on ESP_OK
-    // and is not read otherwise.
+    let netif = eth_netif();
+    if netif.is_null() {
+        return 0;
+    }
+    // SAFETY: `netif` is a live IDF-owned handle; `ip_info` is fully written by
+    // the callee on ESP_OK and is not read otherwise.
     unsafe {
-        let netif = sys::esp_netif_get_handle_from_ifkey(c"ETH_DEF".as_ptr());
-        if netif.is_null() {
-            return 0;
-        }
         let mut ip: sys::esp_netif_ip_info_t = core::mem::zeroed();
         if sys::esp_netif_get_ip_info(netif, &mut ip) == sys::ESP_OK {
             ip.ip.addr

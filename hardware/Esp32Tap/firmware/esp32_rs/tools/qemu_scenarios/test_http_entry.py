@@ -5,27 +5,28 @@ BYPASS, a fresh console) are HARDWARE state, so the QEMU shim scripts them
 exactly as it does for the QT-driven scenarios. The COMMAND, though, arrives
 over HTTP — that is the thing under test.
 """
-import json, sys, urllib.request
+
+import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "qemu_harness"))
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent / "qemu_harness"))
+import httpc  # noqa: E402
 import synth  # noqa: E402
 from conftest import *  # noqa: F401,F403,E402
 
 PACER_INTERVAL = 0.10
 
-
-def http(sess, method, path, body=None):
-    url = f"http://127.0.0.1:{sess.http_port}{path}"
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return r.status, json.loads(r.read().decode())
+# Slice 3 made the server HTTPS-only — there is no plaintext listener left to
+# fall back to — so this scenario now drives the same endpoints over TLS. What
+# it proves is unchanged: a request from the network causes a real transfer.
+http = httpc.request
 
 
 def test_http_speed_causes_a_real_relay_transfer(qemu):
     s = qemu(net=True)
-    s.wait_log(r"http server up on :8000", timeout=120)
+    s.wait_log(r"https server up on :8000", timeout=180)
 
     # Hardware preconditions, scripted by the shim (not by HTTP).
     s.cmd_ok("QT tread 1")

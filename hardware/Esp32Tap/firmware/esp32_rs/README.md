@@ -23,6 +23,9 @@ esp32_rs/
 ├── safety_core/    CRATE 1 — portable, no_std, ZERO dependencies, host-tested
 ├── esp32tap/       CRATE 2 — the ESP32-S3 binary (esp-idf-hal + esp-idf-sys)
 ├── difftest/       CRATE 3 — host-only differential harness vs the C++ core
+├── reqbudget/      CRATE 4 — fixed per-request memory, no_std, zero deps
+├── program_core/   CRATE 5 — the interval executor (port of ProgramState),
+│                             no_std, forbid(unsafe), depends only on safety_core
 │
 ├── experiments/wdt_qemu_control/  plain-C control proving the task-WDT panic
 │                                  path is unreachable under esp-QEMU
@@ -37,7 +40,7 @@ esp32_rs/
     └── dump_capture_fixtures.py  real capture data -> difftest/fixtures/
 ```
 
-**Three independent crates, no virtual workspace.** A workspace containing both
+**Independent crates, no virtual workspace.** A workspace containing both
 a `build-std` xtensa member and host members forces a default target on every
 member, so `cargo test -p safety_core` would try to build tests for xtensa.
 Split, each crate gets its own `.cargo/config.toml` and its own `Cargo.lock`.
@@ -49,6 +52,11 @@ Split, each crate gets its own `.cargo/config.toml` and its own `Cargo.lock`.
 ```bash
 # Host — no Docker, no espup, plain stable rustc. The 148 ported cases.
 cd safety_core && cargo test
+
+# Host — the interval executor (67 cases) and the request budget. Sub-second;
+# this is the fast inner loop when working on program logic.
+cargo test --manifest-path program_core/Cargo.toml
+cargo test --manifest-path reqbudget/Cargo.toml
 
 # Host — differential against the COMMITTED, UNMODIFIED C++ core.
 cd difftest && cargo test
@@ -115,9 +123,10 @@ zero-init-then-assign.
     required gate in `tools/build.sh`: it asserts the allowlist of
     unsafe-bearing files, the allowlist of `allow(unsafe_code)` sites, a
     `// SAFETY:` comment on every unsafe block, and the exact line budget
-    (69 production lines across `hal/` + `log.rs`; 22 more in the
-    never-flashed `qemu_test/`). Its counting rule is stated in the script, so
-    the number is reproducible rather than asserted.
+    (69 production lines across `hal/` + `log.rs`; 346 more in code the
+    flashed image does not contain — `qemu_test/` behind `feature = "qemu-test"`
+    and `net/` behind `feature = "net"`). Its counting rule is stated in the
+    script, so the number is reproducible rather than asserted.
 * **`no_std` + never naming `alloc`** in `safety_core`, so a heap allocation in
   the serial read path or the emulate cycle is a compile error. The C++ relies
   on review for this and in fact allocates (`kv_build` and
@@ -203,6 +212,125 @@ Two verification gaps that are **not Rust's fault** and must not be papered over
   emulator-tuned; the sub-millisecond feedback window needs a real relay on a
   real board regardless of language.
 
+### Slice 3 (TLS + mDNS) — what is proven, and what is not
+
+Proven in QEMU, deterministically, by `tools/qemu_scenarios/`:
+
+* a real TLS handshake against a certificate the DEVICE generated for itself,
+  and the app-facing banner served over it (`test_tls.py`);
+* that there is **no plaintext listener** on :8000 to fall back to, which is
+  what makes the advertised `scheme=https` honest;
+* that the identity **survives a real SoC reset** — the certificate is
+  byte-identical across a `QT reboot`, and the second boot logs
+  `tls: identity loaded from NVS` (`test_tls_persistence.py`);
+* that the DNS-SD announcement is genuinely **on the wire**: the frames the NIC
+  transmits are captured with QEMU `filter-dump` and the PTR/SRV/TXT/A records
+  decoded from the pcap, then compared field-by-field against the Pi's
+  `deploy/treadmill.avahi-service` (`test_mdns.py`).
+
+Not proven, and not claimed:
+
+* **The private key is stored in NVS in the clear.** Flash encryption is not
+  enabled on this part, so anyone with physical access to the flash has the key
+  — the same exposure as `key.pem` on the Pi's SD card. Trust-on-first-use is
+  only as strong as that.
+* **No certificate rotation, revocation or expiry handling.** The validity
+  window is a fixed 2024–2044 because the device has no wall clock at boot.
+* **Cross-power-cycle persistence on real hardware.** The reboot proof resets
+  the SoC inside one QEMU process; the flash file survives because it is a file.
+  A physical power cycle, and flash wear/corruption, need a board.
+* **An mDNS QUERY cannot be answered through the QEMU harness**, and this is an
+  emulator limit rather than a device one: slirp does not translate the source
+  address of a `hostfwd`-ed packet, so a query arrives claiming to come from
+  127.0.0.1, and `espressif/mdns` drops any packet whose source is outside the
+  interface's subnet before parsing it. The capture proves the announcement;
+  the query/response path needs a real L2 network.
+* **The QEMU-test image is 838,560 bytes of the 1 MB factory partition (79%).**
+  TLS (mbedtls X.509 write + PEM + ECDSA) and mDNS are what moved it and the
+  headroom is not comfortable; the 8 MB N8R8 layout is the answer when it runs
+  out, not a harness edit. `tools/build.sh` now parses the GENERATED partition
+  table and fails the build if the image does not fit — the old hard-coded
+  "factory partition = 2097152" label was wrong by 2x (the custom 8 MB table
+  does not apply under esp-idf-sys, so the stock 2 MB single-app table with a
+  1 MB factory partition is what is actually flashed), so every headroom figure
+  derived from it was half the real utilisation. The **production image is
+  454,176 bytes (43%)** and contains neither feature: `net` is off there, and
+  `xtensa-esp32s3-elf-nm` on the two ELFs finds `httpd_ssl_start`, `mdns_init`
+  and `mdns_service_add` in the qemu-test binary and **none of them** in the
+  production one — `--gc-sections` drops them.
+
+### Slice 4 (the interval executor) — what is proven, and what is not
+
+`program_core/` is a port of `python/program_engine.py`'s `ProgramState`,
+written against `python/tests/test_program_engine.py` as its specification: the
+1 s tick loop, interval advance, pause/resume, skip, prev, extend,
+adjust-duration and completion. 67 host cases, 0.00 s. Every deliberate
+divergence is enumerated in that crate's `lib.rs` header; the load-bearing ones
+are **bounded storage** (24 intervals, 20-byte names, durations capped at 24 h,
+all derived from one `reqbudget` slot and asserted by a test), **no
+encouragement engine** (a coaching-tier concern with no on-device consumer), and
+**pause zeroing the belt** — which merges `server.py::_apply_pause_toggle` into
+`toggle_pause`, because there is no layer above this one to forget to do it.
+
+Proven in QEMU, deterministically, by `tools/qemu_scenarios/test_program.py`
+(10 scenarios, no wall-clock sleeps — every wait is on a guest-observed fact):
+
+* a program POSTed over HTTPS is stored, echoed back in the Pi's exact
+  `to_dict()` shape, and **runs**: intervals advance on the GUEST clock with no
+  request in flight, and the new interval's speed reaches the motor wire;
+* starting one drives a **real relay transfer** and the first `[hmph:...]` on
+  the wire after that transfer is `[hmph:0]` — PLAN entry step 6 — even though
+  interval 0 commands a nonzero speed;
+* a pause holds the program clock across 6 s of guest time AND zeroes the belt;
+  a resume restores it; a skip advances immediately and the belt follows;
+* a stop runs PLAN's polite exit and **hands the lease back**, so a manual
+  command works again afterwards — without `control::release` the executor's
+  `NoDeadline` lease would make the device unusable after one workout;
+* an oversized program is refused at ADMISSION (413, before a byte is parsed)
+  and a malformed one by the parser (400), neither disturbing what is loaded.
+
+**Two real defects were found and fixed on the way**, both latent on the
+existing HTTP path and both invisible to a test that issues one request:
+
+1. `net/api.rs` minted a NEW connection generation per request, and
+   `SafetyController::connect` emergency-stops when a fresh generation
+   supersedes a lease-holding one. The **second** `POST /api/speed` would have
+   dropped the relay and re-entered emulate, mid-stride.
+   `test_repeated_manual_commands_do_not_cycle_the_relay` asserts it directly.
+2. `request_emulate` zeroes commanded motion (PLAN "enter at zero", correct),
+   which **discarded the motion accepted in the same call**. A single
+   `POST /api/speed 3.0` from PROXY entered emulate and left the belt at zero;
+   only a second request moved it. `control::command` now re-asserts the intent
+   after a successful entry. The zero-frame guarantee is unaffected — it is
+   enforced by the emulate cycle's session-edge gate, not by `speed_tenths`.
+
+Both fixes live in `esp32tap/src/control.rs`, which is now **the one path to
+the belt**: HTTP and the executor call the same function, so there is one
+lease, one set of clamps, one auto-emulate policy and one `apply_outputs()`.
+The refactor moved that logic out of an `unsafe extern "C"` handler body into a
+`#![forbid(unsafe_code)]` module, which is why ten new endpoints cost only
++37 unsafe-attributed lines.
+
+Not proven, and not claimed:
+
+* **A loaded program does not survive a reboot.** It lives in RAM. That is a
+  decision, not an omission: a reboot drops the relay and ends the run, so
+  silently resuming a workout on the next boot would be wrong without an
+  explicit human gesture. Nothing here writes flash, which is also what keeps
+  the executor off any path that can block.
+* **A manual speed change DURING a program is refused (409), not merged.** The
+  executor owns the lease while a program runs, and taking it away would
+  emergency-stop — relay open, belt dead. The Pi's answer is
+  `ProgramState.split_for_manual`, which rewrites the running manual program at
+  the new speed; that behaviour needs its own slice and is not faked here.
+* **No resume-from-position over HTTP.** `ProgramState::start` takes
+  `resume_interval`/`resume_elapsed` and the host tests cover them, but no
+  endpoint exposes them yet — the Pi drives that from `run_history.json`, which
+  this device does not have.
+* **`_check_encouragement` is not ported at all** — see the divergence list.
+* **Real hardware.** Everything above is QEMU. The executor has never driven a
+  physical treadmill.
+
 ---
 
 ## Dependencies
@@ -210,9 +338,40 @@ Two verification gaps that are **not Rust's fault** and must not be papered over
 **Device runtime — 3 direct, all Espressif:** `esp-idf-hal` 0.46.2,
 `esp-idf-sys` 0.37.2, plus our own `safety_core`. Build-dep `embuild` 0.33.
 
-**`esp-idf-svc` is deliberately excluded** — it is needed only for NVS, which
-only the network tier uses, and it drags in `serde`, `embedded-svc` and their
-tails. Verified absent from the target graph.
+**`esp-idf-svc` is deliberately excluded** — it drags in `serde`,
+`embedded-svc` and their tails, and its latest release pins `esp-idf-hal` ^0.45
+-> `esp-idf-sys` ^0.36, a generation behind the 0.46/0.37 pair this port uses
+(only one crate may link `esp_idf_hal`). Verified absent from the target graph.
+NVS, TLS and mDNS are all called directly through `esp-idf-sys`.
+
+**One managed (remote) ESP-IDF component: `espressif/mdns` ~1.8.0**, declared as
+a `[[package.metadata.esp-idf-sys.extra_components]] remote_component` in
+`esp32tap/Cargo.toml`. mDNS is not part of base ESP-IDF; the component manager
+resolves it (1.8.2 today, recorded in the generated `components_esp32s3.lock`).
+
+### How the bindings decide what exists (read this before "the symbol is missing")
+
+Two features were blocked for a while on the belief that `esp-idf-sys` was
+missing headers. It was not, and both causes are worth stating because the same
+mistake is cheap to repeat:
+
+* **`httpd_ssl_*` generated zero symbols** not because `esp_https_server` was
+  absent from the build — it was being compiled all along — but because
+  esp-idf-sys's stock `src/include/esp-idf/bindings.h` guards its
+  `#include "esp_https_server.h"` with `#ifdef CONFIG_ESP_HTTPS_SERVER_ENABLE`,
+  a **Kconfig symbol**. The generated sdkconfig said `is not set`. One
+  `sdkconfig.defaults` line fixed it.
+* **`mdns_*` generated zero symbols** because the component was not in the build
+  at all. The same stock header already has
+  `#if defined(ESP_IDF_COMP_ESPRESSIF__MDNS_ENABLED) / #include "mdns.h"`, and
+  `-DESP_IDF_COMP_<NAME>_ENABLED` is emitted for every component that was
+  actually compiled — so pulling the component in is sufficient and **no custom
+  `bindings_header` is needed**.
+
+`[package.metadata.esp-idf-sys] esp_idf_components` is the WRONG lever for
+either: it is an exclusive whitelist that *trims* the build, so naming a few
+components drops all the others and CMake fails. All of this is documented in
+`BUILD-OPTIONS.md` inside the `esp-idf-sys` crate source.
 
 `safety_core` and `difftest` have **zero dependencies**, dev or otherwise.
 

@@ -19,6 +19,7 @@
 #![deny(unsafe_code)]
 
 mod context;
+mod control;
 #[allow(unsafe_code)] // THE ONLY unsafe in the firmware — see hal/mod.rs.
 mod hal;
 #[cfg(feature = "net")]
@@ -171,17 +172,53 @@ fn main() {
                 Ok(addr) => {
                     let o = addr.to_le_bytes();
                     logi!("net: link up, ip {}.{}.{}.{}", o[0], o[1], o[2], o[3]);
-                    match net::http::start() {
-                        // EXACT STRING: the net harness waits on this before
-                        // issuing its first request.
-                        Ok(h) => {
-                            match net::api::register(h) {
-                                Ok(()) => logi!("api routes registered"),
-                                Err(e) => logi!("net: api register failed ({})", e),
+                    // The identity comes FIRST and the server does not start
+                    // without it: there is no plaintext fallback, because the
+                    // advertised record says `scheme=https` and a client that
+                    // trusted it would be wrong.
+                    match net::tls::identity() {
+                        Ok((id, origin)) => {
+                            logi!(
+                                "tls: identity {} ({} byte cert)",
+                                match origin {
+                                    net::tls::Origin::Nvs => "loaded from NVS",
+                                    net::tls::Origin::Generated => "generated this boot",
+                                },
+                                id.cert().len()
+                            );
+                            match net::http::start(id) {
+                                Ok(h) => {
+                                    match net::api::register(h) {
+                                        Ok(()) => logi!("api routes registered"),
+                                        Err(e) => logi!("net: api register failed ({})", e),
+                                    }
+                                    // The program endpoints are what let a
+                                    // workout be put on the device. They are
+                                    // registered separately so a failure here
+                                    // is distinguishable in the log from a
+                                    // control-path failure.
+                                    match net::program::register(h) {
+                                        Ok(()) => logi!("program routes registered"),
+                                        Err(e) => logi!("net: program register failed ({})", e),
+                                    }
+                                    // EXACT STRING: the net scenarios wait on
+                                    // this before issuing their first request.
+                                    logi!("https server up on :{}", net::http::port());
+                                    // Advertised LAST, and only on success: a
+                                    // record pointing at a server that failed
+                                    // to start sends the app to a dead port.
+                                    match net::mdns::advertise(net::http::port()) {
+                                        Ok(()) => logi!(
+                                            "mdns: _treadmill._tcp on :{}",
+                                            net::http::port()
+                                        ),
+                                        Err(e) => logi!("net: mdns failed (err {})", e),
+                                    }
+                                }
+                                Err(e) => logi!("net: https start failed (err {})", e),
                             }
-                            logi!("http server up on :{}", net::http::port());
                         }
-                        Err(e) => logi!("net: http start failed (err {})", e),
+                        Err(e) => logi!("net: tls identity failed (err {}) — no server", e),
                     }
                 }
                 Err(e) => logi!("net: no DHCP lease (err {}) — continuing headless", e),

@@ -47,7 +47,7 @@ FW_SRC = ESP32_RS / "esp32tap" / "src"
 CORE_SRC = ESP32_RS / "safety_core" / "src"
 
 # Firmware modules whose unsafe-freedom is COMPILER-enforced.
-FORBID_MODULES = ("tasks/mod.rs", "context.rs", "pins.rs")
+FORBID_MODULES = ("tasks/mod.rs", "context.rs", "pins.rs", "control.rs")
 
 # Production (flashed) unsafe-bearing files.
 PRODUCTION_UNSAFE = {
@@ -62,6 +62,11 @@ PRODUCTION_UNSAFE = {
 QEMU_UNSAFE = {
     "qemu_test/mod.rs",
     "qemu_test/motor_tap.rs",
+    # One call: `esp_restart` behind the `QT reboot` verb. It exists so the
+    # NVS-persistence claim can be PROVEN across a real SoC reset rather than
+    # asserted from a return code. Test-image only — `feature = "qemu-test"`
+    # is never enabled in the flashed build, so nothing can reboot a treadmill.
+    "qemu_test/shim_task.rs",
     # Slice 1 network foundation. Behind `feature = "net"`, which the
     # production image does NOT enable, so none of this is flashed to a
     # treadmill yet. It moves to PRODUCTION_UNSAFE when the network tier
@@ -70,6 +75,8 @@ QEMU_UNSAFE = {
     "net/http.rs",
     "net/api.rs",
     "net/tls.rs",
+    "net/mdns.rs",
+    "net/program.rs",
 }
 UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
 
@@ -97,7 +104,38 @@ PRODUCTION_UNSAFE_LINES = 69
 # safe code), so this counts the C boundary and nothing else. When the
 # network tier ships, net/mod.rs moves to PRODUCTION_UNSAFE and BOTH
 # numbers get re-counted deliberately.
-QEMU_UNSAFE_LINES = 268
+#
+# 268 -> 309 for Slice 3 (TLS + mDNS), all of it new C boundary and none of it
+# new *style*: net/mdns.rs is 6 one-expression FFI wrappers, net/tls.rs gains 6
+# more for the NVS load/store round-trip, and qemu_test/shim_task.rs adds
+# exactly 1 (`esp_restart`). The single large block is the mbedtls keygen,
+# which was already counted; it stays one block because its contexts must be
+# freed on every exit path and splitting it would multiply the cleanup, not the
+# safety.
+#
+# 309 -> 346 for Slice 4 (the interval executor), +37, ALL of it the ten new
+# program endpoints in net/program.rs — and the real C boundary in that file is
+# 3 calls. The rest is the counting rule attributing the body of an
+# `unsafe extern "C" fn`, which is why both IDF callbacks there are THIN
+# wrappers: each reads the one raw field a callback must and delegates to a
+# safe fn, so the logic that decides what the belt is told sits outside any
+# unsafe region.
+#
+# net/api.rs did not grow despite being rewritten: its lease/clamp/auto-emulate
+# logic moved into control.rs, which is `#![forbid(unsafe_code)]`. That is a
+# net reduction in unsafe-attributed SAFETY-CRITICAL code and the reason the
+# increase here is smaller than ten endpoints would suggest.
+#
+# program_core, like safety_core, is forbid + unsafe-free and adds nothing.
+#
+# 346 -> 355, +9: the `QT heap` probe in qemu_test/shim_task.rs. Three
+# argument-free IDF accessors in ONE block (esp_get_free_heap_size,
+# esp_get_minimum_free_heap_size, heap_caps_get_largest_free_block). It reads
+# and returns integers and mutates nothing. It is TEST-IMAGE ONLY — `feature =
+# "qemu-test"` is never enabled in the flashed build — and it exists so the
+# adversarial memory scenarios can plot a real heap curve instead of asserting
+# convergence from the absence of a reboot.
+QEMU_UNSAFE_LINES = 355
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

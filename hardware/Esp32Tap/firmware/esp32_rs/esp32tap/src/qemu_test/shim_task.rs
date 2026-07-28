@@ -202,6 +202,50 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
             qt!("QTOK {} v={}", verb, v);
         }
 
+        // Reset the SoC. The ONLY way to prove a claim about persistence:
+        // "the identity survives a reboot" cannot be shown by any amount of
+        // in-boot checking, and QEMU's flash file outlives a guest reset
+        // (`-drive file=...,if=mtd`), so the second boot reads the same NVS a
+        // real power cycle would. `esp_restart` does not return, so the QTOK is
+        // emitted first and the harness matches on the NEXT boot banner.
+        "reboot" => {
+            qt!("QTOK reboot now=1");
+            // Give the UART FIFO a moment to drain, or the harness never sees
+            // the acknowledgement it is waiting on.
+            delay_ms(50);
+            // SAFETY: `esp_restart` takes no arguments and never returns; no
+            // Rust memory crosses the boundary. Test-image only — this verb
+            // does not exist in the production build (`feature = "qemu-test"`).
+            unsafe { esp_idf_sys::esp_restart() }
+        }
+
+        // Free-heap probe. READ-ONLY, and test-image only. It exists so the
+        // memory claim — "a rejected request costs nothing permanent" — can be
+        // MEASURED across a request storm rather than inferred from the
+        // absence of a reboot. `largest` is reported alongside `free` because
+        // fragmentation, not exhaustion, is what actually kills a long-running
+        // allocator: a heap with 100 KB free in 1 KB pieces cannot serve a
+        // 40 KB TLS session.
+        "heap" => {
+            // SAFETY: three IDF accessors that take no arguments, return
+            // integers by value, and touch no Rust memory.
+            let (free, min_free, largest) = unsafe {
+                (
+                    esp_idf_sys::esp_get_free_heap_size(),
+                    esp_idf_sys::esp_get_minimum_free_heap_size(),
+                    esp_idf_sys::heap_caps_get_largest_free_block(
+                        esp_idf_sys::MALLOC_CAP_INTERNAL | esp_idf_sys::MALLOC_CAP_8BIT,
+                    ),
+                )
+            };
+            qt!(
+                "QTOK heap free={} minfree={} largest={}",
+                free,
+                min_free,
+                largest
+            );
+        }
+
         // `wsdrophello` is NETWORK-TIER ONLY and out of scope for this port,
         // so it is deliberately NOT implemented and falls through to
         // unknown_verb. Nothing in S1-S7 uses it; only `test_net_scenarios.py`

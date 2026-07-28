@@ -51,7 +51,14 @@ CONFIG_ESP_BROWNOUT_DET=y
 
 # --- Main task stack. Raised from the C++ core's 8192: Rust std formatting
 # frames are fatter and main builds the UART drivers on this stack.
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+#
+# Raised again 12288 -> 16384 for Slice 3. `mbedtls_x509write_crt_pem` parks a
+# 4 KB DER buffer on ITS CALLER'S stack (and `mbedtls_pk_write_key_pem` a
+# smaller one), and the TLS identity is generated from `main`. This is measured
+# headroom, not superstition: without it the keygen overruns the main task and
+# the failure appears as a boot-path stack canary, which looks like anything
+# but "the certificate writer needed 4 KB".
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # --- Flash layout: the ESP-IDF STOCK 2 MB / single-app table.
 #
@@ -102,3 +109,56 @@ CONFIG_APP_REPRODUCIBLE_BUILD=y
 # Slice 1: /ws is part of the app-facing contract (status stream), so the
 # WebSocket support in esp_http_server is a production feature, not test-only.
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# --- Slice 3: TLS. THIS ONE KEY IS THE WHOLE "httpd_ssl_* is uncallable" BUG.
+#
+# The recorded blocker said esp_https_server was "absent from the bindings" and
+# guessed the fix was a component whitelist. It was neither: the component was
+# being BUILT the whole time (the generated build had
+# `esp_idf_comp_esp_https_server_enabled`), and esp-idf-sys's stock
+# src/include/esp-idf/bindings.h already carries
+#
+#     #ifdef CONFIG_ESP_HTTPS_SERVER_ENABLE
+#     #include "esp_https_server.h"
+#     #endif
+#
+# — gated on the KCONFIG SYMBOL, not on the component. The generated sdkconfig
+# read `# CONFIG_ESP_HTTPS_SERVER_ENABLE is not set`, so bindgen never saw the
+# header and emitted zero `httpd_ssl_*` symbols. One Kconfig line fixes it.
+#
+# Its Kconfig dependency (`depends on ESP_TLS_USING_MBEDTLS && MBEDTLS_TLS_SERVER`)
+# is already satisfied by the defaults, so this key takes effect as written.
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+
+# --- Slice 3: mDNS. The component itself is pulled in as a remote (managed)
+# component from esp32tap/Cargo.toml — see the long note there. These are its
+# knobs.
+#
+# The console CLI defaults to y and drags the `console` component (and an
+# argtable/linenoise-shaped surface) into an image whose only job is to answer
+# DNS-SD queries. There is no UART shell on this device; refuse it.
+# CONFIG_MDNS_ENABLE_CONSOLE_CLI is not set
+# One netif (ETH today, WiFi later) — the default of 3 sizes per-interface
+# state we will never use.
+CONFIG_MDNS_MAX_INTERFACES=1
+#
+# PREDEFINED INTERFACES OFF — and this is a CORRECTNESS fix, not a diet.
+#
+# With the predefs on, the component learns about an interface ONLY from an
+# event: `mdns_preset_if_handle_system_event` enables the PCB when it sees
+# ETHERNET_EVENT_CONNECTED / IP_EVENT_ETH_GOT_IP. The firmware brings the link
+# up and waits for DHCP BEFORE it starts mDNS (a record must not advertise an
+# address the device does not have yet), so those events have already fired by
+# the time `mdns_init` registers the handler. The result is a responder that
+# starts, logs success, answers `mdns_service_add` with ESP_OK — and never
+# replies to a single query, because no PCB was ever enabled. That is exactly
+# the failure this cost a debugging cycle to find, and it is silent.
+#
+# With the predefs off, `MDNS_MAX_INTERFACES` slots are all CUSTOM, so
+# net/mdns.rs registers ETH_DEF explicitly and drives ENABLE_IP4/ANNOUNCE_IP4
+# itself. That works whatever order the link and the responder come up in, and
+# it says in the source which interface serves discovery — which matters when
+# this board moves from openeth to WiFi.
+# CONFIG_MDNS_PREDEF_NETIF_STA is not set
+# CONFIG_MDNS_PREDEF_NETIF_AP is not set
+# CONFIG_MDNS_PREDEF_NETIF_ETH is not set

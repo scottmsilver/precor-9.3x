@@ -24,6 +24,8 @@ debug = true
 safety_core = { path = "../safety_core" }
 # Host-testable request budget (see reqbudget/src/lib.rs).
 reqbudget = { path = "../reqbudget" }
+# The interval executor's decisions: portable, allocation-free, host-tested.
+program_core = { path = "../program_core" }
 
 # Espressif-provided. NOTE ON esp-idf-svc: it would be the natural home for
 # the HTTP/TLS server and mDNS wrappers, but its latest release (0.51) pins
@@ -38,6 +40,39 @@ esp-idf-sys = "0.37.2"
 
 [build-dependencies]
 embuild = "0.33"
+
+# --- mDNS: a MANAGED (remote) component, not part of base ESP-IDF ----------
+#
+# READ THIS BEFORE CHANGING IT. The previous attempt at this reached for
+# `[package.metadata.esp-idf-sys] esp_idf_components = [...]` and was burned:
+# that key is an EXCLUSIVE whitelist ("this list is used to TRIM the esp-idf
+# build"), so naming a handful of components dropped every other one and CMake
+# failed outright. It is the wrong lever entirely — it removes components, it
+# does not add them.
+#
+# The documented lever is `extra_components` with a `remote_component`
+# (esp-idf-sys 0.37 BUILD-OPTIONS.md, "Remote components (idf component
+# registry)"), which maps 1:1 onto an `idf_component.yml` dependency and is
+# resolved by the IDF component manager (on by default). It ADDS to the build
+# instead of trimming it, so nothing else is disturbed.
+#
+# NO `bindings_header` IS NEEDED, and that is not an oversight. esp-idf-sys's
+# own src/include/esp-idf/bindings.h already carries
+#
+#     #if defined(ESP_IDF_COMP_MDNS_ENABLED) || defined(ESP_IDF_COMP_ESPRESSIF__MDNS_ENABLED)
+#     #include "mdns.h"
+#     #endif
+#
+# and `-DESP_IDF_COMP_<NAME>_ENABLED` is emitted for every component that was
+# actually built (build/common.rs, `clang_args`). Pulling the component in is
+# therefore sufficient to make `mdns_*` appear in the generated bindings; the
+# slash in the name becomes `__`, hence ESPRESSIF__MDNS.
+#
+# The version is pinned to a compatible range rather than floating; the exact
+# resolution is recorded in the generated `components_esp32s3.lock`
+# (1.8.2 at the time of writing).
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = "~1.8.0" }
 
 [features]
 default = []

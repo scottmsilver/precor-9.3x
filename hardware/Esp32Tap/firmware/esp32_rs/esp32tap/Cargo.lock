@@ -527,6 +527,7 @@ dependencies = [
  "embuild",
  "esp-idf-hal",
  "esp-idf-sys",
+ "program_core",
  "reqbudget",
  "safety_core",
 ]
@@ -905,6 +906,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "program_core"
+version = "0.0.0"
+dependencies = [
+ "safety_core",
 ]
 
 [[package]]
