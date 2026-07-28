@@ -117,7 +117,10 @@ pub fn start() -> Result<sys::httpd_handle_t, sys::esp_err_t> {
     cfg.server_port = PORT; // DEVIATION: 80 -> 8000, the mDNS-advertised port
     cfg.ctrl_port = 32768;
     cfg.max_open_sockets = 7;
-    cfg.max_uri_handlers = 8;
+    // 2 (banner, ws) + 6 api routes fills the IDF default of 8 exactly, and
+    // registration fails with ESP_ERR_HTTPD_HANDLERS_FULL the moment one more
+    // is added. Raised with headroom for the endpoints still to come.
+    cfg.max_uri_handlers = 20;
     cfg.max_resp_headers = 8;
     cfg.backlog_conn = 5;
     cfg.lru_purge_enable = false;
