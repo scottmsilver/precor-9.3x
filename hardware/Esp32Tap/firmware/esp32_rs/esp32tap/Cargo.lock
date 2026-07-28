@@ -527,6 +527,7 @@ dependencies = [
  "embuild",
  "esp-idf-hal",
  "esp-idf-sys",
+ "reqbudget",
  "safety_core",
 ]
 
@@ -963,6 +964,10 @@ dependencies = [
  "normpath",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "reqbudget"
+version = "0.0.0"
 
 [[package]]
 name = "rustc-hash"

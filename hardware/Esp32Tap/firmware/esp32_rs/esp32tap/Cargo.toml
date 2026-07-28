@@ -22,6 +22,8 @@ debug = true
 [dependencies]
 # Our own safety core — zero dependencies of its own.
 safety_core = { path = "../safety_core" }
+# Host-testable request budget (see reqbudget/src/lib.rs).
+reqbudget = { path = "../reqbudget" }
 
 # Espressif-provided. NOTE ON esp-idf-svc: it would be the natural home for
 # the HTTP/TLS server and mDNS wrappers, but its latest release (0.51) pins
