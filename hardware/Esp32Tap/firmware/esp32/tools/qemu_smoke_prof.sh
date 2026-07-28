@@ -21,22 +21,14 @@
 #
 # Usage: tools/qemu_smoke.sh            (from firmware/esp32/, or anywhere)
 # Env:   IDF_IMAGE (default espressif/idf:release-v5.5 — keep pinned)
-#        SMOKE_UPTIME_S (default 15), SMOKE_WALL_TIMEOUT_S (default 20)
-#
-# SMOKE_WALL_TIMEOUT_S bounds only the CAPTURE WINDOW; the gate is
-# SMOKE_UPTIME_S of GUEST uptime, which is unchanged. With `-icount` the
-# guest free-runs at ~26x wall, so 15 s of guest uptime costs ~0.6 s of
-# wall — the 90 s window this used to open was ~150x over-provisioned and
-# every healthy run paid all of it (exit 124 is the expected ending). 20 s
-# keeps ~34x headroom over the measured need while cutting the gate from
-# 91 s to ~5 s. Nothing it asserts changed.
+#        SMOKE_UPTIME_S (default 15), SMOKE_WALL_TIMEOUT_S (default 90)
 
 set -u -o pipefail
 
 ESP32_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 IDF_IMAGE="${IDF_IMAGE:-espressif/idf:release-v5.5}"
 SMOKE_UPTIME_S="${SMOKE_UPTIME_S:-15}"
-SMOKE_WALL_TIMEOUT_S="${SMOKE_WALL_TIMEOUT_S:-20}"
+SMOKE_WALL_TIMEOUT_S="${SMOKE_WALL_TIMEOUT_S:-90}"
 # build/ is root-owned when produced by the docker build — log to /tmp.
 LOG="${SMOKE_LOG:-/tmp/esp32tap_qemu_smoke.log}"
 
@@ -57,21 +49,15 @@ docker run --rm -v "$REPO_ROOT":/project -w "/project/$REL" "$IDF_IMAGE" \
         set -u
         cd build || exit 3
         # Merge a padded flash image for QEMU (esptool from the IDF env).
-        # The emulated flash MUST be the size the app image header declares:
-        # IDF spi_flash init aborts + reboots forever ("Detected size(...)
-        # smaller than the size in the binary image header(...)") otherwise.
-        # Take it from the build'"'"'s own flash_args rather than assuming 2MB.
-        FS=$(sed -n "s/.*--flash_size \([0-9A-Za-z]*\).*/\1/p" flash_args | head -1)
-        [ -n "$FS" ] || { echo "no --flash_size in build/flash_args" >&2; exit 3; }
         python -m esptool --chip esp32s3 merge_bin -o qemu_flash.bin \
-            @flash_args --fill-flash-size "$FS" >/dev/null 2>&1 \
+            @flash_args --fill-flash-size 8MB >/dev/null 2>&1 \
         || python -m esptool --chip esp32s3 merge-bin -o qemu_flash.bin \
-            @flash_args --pad-to-size "$FS" >/dev/null \
+            @flash_args --pad-to-size 8MB >/dev/null \
         || exit 3
         cd ..
         # Headless boot; wall timeout only bounds the capture window —
         # exit 124 (timeout) is the EXPECTED end of a healthy run.
-        timeout '"$SMOKE_WALL_TIMEOUT_S"' qemu-system-xtensa -icount shift=auto,sleep=off -nographic \
+        timeout '"$SMOKE_WALL_TIMEOUT_S"' qemu-system-xtensa -nographic \
             -machine esp32s3 \
             -drive file=build/qemu_flash.bin,if=mtd,format=raw \
             2>&1

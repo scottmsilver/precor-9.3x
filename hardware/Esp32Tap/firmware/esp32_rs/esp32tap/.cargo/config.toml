@@ -1,0 +1,27 @@
+[build]
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = ["--cfg", "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32s3"
+# SHARP EDGE (same class as CONFIG_PARTITION_TABLE_CUSTOM_FILENAME): esp-idf-sys
+# does NOT pick up a `sdkconfig.defaults` sitting next to Cargo.toml here — the
+# generated CMake project lives under target/.../esp-idf-sys-<HASH>/out/ and the
+# default relative lookup misses the crate entirely. Verified empirically: with
+# the file (and a symlink to it) in the crate root, the generated sdkconfig still
+# had CONFIG_FREERTOS_HZ=100 and the DEFAULT partitions.csv.
+#
+# Point at it ABSOLUTELY. tools/build.sh always bind-mounts the repo at /project,
+# so this is fixed and reproducible. The FreeRTOS tick const-assert in
+# tasks/mod.rs is what caught this — exactly the regression it exists to catch.
+ESP_IDF_SDKCONFIG_DEFAULTS = "/project/hardware/Esp32Tap/firmware/esp32_rs/sdkconfig.defaults"
+# Reuse the container's PINNED ESP-IDF (v5.5.4) instead of letting
+# esp-idf-sys clone a second, different one.
+ESP_IDF_TOOLS_INSTALL_DIR = "fromenv"

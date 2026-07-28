@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""check_unsafe_budget.py — make the `unsafe` containment REAL.
+
+Why this exists
+---------------
+The firmware crate root carries ``#![deny(unsafe_code)]`` and grants
+``#[allow(unsafe_code)]`` to three modules. A reviewer disproved the claim that
+this makes the containment compiler-enforced, by counterexample: ``deny`` is a
+LINT LEVEL, and any module may lift it for itself with an inner
+``#[allow(unsafe_code)]``. A new module could therefore start using ``unsafe``
+and nothing would fail. (``forbid`` cannot be lifted — an inner ``allow`` under
+a ``forbid`` is a hard compile error — which is why ``safety_core`` and the
+unsafe-free firmware modules now use ``forbid``. The crate root cannot: it has
+to grant ``allow`` to the three modules that legitimately need FFI.)
+
+This script closes the remaining hole. It is a REQUIRED gate in
+``tools/build.sh``; a failure fails the build.
+
+Enforced
+--------
+1. ``safety_core`` carries ``#![forbid(unsafe_code)]`` and contains no
+   ``unsafe`` token at all.
+2. The firmware modules listed in ``FORBID_MODULES`` each carry their own
+   module-level ``#![forbid(unsafe_code)]``.
+3. The set of firmware files containing an ``unsafe`` BLOCK/``impl``/``fn`` is
+   exactly ``UNSAFE_ALLOWLIST``.
+4. Every ``allow(unsafe_code)`` attribute in the firmware sits at one of the
+   sites in ``ALLOW_SITES``.
+5. Every ``unsafe`` block is preceded (within 12 lines, in its own function)
+   by a ``// SAFETY:`` comment.
+6. The PRODUCTION unsafe line count equals ``PRODUCTION_UNSAFE_LINES`` and the
+   TEST-IMAGE-ONLY count equals ``QEMU_UNSAFE_LINES``. Changing either is a
+   deliberate act that has to update this file.
+
+Exit status 0 = the budget holds.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ESP32_RS = HERE.parent
+FW_SRC = ESP32_RS / "esp32tap" / "src"
+CORE_SRC = ESP32_RS / "safety_core" / "src"
+
+# Firmware modules whose unsafe-freedom is COMPILER-enforced.
+FORBID_MODULES = ("tasks/mod.rs", "context.rs", "pins.rs")
+
+# Production (flashed) unsafe-bearing files.
+PRODUCTION_UNSAFE = {
+    "hal/clock.rs",
+    "hal/delay.rs",
+    "hal/gpio.rs",
+    "hal/uart.rs",
+    "hal/wdt.rs",
+    "log.rs",
+}
+# Test-image-only (feature = "qemu-test"), never flashed to a treadmill.
+QEMU_UNSAFE = {
+    "qemu_test/mod.rs",
+    "qemu_test/motor_tap.rs",
+}
+UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
+
+# Exactly where `allow(unsafe_code)` may appear: file -> the modules it grants.
+ALLOW_SITES = {
+    "main.rs": {"hal", "log", "qemu_test"},
+}
+
+# The documented budget.
+#
+# COUNTING RULE (this script IS the definition, so the number is reproducible):
+# for each `unsafe { ... }` block, every physical source line from the line
+# carrying the `unsafe` keyword through the line carrying its closing brace,
+# INCLUSIVE, after comments and string literals have been blanked out; each
+# `unsafe fn` / `unsafe impl` / `unsafe trait` declaration counts as 1.
+#
+# The earlier hand-written figure of "66 production lines" was produced by an
+# unstated rule and is superseded: 69 is what the rule above measures on the
+# same code, and it is now a build gate rather than a claim.
+PRODUCTION_UNSAFE_LINES = 69
+QEMU_UNSAFE_LINES = 22
+
+_UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
+_ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")
+
+
+def rel(p: Path, root: Path) -> str:
+    return str(p.relative_to(root)).replace("\\", "/")
+
+
+def rs_files(root: Path) -> list[Path]:
+    return sorted(p for p in root.rglob("*.rs") if "target" not in p.parts)
+
+
+def strip_comments_and_strings(text: str) -> str:
+    """Blank out // comments, /* */ comments and string/char literals.
+
+    Keeps line structure so line numbers stay meaningful.
+    """
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+            out.append("  ")
+            i += 2
+        elif c == '"':
+            out.append(" ")
+            i += 1
+            while i < n and text[i] != '"':
+                if text[i] == "\\":
+                    out.append(" ")
+                    i += 1
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+            out.append(" ")
+            i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def unsafe_line_count(text: str) -> int:
+    """Physical lines of code governed by an `unsafe` block or item."""
+    code = strip_comments_and_strings(text)
+    lines = code.split("\n")
+    total = 0
+    for idx, line in enumerate(lines):
+        if not _UNSAFE_TOKEN.search(line):
+            continue
+        # `unsafe impl` / `unsafe fn` / `unsafe trait` declarations count as 1.
+        if re.search(r"unsafe\s+(impl|fn|trait)\b", line):
+            total += 1
+            continue
+        # An `unsafe { ... }` block: count until braces balance.
+        depth = 0
+        started = False
+        j = idx
+        body = 0
+        while j < len(lines):
+            for ch in lines[j]:
+                if ch == "{":
+                    depth += 1
+                    started = True
+                elif ch == "}":
+                    depth -= 1
+            if started and j > idx:
+                body += 1
+            if started and depth == 0:
+                break
+            j += 1
+        # Count the whole block INCLUSIVE of the `unsafe {` line and the
+        # closing brace — "how many source lines are inside an unsafe region"
+        # is the number the README publishes.
+        total += body + 1
+    return total
+
+
+def check() -> list[str]:
+    failures: list[str] = []
+
+    # --- 1. safety_core is forbid + unsafe-free ---------------------------
+    lib = CORE_SRC / "lib.rs"
+    if "#![forbid(unsafe_code)]" not in lib.read_text(encoding="utf-8"):
+        failures.append("safety_core/src/lib.rs lost `#![forbid(unsafe_code)]`")
+    for p in rs_files(CORE_SRC):
+        code = strip_comments_and_strings(p.read_text(encoding="utf-8"))
+        if _UNSAFE_TOKEN.search(code):
+            failures.append(f"safety_core/{rel(p, CORE_SRC)} contains `unsafe`")
+
+    # --- 2. module-level forbid in the unsafe-free firmware modules -------
+    for m in FORBID_MODULES:
+        p = FW_SRC / m
+        if not p.exists():
+            failures.append(f"FORBID_MODULES names a missing file: {m}")
+            continue
+        if "#![forbid(unsafe_code)]" not in p.read_text(encoding="utf-8"):
+            failures.append(
+                f"esp32tap/src/{m} lost its module-level `#![forbid(unsafe_code)]` "
+                "— the containment for that subtree is no longer compiler-enforced"
+            )
+
+    # --- 3/4/5/6. firmware allowlists, SAFETY comments, budget ------------
+    found_unsafe: set[str] = set()
+    prod_lines = 0
+    qemu_lines = 0
+    for p in rs_files(FW_SRC):
+        name = rel(p, FW_SRC)
+        raw = p.read_text(encoding="utf-8")
+        code = strip_comments_and_strings(raw)
+
+        # allow(unsafe_code) sites
+        for m in _ALLOW_UNSAFE.finditer(code):
+            if "unsafe_code" not in m.group(1):
+                continue
+            if name not in ALLOW_SITES:
+                failures.append(
+                    f"esp32tap/src/{name} carries `allow(unsafe_code)`, which is "
+                    "only permitted in " + ", ".join(sorted(ALLOW_SITES))
+                )
+        if name in ALLOW_SITES:
+            granted = set(re.findall(r"#\[allow\(unsafe_code\)\][^\n]*\n\s*mod\s+(\w+)", raw))
+            if granted != ALLOW_SITES[name]:
+                failures.append(
+                    f"esp32tap/src/{name}: `allow(unsafe_code)` is granted to "
+                    f"{sorted(granted)}, expected {sorted(ALLOW_SITES[name])}"
+                )
+
+        if not _UNSAFE_TOKEN.search(code):
+            continue
+        found_unsafe.add(name)
+        if name not in UNSAFE_ALLOWLIST:
+            failures.append(
+                f"esp32tap/src/{name} contains `unsafe` but is not in the "
+                "allowlist — every unsafe site must be a deliberate, budgeted one"
+            )
+            continue
+
+        # SAFETY comment on every unsafe block
+        lines = raw.split("\n")
+        code_lines = code.split("\n")
+        for i, cl in enumerate(code_lines):
+            if not _UNSAFE_TOKEN.search(cl):
+                continue
+            if re.search(r"unsafe\s+(impl|fn|trait)\b", cl):
+                continue
+            window = "\n".join(lines[max(0, i - 12) : i + 1])
+            if "// SAFETY:" not in window and "//! SAFETY" not in window:
+                failures.append(
+                    f"esp32tap/src/{name}:{i + 1}: unsafe block with no "
+                    "`// SAFETY:` comment within the preceding 12 lines"
+                )
+
+        n = unsafe_line_count(raw)
+        if name in PRODUCTION_UNSAFE:
+            prod_lines += n
+        else:
+            qemu_lines += n
+
+    missing = UNSAFE_ALLOWLIST - found_unsafe
+    if missing:
+        failures.append(
+            f"allowlisted files no longer contain `unsafe`: {sorted(missing)} — "
+            "shrink the allowlist so it keeps meaning something"
+        )
+
+    if prod_lines != PRODUCTION_UNSAFE_LINES:
+        failures.append(
+            f"production unsafe budget is {prod_lines} lines, documented as "
+            f"{PRODUCTION_UNSAFE_LINES}. Update PRODUCTION_UNSAFE_LINES here and "
+            "in README.md deliberately, with review."
+        )
+    if qemu_lines != QEMU_UNSAFE_LINES:
+        failures.append(f"qemu-test unsafe budget is {qemu_lines} lines, documented as " f"{QEMU_UNSAFE_LINES}.")
+    return failures
+
+
+def main() -> int:
+    failures = check()
+    if failures:
+        print("check_unsafe_budget: FAIL")
+        for f in failures:
+            print(f"  - {f}")
+        return 1
+    print(
+        "check_unsafe_budget: OK — safety_core forbid+unsafe-free; "
+        f"{len(FORBID_MODULES)} firmware modules compiler-forbid; unsafe confined to "
+        f"{len(PRODUCTION_UNSAFE)} production files ({PRODUCTION_UNSAFE_LINES} lines) "
+        f"+ {len(QEMU_UNSAFE)} test-image files ({QEMU_UNSAFE_LINES} lines); "
+        "every unsafe block carries a SAFETY comment."
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

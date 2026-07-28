@@ -1,0 +1,4 @@
+# The Espressif Xtensa rustc fork. Xtensa is NOT in upstream rustc, so this
+# is mandatory for the ESP32-S3 (LX7). Installed by espup in the Dockerfile.
+[toolchain]
+channel = "esp"

@@ -85,25 +85,17 @@ class QemuSession:
     def _start(self, boot_timeout: float) -> None:
         p0, p1 = _free_port(), _free_port()
         bdir = shlex.quote(self.build_dir)
-        # The emulated flash MUST be the size the app image header declares.
-        # IDF's spi_flash init aborts ("Detected size(...) smaller than the
-        # size in the binary image header(...). Probe failed.") and reboots
-        # forever otherwise. Hard-coding 2MB silently assumed
-        # CONFIG_ESPTOOLPY_FLASHSIZE=2MB; take it from the build's own
-        # flash_args instead so the emulated part always matches the image.
         script = (
             "set -u; cd %s || exit 3; "
-            "FS=$(sed -n 's/.*--flash_size \\([0-9A-Za-z]*\\).*/\\1/p' flash_args | head -1); "
-            "[ -n \"$FS\" ] || { echo 'no --flash_size in flash_args' >&2; exit 3; }; "
             "python -m esptool --chip esp32s3 merge_bin -o qemu_flash.bin "
-            '@flash_args --fill-flash-size "$FS" >/dev/null 2>&1 '
+            "@flash_args --fill-flash-size 8MB >/dev/null 2>&1 "
             "|| python -m esptool --chip esp32s3 merge-bin -o qemu_flash.bin "
-            '@flash_args --pad-to-size "$FS" >/dev/null || exit 3; cd ..; '
+            "@flash_args --pad-to-size 8MB >/dev/null || exit 3; cd ..; "
             "exec qemu-system-xtensa -nographic -machine esp32s3 "
             "-drive file=%s/qemu_flash.bin,if=mtd,format=raw "
             "-serial tcp:127.0.0.1:%d,server=on,wait=on "
-            "-serial tcp:127.0.0.1:%d,server=on,wait=on"
-        ) % (bdir, bdir, p0, p1)
+            "-serial tcp:127.0.0.1:%d,server=on,wait=on %s"
+        ) % (bdir, bdir, p0, p1, os.environ.get("QPROF_QEMU_EXTRA", ""))
         self.proc = subprocess.Popen(
             [
                 "docker",

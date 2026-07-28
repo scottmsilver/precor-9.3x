@@ -1,0 +1,42 @@
+[package]
+name = "esp32tap"
+version = "0.0.0"
+edition = "2021"
+resolver = "2"
+rust-version = "1.90"
+
+[[bin]]
+name = "esp32tap"
+harness = false
+
+[profile.release]
+opt-level = "s"
+debug = true
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = "z"
+debug = true
+
+[dependencies]
+# Our own safety core — zero dependencies of its own.
+safety_core = { path = "../safety_core" }
+
+# Espressif-provided ONLY. `esp-idf-svc` is DELIBERATELY EXCLUDED: it drags
+# the target graph from 41 to 61 crates (serde, chrono, embedded-svc and
+# their tails) and is needed only for NVS, which only the network tier uses.
+esp-idf-hal = "0.46.2"
+esp-idf-sys = "0.37.2"
+
+[build-dependencies]
+embuild = "0.33"
+
+[features]
+default = []
+# Compile-time gate for the QEMU behavioral-harness shim. A cfg'd-out module
+# is never compiled, so no `qemu_test` panic-location strings can leak into
+# the production binary (S6 asserts their absence).
+# The QEMU-test image also turns on safety_core's exit-ordering audit fact so
+# the harness can decide PLAN step1-before-step3 in-guest. Production does not.
+qemu-test = ["safety_core/exit-ordering-audit"]

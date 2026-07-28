@@ -1,0 +1,21 @@
+[package]
+name = "difftest"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+
+# ZERO third-party dependencies. The C++ build glue is hand-rolled in build.rs
+# (~40 lines) rather than pulling the `cc` crate: we need host/Makefile's exact
+# flags verbatim anyway, so `cc`'s flag inference would be working against us.
+[dependencies]
+# `test-mint` exposes ONLY SafetyTimeoutFired::mint_for_differential_test,
+# so the 3-hour-timeout back-mirror (the one method with no Python twin)
+# is covered by the differential like everything else. The firmware crate
+# does not enable it.
+safety_core = { path = "../safety_core", features = ["test-mint"] }
+
+[build-dependencies]
+
+[lib]
+name = "difftest"
+path = "src/lib.rs"

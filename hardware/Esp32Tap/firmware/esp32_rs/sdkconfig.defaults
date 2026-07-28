@@ -1,0 +1,100 @@
+# Esp32Tap Rust safety core — the PLAN.md NORMATIVE phase-1 key set, carried
+# over from firmware/esp32/sdkconfig.defaults. Network-tier keys (wifi / lwip
+# / httpd / mbedtls) are omitted: this image is the safety core only.
+#
+# Every key here must survive into the esp-idf-sys-generated sdkconfig; the
+# flashed artifact is gated by `grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig`
+# (PLAN treadmill-contact checklist item 2).
+
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_IDF_TARGET_ESP32S3=y
+
+# --- FreeRTOS tick: 1000 Hz, NOT the IDF default 100 Hz. Guarded in
+# src/tasks/mod.rs by a const assertion on esp_idf_sys::configTICK_RATE_HZ,
+# so a regression is a COMPILE ERROR rather than a boot loop. (Parity with
+# the C++ static_assert — Rust gives nothing extra here.)
+CONFIG_FREERTOS_HZ=1000
+
+# --- Task WDT: 2 s, panic-on-stall (MANDATORY) ---
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=2
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# --- Panic action: immediate silent reboot (-> GPIO21 Hi-Z -> R23
+# pull-down -> relay released). There is deliberately no software handler.
+CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y
+# Hidden/default key; if the generated sdkconfig emits it, it must be 0
+# (PLAN — nothing may delay the reset that releases the relay).
+CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0
+CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+CONFIG_APPTRACE_DEST_NONE=y
+CONFIG_APPTRACE_DEST_UART_NONE=y
+
+# --- OCD-aware panic handling is a debug/halt path and is FORBIDDEN in an
+# Emulate-capable build (PLAN; build_safety_manifest.py fail-closes on it).
+# It is not merely cosmetic: with OCDAWARE on, the panic handler consults
+# esp_cpu_dbgr_is_attached() and BREAKS/HALTS instead of resetting when a
+# debugger is present — GPIO21 would stay driven and the relay latched.
+#
+# NOTE the IDF default is =y, so this MUST be stated explicitly. The C++
+# core carries the identical line; omitting it here silently re-enabled the
+# forbidden path in the Rust image and made it unshippable (the generated
+# sdkconfig had CONFIG_ESP_DEBUG_OCDAWARE=y). tools/build.sh now runs
+# build_safety_manifest.py over the generated sdkconfig so the whole
+# FORBIDDEN_ENABLED_SDKCONFIG set is gated, not two hand-picked greps.
+# CONFIG_ESP_DEBUG_OCDAWARE is not set
+
+# --- Brownout detection on (selector left at the IDF default pending the
+# measured min +3V3 of the production artifact).
+CONFIG_ESP_BROWNOUT_DET=y
+
+# --- Main task stack. Raised from the C++ core's 8192: Rust std formatting
+# frames are fatter and main builds the UART drivers on this stack.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+
+# --- Flash layout: the ESP-IDF STOCK 2 MB / single-app table.
+#
+# This is deliberate, and it is what the committed QEMU harness assumes.
+# `qemu_session.py` merges the flash with `--fill-flash-size 2MB` and
+# `qemu_smoke.sh` does the same; an image whose partition table places a
+# partition above 2 MB cannot be booted by that harness AT ALL, and the only
+# way to run it would be to edit the harness — which is exactly what this
+# port must not need. The safety core is 447 KB / 461 KB, i.e. 43-44% of the
+# stock 1 MB factory partition, and it owns no data partition (no LittleFS,
+# no TLS identity, no history stores), so nothing here wants the larger
+# table. If the port ever grows a data partition, the 8 MB N8 layout comes
+# back in a QEMU-only sdkconfig fragment, never in a harness edit.
+#
+# (Retained for that day — the sharp edge that cost an afternoon: a RELATIVE
+# CONFIG_PARTITION_TABLE_CUSTOM_FILENAME does NOT work under esp-idf-sys.
+# idf.py resolves it against the project dir; esp-idf-sys generates its own
+# CMake project under target/.../esp-idf-sys-<HASH>/out/ and resolves against
+# THAT, and <HASH> is not knowable in advance. Use the absolute /project path
+# that tools/build.sh always bind-mounts.)
+
+# --- Rust-specific: IDF defaults to CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y.
+# That peripheral is NOT emulated by esp-QEMU, the VFS write returns 0 bytes,
+# and Rust std turns that into a panic on the FIRST print — a 31k-line boot
+# loop. The C++ core never hit it because ESP_LOGx goes straight out UART0
+# via ets_printf, bypassing the VFS. We log via ESP_LOG for the same reason,
+# and set this as belt-and-braces.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# --- Reproducible build (added 2026-07-28) ---
+#
+# WHY THIS IS A SAFETY KEY, not a nicety: PLAN's "exact production artifact
+# identity" section makes `bundle_sha256` — a hash of the application,
+# bootloader, partition table and sdkconfig — the name every bench log, scope
+# capture and contact-timing record is filed under. If two builds of identical
+# source produce different bytes, that identity is meaningless: evidence can
+# never be re-derived, and "rebuild and confirm the hash" is not a check
+# anyone can run.
+#
+# Measured before this key was set: wiping the cargo target dirs and building
+# the same commit twice produced DIFFERENT application and bootloader images
+# (the partition table was already stable). The cause is IDF's default
+# `CONFIG_APP_COMPILE_TIME_DATE=y`, which stamps __DATE__/__TIME__ into the
+# esp_app_desc, plus absolute build paths in the binaries.
+# CONFIG_APP_REPRODUCIBLE_BUILD=y turns both off.
+CONFIG_APP_REPRODUCIBLE_BUILD=y

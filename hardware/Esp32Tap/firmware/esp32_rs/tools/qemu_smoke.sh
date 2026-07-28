@@ -1,0 +1,1 @@
+../../esp32/tools/qemu_smoke.sh
