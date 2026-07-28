@@ -23,9 +23,14 @@ debug = true
 # Our own safety core — zero dependencies of its own.
 safety_core = { path = "../safety_core" }
 
-# Espressif-provided ONLY. `esp-idf-svc` is DELIBERATELY EXCLUDED: it drags
-# the target graph from 41 to 61 crates (serde, chrono, embedded-svc and
-# their tails) and is needed only for NVS, which only the network tier uses.
+# Espressif-provided. NOTE ON esp-idf-svc: it would be the natural home for
+# the HTTP/TLS server and mDNS wrappers, but its latest release (0.51) pins
+# esp-idf-hal ^0.45 -> esp-idf-sys ^0.36, a full generation behind the 0.46/
+# 0.37 pair this port is built on, and only one crate may link `esp_idf_hal`.
+# Downgrading the whole stack broke the toolchain probe. We therefore call the
+# same ESP-IDF services directly through esp-idf-sys (see net/mod.rs) — not a
+# reimplementation of the service, just no intermediary crate forcing a
+# downgrade. Revisit when esp-idf-svc catches up to hal 0.46.
 esp-idf-hal = "0.46.2"
 esp-idf-sys = "0.37.2"
 
@@ -40,3 +45,7 @@ default = []
 # The QEMU-test image also turns on safety_core's exit-ordering audit fact so
 # the harness can decide PLAN step1-before-step3 in-guest. Production does not.
 qemu-test = ["safety_core/exit-ordering-audit"]
+# Slice 1 network foundation (openeth/WiFi netif + server tier).
+# Gated while it is developed so the safety image and its gates are
+# unaffected until the stack is proven.
+net = []

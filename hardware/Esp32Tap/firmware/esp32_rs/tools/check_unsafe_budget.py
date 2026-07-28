@@ -62,12 +62,18 @@ PRODUCTION_UNSAFE = {
 QEMU_UNSAFE = {
     "qemu_test/mod.rs",
     "qemu_test/motor_tap.rs",
+    # Slice 1 network foundation. Behind `feature = "net"`, which the
+    # production image does NOT enable, so none of this is flashed to a
+    # treadmill yet. It moves to PRODUCTION_UNSAFE when the network tier
+    # ships — deliberately, with the budget re-counted at that point.
+    "net/mod.rs",
+    "net/http.rs",
 }
 UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
 
 # Exactly where `allow(unsafe_code)` may appear: file -> the modules it grants.
 ALLOW_SITES = {
-    "main.rs": {"hal", "log", "qemu_test"},
+    "main.rs": {"hal", "log", "qemu_test", "net"},
 }
 
 # The documented budget.
@@ -82,7 +88,14 @@ ALLOW_SITES = {
 # unstated rule and is superseded: 69 is what the rule above measures on the
 # same code, and it is now a build gate rather than a claim.
 PRODUCTION_UNSAFE_LINES = 69
-QEMU_UNSAFE_LINES = 22
+# 22 shim + 25 net (eth) + 49 net (http: banner + ws handler). The ws
+# handler is one `unsafe extern "C"` fn, so the counting rule attributes its
+# whole body; the FFI surface inside it is 4 calls. The net delta is Slice 1's esp_netif/esp_eth bring-up:
+# each FFI call is its own one-expression block (struct setup stays in
+# safe code), so this counts the C boundary and nothing else. When the
+# network tier ships, net/mod.rs moves to PRODUCTION_UNSAFE and BOTH
+# numbers get re-counted deliberately.
+QEMU_UNSAFE_LINES = 96
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

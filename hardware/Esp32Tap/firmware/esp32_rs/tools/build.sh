@@ -50,6 +50,7 @@ docker run --rm \
     -v "$CARGO_CACHE":/cargo \
     -e CARGO_HOME=/cargo \
     -e PROFILE="$PROFILE" \
+    -e NET_FEATURE="${NET_FEATURE:-}" \
     -e ONLY="$ONLY" \
     -w "/project/$REL" \
     "$IMAGE" bash -lc '
@@ -162,6 +163,6 @@ if [ "$ONLY" != "qemu" ]; then
     build_one ../build target/prod
 fi
 if [ "$ONLY" != "prod" ]; then
-    build_one ../build_qemu_test target/qemu --features qemu-test
+    build_one ../build_qemu_test target/qemu --features "qemu-test${NET_FEATURE:+,net}"
 fi
 '

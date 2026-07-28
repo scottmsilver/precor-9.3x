@@ -21,6 +21,9 @@
 mod context;
 #[allow(unsafe_code)] // THE ONLY unsafe in the firmware — see hal/mod.rs.
 mod hal;
+#[cfg(feature = "net")]
+#[allow(unsafe_code)] // esp_netif/esp_eth FFI only — see net/mod.rs.
+mod net;
 #[allow(unsafe_code)] // esp_log_write FFI only.
 mod log;
 mod pins;
@@ -156,6 +159,30 @@ fn main() {
     }
 
     logi!("esp32tap phase-1 safety core started (Proxy)");
+
+    // Slice 1: network foundation. AFTER the safety banner and after the
+    // supervised tasks exist, so a link failure can never delay the belt
+    // reaching its safe state — the treadmill must be controllable from the
+    // physical console whether or not any network ever comes up.
+    #[cfg(feature = "net")]
+    {
+        match net::bring_up() {
+            Ok(()) => match net::wait_for_ip(15_000) {
+                Ok(addr) => {
+                    let o = addr.to_le_bytes();
+                    logi!("net: link up, ip {}.{}.{}.{}", o[0], o[1], o[2], o[3]);
+                    match net::http::start() {
+                        // EXACT STRING: the net harness waits on this before
+                        // issuing its first request.
+                        Ok(_) => logi!("http server up on :{}", net::http::port()),
+                        Err(e) => logi!("net: http start failed (err {})", e),
+                    }
+                }
+                Err(e) => logi!("net: no DHCP lease (err {}) — continuing headless", e),
+            },
+            Err(e) => logi!("net: bring-up failed (err {}) — continuing headless", e),
+        }
+    }
 
     // app_main returns into the IDF main task, which then idles. The
     // supervised tasks own the machine from here.

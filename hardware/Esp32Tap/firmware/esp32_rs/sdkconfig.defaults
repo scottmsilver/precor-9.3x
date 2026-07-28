@@ -98,3 +98,7 @@ CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 # esp_app_desc, plus absolute build paths in the binaries.
 # CONFIG_APP_REPRODUCIBLE_BUILD=y turns both off.
 CONFIG_APP_REPRODUCIBLE_BUILD=y
+
+# Slice 1: /ws is part of the app-facing contract (status stream), so the
+# WebSocket support in esp_http_server is a production feature, not test-only.
+CONFIG_HTTPD_WS_SUPPORT=y
