@@ -452,7 +452,23 @@ pub fn write_program<W: Write>(w: &mut W, p: &Program) -> core::fmt::Result {
 ///
 /// `encouragement` is deliberately absent — see the crate header, divergence 2.
 pub fn write_state<W: Write>(w: &mut W, s: &ProgramState) -> core::fmt::Result {
-    w.write_str(r#"{"type":"program","program":"#)?;
+    write_state_with_lead(w, s, "")
+}
+
+/// As [`write_state`], with `lead` inserted immediately after the opening brace.
+///
+/// It exists for exactly one reason: `server.py` answers quick-start and resume
+/// with `{"ok": True, **sess.prog.to_dict()}` while every other verb answers
+/// with the bare dict, and the Android app types the quick-start call as
+/// `GenericOkResponse`, whose `ok` has NO kotlinx default — so a reply without
+/// it throws MissingFieldException and the app toasts "Failed to start workout"
+/// at a user who is standing on a belt that just started. The lead is a
+/// caller-supplied prefix rather than a bool so this module keeps no opinion
+/// about which verbs the Pi decorates.
+pub fn write_state_with_lead<W: Write>(w: &mut W, s: &ProgramState, lead: &str) -> core::fmt::Result {
+    w.write_char('{')?;
+    w.write_str(lead)?;
+    w.write_str(r#""type":"program","program":"#)?;
     match s.program() {
         Some(p) => write_program(w, p)?,
         None => w.write_str("null")?,

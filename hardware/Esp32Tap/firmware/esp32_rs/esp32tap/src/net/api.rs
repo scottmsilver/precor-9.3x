@@ -29,7 +29,8 @@
 use crate::context::lock;
 use crate::control::{self, Surface};
 use esp_idf_sys as sys;
-use safety_core::units::{InclineHalfPct, SpeedTenths};
+use safety_core::safety::constants::CONSOLE_FRESH_US;
+use safety_core::units::{InclineHalfPct, Micros, SpeedTenths};
 
 /// Largest body we will read on a command endpoint. Well under a budget slot;
 /// `{"value":12.5}` is 15 bytes.
@@ -169,41 +170,114 @@ pub(crate) fn parse_value_hundredths(body: &[u8]) -> Option<i32> {
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
 unsafe extern "C" fn status_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
-    let (speed_tenths, incline_half, mode, relay, fault) = {
+    let mut buf = [0u8; STATUS_BUF];
+    let n = render_status(&mut buf, "");
+    respond(req, c"200 OK", &buf[..n])
+}
+
+/// Every status body in the firmware comes from here, so the shape cannot
+/// diverge between GET /api/status and the reply to a motion command.
+///
+/// `lead` is inserted immediately after the opening brace (`"ok":true,` for the
+/// POST replies, empty for GET).
+fn render_status(buf: &mut [u8; STATUS_BUF], lead: &str) -> usize {
+    let (speed_tenths, incline_half, mode, relay, fault, connected) = {
         let g = lock(&crate::CTX.guarded);
+        let now = crate::CTX.clock.now();
+        // "Is the treadmill there?" has exactly one honest answer on this
+        // device: whether a COMPLETE console frame arrived recently, which is
+        // the same freshness the safety controller itself gates emulate entry
+        // on. It is not a link-layer notion and it is not faked from the fact
+        // that the firmware is running.
+        let connected = match g.controller.last_complete_console_frame_at() {
+            Some(ts) => {
+                let age = now - ts;
+                age >= Micros::ZERO && age < CONSOLE_FRESH_US
+            }
+            None => false,
+        };
         (
             g.controller.speed_tenths().get(),
             g.controller.incline_half_percent().get(),
             g.controller.mode(),
             g.controller.relay_cmd().get(),
             g.controller.fault_latched(),
+            connected,
         )
     };
-    let mut buf = [0u8; 192];
-    let n = format_status(&mut buf, speed_tenths, incline_half, mode, relay, fault);
-    respond(req, c"200 OK", &buf[..n])
+    format_status(
+        buf,
+        lead,
+        speed_tenths,
+        incline_half,
+        mode,
+        relay,
+        fault,
+        connected,
+    )
 }
 
 /// Render the status JSON without allocating or using floats.
+///
+/// THE FIELD SET IS THE PI'S, not this device's convenience. The Android app
+/// declares `proxy`, `emulate`, `emu_speed`, `emu_speed_mph`, `emu_incline` and
+/// `treadmill_connected` with NO kotlinx default, which makes every one of them
+/// REQUIRED — `coerceInputValues` rewrites an explicit null into a default that
+/// exists, it cannot invent one — so a body missing any of them throws
+/// MissingFieldException in the client rather than degrading. `speed`,
+/// `incline`, `mode`, `relay` and `fault` are the device's own additions and
+/// are ignored by clients that do not know them (`ignoreUnknownKeys`).
+///
+/// UNITS ARE THE PI'S TOO, and they are not uniform: `emu_speed` is TENTHS of
+/// mph as an integer (the app divides by 10 in three places), while
+/// `emu_speed_mph`, `speed`, `incline` and `emu_incline` are decimal mph/percent.
+///
+/// `speed` here is the COMMANDED speed, not a decoded motor reading: the Pi
+/// fills it from the motor tap's `hmph` and this firmware's safety core does
+/// not consume motor KV. Stated rather than silently different.
+#[allow(clippy::too_many_arguments)]
 fn format_status(
-    buf: &mut [u8; 192],
+    buf: &mut [u8; STATUS_BUF],
+    lead: &str,
     speed_tenths: i32,
     incline_half: i32,
     mode: safety_core::safety::controller::SafeMode,
     relay: bool,
     fault: bool,
+    connected: bool,
 ) -> usize {
     use core::fmt::Write;
+    use safety_core::safety::controller::SafeMode;
     let mut w = crate::net::api::BufWriter { buf, len: 0 };
+    let emulating = mode == SafeMode::Emulating;
     // speed is tenths of mph, incline is half-percent — rendered to one decimal
     // exactly as every UI in this project displays them.
-    let _ = write!(
-        w,
-        r#"{{"speed":{}.{},"incline":{}.{},"mode":"{}","relay":{},"fault":{}}}"#,
-        speed_tenths / 10,
-        speed_tenths % 10,
+    let (sw, sf) = (speed_tenths / 10, speed_tenths % 10);
+    let (iw, if_) = (
         incline_half / 2,
         if incline_half % 2 == 0 { 0 } else { 5 },
+    );
+    let _ = write!(
+        w,
+        concat!(
+            r#"{{{}"type":"status","proxy":{},"emulate":{},"emu_speed":{},"#,
+            r#""emu_speed_mph":{}.{},"emu_incline":{}.{},"speed":{}.{},"#,
+            r#""incline":{}.{},"treadmill_connected":{},"mode":"{}","#,
+            r#""relay":{},"fault":{}}}"#
+        ),
+        lead,
+        !emulating,
+        emulating,
+        speed_tenths,
+        sw,
+        sf,
+        iw,
+        if_,
+        sw,
+        sf,
+        iw,
+        if_,
+        connected,
         mode_name(mode),
         relay,
         fault
@@ -221,8 +295,14 @@ const fn mode_name(m: safety_core::safety::controller::SafeMode) -> &'static str
     }
 }
 
+/// Status bodies are rendered into a fixed stack buffer; `BufWriter` REFUSES to
+/// overflow it, so a body that outgrows this is truncated into a visible
+/// failure rather than smashing the httpd task's stack. Measured longest
+/// rendering (`"ok":true,` lead, negative-free maxima) is ~215 bytes.
+const STATUS_BUF: usize = 320;
+
 struct BufWriter<'a> {
-    buf: &'a mut [u8; 192],
+    buf: &'a mut [u8; STATUS_BUF],
     len: usize,
 }
 
@@ -282,7 +362,19 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
     };
 
     match outcome {
-        Ok(()) => respond(req, c"200 OK", br#"{"ok":true}"#),
+        // ANSWER WITH THE STATE, not with `{"ok":true}`. The app types
+        // `setSpeed`/`setIncline` as returning a full `StatusMessage` (the Pi
+        // returns `build_status()` from both), and six of its fields have no
+        // kotlinx default, so a bare ok-body throws MissingFieldException in
+        // the client — swallowed by its `runCatching`, leaving the UI with only
+        // its optimistic local echo and no path back to the truth. `ok` is kept
+        // as well: it costs 12 bytes, it is what the QEMU scenarios assert on,
+        // and an unknown key is ignored by every client here.
+        Ok(()) => {
+            let mut buf = [0u8; STATUS_BUF];
+            let n = render_status(&mut buf, r#""ok":true,"#);
+            respond(req, c"200 OK", &buf[..n])
+        }
         // A program owns the belt. Refusing is the deliberate answer: the
         // alternative is taking the lease from the executor, which
         // emergency-stops it — relay open, belt dead, mid-stride. The Pi

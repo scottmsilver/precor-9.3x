@@ -122,6 +122,7 @@ def test_quick_start_over_a_running_program_actually_moves_the_belt(qemu):
     st, body = http(s, "POST", "/api/program/quick-start", {"speed": 2.0, "incline": 0.0, "duration_minutes": 60})
     assert st == 200, body
     assert body["running"] is True, body
+    assert body.get("ok") is True, body
     assert body["program"]["name"] == "Quick Start", body
 
     # THE CLAIM UNDER TEST: a program the device reports as RUNNING must
@@ -519,6 +520,10 @@ def test_quick_start_from_idle_works(qemu):
     st, body = http(s, "POST", "/api/program/quick-start",
                     {"speed": 2.0, "incline": 0.0, "duration_minutes": 60})
     assert st == 200 and body["running"] is True, body
+    # The app types quick-start as GenericOkResponse, whose `ok` has no
+    # kotlinx default: without it the decode throws and the user is told
+    # "Failed to start workout" while standing on a belt that just started.
+    assert body.get("ok") is True, body
     assert _belt_reaches(s, WIRE_2, tx0), f"idle quick-start never moved the belt; {status(s)}"
     s.stop_pacer()
 

@@ -111,17 +111,29 @@ impl core::fmt::Write for Sink<'_> {
 /// rather than a copy: `ProgramState` is ~1.5 KB, and neither a copy of it nor
 /// a second buffer belongs on the httpd task's 10 KB stack alongside an
 /// mbedtls handshake.
-fn render_state(buf: &mut [u8; STATE_BUF], state: &ProgramState) -> Option<usize> {
+fn render_state(buf: &mut [u8; STATE_BUF], state: &ProgramState, lead: &str) -> Option<usize> {
     let mut sink = Sink {
         buf,
         len: 0,
         overflowed: false,
     };
-    if json::write_state(&mut sink, state).is_err() || sink.overflowed {
+    if json::write_state_with_lead(&mut sink, state, lead).is_err() || sink.overflowed {
         return None;
     }
     Some(sink.len)
 }
+
+/// The lead every POST verb answers with.
+///
+/// `server.py` puts `"ok": True` on quick-start and resume only; the app types
+/// quick-start as `GenericOkResponse`, whose `ok` has no kotlinx default, so
+/// omitting it makes the app toast "Failed to start workout" while the belt
+/// starts. Applying it to every verb rather than to the two the Pi decorates
+/// costs 10 bytes and is invisible to a client that types the reply as a
+/// program state (`ignoreUnknownKeys`); the alternative is a per-verb table of
+/// which replies the Pi happens to wrap, which is a rule nobody could keep.
+/// GET keeps the bare `to_dict()` shape.
+const OK_LEAD: &str = r#""ok":true,"#;
 
 fn respond_rendered(req: *mut sys::httpd_req_t, buf: &[u8], n: Option<usize>) -> sys::esp_err_t {
     match n {
@@ -289,7 +301,7 @@ fn get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
     let mut buf = [0u8; STATE_BUF];
     let n = {
         let p = lock(&crate::CTX.program);
-        render_state(&mut buf, &p)
+        render_state(&mut buf, &p, "")
     };
     respond_rendered(req, &buf, n)
 }
@@ -432,7 +444,7 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
 
     drive(plan, release_belt);
     let mut buf = [0u8; STATE_BUF];
-    let n = render_state(&mut buf, &p);
+    let n = render_state(&mut buf, &p, OK_LEAD);
     drop(p);
     respond_rendered(req, &buf, n)
 }
