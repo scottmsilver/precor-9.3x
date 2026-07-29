@@ -50,6 +50,23 @@
 //! answers 200 with the full body and never sends a coach frame), so one client
 //! works with both machines.
 //!
+//! The SYMPTOM until it lands was worse than "nothing is shown", and that was
+//! measured rather than reasoned: `ChatSheet.kt:56-57` is
+//! `onToast(res.text.ifBlank { "No response" })`, so an empty `text` in the 202
+//! made every coach message on this device toast the words "No response" — a
+//! healthy device reading as a broken feature. [`PENDING_TEXT`] is why it now
+//! reads as a slow one instead.
+//!
+//! The 429 for a SECOND message while one is in flight keeps its status, and
+//! that is a decision. Retrofit throws on any non-2xx, so the crafted sentence
+//! in its body never reaches the user — the app says "Error connecting to AI"
+//! for a device that is working correctly, which is bead precor-9_3x-lsx's to
+//! fix along with the frame. Answering 202 instead would be worse than the
+//! wrong toast: it would tell the client the message was ACCEPTED and hand it
+//! a turn number belonging to somebody else's message, so it would wait forever
+//! for an answer to a question the device never took. A refusal that is honest
+//! about being a refusal is the smaller of the two wrongs.
+//!
 //! # ONE MODEL CALL PER TURN, NOT THE PI'S THREE
 //!
 //! `server.py::_run_chat_core` loops up to three times: it executes the tool
@@ -142,7 +159,7 @@
 use crate::context::lock;
 use crate::control::{self, Surface};
 use crate::net::api::{parse_key_str, read_body_into, respond};
-use crate::net::program::drive;
+use crate::net::program::{drive, drive_stop};
 use crate::{logi, logw};
 use coach_core::hist::Role;
 use coach_core::scan::ReplyScanner;
@@ -168,6 +185,17 @@ const HTTP_TIMEOUT_MS: i32 = 15_000;
 /// task is not the belt — but a turn that never finishes would leave the
 /// mailbox busy and every later message refused, which to the user is a coach
 /// that stopped working with no explanation.
+///
+/// IT IS CHECKED AT EVERY SOCKET STEP, not only in the read loop, and that
+/// correction matters because this file's value is the bounds it states.
+/// `esp_http_client_open` (DNS + TCP + TLS), the write loop and
+/// `fetch_headers` are each bounded only by [`HTTP_TIMEOUT_MS`], and a turn
+/// makes TWO full round trips when a workout is generated — so a budget
+/// enforced only on reads described 45 s and permitted roughly 2 x (15+15+15)
+/// plus reads. `POST /api/chat` answering 429 for ~100 s where the header says
+/// 45 s is exactly the kind of drift that makes the WDT matrix in
+/// `tasks/mod.rs` — which cites this constant as the reason the coach task
+/// needs no watchdog — stop being evidence.
 const TURN_BUDGET: Micros = Micros::from_secs(45);
 
 /// Ceiling on the reply we will listen to. Beyond it the socket is closed and
@@ -304,7 +332,14 @@ fn store(key: &core::ffi::CStr, value: &str) -> bool {
 pub const REPLY_BYTES: usize = 480;
 
 /// Bytes of rendered `actions` array.
-const ACTIONS_BYTES: usize = 384;
+///
+/// DERIVED, and derived somewhere it can be TESTED: `coach_core::render` sizes
+/// it from `scan::MAX_CALLS` x the widest entry the scanner can produce, with a
+/// compile-time assertion. It was a hand-picked 384 here — smaller than a
+/// single worst-case entry — and the array saturated mid-token at the DECLARED
+/// maximum of four tool calls, which made `GET /api/chat` and the `/ws` coach
+/// frame invalid JSON on the happy path.
+const ACTIONS_BYTES: usize = coach_core::render::ACTIONS_BYTES;
 
 struct Mailbox {
     /// Handed out by `POST /api/chat`, monotonic, never reused.
@@ -404,7 +439,7 @@ fn turn_impl(turn: u32, msg: &str) {
     }
 
     let mut text: FixedStr<REPLY_BYTES> = FixedStr::new();
-    let mut actions: FixedStr<ACTIONS_BYTES> = FixedStr::new();
+    let mut actions = coach_core::render::Actions::new();
     // A generation is DEFERRED, not executed in the loop, because it is a
     // second model call and the loop is holding the work buffers it needs. The
     // call's own arguments ride along so the transcript still shows what the
@@ -459,13 +494,17 @@ fn turn_impl(turn: u32, msg: &str) {
         // Validate and apply, in the order the model emitted them.
         for i in 0..w.scanner.n_calls {
             let call = w.scanner.calls[i];
-            let mut result: FixedStr<96> = FixedStr::new();
-            let name = call.name;
+            let mut result: FixedStr<{ coach_core::render::RESULT_BYTES }> = FixedStr::new();
             match validate(&call) {
                 Ok(action) => {
                     // THE SAME CLAMPED VALUE IS DESCRIBED AND APPLIED. One
                     // rendering, so what the user is told and what the belt was
-                    // asked for cannot diverge.
+                    // asked for cannot diverge — WHICH REQUIRES EVERY ACTION TO
+                    // HAVE A FAILURE BRANCH. `describe` runs first and `apply`
+                    // overrides it only on failure, so an action that cannot
+                    // report failure reports success unconditionally. That is
+                    // exactly what `stop_treadmill` did: it said "treadmill
+                    // stopped" for a manually commanded belt it never touched.
                     describe(&action, &mut result);
                     if let Action::GenerateWorkout(d) = action {
                         pending_gen = Some((d, call.args));
@@ -477,13 +516,16 @@ fn turn_impl(turn: u32, msg: &str) {
                 }
                 Err(r) => result = FixedStr::from_str_truncating(r.message()),
             }
-            push_action(&mut actions, name.as_str(), &call.args, result.as_str());
+            // `push_call` — not `push` — because the decision about whether the
+            // argument object may be echoed verbatim is `ToolCall::is_intact()`,
+            // and it belongs next to the flags that set it rather than at each
+            // call site.
+            actions.push_call(&call, result.as_str());
         }
         if w.scanner.too_many_calls {
-            push_action(
-                &mut actions,
+            actions.push(
                 "ignored",
-                &FixedStr::new(),
+                None,
                 "the coach asked for more changes than one turn may make",
             );
         }
@@ -493,7 +535,10 @@ fn turn_impl(turn: u32, msg: &str) {
     // the work buffers can be reused for it.
     if let Some((desc, args)) = pending_gen {
         let outcome = generate(desc.as_str(), &url, key_hdr.as_ref(), started);
-        push_action(&mut actions, "generate_workout", &args, outcome);
+        // `Some(&args)`: this call reached `validate` and was ACCEPTED, and
+        // `validate` refuses anything that is not `is_intact()`, so the object
+        // is balanced by the same predicate `push_call` uses.
+        actions.push("generate_workout", Some(&args), outcome);
     }
 
     // COMMITTED ONLY NOW. Nothing was written to the ring while the turn could
@@ -550,10 +595,24 @@ fn apply(action: &Action) -> Option<&'static str> {
             None
         }
         Action::StopTreadmill => {
+            // THROUGH THE SAME STOP THE HTTP ENDPOINT USES, and the answer
+            // comes from what HAPPENED rather than from what was asked for.
+            //
+            // This was the one action with no failure branch, which — given
+            // that `describe()` runs before `apply()` and only a failure
+            // overrides it — meant the transcript said "treadmill stopped"
+            // unconditionally. It said that for a belt commanded manually,
+            // which `ProgramState::stop()` alone never touched: with no
+            // program running its plan is EMPTY, and an empty plan releases
+            // the executor's lease and nothing else. The user asked the coach
+            // to stop the treadmill and was told it had stopped while it ran.
             let mut p = lock(&crate::CTX.program);
             let plan = p.stop();
-            drive(plan, true);
-            None
+            if drive_stop(plan) {
+                None
+            } else {
+                Some("I could not stop the belt — use the stop button")
+            }
         }
         Action::PauseProgram | Action::ResumeProgram => {
             let mut p = lock(&crate::CTX.program);
@@ -694,52 +753,15 @@ fn render_state_line(out: &mut FixedStr<{ req::STATE_BYTES }>) {
     }
 }
 
-/// Append one entry to the rendered actions array.
-fn push_action(
-    out: &mut FixedStr<ACTIONS_BYTES>,
-    name: &str,
-    args: &FixedStr<{ coach_core::scan::ARGS_BYTES }>,
-    result: &str,
-) {
-    // The separator is decided by what is ALREADY there, not by a counter the
-    // caller has to keep right. A counter and a buffer that can silently
-    // saturate are two facts that can disagree; this is one.
-    if !out.is_empty() {
-        out.push_byte(b',');
-    }
-    out.push_str("{\"name\":\"");
-    out.push_str(name);
-    out.push_str("\",\"args\":");
-    // VERBATIM, and it is safe to be: `args` is only non-empty for a call the
-    // scanner saw open AND close inside its budget, so it is balanced JSON the
-    // model itself wrote. A call that did not survive intact carries no args at
-    // all and gets `{}`.
-    if args.is_empty() {
-        out.push_str("{}");
-    } else {
-        out.push_str(args.as_str());
-    }
-    out.push_str(",\"result\":\"");
-    for b in result.as_bytes() {
-        out.push_byte(if *b < 0x20 || *b == b'"' || *b == b'\\' {
-            b'_'
-        } else {
-            *b
-        });
-    }
-    out.push_str("\"}");
-}
-
 fn publish(turn: u32, text: &str, actions: &str) {
     let mut r = lock(&REPLY);
     r.turn = turn;
     r.text.clear();
+    // THE SAME FILTER `coach_core::render` APPLIES TO A NAME AND A RESULT. It
+    // was three hand-written copies of this loop with the tool NAME left out
+    // entirely; one shared function cannot have that divergence.
     for b in text.as_bytes() {
-        r.text.push_byte(if *b < 0x20 || *b == b'"' || *b == b'\\' {
-            b'_'
-        } else {
-            *b
-        });
+        r.text.push_byte(coach_core::tool::sanitise(*b));
     }
     r.actions = FixedStr::from_str_truncating(actions);
 }
@@ -846,6 +868,14 @@ fn post_inner(
         }
     }
 
+    // THE WHOLE-TURN CEILING, BEFORE EVERY BLOCKING STEP. `open` is DNS + TCP
+    // + the TLS handshake and is bounded only by `timeout_ms`; so are the
+    // write loop and `fetch_headers`; and `generate` makes a second full set
+    // of them with the ORIGINAL `started`. Checking only the read loop
+    // described a 45 s turn and permitted about twice that.
+    if over_budget(started) {
+        return Err(sys::ESP_ERR_TIMEOUT);
+    }
     // SAFETY: `client` is live; the length is the body we are about to write.
     let rc = unsafe { sys::esp_http_client_open(client, body.len() as i32) };
     if rc != sys::ESP_OK {
@@ -854,6 +884,9 @@ fn post_inner(
 
     let mut sent = 0usize;
     while sent < body.len() {
+        if over_budget(started) {
+            return Err(sys::ESP_ERR_TIMEOUT);
+        }
         // SAFETY: `client` is live and open; the pointer/length name a
         // sub-slice of `body`, which outlives the call and is only read.
         let n = unsafe {
@@ -869,6 +902,9 @@ fn post_inner(
         sent += n as usize;
     }
 
+    if over_budget(started) {
+        return Err(sys::ESP_ERR_TIMEOUT);
+    }
     // SAFETY: `client` is live and the request has been written.
     let content = unsafe { sys::esp_http_client_fetch_headers(client) };
     if content < 0 {
@@ -880,7 +916,7 @@ fn post_inner(
     let mut chunk = [0u8; CHUNK_BYTES];
     let mut total = 0usize;
     loop {
-        if crate::CTX.clock.now() - started > TURN_BUDGET {
+        if over_budget(started) {
             // The whole-turn ceiling. Whatever arrived is what we have; the
             // socket is closed by `cleanup`.
             break;
@@ -905,6 +941,14 @@ fn post_inner(
     }
     scanner.finish_stream();
     Ok(status)
+}
+
+/// Whether the turn that began at `started` has used its whole budget.
+///
+/// ONE predicate, so every step of every round trip in a turn is bounded by
+/// the same number the module header quotes.
+fn over_budget(started: Micros) -> bool {
+    crate::CTX.clock.now() - started > TURN_BUDGET
 }
 
 fn zeroed<T>() -> T {
@@ -1013,6 +1057,19 @@ fn chat_post_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
     respond(req, c"202 Accepted", &out[..n])
 }
 
+/// What an UNCHANGED client is told while the answer is still being fetched.
+///
+/// NOT AN EMPTY STRING, and the reason is measured rather than aesthetic:
+/// `ChatSheet.kt:56-57` does `onToast(res.text.ifBlank { "No response" })`, and
+/// Retrofit treats 202 as success and decodes the body — so an empty `text`
+/// made every single coach message on this device toast the words "No
+/// response". A user reads that as a broken feature, not a slow one. Until
+/// bead `precor-9_3x-lsx` teaches the app the `coach` frame, a non-blank
+/// placeholder degrades the unchanged app to a WAIT instead of to an ERROR,
+/// and it costs nothing on the Pi (which answers 200 with the real text and
+/// never sends this body).
+const PENDING_TEXT: &str = "Thinking...";
+
 /// The pending answer, in the shape the app already decodes.
 ///
 /// `text` and `actions` are what `ChatResponse` requires (both have kotlinx
@@ -1020,7 +1077,9 @@ fn chat_post_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
 /// additions an existing client ignores under `ignoreUnknownKeys`.
 fn render_pending(out: &mut [u8; 256], turn: u32) -> usize {
     let mut s: FixedStr<256> = FixedStr::new();
-    s.push_str(r#"{"text":"","actions":[],"pending":true,"turn":"#);
+    s.push_str(r#"{"text":""#);
+    s.push_str(PENDING_TEXT);
+    s.push_str(r#"","actions":[],"pending":true,"turn":"#);
     s.push_i64(turn as i64);
     s.push_str("}");
     let b = s.as_bytes();
@@ -1028,7 +1087,33 @@ fn render_pending(out: &mut [u8; 256], turn: u32) -> usize {
     b.len()
 }
 
+/// The rendered `GET /api/chat` body (and the `/ws` coach frame).
+///
+/// SIZED BY ARITHMETIC AND ASSERTED, because `render_reply` writes into a
+/// `FixedStr` of this size and `FixedStr::push_str` saturates SILENTLY — so an
+/// undersized buffer here does not overflow, it emits a body that stops
+/// mid-token. `req::REQ_BYTES` has had exactly this assertion since the
+/// request builder was written; this one was missing, and the worst case had
+/// 23 bytes of margin nobody had counted.
 pub const REPLY_BODY_BYTES: usize = REPLY_BYTES + ACTIONS_BYTES + 96;
+
+/// The punctuation `render_reply` writes around the two variable strings, with
+/// the widest `lead` (`"type":"coach",` = 15) and a full-width `turn`.
+const REPLY_FRAME_BYTES: usize = 1  // {
+    + 15                            // lead
+    + 8                             // "text":"
+    + 13                            // ","actions":[
+    + 9                             // ],"turn":
+    + 10                            // u32 as decimal
+    + 11                            // ,"pending":
+    + 5                             // false
+    + 1; // }
+
+const _: () = assert!(
+    REPLY_BODY_BYTES >= REPLY_BYTES + ACTIONS_BYTES + REPLY_FRAME_BYTES,
+    "REPLY_BODY_BYTES no longer holds a full-width reply plus the frame around \
+     it — render_reply would silently truncate a /ws frame into malformed JSON"
+);
 
 /// The published answer, in the shape `POST /api/chat` on the Pi returns.
 ///

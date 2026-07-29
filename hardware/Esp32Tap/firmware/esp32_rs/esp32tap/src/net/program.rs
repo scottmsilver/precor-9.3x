@@ -182,6 +182,25 @@ pub(crate) fn drive(plan: Plan, release_belt: bool) {
     apply_plan(&mut g, plan, release_belt, now);
 }
 
+/// The WHOLE meaning of Stop: the program's plan, and then the belt itself.
+///
+/// ONE function so `POST /api/program/stop` and the coach's `stop_treadmill`
+/// cannot drift. Before this existed, both drove `ProgramState::stop()`'s plan
+/// and nothing else — which is empty when no program is running, so a manually
+/// commanded belt kept its speed and the coach's transcript still said
+/// "treadmill stopped".
+///
+/// Called with the PROGRAM lock held, like [`drive`], and takes the safety lock
+/// ONCE for both halves so nothing can command the belt in between.
+///
+/// Returns whether the belt is now commanded to zero.
+pub(crate) fn drive_stop(plan: Plan) -> bool {
+    let now = crate::CTX.clock.now();
+    let mut g = lock(&crate::CTX.guarded);
+    apply_plan(&mut g, plan, true, now);
+    crate::control::stop_belt(&mut g, now)
+}
+
 // ---------------------------------------------------------------------------
 // Body reading for the program-sized endpoints.
 //
@@ -513,7 +532,16 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
         return respond(req, c"200 OK", msg);
     }
 
-    drive(plan, release_belt);
+    // STOP IS THE ONE VERB THAT ALSO OWES THE BELT. Every other verb drives
+    // its plan; Stop drives its plan AND zeroes whatever surface still holds
+    // the belt, because with no program running the plan is empty and a
+    // manually commanded belt kept its speed through a Stop that answered 200.
+    // The coach's `stop_treadmill` calls the same function.
+    if verb == V_STOP {
+        drive_stop(plan);
+    } else {
+        drive(plan, release_belt);
+    }
     let mut buf = [0u8; STATE_BUF];
     let n = render_state(&mut buf, &p, OK_LEAD);
     drop(p);

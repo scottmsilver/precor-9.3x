@@ -328,7 +328,19 @@ fn string<const N: usize>(body: &[u8], key: &[u8], out: &mut FixedStr<N>) -> boo
     false // unterminated
 }
 
-pub(crate) const fn sanitise(b: u8) -> u8 {
+/// The project's one rule for a byte that is about to be written between two
+/// `"` in JSON we emit: anything that could end the string, escape the next
+/// character, or be an unescaped control byte becomes `_`.
+///
+/// PUBLIC BECAUSE THE FIRMWARE EMITS THESE STRINGS TOO. `net::coach` renders a
+/// tool call's `name`, its `result` and the model's `text` into the `/ws` frame
+/// and into `GET /api/chat`, and every one of those strings came from a model
+/// reply — `scan::push_in_string` DECODES `\"` into a bare quote and `\n` into
+/// byte 0x0A on the way in, so none of them is quote-free by construction. It
+/// used to be three hand-written copies of this loop with the name left out
+/// entirely, which is exactly the divergence one shared function cannot have.
+/// Length-preserving, so a caller can measure before it writes.
+pub const fn sanitise(b: u8) -> u8 {
     if b < 0x20 || b == b'"' || b == b'\\' || b == 0x7f {
         b'_'
     } else {

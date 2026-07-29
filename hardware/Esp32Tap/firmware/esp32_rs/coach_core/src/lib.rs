@@ -55,6 +55,9 @@
 
 pub mod hist;
 pub mod prompt;
+/// Rendering the transcript a client is shown. Pure, so every shape that used
+/// to produce invalid JSON is a host test rather than a booted guest.
+pub mod render;
 pub mod req;
 pub mod salvage;
 pub mod scan;

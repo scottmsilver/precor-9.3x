@@ -170,11 +170,25 @@ class QemuSession:
             nic = " -nic user,model=open_eth,hostfwd=tcp::%d-:8000" % self.http_port
         bdir = shlex.quote(self.build_dir)
         # PER-SESSION FLASH IMAGE. Every session used to merge into the SAME
-        # build_qemu_test/qemu_flash.bin, so under xdist one session could boot
+        # build_qemu_test/qemu_flash.bin — a path on the BIND-MOUNTED REPO,
+        # shared by every container — so under xdist one session could boot
         # from an image another was still rewriting: garbage image, no boot
         # banner, and a 120 s "log pattern not seen" that looked like CPU
         # starvation. It is not — this machine has 20 cores.
-        flash_img = "/tmp/qemu_flash.bin"
+        #
+        # WHY /tmp IS ALREADY PRIVATE, since "per-session" and a fixed name
+        # read as a contradiction: only the repo is bind-mounted (-v
+        # $REPO_ROOT:/project), so /tmp here is the CONTAINER's own writable
+        # layer — not the host's — and `docker run --rm` destroys it on exit.
+        # That is also what bounds the residency of anything the guest commits
+        # to NVS during a session, including the operator's real API key in the
+        # opt-in test_coach_live.py run.
+        #
+        # The name is made unique anyway. It costs one f-string, and it means
+        # the isolation survives somebody adding `-v /tmp:/tmp` or running the
+        # merge outside a container — neither of which should have to be
+        # remembered for the comment above to stay true.
+        flash_img = f"/tmp/qemu_flash_{self.name}.bin"
         # The emulated flash MUST be the size the app image header declares.
         # IDF's spi_flash init aborts ("Detected size(...) smaller than the
         # size in the binary image header(...). Probe failed.") and reboots

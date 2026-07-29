@@ -49,9 +49,15 @@ use safety_core::units::Micros;
 /// program lock, so they pass `g` in and the documented lock order is
 /// preserved by the caller rather than re-established here).
 ///
-/// A refusal is NOT retried. The controller has already recorded why in the
-/// audit ring, and retrying a motion the safety layer refused is exactly the
-/// behaviour that must not exist.
+/// A REFUSED MOTION is NOT retried. The controller has already recorded why in
+/// the audit ring, and retrying a motion the safety layer refused is exactly
+/// the behaviour that must not exist.
+///
+/// A DECLINED MODE TRANSITION is a different thing and IS asked again, by
+/// `control::reassert` on the tick below. `request_emulate` declining because
+/// the console frame is 1.6 s old is not the safety layer saying no to a
+/// motion; it is the safety layer saying "not yet", and treating the two the
+/// same cost a whole interval of a motionless belt under a running program.
 pub fn apply_plan(g: &mut Guarded, plan: Plan, release_belt: bool, now: Micros) -> usize {
     let mut accepted = 0usize;
     for (speed, incline) in plan.commands() {
@@ -120,7 +126,35 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
                 logi!("program: ended, belt released");
             }
         }
+
+        // WHAT THE PROGRAM WANTS RIGHT NOW, read from the program itself
+        // rather than remembered from the last plan — because a program can be
+        // started by `POST /api/program/start`, by quick-start, or by the
+        // coach, and every one of those commands the belt from the HTTP task,
+        // so the executor never sees a plan for it at all. Reading the state is
+        // also less code than tracking a copy of it, and a copy is a second
+        // fact that can disagree with the first.
+        //
+        // Paused is excluded: a paused program wants ZERO, which is what the
+        // pause plan already commanded, and re-asserting the interval's speed
+        // over it would un-pause the belt.
+        let owed = if running && !p.paused() {
+            p.motion_of_current()
+        } else {
+            None
+        };
         drop(p);
+
+        // ASK AGAIN FOR A TRANSITION THAT DID NOT HAPPEN. `control::reassert`
+        // returns immediately unless the executor still owns the lease AND the
+        // controller is still in Proxy — so in the normal case (emulating) this
+        // is one uncontended lock and three comparisons per second, and in the
+        // console-takeover case it does nothing at all, which is attack D's
+        // requirement.
+        if let Some((speed, incline)) = owed {
+            let mut g = lock(&ctx.guarded);
+            control::reassert(&mut g, Surface::Executor, speed, incline, now);
+        }
 
         if seconds % 5 == 0 {
             // Cold-path liveness heartbeat on the debug console (UART0, never

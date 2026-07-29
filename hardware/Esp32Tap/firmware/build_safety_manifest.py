@@ -60,6 +60,29 @@ REQUIRED_SDKCONFIG = {
     "CONFIG_ESP_COREDUMP_ENABLE_TO_NONE": "y",
     "CONFIG_APPTRACE_DEST_NONE": "y",
     "CONFIG_APPTRACE_DEST_UART_NONE": "y",
+    # THE PER-DEVICE API KEY'S "NEVER LOGGED" GUARANTEE RESTS ON THIS SYMBOL.
+    #
+    # net::coach sends the Gemini key as an `x-goog-api-key` REQUEST HEADER,
+    # never in a URL, and logs nothing about it. That is true of OUR code and
+    # not of the component underneath it: IDF's own
+    # esp-idf/components/esp_http_client/esp_http_client.c:1754 (release-v5.5)
+    # is
+    #     ESP_LOGD(TAG, "Write header[%d]: %s", client->header_index,
+    #              client->request->buffer->data)
+    # which prints the ENTIRE outgoing header block, key included, and line
+    # 1953 logs an auth header as well. `3` (ESP_LOG_INFO) is what compiles
+    # those ESP_LOGD calls out of the image.
+    #
+    # So the guarantee is one Kconfig flip away from a leak: a future session
+    # chasing an HTTP problem enables CONFIG_LOG_MAXIMUM_LEVEL_DEBUG -- the
+    # natural move, since the coach's failure path only reports an integer --
+    # and the key is printed to UART0 on every turn, captured by the QEMU
+    # console reader, retained in the harness line buffers and echoed by pytest
+    # on any assertion failure. Pinning it here makes that flip fail the BUILD
+    # rather than depend on somebody remembering to run test_coach.py's
+    # test_the_key_is_never_echoed_logged_or_returned. All four generated
+    # sdkconfigs (C++ prod/qemu, Rust prod/qemu) already satisfy it.
+    "CONFIG_LOG_MAXIMUM_LEVEL": "3",
 }
 FORBIDDEN_ENABLED_SDKCONFIG = (
     "CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT",

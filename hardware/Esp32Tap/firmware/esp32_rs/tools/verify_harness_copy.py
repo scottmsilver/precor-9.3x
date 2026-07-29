@@ -64,13 +64,17 @@ IGNORE_NAMES = {"__pycache__", ".pytest_cache"}
 # small harness edit" cannot ride along unnoticed.
 ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
     "qemu_session.py": (
-        "4b97e987235c840bed2ce5b75bef765bfc16be4cff06aaaf1ff6d2af1e267ae9",
+        "ae4bec993f4863cdff36aea4498774b915f1ea7e10d42447d52f00cd97b34792",
         "(a) the emulated flash is padded to the size the image header "
         "declares (read from the build's own flash_args) instead of a "
         "hard-coded 2MB; a header that claims more flash than the emulated "
         "part has makes IDF spi_flash init abort and reboot forever, and it "
-        "is written to a PER-SESSION path inside the container so two "
-        "sessions cannot boot from an image the other is still rewriting. "
+        "is written to a UNIQUELY NAMED path inside the CONTAINER's own "
+        "writable layer — only the repo is bind-mounted, and --rm "
+        "destroys that layer — rather than to the bind-mounted repo, so "
+        "two sessions cannot boot from an image the other is still "
+        "rewriting and nothing a guest commits to NVS outlives its "
+        "session. "
         "(b) `net=True` attaches the emulated openeth NIC and forwards a host "
         "port to the guest's :8000 — purely ADDITIVE: it is off by default "
         "and no existing scenario passes it. (c) PORT LEASING: ports come "

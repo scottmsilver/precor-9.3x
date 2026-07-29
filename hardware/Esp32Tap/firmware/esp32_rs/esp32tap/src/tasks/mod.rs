@@ -20,8 +20,18 @@
 //! What that costs, stated plainly: a wedged coach task is NOT detected or
 //! recovered, and the symptom is that `POST /api/chat` starts answering 429
 //! ("still working on the last one") forever. The belt, the console, the HTTPS
-//! server and `/ws` are all unaffected — the coach task holds no lock across
-//! its network call and touches the belt only through `control::command`.
+//! server and `/ws` are all unaffected — the coach task holds NO LOCK ANY
+//! OTHER TASK CAN ACQUIRE across its network call, and touches the belt only
+//! through `control::command`.
+//!
+//! That wording is deliberate and was wrong before. This file used to say
+//! "holds no lock", which `net::coach.rs:86` explicitly denies: `turn_impl`
+//! takes the coach's own `WORK` mutex and holds it across the round trip. The
+//! effect is harmless — `WORK` is the coach's request buffer, scanner and
+//! history ring, private to that module, so nothing else can name it or wait
+//! on it — but this matrix is the normative document somebody consults when
+//! deciding whether a task is safe unsupervised, and it must not assert
+//! something the implementation file denies in the same repository.
 //!
 //! THE BLE TIER IS NOT IN THE MATRIX, AND THAT IS A DECISION RATHER THAN A
 //! HOLE. `ble::run` (core 0, prio 3 — the lowest in the system, stack 4096,

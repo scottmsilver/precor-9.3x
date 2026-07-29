@@ -184,6 +184,24 @@ pub fn command(
     now: Micros,
 ) -> Result<(), Reject> {
     let id = hold_lease(g, surface, now)?;
+    command_as(g, surface, &id, speed, incline, now)
+}
+
+/// The motion + auto-emulate choreography for an identity that ALREADY owns
+/// the lease.
+///
+/// Split out of [`command`] so [`reassert`] can reuse it without going through
+/// `hold_lease` — the difference between the two callers is exactly whether a
+/// new generation may be minted, and everything after that must stay one copy.
+fn command_as(
+    g: &mut Guarded,
+    surface: Surface,
+    id: &ConnectionIdentity,
+    speed: SpeedTenths,
+    incline: InclineHalfPct,
+    now: Micros,
+) -> Result<(), Reject> {
+    let id = *id;
     if !g.controller.command_motion(&id, speed, incline, now) {
         g.apply_outputs();
         return Err(Reject::Refused);
@@ -267,6 +285,90 @@ pub fn release(g: &mut Guarded, surface: Surface, now: Micros) -> bool {
     };
     g.apply_outputs();
     released
+}
+
+/// Ask AGAIN for a mode transition that did not happen — without taking the
+/// belt from anyone.
+///
+/// # The silence this exists to remove
+///
+/// [`command`] ATTEMPTS auto-emulate, and `request_emulate` enforces six
+/// preconditions of its own; a console frame older than 1.5 s fails one of
+/// them, and a 1.5 s gap in a stimulus is not exotic. The interval executor
+/// commands only at interval BOUNDARIES, so a single refusal used to leave the
+/// belt motionless for the whole interval — up to `MAX_DURATION_S` — while
+/// `GET /api/program` reported `running: true` and nothing anywhere said why.
+///
+/// MEASURED, not argued. Under load a start produced exactly:
+/// `connected:EXECUTOR:2:1` -> `lease_acquired:EXECUTOR:2:1` -> `owner_motion`
+/// -> `entry_rejected:console_not_fresh`, and then 25 s of nothing with ZERO
+/// bytes on the motor UART. That is the worst failure mode this firmware has:
+/// a device that looks healthy from every surface and does not move.
+///
+/// # Why this is not the console-takeover defect
+///
+/// It refuses unless `surface` STILL OWNS the lease, and it never calls
+/// [`hold_lease`]. A console takeover emergency-stops, which DROPS the lease —
+/// so the moment the human takes the belt this returns false and stops asking.
+/// Re-acquiring would be a running program reclaiming the belt from the person
+/// standing on it, which is the one thing it must never do.
+///
+/// Returns whether the caller should keep asking.
+pub fn reassert(
+    g: &mut Guarded,
+    surface: Surface,
+    speed: SpeedTenths,
+    incline: InclineHalfPct,
+    now: Micros,
+) -> bool {
+    let Some(id) = owner(g, surface).identity() else {
+        return false;
+    };
+    if g.controller.owner() != Some(id) {
+        return false;
+    }
+    // Emulating, or a transfer already in flight: the transition either
+    // happened or is happening, and there is nothing to ask for.
+    if g.controller.mode() != SafeMode::Proxy {
+        return false;
+    }
+    command_as(g, surface, &id, speed, incline, now).is_ok()
+}
+
+/// STOP MEANS STOP — for whichever surface actually holds the belt.
+///
+/// `ProgramState::stop()` describes what the PROGRAM wants, and when no program
+/// is running that description is EMPTY. An empty plan through `apply_plan`
+/// releases the EXECUTOR's lease and touches nothing else, so a belt commanded
+/// manually — `POST /api/speed`, a BLE Control Point write, the coach's
+/// `stop_treadmill` — kept its speed and its relay through a Stop the user was
+/// told had succeeded. `python/server.py::_apply_stop` has always done
+/// `_hw_set_speed(0)` unconditionally; this is that half, and it is HERE rather
+/// than in a handler because the HTTP endpoint and the coach must not be able
+/// to mean two different things by "stop".
+///
+/// Zeroing goes through [`command`] like everything else — same clamps, same
+/// lease, same `apply_outputs` — and then the lease is handed back so the next
+/// owner does not have to wait for a deadman.
+///
+/// Returns whether the belt is now commanded to zero, so a caller can tell the
+/// user what actually happened instead of what was asked for.
+pub fn stop_belt(g: &mut Guarded, now: Micros) -> bool {
+    // Only a surface that OWNS the belt right now is touched. Commanding as a
+    // surface that does not own it would mint a fresh generation against a
+    // lease somebody else holds — churn, an audit line, and no effect.
+    for surface in [Surface::Executor, Surface::Http] {
+        let Some(id) = owner(g, surface).identity() else {
+            continue;
+        };
+        if g.controller.owner() != Some(id) {
+            continue;
+        }
+        let inc = g.controller.incline_half_percent();
+        let _ = command(g, surface, SpeedTenths::ZERO, inc, now);
+        release(g, surface, now);
+    }
+    g.controller.speed_tenths() == SpeedTenths::ZERO
 }
 
 const fn surface_name(s: Surface) -> &'static str {

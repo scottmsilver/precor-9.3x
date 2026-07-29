@@ -55,6 +55,9 @@ PACER_INTERVAL = 0.10
 
 # 3.0 mph on the wire: `hmph` is mph x 100 in uppercase hex, so 300 -> 12C.
 WIRE_3 = b"[hmph:12C]"
+WIRE_2 = b"[hmph:C8]"
+# What a GUESS at the truncated `{"mph":11` would have produced: 1100 -> 44C.
+WIRE_11 = b"[hmph:44C]"
 
 PROGRAM = {
     "name": "Coach Baseline",
@@ -459,17 +462,51 @@ def test_a_tool_this_device_does_not_have_is_refused_by_name(qemu, stub):
 
 
 def test_a_truncated_reply_produces_no_action(qemu, stub):
+    """`{"mph":11` would parse to 11.0 mph if anything guessed. Nothing does.
+
+    THE ASSERTION IS ABOUT THE GUESS, and it is made against the WIRE.
+
+    This test used to say `emu_speed == 20` after the turn, and that was an
+    INTERMITTENT — reproduced 2 runs in 6 under load. The reason is not the
+    coach: `POST /api/speed` takes a MANUAL lease, nothing renews it (the HTTP
+    surface has no heartbeat), and `expire_manual_lease` emergency-stops the
+    belt 4 s later. Every TLS handshake in the poll loop is seconds of guest
+    time on a loaded host, so whether the belt still held 2.0 mph when the
+    status was read was a race against a deadman that has nothing to do with a
+    truncated reply. `test_reviewer_attacks.py::test_a` is that defect, stated
+    and still open.
+
+    So the property is asserted where it cannot be confused with the deadman:
+    the number a guess would have produced must never reach the motor wire, and
+    must never be the commanded speed. Losing the speed to the deadman is still
+    not tolerated silently — it has to be PROVEN, by its own audit event.
+    """
     s = armed(qemu)
     point_at(s, stub, "/truncated")
-    http(s, "POST", "/api/speed", {"value": 2.0})
+    st, body = http(s, "POST", "/api/speed", {"value": 2.0})
+    assert st == 200, body
+    s.wait_tx_contains(WIRE_2, timeout=60)
+
     st, chat = ask(s)
     got = await_reply(s, chat["turn"])
 
-    # `{"mph":11` would parse to 11.0 mph if anything guessed. Nothing does.
-    st, status = http(s, "GET", "/api/status")
-    assert status["emu_speed"] == 20, status
     for a in got["actions"]:
         assert "did not arrive intact" in a["result"], got
+
+    # 11.00 mph is 1100 hundredths = 0x44C. It must be nowhere.
+    assert WIRE_11 not in s.tx_bytes(), "the device commanded a GUESSED speed"
+    st, status = http(s, "GET", "/api/status")
+    assert status["emu_speed"] != 110, status
+
+    if status["emu_speed"] != 20:
+        # The ONLY other lawful outcome, and it must show its receipt.
+        expired = [t for _, t in s.audit_events() if "lease_expired" in t]
+        assert expired, (
+            "the belt lost its commanded speed and NOT to the known 4 s manual "
+            f"lease deadman — something else zeroed it: {status}"
+        )
+        assert status["emu_speed"] == 0, status
+    s.stop_pacer()
 
 
 def test_an_http_error_is_reported_and_the_device_carries_on(qemu, stub):

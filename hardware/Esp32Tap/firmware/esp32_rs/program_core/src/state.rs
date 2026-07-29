@@ -155,7 +155,17 @@ impl ProgramState {
         self.program.as_ref().map_or(0, |p| p.cumulative_at(idx))
     }
 
-    fn motion_of_current(&self) -> Option<(SpeedTenths, InclineHalfPct)> {
+    /// The motion the CURRENT interval wants, in the units the belt path takes.
+    ///
+    /// PUBLIC because the interval executor needs to be able to re-assert it:
+    /// `control::command` only ATTEMPTS the emulate transition and
+    /// `request_emulate` can decline it (a console frame older than 1.5 s is
+    /// enough), and a plan is produced only at interval BOUNDARIES — so without
+    /// a way to ask "what does the program want right now?" one declined
+    /// transition cost the whole interval. This is the same pair every `Plan`
+    /// this state machine emits is built from, so the executor re-asserts the
+    /// program's own intent rather than a remembered copy of it.
+    pub fn motion_of_current(&self) -> Option<(SpeedTenths, InclineHalfPct)> {
         self.current_iv().map(|iv| (iv.speed, iv.incline))
     }
 

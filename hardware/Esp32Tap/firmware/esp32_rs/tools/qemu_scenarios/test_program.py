@@ -471,3 +471,59 @@ def test_program_storage_is_bounded_and_refusal_is_clean(qemu):
     # THE LOADED PROGRAM IS UNCHANGED by any of the three.
     assert prog(s)["program"] == good
     s.stop_pacer()
+
+
+# ---------------------------------------------------------------------------
+# A DECLINED MODE TRANSITION IS ASKED AGAIN.
+#
+# `control::command` ATTEMPTS auto-emulate and `request_emulate` enforces six
+# preconditions of its own; a console frame older than 1.5 s fails one of them.
+# The executor commands only at interval BOUNDARIES, so before
+# `control::reassert` existed a single refusal cost the WHOLE interval — up to
+# MAX_DURATION_S of a motionless belt while `GET /api/program` reported
+# `running: true` and nothing, anywhere, said why.
+#
+# It was found as an INTERMITTENT in the coach gate (a loaded host delays the
+# console pacer past 1.5 s at exactly the wrong moment) and the audit ring named
+# it exactly: `lease_acquired:EXECUTOR:2:1` -> `owner_motion` ->
+# `entry_rejected:console_not_fresh`, then 25 s with ZERO bytes on the motor
+# UART. This reproduces that DETERMINISTICALLY by taking the console away on
+# purpose, so the mechanism is a gate rather than a race.
+#
+# The pair of it — that a running program must NOT take the belt back from a
+# human who grabbed the physical console — is `test_reviewer_attacks.py`'s
+# attack D, and `control::reassert` is written to satisfy both: it re-asks only
+# while the executor STILL OWNS the lease, and a console takeover drops it.
+# ---------------------------------------------------------------------------
+
+
+def test_an_emulate_entry_declined_for_a_stale_console_is_asked_again(qemu):
+    s = armed(qemu)
+
+    # Take the console away. The staleness threshold is 1.5 s of GUEST time, so
+    # the wait is on a guest-observed fact — the firmware's own 5 s heartbeat —
+    # rather than on a wall-clock sleep, which under xdist would be the
+    # intermittent this test exists to remove.
+    s.stop_pacer()
+    n_lines = len(s.lines())
+    s.wait_log(r"heartbeat uptime=", timeout=30, since_line=n_lines)
+
+    idx0 = s.audit_events()[-1][0] if s.audit_events() else 0
+    st, body = http(s, "POST", "/api/program/start", PROGRAM)
+    assert st == 200 and body["running"] is True, body
+
+    # The entry IS refused, and for the reason this test is about.
+    s.wait_audit("entry_rejected:console_not_fresh", timeout=30, since=idx0)
+    assert b"[hmph:" not in s.tx_bytes(), "the belt moved with a stale console"
+
+    # Now give the console back. NO further request is made — the device must
+    # complete the transition on its own, because a user who started a workout
+    # is not going to press start again.
+    s.start_pacer(synth.console_cycle_bytes(0, 0), PACER_INTERVAL)
+    s.wait_audit("complete_console_frame", timeout=30)
+    s.wait_tx_contains(WIRE[1.0], timeout=45)
+
+    st, state = http(s, "GET", "/api/status")
+    assert state["emulate"] is True, state
+    assert state["speed"] == 1.0, state
+    s.stop_pacer()
