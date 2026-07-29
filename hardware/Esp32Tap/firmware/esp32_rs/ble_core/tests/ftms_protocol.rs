@@ -449,16 +449,54 @@ fn conversion_extremes_match_the_daemon() {
 fn newtyped_speed_conversion_saturates_rather_than_wrapping() {
     assert_eq!(speed_tenths_to_kmh_hundredths(SpeedTenths::new(0)), 0);
     assert_eq!(speed_tenths_to_kmh_hundredths(SpeedTenths::new(120)), 1930);
-    // A negative or absurd speed must never become a SMALL POSITIVE km/h — the
-    // one failure mode here a client could act on.
     assert_eq!(speed_tenths_to_kmh_hundredths(SpeedTenths::new(-1)), 0);
     assert_eq!(
         speed_tenths_to_kmh_hundredths(SpeedTenths::new(i32::MIN)),
         0
     );
+
+    // A huge speed must NEVER become a small km/h. The raw daemon function
+    // TRUNCATES here — 6553.5 mph reports as 58.88 km/h — which is why the
+    // newtyped path deliberately diverges above ~407 mph and clamps at the top
+    // of the range instead. A first version of it saturated only its INPUT and
+    // had exactly that bug, under a doc comment claiming otherwise.
+    assert_eq!(
+        mph_tenths_to_kmh_hundredths(u16::MAX),
+        5882,
+        "the raw daemon function truncates — this is why the newtyped one does \
+         not simply call it"
+    );
     assert_eq!(
         speed_tenths_to_kmh_hundredths(SpeedTenths::new(i32::MAX)),
-        mph_tenths_to_kmh_hundredths(u16::MAX)
+        u16::MAX
+    );
+    assert_eq!(
+        speed_tenths_to_kmh_hundredths(SpeedTenths::new(u16::MAX as i32)),
+        u16::MAX
+    );
+}
+
+#[test]
+fn newtyped_speed_conversion_is_monotonic_over_the_whole_i32_domain() {
+    // Monotonicity is the property that makes saturation SAFE: no larger belt
+    // speed may encode as a smaller km/h. Checked densely across the reachable
+    // range and at every power-of-two boundary above it, which is where the u32
+    // intermediate and the u16 clamp change behaviour.
+    let mut prev = 0u16;
+    for t in 0i32..=5000 {
+        let v = speed_tenths_to_kmh_hundredths(SpeedTenths::new(t));
+        assert!(v >= prev, "not monotonic at {t} tenths: {prev} -> {v}");
+        prev = v;
+    }
+    for shift in 13..31 {
+        let t = 1i32 << shift;
+        let v = speed_tenths_to_kmh_hundredths(SpeedTenths::new(t));
+        assert!(v >= prev, "not monotonic at {t} tenths: {prev} -> {v}");
+        prev = v;
+    }
+    assert_eq!(
+        speed_tenths_to_kmh_hundredths(SpeedTenths::new(i32::MAX)),
+        u16::MAX
     );
 }
 

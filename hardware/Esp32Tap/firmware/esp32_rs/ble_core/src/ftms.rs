@@ -386,7 +386,7 @@ pub fn encode_status_notification(cmd: ControlCommand) -> Option<Notification> {
 /// this crate. `conversion_matches_daemon_vectors` and
 /// `roundtrip_is_within_one_tenth_mph` hold it in place.
 ///
-/// OVERFLOW: the intermediate is u32 (65535 * 1609 = 105 446 415, fits), and
+/// OVERFLOW: the intermediate is u32 (65535 * 1609 = 105 445 815, fits), and
 /// the result is TRUNCATED into u16 by the cast — inherited verbatim, and
 /// unreachable through [`speed_tenths_to_kmh_hundredths`], which saturates
 /// first. Exercised at the boundary by `conversion_extremes_match_the_daemon`.
@@ -402,22 +402,33 @@ pub fn kmh_hundredths_to_mph_tenths(kmh_hundredths: u16) -> u16 {
 
 /// [`SpeedTenths`] -> km/h x 100 for the notify path.
 ///
-/// Saturates instead of wrapping: a negative or absurd speed must not become a
-/// SMALL POSITIVE km/h on the wire, which is the only failure here a client
-/// could act on. Unreachable in practice (the controller clamps to 0..=120)
-/// and total anyway, because unreachable is not the same as cannot-happen
-/// under `panic = "abort"`.
+/// SATURATES THE RESULT, and that is a DELIBERATE, DOCUMENTED DIVERGENCE from
+/// [`mph_tenths_to_kmh_hundredths`] above ~407 mph — the same divergence, for
+/// the same reason, that `SpeedTenths::to_hundredths` already makes against
+/// the C++ `kv_protocol.cpp`. The raw function inherits the daemon's `as u16`
+/// cast, which TRUNCATES: feed it 6553.5 mph and it reports 58.82 km/h. A huge
+/// speed becoming a small one is the only failure here a client could act on,
+/// so this path clamps at the top of the range instead. A first version of
+/// this function saturated only its INPUT and had exactly that bug, with a
+/// doc comment claiming otherwise.
+///
+/// Both directions of the divergence are unreachable through the controller
+/// (motion is clamped to 0..=120 tenths long before this) and total anyway,
+/// because unreachable is not the same as cannot-happen under
+/// `panic = "abort"`. Zero and below map to 0.
 pub fn speed_tenths_to_kmh_hundredths(speed: SpeedTenths) -> u16 {
     let t = speed.get();
     if t <= 0 {
         return 0;
     }
-    let clamped = if t > u16::MAX as i32 {
+    // `t` is positive, so the `as u32` is exact; `saturating_mul` covers the
+    // whole i32 domain without ever wrapping into a small value.
+    let kmh = (t as u32).saturating_mul(1609) / 100;
+    if kmh > u16::MAX as u32 {
         u16::MAX
     } else {
-        t as u16
-    };
-    mph_tenths_to_kmh_hundredths(clamped)
+        kmh as u16
+    }
 }
 
 /// [`InclineHalfPct`] -> percent x 10. `half_pct * 5` (0.5% = 5 tenths),
