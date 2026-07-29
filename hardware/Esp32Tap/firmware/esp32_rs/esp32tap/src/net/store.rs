@@ -1,216 +1,530 @@
-//! The persistence tier — `recstore` rings over the real `storage` partition.
+//! The persistence tier — LittleFS files over the real `storage` partition.
 //!
 //! WHAT LIVES HERE, and the caps, mirroring what `python/db.py` owns:
 //!   * program history — the last few loaded/generated programs, newest first
 //!   * saved workouts  — favourites the user keeps deliberately
 //!   * run records     — one per session, checkpointed while it runs
 //!
-//! MEMORY IS THE DESIGN, not a consideration. Each ring keeps `SLOTS*4+8` bytes
-//! resident and nothing else: no parsed document is ever retained across a
-//! request. That is the property whose absence killed the C++ tier, where
-//! documents were held per store and ~15 unauthenticated requests could exhaust
-//! the heap and reboot the device mid-run. A record is read into a
-//! caller-supplied buffer, used, and forgotten.
+//! # Why a filesystem, after a hand-rolled store was written and deleted
 //!
-//! SIZING. The partition is 1 MB and a slot is one 4 KB sector (see
-//! `recstore::slot_is_sector_safe` — NOR erase granularity means anything
-//! smaller lets one record's erase destroy its neighbours). The three rings
-//! below occupy 44 sectors = 176 KB, leaving the rest of the partition free for
-//! the tiers still to come.
-
-//! ## The record layer
+//! This tier used to be `recstore`: fixed-size slots in raw flash, with a
+//! magic, a monotonic sequence, a length and a CRC32 per slot. It was ~200
+//! lines and it produced TWO REAL DEFECTS WITHIN AN HOUR, both caught only by
+//! its own torn-write test:
 //!
-//! Below the rings sits one rule, and every operation in this file obeys it:
-//! **a record is read into a `reqbudget` slot, decoded into a value, and the
-//! slot is released.** Nothing parsed is retained between requests, and the
-//! only per-request memory is the slot the request already had to lease. That
-//! is why `program_core::record` is a binary codec rather than JSON — the
-//! worst-case record is ~936 bytes, so it fits one 2048-byte slot with room
-//! to spare (`record::max_entry_bytes`, asserted against the slot size by a
-//! host test).
+//!   * slots packed 16 to a 4 KB sector meant erasing one destroyed the other
+//!     15, because NOR erase granularity is the sector and not the slot;
+//!   * a torn header left the erased `0xFFFFFFFF` sequence reading as the
+//!     NEWEST valid record, with an unchecked `seq + 1` behind it that would
+//!     overflow — and this build is `panic = abort`, so that reboots the
+//!     device and DROPS THE RELAY.
+//!
+//! LittleFS has neither by construction: it owns erase granularity, and a
+//! commit is atomic or it did not happen. The recorded reason for not using it
+//! was never a design argument, only plumbing — esp-idf-sys generates no
+//! symbols for a third-party component without a `bindings_header`, and the
+//! first attempt at declaring one put the key on the
+//! `[package.metadata.esp-idf-sys]` TABLE, where it does not exist, instead of
+//! on an `extra_components` ENTRY, where it does. See `bindings/littlefs.h`
+//! and the Cargo.toml note. `recstore` is deleted, not kept beside this:
+//! deleted code has no bugs.
+//!
+//! # What this module still owns, and why it is not a second store
+//!
+//! A filesystem has no notion of "the third-newest record", and record order
+//! is what every list endpoint is built on. So each record file carries a
+//! 4-byte little-endian SEQUENCE NUMBER ahead of its payload, and this module
+//! keeps those sequences — and nothing else — in RAM. That is ordering
+//! metadata a filesystem genuinely does not provide. It is emphatically NOT a
+//! second attempt at the parts littlefs already does: there is no magic, no
+//! length field, no CRC and no torn-write recovery here, because integrity is
+//! the filesystem's job now.
+//!
+//! # One atomic rename per write — strictly safer than what it replaces
+//!
+//! Every write goes to a temp file, is closed, and is then RENAMED over the
+//! destination. `lfs_rename` is a single metadata commit that both installs
+//! the new name and removes the old one, so a power cut leaves the slot at its
+//! PREVIOUS content — never half-written, never absent, never ambiguous.
+//! `recstore` could not offer that: its update path erased the slot first, so
+//! a cut lost the record being updated (it documented this as an acceptable
+//! bounded loss). There is no such window here.
+//!
+//! # MEMORY IS THE DESIGN, not a consideration
+//!
+//! No parsed document is ever retained across a request. That is the property
+//! whose absence killed the C++ tier, where documents were held per store and
+//! ~15 unauthenticated requests could exhaust the heap and reboot the device
+//! mid-run. A record is read into the caller's `reqbudget` slot, decoded into
+//! a value, and the slot is released.
+//!
+//! WHAT A FILESYSTEM COSTS, STATED IN BYTES RATHER THAN WAVED AT. The three
+//! `recstore` rings held 200 bytes between them. The three indexes below hold
+//! [`INDEX_BYTES`] — the same array of sequence numbers, so the same order of
+//! magnitude — but the MOUNT is not free: littlefs keeps a read cache, a
+//! program cache and a lookahead bitmap, plus `lfs_t` and the esp_littlefs
+//! wrapper, for the life of the mount. Those buffers are sized explicitly in
+//! `sdkconfig.defaults` (128 + 128 + 32 bytes) rather than defaulted, and the
+//! REST of it is measured rather than estimated: `mount_once` samples the free
+//! heap either side of `esp_vfs_littlefs_register` and latches the difference,
+//! so `Stores::resident_bytes()` — what `QT store_stat` reports and what
+//! `test_records.py` asserts does not move — is the real figure for this
+//! device rather than an arithmetic hope. It is a CONSTANT: it is paid once at
+//! boot and does not grow with stored volume, record size or request count.
 //!
 //! ## Divergences from `python/db.py`, all deliberate
 //!
-//! * **Order is write order, not `created_at`/`last_used_at`.** The ring knows
-//!   sequences; there is no clock here to sort by. Updating a record makes it
-//!   newest, so "most recently touched first" is what a client sees — which is
-//!   what the Pi's `ORDER BY last_used_at DESC` produces for workouts anyway,
-//!   and differs for history only in that reloading an entry re-floats it.
-//! * **Caps are the rings'.** History's 20 matches `db.MAX_HISTORY`; workouts
-//!   are capped at 20 where the Pi has no cap, and runs at 4 where the Pi
-//!   keeps 200. Stated in the module header above; not hidden.
+//! * **Order is write order, not `created_at`/`last_used_at`.** The sequence
+//!   knows write order; there is no clock here to sort by (and deliberately no
+//!   `mtime` — see the sdkconfig note). Updating a record makes it newest, so
+//!   "most recently touched first" is what a client sees.
+//! * **Caps are the indexes'.** History's 20 matches `db.MAX_HISTORY`;
+//!   workouts are capped at 20 where the Pi has no cap, and runs at 4 where
+//!   the Pi keeps 200.
 //! * **One profile**, so every ownership check in `server.py` is vacuous and
-//!   none is ported. Building `profile_id` plumbing for a device with one
-//!   profile would add an id-confusion surface for no user-visible benefit.
+//!   none is ported.
 
 use esp_idf_sys as sys;
 use program_core::record::{self, Entry, Run};
-use recstore::{Flash, Ring, SECTOR};
 use safety_core::FixedStr;
+use std::fs;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-/// Slots per ring. Program history matches python/db.py's MAX_HISTORY (20).
+/// Records per index. Program history matches python/db.py's MAX_HISTORY (20).
 pub const HISTORY_SLOTS: usize = 20;
 pub const WORKOUT_SLOTS: usize = 20;
-/// Run records: fewer than the Pi keeps (it has a real disk), sized so the
-/// three rings still fit comfortably with the partition mostly free.
+/// Run records: fewer than the Pi keeps (it has a real disk).
 pub const RUN_SLOTS: usize = 4;
 
-/// One 4 KB sector per record — the smallest slot that is crash-safe.
-pub const SLOT: usize = SECTOR;
+/// The VFS mount point. Short on purpose: it is a prefix on every path this
+/// module builds into a fixed-size stack buffer.
+const BASE: &str = "/rec";
+/// The C form of [`BASE`], for the one FFI call that needs it.
+const BASE_C: &core::ffi::CStr = c"/rec";
+/// The partition declared in partitions_esp32tap.csv. `esp_littlefs` looks it
+/// up with `SUBTYPE_ANY`, so the `spiffs` subtype in the CSV is not a problem.
+const PARTITION_C: &core::ffi::CStr = c"storage";
 
-/// Byte offsets within the partition. Explicit rather than computed so a later
-/// resize cannot silently shift an existing ring on top of another's records.
-const HISTORY_BASE: usize = 0;
-const WORKOUT_BASE: usize = HISTORY_SLOTS * SLOT;
-const RUN_BASE: usize = WORKOUT_BASE + WORKOUT_SLOTS * SLOT;
+/// The staging file every write passes through. ONE fixed name, reused: it is
+/// only ever the source of a rename, so a crash leaves it as garbage that the
+/// next write truncates. It is not a slot name, so no scan can mistake it for
+/// a record.
+const TMP: &str = "/rec/t";
 
-/// Total flash consumed. Checked against the partition at mount.
-pub const USED_BYTES: usize = RUN_BASE + RUN_SLOTS * SLOT;
+/// Bytes of ordering metadata this module prepends to a record.
+const SEQ: usize = 4;
 
-/// The `storage` partition, found once at boot.
-pub struct Partition {
-    inner: *const sys::esp_partition_t,
+/// Longest path this module builds: `/rec/` + tag + two digits.
+const MAX_PATH: usize = 16;
+
+/// Bytes the three indexes keep in RAM, independent of what is stored.
+pub const INDEX_BYTES: usize = core::mem::size_of::<Index<HISTORY_SLOTS>>()
+    + core::mem::size_of::<Index<WORKOUT_SLOTS>>()
+    + core::mem::size_of::<Index<RUN_SLOTS>>();
+
+/// What `esp_vfs_littlefs_register` cost, measured at mount. Latched once and
+/// never updated, so [`Stores::resident_bytes`] is constant for the life of
+/// the boot — which is exactly what `test_records.py` asserts.
+static FS_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+// ---------------------------------------------------------------------------
+// Paths and file primitives.
+//
+// EVERY OPERATION OPENS, ACTS AND CLOSES. Nothing holds a descriptor between
+// calls: an open file costs littlefs a `cache_size` buffer plus its own state,
+// and "resident memory does not grow" is easier to keep than to prove.
+// ---------------------------------------------------------------------------
+
+/// `/rec/<tag><slot>` — the file backing one record slot.
+fn path_of(tag: u8, slot: usize) -> FixedStr<MAX_PATH> {
+    let mut s: FixedStr<MAX_PATH> = FixedStr::new();
+    s.push_str(BASE);
+    s.push_byte(b'/');
+    s.push_byte(tag);
+    s.push_i64(slot as i64);
+    s
 }
 
-// SAFETY: `esp_partition_t` is owned by IDF, immutable for the life of the
-// application (its own docs say the pointer stays valid), and we only pass it
-// back into IDF's own thread-safe partition API.
-unsafe impl Send for Partition {}
+/// The sequence number stored at the head of a slot file, or `None` if the
+/// slot is empty, unreadable, or too short to carry one.
+///
+/// A zero sequence is treated as absent: 0 is this module's "no record", so a
+/// file that somehow claims it is not a record.
+fn read_seq(path: &str) -> Option<u32> {
+    let mut f = fs::File::open(path).ok()?;
+    let mut hdr = [0u8; SEQ];
+    f.read_exact(&mut hdr).ok()?;
+    match u32::from_le_bytes(hdr) {
+        0 => None,
+        seq => Some(seq),
+    }
+}
 
-impl Partition {
-    /// Locate the `storage` partition declared in partitions_esp32tap.csv.
-    pub fn open() -> Option<Partition> {
-        // SAFETY: a lookup by type/subtype/label; the returned pointer is
-        // IDF-owned and valid for the application's lifetime, or null.
-        let p = unsafe {
-            sys::esp_partition_find_first(
-                sys::esp_partition_type_t_ESP_PARTITION_TYPE_DATA,
-                sys::esp_partition_subtype_t_ESP_PARTITION_SUBTYPE_DATA_SPIFFS,
-                c"storage".as_ptr(),
-            )
+/// THE ONE WRITE PATH. Stage into [`TMP`], close it, then rename it over
+/// `path`.
+///
+/// The rename is what makes this safe, and it is the reason this module is
+/// smaller than the store it replaced: `lfs_rename` is a single atomic
+/// metadata commit, so the slot is either the old record or the new one at
+/// every instant. There is no window in which the record is missing (which is
+/// what `recstore`'s erase-then-write update had) and none in which two files
+/// claim it (which is what the opposite ordering would have).
+///
+/// The file is CLOSED before the rename, not merely dropped at end of scope:
+/// `vfs_littlefs_rename` refuses outright if either name is open.
+fn write_slot(path: &str, seq: u32, payload: &[u8]) -> bool {
+    {
+        let Ok(mut f) = fs::File::create(TMP) else {
+            return false;
         };
-        if p.is_null() {
+        if f.write_all(&seq.to_le_bytes()).is_err() || f.write_all(payload).is_err() {
+            return false;
+        }
+    }
+    fs::rename(TMP, path).is_ok()
+}
+
+/// Read a slot's payload (the bytes after the sequence) into `buf`.
+///
+/// A record LONGER than the caller's buffer reads as absent rather than as a
+/// truncated record: half a record decodes to nonsense or, worse, to something
+/// plausible.
+fn read_slot(path: &str, buf: &mut [u8]) -> Option<usize> {
+    let mut f = fs::File::open(path).ok()?;
+    let mut hdr = [0u8; SEQ];
+    f.read_exact(&mut hdr).ok()?;
+    let mut n = 0usize;
+    while n < buf.len() {
+        match f.read(&mut buf[n..]) {
+            Ok(0) => return Some(n),
+            Ok(k) => n += k,
+            Err(_) => return None,
+        }
+    }
+    // The buffer filled exactly; one more byte decides whether that was the
+    // whole record or the start of one that does not fit.
+    let mut over = [0u8; 1];
+    match f.read(&mut over) {
+        Ok(0) => Some(n),
+        _ => None,
+    }
+}
+
+/// Whether a slot already holds EXACTLY `payload`.
+///
+/// EXISTS TO SKIP A WRITE, and that is a wear bound rather than a performance
+/// one. Every write here is a file rewrite plus a rename, and both endpoints
+/// that reach it are unauthenticated: one client POSTing one identical program
+/// in a loop would otherwise spend flash endurance one request at a time, and
+/// an app retry loop produces the same shape by accident.
+///
+/// Compares through a fixed 64-byte window rather than reading the record into
+/// a second buffer — needing a record-sized buffer to discover that a write
+/// can be skipped would cost more memory than the write saves.
+fn slot_equals(path: &str, payload: &[u8]) -> bool {
+    let Ok(mut f) = fs::File::open(path) else {
+        return false;
+    };
+    let mut hdr = [0u8; SEQ];
+    if f.read_exact(&mut hdr).is_err() {
+        return false;
+    }
+    let mut win = [0u8; 64];
+    let mut i = 0usize;
+    while i < payload.len() {
+        let take = core::cmp::min(win.len(), payload.len() - i);
+        if f.read_exact(&mut win[..take]).is_err() {
+            return false;
+        }
+        if win[..take] != payload[i..i + take] {
+            return false;
+        }
+        i += take;
+    }
+    // A stored record that merely STARTS with `payload` is not equal to it.
+    matches!(f.read(&mut win[..1]), Ok(0))
+}
+
+// ---------------------------------------------------------------------------
+// The index: which slots hold records, and in what order.
+// ---------------------------------------------------------------------------
+
+/// `SLOTS` record files under one tag, ordered by sequence.
+///
+/// THIS IS THE ENTIRE RESIDENT FOOTPRINT of a record set. It does not grow
+/// with what is stored, with record size, or with request count.
+///
+/// Why an index at all, when the filesystem knows its own directory: every
+/// by-position operation would otherwise be a directory scan, and `find_pos`
+/// performs one per slot — so a single list request would cost `SLOTS`
+/// squared directory reads. This array is the directory listing, cached, at
+/// four bytes per slot.
+pub struct Index<const SLOTS: usize> {
+    /// Sequence number per slot; 0 means the slot holds no record.
+    seqs: [u32; SLOTS],
+    next_seq: u32,
+    /// The filename character that distinguishes this set from the others.
+    tag: u8,
+}
+
+impl<const SLOTS: usize> Index<SLOTS> {
+    /// Rebuild the index by reading each slot file's 4-byte head.
+    ///
+    /// `SLOTS` opens of 4 bytes each — 44 across the whole tier — so boot cost
+    /// does not grow with what is stored. Slots whose file is absent or
+    /// unreadable stay 0 and are the first reused.
+    fn mount(tag: u8) -> Index<SLOTS> {
+        let mut ix = Index {
+            seqs: [0; SLOTS],
+            next_seq: 1,
+            tag,
+        };
+        for i in 0..SLOTS {
+            if let Some(seq) = read_seq(path_of(tag, i).as_str()) {
+                ix.seqs[i] = seq;
+                if seq >= ix.next_seq {
+                    // Saturating, not `+ 1`: this build is panic=abort, so an
+                    // overflow here would reboot the device and drop the relay.
+                    ix.next_seq = seq.saturating_add(1);
+                }
+            }
+        }
+        ix
+    }
+
+    /// The sequence the NEXT write will be given.
+    ///
+    /// Exposed so a caller can mint a record id BEFORE the record is written —
+    /// an id has to be inside the payload, so it cannot come from the return
+    /// value of `append`. It is rebuilt from flash at mount, so ids stay
+    /// unique across reboots without a second counter to keep in step.
+    fn next_seq(&self) -> u32 {
+        self.next_seq
+    }
+
+    /// Number of records held.
+    fn len(&self) -> usize {
+        self.seqs.iter().filter(|s| **s != 0).count()
+    }
+
+    /// Slot holding the record with the nth-highest sequence (0 = newest).
+    ///
+    /// ONE ordering, used by every by-position operation. `read_nth` and
+    /// `erase_nth` disagreeing about what "the third record" means would
+    /// delete a different record than the one the caller just read — the kind
+    /// of defect that only shows up once a user has data.
+    ///
+    /// A selection scan rather than a sort: sequences are unique within an
+    /// index (they are minted monotonically), `SLOTS` is 20, and a sort would
+    /// need a scratch array of pairs on a stack that has already overflowed
+    /// once in this firmware.
+    fn nth_slot(&self, n: usize) -> Option<usize> {
+        if n >= SLOTS {
             return None;
         }
-        Some(Partition { inner: p })
+        let mut ceiling = u32::MAX;
+        let mut found = None;
+        for _ in 0..=n {
+            let mut best = 0u32;
+            found = None;
+            for i in 0..SLOTS {
+                let s = self.seqs[i];
+                if s != 0 && s < ceiling && s > best {
+                    best = s;
+                    found = Some(i);
+                }
+            }
+            found?;
+            ceiling = best;
+        }
+        found
     }
-}
 
-impl Flash for Partition {
-    fn size(&self) -> usize {
-        // SAFETY: `inner` is non-null (checked in `open`) and IDF-owned.
-        unsafe { (*self.inner).size as usize }
+    /// Slot holding the record with the LOWEST sequence — the eviction victim.
+    fn oldest_slot(&self) -> Option<usize> {
+        let mut best = u32::MAX;
+        let mut found = None;
+        for i in 0..SLOTS {
+            let s = self.seqs[i];
+            if s != 0 && s <= best {
+                best = s;
+                found = Some(i);
+            }
+        }
+        found
     }
 
-    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<(), ()> {
-        // SAFETY: `buf` is a live exclusive borrow of exactly the length passed;
-        // IDF writes at most that many bytes and bounds-checks the offset.
-        let rc = unsafe {
-            sys::esp_partition_read(
-                self.inner,
-                offset,
-                buf.as_mut_ptr() as *mut core::ffi::c_void,
-                buf.len(),
-            )
-        };
-        if rc == sys::ESP_OK {
-            Ok(())
-        } else {
-            Err(())
+    fn read_nth(&self, n: usize, buf: &mut [u8]) -> Option<usize> {
+        let slot = self.nth_slot(n)?;
+        read_slot(path_of(self.tag, slot).as_str(), buf)
+    }
+
+    fn nth_equals(&self, n: usize, payload: &[u8]) -> bool {
+        match self.nth_slot(n) {
+            Some(slot) => slot_equals(path_of(self.tag, slot).as_str(), payload),
+            None => false,
         }
     }
 
-    fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), ()> {
-        // SAFETY: `data` is a live borrow read for the duration of the call.
-        let rc = unsafe {
-            sys::esp_partition_write(
-                self.inner,
-                offset,
-                data.as_ptr() as *const core::ffi::c_void,
-                data.len(),
-            )
-        };
-        if rc == sys::ESP_OK {
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-
-    fn erase(&mut self, offset: usize) -> Result<(), ()> {
-        // Erase the sector CONTAINING `offset`, matching the trait contract.
-        let base = (offset / SECTOR) * SECTOR;
-        // SAFETY: an IDF call taking scalars; it bounds-checks against the
-        // partition and refuses an unaligned range.
-        let rc = unsafe { sys::esp_partition_erase_range(self.inner, base, SECTOR) };
-        if rc == sys::ESP_OK {
-            Ok(())
-        } else {
-            Err(())
-        }
-    }
-}
-
-/// All three rings, mounted once at boot.
-pub struct Stores {
-    pub flash: Partition,
-    pub history: Ring<HISTORY_SLOTS, SLOT>,
-    pub workouts: Ring<WORKOUT_SLOTS, SLOT>,
-    pub runs: Ring<RUN_SLOTS, SLOT>,
-}
-
-impl Stores {
-    /// Mount every ring. Scanning is header-only — 44 sector reads of 16 bytes,
-    /// not 176 KB — so boot cost does not grow with what is stored.
-    pub fn mount() -> Option<Stores> {
-        let flash = Partition::open()?;
-        if flash.size() < USED_BYTES {
+    /// Write `payload` into `slot`, giving it a fresh (newest) sequence.
+    ///
+    /// The ONE write path — `append` and `replace_nth` differ only in how they
+    /// choose the slot.
+    fn write_at(&mut self, slot: usize, payload: &[u8]) -> Option<u32> {
+        if slot >= SLOTS {
             return None;
         }
-        let history = Ring::mount(&flash, HISTORY_BASE).ok()?;
-        let workouts = Ring::mount(&flash, WORKOUT_BASE).ok()?;
-        let runs = Ring::mount(&flash, RUN_BASE).ok()?;
-        Some(Stores {
-            flash,
-            history,
-            workouts,
-            runs,
-        })
+        // SEQUENCE EXHAUSTION IS REFUSED, NOT WRAPPED. Ordering IS the
+        // sequence, so wrapping back to 1 would make every new record sort
+        // OLDER than every pre-wrap one, and a full index would then evict the
+        // record it had just written, forever — a silent, permanent corruption
+        // of the newest-first contract. At one write every 30 s this is ~4000
+        // years away; refusing costs nothing and makes the code total.
+        if self.next_seq >= u32::MAX - 1 {
+            return None;
+        }
+        let seq = self.next_seq;
+        if !write_slot(path_of(self.tag, slot).as_str(), seq, payload) {
+            return None;
+        }
+        self.seqs[slot] = seq;
+        self.next_seq = seq + 1;
+        Some(seq)
     }
 
-    /// Resident bytes across all three rings. Constant by construction.
-    pub const fn resident_bytes() -> usize {
-        Ring::<HISTORY_SLOTS, SLOT>::resident_bytes()
-            + Ring::<WORKOUT_SLOTS, SLOT>::resident_bytes()
-            + Ring::<RUN_SLOTS, SLOT>::resident_bytes()
+    /// Append a record, evicting the OLDEST if every slot is taken.
+    fn append(&mut self, payload: &[u8]) -> Option<u32> {
+        let slot = match self.seqs.iter().position(|s| *s == 0) {
+            Some(i) => i,
+            // The victim's file is not deleted first: `write_at` renames the
+            // new record over it in one commit, so the eviction and the
+            // insertion are the same atomic act.
+            None => self.oldest_slot()?,
+        };
+        self.write_at(slot, payload)
+    }
+
+    /// Overwrite the record with the nth-highest sequence, IN ITS OWN SLOT.
+    ///
+    /// It becomes the newest record: this tier has no notion of created-at,
+    /// only of write order, and "most recently touched first" is what the
+    /// lobby's recent list shows.
+    fn replace_nth(&mut self, n: usize, payload: &[u8]) -> bool {
+        match self.nth_slot(n) {
+            Some(slot) => self.write_at(slot, payload).is_some(),
+            None => false,
+        }
+    }
+
+    /// Remove the record with the nth-highest sequence. Returns whether one
+    /// was there.
+    ///
+    /// DELETE-BY-POSITION IS THE ONLY DELETE. A record's identity (an id, a
+    /// name) is the caller's concern; this type knows only sequences.
+    fn erase_nth(&mut self, n: usize) -> bool {
+        let Some(slot) = self.nth_slot(n) else {
+            return false;
+        };
+        // The index entry is cleared whether or not the unlink reported
+        // success: an entry that survives a failed delete would be read back
+        // through a path that is no longer there on the next boot anyway, and
+        // a stale "this slot has a record" is the state that hides a slot from
+        // reuse forever.
+        let removed = fs::remove_file(path_of(self.tag, slot).as_str()).is_ok();
+        self.seqs[slot] = 0;
+        removed
     }
 }
 
 // ---------------------------------------------------------------------------
 // The mounted store.
-//
-// ONE INSTANCE, MOUNTED ONCE, BEHIND ONE LOCK. Mounting per request would
-// re-scan 44 sector headers every time and — worse — two mounts of the same
-// ring would hold two independent indexes, so an append through one would be
-// invisible to the other until it re-mounted. `recstore` is a single-writer
-// design; this is where that is enforced.
+// ---------------------------------------------------------------------------
+
+/// All three record sets, mounted once at boot.
+pub struct Stores {
+    pub history: Index<HISTORY_SLOTS>,
+    pub workouts: Index<WORKOUT_SLOTS>,
+    pub runs: Index<RUN_SLOTS>,
+}
+
+/// Bring LittleFS up on the `storage` partition, and MEASURE what it cost.
+///
+/// `format_if_mount_failed` is what makes a blank part (and a part still
+/// carrying the deleted `recstore` layout) usable: the mount fails, littlefs
+/// formats, and the device comes up with an empty store rather than with no
+/// store. The alternative — refusing to run — is strictly worse on a treadmill
+/// whose belt works and whose history does not.
+fn register_fs() -> bool {
+    // SAFETY: `esp_vfs_littlefs_conf_t` is a C POD of pointers, a struct
+    // pointer and a bitfield unit; all-zero is a valid initial value for every
+    // field (null pointers, all flags clear) and is exactly what the C
+    // examples achieve with `= { 0 }`. Zeroing avoids naming bindgen's
+    // internal bitfield members, which are not part of any stable contract.
+    let mut conf: sys::littlefs::esp_vfs_littlefs_conf_t = unsafe { core::mem::zeroed() };
+    conf.base_path = BASE_C.as_ptr();
+    conf.partition_label = PARTITION_C.as_ptr();
+    conf.set_format_if_mount_failed(1);
+
+    // SAFETY: three argument-free IDF accessors and one registration call.
+    // `conf` is a live local read for the duration of the call — esp_littlefs
+    // copies what it retains — and the two `CStr`s it points at are `'static`.
+    // The heap samples either side are what turn the resident cost of a
+    // filesystem from an estimate into a measurement.
+    let (before, rc, after) = unsafe {
+        let before = sys::esp_get_free_heap_size();
+        let rc = sys::littlefs::esp_vfs_littlefs_register(&conf);
+        (before, rc, sys::esp_get_free_heap_size())
+    };
+    if rc != sys::ESP_OK {
+        return false;
+    }
+    FS_BYTES.store(before.saturating_sub(after) as usize, Ordering::Relaxed);
+    true
+}
+
+impl Stores {
+    fn mount() -> Option<Stores> {
+        if !register_fs() {
+            return None;
+        }
+        Some(Stores {
+            history: Index::mount(b'h'),
+            workouts: Index::mount(b'w'),
+            runs: Index::mount(b'r'),
+        })
+    }
+
+    /// Resident bytes for the whole tier: the sequence indexes (a compile-time
+    /// constant) plus what the mount actually cost (measured once, at boot).
+    ///
+    /// CONSTANT BY CONSTRUCTION, which is the property `test_records.py`
+    /// asserts and the property whose absence let ~15 requests exhaust the C++
+    /// tier's heap. Neither term moves with stored volume, record size or
+    /// request count: this module opens exactly one file at a time and closes
+    /// it before returning, so littlefs's per-open-file buffer is transient
+    /// and its four-entry descriptor cache never has to grow.
+    pub fn resident_bytes() -> usize {
+        INDEX_BYTES + FS_BYTES.load(Ordering::Relaxed)
+    }
+}
+
+// ONE INSTANCE, MOUNTED ONCE, BEHIND ONE LOCK. Two mounts would hold two
+// independent indexes, so a write through one would be invisible to the other
+// and both would eventually choose the same slot for different records.
 //
 // The lock is taken by HTTP handlers and by the session recorder. Neither is
 // on the belt path: the serial engine, the emulate cycle and the interval
 // executor cannot reach this module at all (they do not name it, and `net` is
 // behind a cargo feature they do not depend on), so a slow flash erase can
 // never stall the belt.
-// ---------------------------------------------------------------------------
-
 static STORES: Mutex<Option<Stores>> = Mutex::new(None);
 
-/// Mount the rings. Call once, at boot, before the server starts.
+/// Mount the store. Call once, at boot, before the server starts.
 ///
-/// Returns false if the partition is missing or unreadable — the device then
-/// runs with NO persistence rather than refusing to run, because a treadmill
-/// whose belt works and whose history does not is strictly better than one
-/// that will not start.
+/// Returns false if the partition is missing or unmountable — the device then
+/// runs with NO persistence rather than refusing to run.
 pub fn mount_once() -> bool {
     let mut g = crate::context::lock(&STORES);
     if g.is_some() {
@@ -229,9 +543,9 @@ pub fn with<R>(f: impl FnOnce(&mut Stores) -> R) -> Option<R> {
     g.as_mut().map(f)
 }
 
-/// Which ring an operation addresses. An enum rather than three copies of
-/// every helper: the two entry rings differ only in their slot count, and a
-/// generic function per ring would be two monomorphisations of identical code
+/// Which record set an operation addresses. An enum rather than three copies
+/// of every helper: the two entry sets differ only in their slot count, and a
+/// generic function per set would be two monomorphisations of identical code
 /// in a firmware image with a size budget.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Which {
@@ -239,7 +553,7 @@ pub enum Which {
     Workouts,
 }
 
-/// Slots in the addressed ring — the upper bound of any scan over it.
+/// Slots in the addressed set — the upper bound of any scan over it.
 pub const fn slots(w: Which) -> usize {
     match w {
         Which::History => HISTORY_SLOTS,
@@ -249,14 +563,13 @@ pub const fn slots(w: Which) -> usize {
 
 impl Stores {
     fn read_at(&self, w: Which, n: usize, buf: &mut [u8]) -> Option<usize> {
-        let r = match w {
-            Which::History => self.history.read_nth(&self.flash, n, buf),
-            Which::Workouts => self.workouts.read_nth(&self.flash, n, buf),
-        };
-        r.ok().flatten()
+        match w {
+            Which::History => self.history.read_nth(n, buf),
+            Which::Workouts => self.workouts.read_nth(n, buf),
+        }
     }
 
-    /// Decode the nth-newest entry of a ring, or `None` if the slot is empty
+    /// Decode the nth-newest entry of a set, or `None` if the slot is empty
     /// or unreadable. `scratch` is the caller's `reqbudget` slot.
     pub fn entry_at(&self, w: Which, n: usize, scratch: &mut [u8]) -> Option<Entry> {
         let len = self.read_at(w, n, scratch)?;
@@ -275,9 +588,9 @@ impl Stores {
     /// than one `Entry` (~1 KB): decoding 24 intervals to compare an id is
     /// both wasteful and — nested inside an HTTP handler that already holds an
     /// entry — enough to overflow the httpd task's stack and reboot the
-    /// device. An index instead of a scan would have to be rebuilt at mount
-    /// and kept in step with every write; more state to be wrong, for a saving
-    /// nobody can perceive at this size.
+    /// device. An index instead of a scan would have to be kept in step with
+    /// every write; more state to be wrong, for a saving nobody can perceive
+    /// at this size.
     pub fn find_pos(
         &self,
         w: Which,
@@ -326,7 +639,7 @@ impl Stores {
         Some((n, self.entry_at(w, n, scratch)?))
     }
 
-    /// The id the next record written to this ring will be given.
+    /// The id the next record written to this set will be given.
     pub fn next_id(&self, w: Which) -> FixedStr<{ record::MAX_ID }> {
         let (tag, seq) = match w {
             Which::History => ('h', self.history.next_seq()),
@@ -340,12 +653,8 @@ impl Stores {
 
     /// Whether an in-place write would change nothing on flash.
     ///
-    /// A REPLACE THAT CHANGES NOTHING IS STILL A 4 KB SECTOR ERASE, and the
-    /// dedup path aims every repeat at the same physical slot — so an
-    /// unauthenticated client re-POSTing one identical program in a loop was
-    /// spending the flash's endurance one request at a time. See
-    /// `recstore::Ring::nth_equals`. Only the in-place path is checked:
-    /// appending is by definition a new record in a different slot.
+    /// See [`slot_equals`]. Only the in-place path is checked: appending is by
+    /// definition a new record in a different slot.
     ///
     /// THE COST IS ORDERING, and it is stated rather than hidden: a re-load of
     /// an unchanged program no longer re-sequences its history entry to the
@@ -354,8 +663,8 @@ impl Stores {
     /// changes the bytes and therefore still writes.
     fn unchanged(&self, w: Which, n: usize, payload: &[u8]) -> bool {
         match w {
-            Which::History => self.history.nth_equals(&self.flash, n, payload),
-            Which::Workouts => self.workouts.nth_equals(&self.flash, n, payload),
+            Which::History => self.history.nth_equals(n, payload),
+            Which::Workouts => self.workouts.nth_equals(n, payload),
         }
     }
 
@@ -366,20 +675,14 @@ impl Stores {
             }
         }
         match (w, n) {
-            (Which::History, None) => self.history.append(&mut self.flash, payload).is_ok(),
-            (Which::History, Some(n)) => self
-                .history
-                .replace_nth(&mut self.flash, n, payload)
-                .unwrap_or(false),
-            (Which::Workouts, None) => self.workouts.append(&mut self.flash, payload).is_ok(),
-            (Which::Workouts, Some(n)) => self
-                .workouts
-                .replace_nth(&mut self.flash, n, payload)
-                .unwrap_or(false),
+            (Which::History, None) => self.history.append(payload).is_some(),
+            (Which::History, Some(n)) => self.history.replace_nth(n, payload),
+            (Which::Workouts, None) => self.workouts.append(payload).is_some(),
+            (Which::Workouts, Some(n)) => self.workouts.replace_nth(n, payload),
         }
     }
 
-    /// Write `e` into the ring. `at` selects update-in-place (the record keeps
+    /// Write `e` into the set. `at` selects update-in-place (the record keeps
     /// its slot) versus append (evicting the oldest when full).
     pub fn put(&mut self, w: Which, at: Option<usize>, e: &Entry, scratch: &mut [u8]) -> bool {
         match record::encode_entry(e, scratch) {
@@ -392,16 +695,15 @@ impl Stores {
 
     pub fn erase(&mut self, w: Which, n: usize) -> bool {
         match w {
-            Which::History => self.history.erase_nth(&mut self.flash, n),
-            Which::Workouts => self.workouts.erase_nth(&mut self.flash, n),
+            Which::History => self.history.erase_nth(n),
+            Which::Workouts => self.workouts.erase_nth(n),
         }
-        .unwrap_or(false)
     }
 
     /// `db.add_to_history`'s dedup: a program with the same name REPLACES the
     /// existing entry rather than sitting beside it. The Pi deletes and
-    /// re-inserts; here the record is written into the same slot, which costs
-    /// one erase instead of two and keeps the ring's occupancy stable.
+    /// re-inserts; here the record is written into the same slot, which keeps
+    /// occupancy stable and costs one commit instead of two.
     pub fn add_history(&mut self, e: &mut Entry, scratch: &mut [u8]) -> bool {
         let name = e.program.name;
         let existing = self.find_pos(Which::History, scratch, |h| h.name.as_str() == name.as_str());
@@ -422,7 +724,7 @@ impl Stores {
     // --- runs -------------------------------------------------------------
 
     pub fn run_at(&self, n: usize, scratch: &mut [u8]) -> Option<Run> {
-        let len = self.runs.read_nth(&self.flash, n, scratch).ok().flatten()?;
+        let len = self.runs.read_nth(n, scratch)?;
         record::decode_run(&scratch[..len])
     }
 
@@ -446,21 +748,44 @@ impl Stores {
 
     /// Write a run record. `at` is `Some` for a checkpoint or a finalisation —
     /// the SAME slot is rewritten, so a 30-second checkpoint cadence cannot
-    /// evict the other three runs (it would empty the ring in two minutes).
+    /// evict the other three runs (it would empty the set in two minutes).
     pub fn put_run(&mut self, at: Option<usize>, r: &Run, scratch: &mut [u8]) -> bool {
         let Some(n) = record::encode_run(r, scratch) else {
             return false;
         };
         match at {
-            None => self.runs.append(&mut self.flash, &scratch[..n]).is_ok(),
-            // A checkpoint that carries the same numbers as the last one —
-            // a paused session, a belt at zero under a running program —
-            // erases a sector for nothing. See `Stores::unchanged`.
-            Some(pos) if self.runs.nth_equals(&self.flash, pos, &scratch[..n]) => true,
-            Some(pos) => self
-                .runs
-                .replace_nth(&mut self.flash, pos, &scratch[..n])
-                .unwrap_or(false),
+            None => self.runs.append(&scratch[..n]).is_some(),
+            // A checkpoint carrying the same numbers as the last one — a
+            // paused session, a belt at zero under a running program — would
+            // rewrite a sector for nothing. See `Stores::unchanged`.
+            Some(pos) if self.runs.nth_equals(pos, &scratch[..n]) => true,
+            Some(pos) => self.runs.replace_nth(pos, &scratch[..n]),
         }
+    }
+
+    // --- the QEMU harness's probes ----------------------------------------
+    //
+    // The behavioural harness must be able to write a record, reboot the SoC
+    // and read it back, and it must do so through THE MOUNTED STORE rather
+    // than a private mount of its own. These three are the whole surface it
+    // needs; they are here, next to the index, rather than reaching into the
+    // index's internals from a test module.
+
+    /// Append raw bytes to a set, bypassing the record codec.
+    pub fn raw_append(&mut self, w: Which, payload: &[u8]) -> Option<u32> {
+        match w {
+            Which::History => self.history.append(payload),
+            Which::Workouts => self.workouts.append(payload),
+        }
+    }
+
+    /// Read the nth-newest raw record of a set.
+    pub fn raw_read(&self, w: Which, n: usize, buf: &mut [u8]) -> Option<usize> {
+        self.read_at(w, n, buf)
+    }
+
+    /// How many records each set holds.
+    pub fn counts(&self) -> (usize, usize, usize) {
+        (self.history.len(), self.workouts.len(), self.runs.len())
     }
 }

@@ -252,3 +252,64 @@ CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=128
 # so the first real board replaces this estimate with a measurement. Bead
 # precor-9_3x-l0h.
 CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192
+
+# --- Persistence: LittleFS over the `storage` partition ---------------------
+#
+# THE SIZES ARE STATED HERE BECAUSE THEY ARE RESIDENT MEMORY, not tuning. Every
+# one of these is a buffer littlefs holds for the life of the mount, and the
+# tier this replaced (`recstore`) held 200 bytes total — so the cost of using a
+# real filesystem is exactly what these lines add. See net/store.rs, which
+# MEASURES the total at mount and reports it through `QT store_stat`, rather
+# than leaving this arithmetic as the claim.
+#
+# The buffers, per mount: one read cache (CACHE_SIZE), one program cache
+# (CACHE_SIZE) and one lookahead bitmap (LOOKAHEAD_SIZE), plus `lfs_t` and the
+# esp_littlefs wrapper. Each OPEN FILE additionally costs CACHE_SIZE, and this
+# firmware opens exactly one at a time and closes it before it returns.
+#
+# CACHE_SIZE=128 rather than the component's 512: littlefs requires
+# `cache_size % read_size == 0` and `block_size % cache_size == 0`, so 128 is
+# the smallest legal value at READ/WRITE_SIZE=128 and it saves 384 bytes on
+# each of the two mount caches AND on every open file. A record here is under
+# 1 KB, so the extra block reads a small cache costs are invisible next to a
+# 4 KB sector erase.
+CONFIG_LITTLEFS_READ_SIZE=128
+CONFIG_LITTLEFS_WRITE_SIZE=128
+CONFIG_LITTLEFS_CACHE_SIZE=128
+#
+# LOOKAHEAD=32 IS SIZED TO THE PARTITION, not defaulted. The lookahead buffer
+# is a bitmap of free blocks at 8 blocks per byte; the `storage` partition is
+# 1 MB of 4 KB blocks = 256 blocks = exactly 32 bytes. The component's default
+# of 128 would reserve 96 bytes to describe blocks that do not exist.
+CONFIG_LITTLEFS_LOOKAHEAD_SIZE=32
+#
+# One partition is mounted, so do not reserve slots for three.
+CONFIG_LITTLEFS_MAX_PARTITIONS=1
+#
+# NO MTIME. It costs 4 bytes per file on flash plus an attribute write on every
+# commit, and it would be a LIE on this device: there is no RTC and no
+# guarantee of NTP, so `time(NULL)` at the moment a run record is checkpointed
+# is whatever the epoch says. Record ordering comes from an explicit sequence
+# number in the record itself (net/store.rs) precisely so it does not depend on
+# a clock this hardware does not have.
+# CONFIG_LITTLEFS_USE_MTIME is not set
+#
+# NO SPIFFS COMPATIBILITY SHIM. It auto-creates parent directories on open and
+# deletes them when they empty; this tier uses flat, fixed filenames at the
+# mount root and wants an open of a name that is not there to FAIL rather than
+# to conjure a path.
+# CONFIG_LITTLEFS_SPIFFS_COMPAT is not set
+#
+# NO MMAP. Mapping 1 MB of flash into the address space to speed up a store
+# that is read a few times per request is a poor trade on a part where the
+# address space is the scarce thing.
+# CONFIG_LITTLEFS_MMAP_PARTITION is not set
+#
+# NO WDT PETTING INSIDE FLASH OPERATIONS, and that is a safety decision rather
+# than an oversight. CONFIG_LITTLEFS_WDT_RESET makes littlefs call
+# esp_task_wdt_reset() during read/write/erase — i.e. it makes a stalled flash
+# operation invisible to the watchdog. The task WDT here is 2 s with PANIC, and
+# panic means reset means the relay is released; a store operation that cannot
+# finish in 2 s is precisely the condition that must reach it. The longest
+# thing this tier does on purpose is one 4 KB sector erase (~30 ms).
+# CONFIG_LITTLEFS_WDT_RESET is not set

@@ -1,19 +1,19 @@
 //! What a stored program looks like on flash, and what it looks like on the
 //! wire.
 //!
-//! # Why this is here and not in `recstore`
+//! # Why this is here and not in the storage tier
 //!
-//! `recstore` is bytes: slots, sequences, CRCs, no dependencies. A stored
-//! entry is *a `Program` plus the handful of fields the app shows next to it*,
-//! so it can only live somewhere that already knows what a `Program` is.
-//! Putting it here keeps `recstore` dependency-free and gets this codec into
-//! the host test suite that already runs in 0.00 s, instead of proving a byte
+//! `esp32tap::net::store` is bytes: files, sequences, a filesystem, no
+//! knowledge of what it holds. A stored entry is *a `Program` plus the handful
+//! of fields the app shows next to it*, so it can only live somewhere that
+//! already knows what a `Program` is. Putting it here gets this codec into the
+//! host test suite that already runs in 0.00 s, instead of proving a byte
 //! format in QEMU.
 //!
 //! # Binary on flash, JSON on the wire — and why not JSON on both
 //!
-//! A slot holds 4080 bytes and the worst-case program alone serialises to
-//! 1938 (`model::max_program_json_bytes`), so storing the served JSON verbatim
+//! The worst-case program alone serialises to 1938 JSON bytes
+//! (`model::max_program_json_bytes`), so storing the served JSON verbatim
 //! would fit flash but NOT the 2048-byte `reqbudget` slot a request path is
 //! allowed to use — the record could not be read without a second, larger
 //! buffer whose whole purpose would be to exist per request. The binary form
@@ -233,12 +233,12 @@ impl Run {
 // ---------------------------------------------------------------------------
 // Byte codec. Total in both directions: encode refuses rather than truncating,
 // decode returns None for anything it does not fully understand. A record it
-// cannot read is a record that is ABSENT — the same answer `recstore` gives
-// for a failed CRC — never a partially-populated value.
+// cannot read is a record that is ABSENT — the same answer the storage tier
+// gives for a slot it cannot open — never a partially-populated value.
 // ---------------------------------------------------------------------------
 
 /// Format version. Bumping it makes older records unreadable (they decode as
-/// `None` and the ring reuses their slots), which is the correct behaviour for
+/// `None` and their slots are reused), which is the correct behaviour for
 /// a device whose store is a cache of the user's recent work, not an archive.
 const V_ENTRY: u8 = 1;
 /// 2 -> 3 when `Run` gained its program fingerprint. Records written by an

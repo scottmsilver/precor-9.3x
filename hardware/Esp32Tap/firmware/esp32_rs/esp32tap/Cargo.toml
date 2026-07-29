@@ -24,7 +24,6 @@ debug = true
 safety_core = { path = "../safety_core" }
 # Host-testable request budget (see reqbudget/src/lib.rs).
 reqbudget = { path = "../reqbudget" }
-recstore = { path = "../recstore" }
 # The interval executor's decisions: portable, allocation-free, host-tested.
 program_core = { path = "../program_core" }
 # The BLE wire bytes: FTMS encoding + HR Measurement parsing, ported from the
@@ -85,6 +84,35 @@ embuild = "0.33"
 # (1.8.2 at the time of writing).
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/mdns", version = "~1.8.0" }
+
+# --- LittleFS: a MANAGED component that ALSO needs a bindings header -------
+#
+# This is the mDNS entry above with ONE extra field, and that field is the
+# whole difference between "the component builds" and "the component is
+# callable". mDNS needs no `bindings_header` because esp-idf-sys's own
+# src/include/esp-idf/bindings.h already carries an `#include "mdns.h"` behind
+# `ESP_IDF_COMP_ESPRESSIF__MDNS_ENABLED`. joltwallet/littlefs is not in that
+# file at all, so without a header of our own the component compiles into the
+# image and bindgen emits nothing — a build that succeeds and a crate that
+# cannot name a single symbol.
+#
+# READ bindings/littlefs.h BEFORE MOVING THIS. The recorded blocker
+# ("declaring a bindings_header in [package.metadata.esp-idf-sys] did not take
+# effect — the metadata parsed but the key was absent at build time") was a
+# MISPLACED KEY, not a missing capability: `bindings_header` is a field on
+# each `[[…extra_components]]` ENTRY and does not exist on the table itself,
+# so setting it there parses and is never read.
+#
+# `bindings_module` puts them in their own module (`esp_idf_sys::littlefs`)
+# rather than merging them into the crate root. That costs duplicate esp-idf
+# types inside that module — we only cross the boundary with a nul-terminated
+# path, a null partition pointer and an esp_err_t, so nothing is affected —
+# and buys a blast radius: a bindgen change here cannot perturb the root
+# bindings every other module in this firmware compiles against.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "joltwallet/littlefs", version = "^1.14" }
+bindings_header = "bindings/littlefs.h"
+bindings_module = "littlefs"
 
 
 [features]

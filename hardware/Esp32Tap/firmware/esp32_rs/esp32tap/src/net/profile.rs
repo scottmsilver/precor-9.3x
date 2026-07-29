@@ -8,14 +8,15 @@
 //! the note is discharged rather than repeated: `PUT /api/profiles/{id}`
 //! exists, and what it writes survives a power cut.
 //!
-//! # NVS, not a fourth flash ring
+//! # NVS, not a fourth record set
 //!
-//! A profile is ~60 bytes. A `recstore` ring costs one 4 KB sector per record
-//! by construction (NOR erase granularity — see `recstore::slot_is_sector_safe`),
-//! so a ring for this would spend 4 KB to store 60 bytes and add a fourth
-//! mount to the boot path. NVS is already initialised for the TLS identity,
+//! A profile is ~60 bytes, it is a SINGLETON, and it is read on the boot path
+//! before the store is mounted (`weight_grams` feeds the calorie accumulator
+//! from the first tick). NVS is already initialised for the TLS identity,
 //! already does wear levelling and atomic commits, and this reuses its
-//! helpers rather than opening a second boundary to the same subsystem.
+//! helpers rather than opening a second boundary to the same subsystem — or
+//! adding a fourth index and a fourth mount to `net::store` for one record
+//! that has no ordering, no cap and no list endpoint.
 //!
 //! # Still one profile, and still no avatars — but every route ANSWERS
 //!

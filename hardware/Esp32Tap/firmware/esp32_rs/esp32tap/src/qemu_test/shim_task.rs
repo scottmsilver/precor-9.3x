@@ -237,9 +237,10 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
         // both would eventually choose the same slot for different records.
         "store_put" => {
             let payload = args.as_bytes();
-            match crate::net::store::with(|st| st.history.append(&mut st.flash, payload)) {
-                Some(Ok(seq)) => qt!("QTOK store_put seq={} len={}", seq, payload.len()),
-                Some(Err(())) => qt!("QTERR store_put write_failed"),
+            let w = crate::net::store::Which::History;
+            match crate::net::store::with(|st| st.raw_append(w, payload)) {
+                Some(Some(seq)) => qt!("QTOK store_put seq={} len={}", seq, payload.len()),
+                Some(None) => qt!("QTERR store_put write_failed"),
                 None => qt!("QTERR store_put no_partition"),
             }
         }
@@ -247,20 +248,19 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
         "store_get" => {
             let n: usize = args.trim().parse().unwrap_or(0);
             let mut buf = [0u8; 256];
-            match crate::net::store::with(|st| st.history.read_nth(&st.flash, n, &mut buf)) {
-                Some(Ok(Some(len))) => {
+            let w = crate::net::store::Which::History;
+            match crate::net::store::with(|st| st.raw_read(w, n, &mut buf)) {
+                Some(Some(len)) => {
                     let text = core::str::from_utf8(&buf[..len]).unwrap_or("<non-utf8>");
                     qt!("QTOK store_get n={} len={} body={}", n, len, text);
                 }
-                Some(Ok(None)) => qt!("QTOK store_get n={} absent", n),
-                Some(Err(())) => qt!("QTERR store_get read_failed"),
+                Some(None) => qt!("QTOK store_get n={} absent", n),
                 None => qt!("QTERR store_get no_partition"),
             }
         }
 
         "store_stat" => {
-            match crate::net::store::with(|st| (st.history.len(), st.workouts.len(), st.runs.len()))
-            {
+            match crate::net::store::with(|st| st.counts()) {
                 Some((h, w, r)) => qt!(
                     "QTOK store_stat history={} workouts={} runs={} resident={}",
                     h,

@@ -47,8 +47,8 @@ FW_SRC = ESP32_RS / "esp32tap" / "src"
 CORE_SRC = ESP32_RS / "safety_core" / "src"
 
 # Crates that are `#![forbid(unsafe_code)]` and contain no `unsafe` token at
-# all. `reqbudget` and `recstore` are deliberately absent: reqbudget owns the
-# static request pool and needs FFI-free `unsafe` for it.
+# all. `reqbudget` is deliberately absent: it owns the static request pool and
+# needs FFI-free `unsafe` for it.
 PURE_FORBID_CRATES = ("safety_core", "program_core", "ble_core", "coach_core")
 
 # Firmware modules whose unsafe-freedom is COMPILER-enforced.
@@ -221,6 +221,15 @@ PRODUCTION_UNSAFE_LINES = 69
 # the actual C boundary added is zero calls. Leaving these routes UNREGISTERED
 # was cheaper in this number and cost the user a raw `HTTP 404 Not Found` on the
 # app's first screen and a weight the calorie maths could never be told.
+# 1129 -> 1200, +71: `net/coach.rs`, the AI tier's socket half. The real C
+# boundary is 8 `esp_http_client` calls plus one `crt_bundle_attach` function
+# pointer; the rest is the counting rule attributing the whole body of four
+# `unsafe extern "C"` IDF handlers, which is why each of them reads one raw
+# field and delegates to safe code. NOTHING that decides what a model reply
+# MEANS is inside an unsafe region: `coach_core` is forbid + unsafe-free, and
+# the belt is only ever reached through `control::command`, which is
+# `#![forbid(unsafe_code)]` too.
+#
 # 580 -> 589, +9: `net/ws.rs` moved its sends onto the httpd task through
 # `httpd_queue_work`, which adds the queue call and the queued `unsafe extern
 # "C"` callback and drops nothing (the send is still one block, and the
@@ -282,15 +291,19 @@ PRODUCTION_UNSAFE_LINES = 69
 #                                  and becomes a measurement on the first real
 #                                  board. It takes no arguments, returns an
 #                                  integer, and dereferences nothing.
-# 1129 -> 1200, +71: `net/coach.rs`, the AI tier's socket half. The real C
-# boundary is 8 `esp_http_client` calls plus one `crt_bundle_attach` function
-# pointer; the rest is the counting rule attributing the whole body of four
-# `unsafe extern "C"` IDF handlers, which is why each of them reads one raw
-# field and delegates to safe code. NOTHING that decides what a model reply
-# MEANS is inside an unsafe region: `coach_core` is forbid + unsafe-free, and
-# the belt is only ever reached through `control::command`, which is
-# `#![forbid(unsafe_code)]` too.
-QEMU_UNSAFE_LINES = 1200
+#
+# 1200 -> 1180, -20: `net/store.rs` stopped being a flash driver. The deleted
+# `recstore` needed the whole `esp_partition_*` surface behind a `Flash` trait
+# — find/size/read/write/erase plus an `unsafe impl Send` for the partition
+# pointer it had to keep. LittleFS needs a mount and nothing else: one
+# `core::mem::zeroed` of a C config POD and one block holding
+# `esp_vfs_littlefs_register` between two free-heap samples (which is how the
+# filesystem's resident cost becomes a measurement rather than an estimate).
+# Every read, write, rename and unlink below it is `std::fs` — SAFE code
+# against the VFS, where it used to be raw pointers against the partition API.
+# A tier that stores MORE safely while touching LESS unsafe is the shape a
+# swap like this is supposed to have.
+QEMU_UNSAFE_LINES = 1180
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

@@ -27,9 +27,7 @@ esp32_rs/
 ├── program_core/   CRATE 5 — the interval executor (port of ProgramState) and
 │                             the stored-record codec, no_std, forbid(unsafe),
 │                             depends only on safety_core
-├── recstore/       CRATE 6 — fixed-record flash rings, no_std, ZERO deps,
-│                             torn-write tested at every byte offset
-├── ble_core/       CRATE 7 — FTMS encoding + HR parsing, no_std,
+├── ble_core/       CRATE 6 — FTMS encoding + HR parsing, no_std,
 │                             forbid(unsafe), depends only on safety_core.
 │                             Port of rust/ftms + rust/hrm PROTOCOL logic;
 │                             their bluer transport is Linux-only and stayed
@@ -200,7 +198,7 @@ exact-deadline-loses rule, the 1.5 s console freshness, the 4 s lease, the
 
 **The AI coach's live endpoint is not a gate, on purpose.** `net/coach.rs` +
 `coach_core/` are proven against a local stub the test controls
-(`tools/qemu_scenarios/test_coach.py`, 19 scenarios), and that stub is strictly
+(`tools/qemu_scenarios/test_coach.py`, 18 scenarios), and that stub is strictly
 better than the real API at everything except two things it cannot do: confirm
 that the request body Gemini ACCEPTS is the one we build, and confirm that the
 embedded CA bundle validates the real chain. Those need a live per-device key and
@@ -379,14 +377,49 @@ Not proven, and not claimed:
 The device keeps its own data: program history, saved workouts, run records
 and the profile. `/api/programs/history` (+ `/{id}/load`, `/{id}/resume`),
 `/api/workouts` (list, save, rename, delete, load), `/api/runs` and
-`PUT /api/profiles/{id}` are served straight out of flash — three `recstore`
-rings on the `storage` partition (20 history, 20 workouts, 4 runs) plus one NVS
-blob for the profile.
+`PUT /api/profiles/{id}` are served straight out of flash — three sets of
+LittleFS record files on the `storage` partition (20 history, 20 workouts,
+4 runs) plus one NVS blob for the profile.
+
+**It is LittleFS, and the hand-rolled store that was here is deleted.** The
+`recstore` crate — fixed-size slots in raw flash with a magic, a sequence, a
+length and a CRC — produced two real defects within an hour of being written
+(a 4 KB NOR sector erase destroying the fifteen slots packed beside the one
+being rewritten; a torn header leaving the erased `0xFFFFFFFF` sequence
+sorting as the *newest* record, behind an unchecked `seq + 1` that reboots a
+`panic = abort` build and drops the relay). LittleFS has neither by
+construction. The recorded blocker was never a design argument, only plumbing:
+esp-idf-sys generates no symbols for a third-party component without a
+`bindings_header`, and `bindings_header` is a field on an
+`[[…extra_components]]` **entry**, not a key on the
+`[package.metadata.esp-idf-sys]` **table** — which is why the first attempt
+"parsed but was absent at build time". See `esp32tap/bindings/littlefs.h`.
+
+Every write stages into a temp file and is **renamed** over its destination;
+`lfs_rename` is one atomic metadata commit, so a power cut leaves a record at
+its previous content — never half-written, never missing, never duplicated.
+That is strictly safer than what it replaced, whose update path erased first
+and documented the resulting loss window as acceptable. What this tier still
+owns is a 4-byte sequence number per record, because a filesystem has no
+notion of "the third-newest record" and every list endpoint is built on one.
 
 **Memory is the design, not a consideration**, and there are three mechanisms:
 
-* `recstore::Ring` keeps `SLOTS*4+8` bytes resident and nothing else — 200
-  bytes for all three rings, independent of what is stored.
+* The sequence indexes keep `SLOTS*4+8` bytes each and nothing else — **200
+  bytes** for all three sets, independent of what is stored, exactly as the
+  deleted rings did. A filesystem is not free on top of that: littlefs holds a
+  read cache, a program cache and a lookahead bitmap for the life of the mount
+  (sized explicitly in `sdkconfig.defaults` at 128/128/32 bytes rather than
+  defaulted at 512/512/128), plus `lfs_t` and the esp_littlefs wrapper. That
+  part is **measured, not estimated**: `net::store::mount_once` samples the
+  free heap either side of `esp_vfs_littlefs_register` and latches the
+  difference, so the figure `QT store_stat` reports is this device's.
+  **Measured total: 992 bytes** — 200 of index plus **792** of mount, against
+  the 200 bytes the rings cost. That is the whole price of the swap, it is
+  paid once at boot, and it does not move with stored volume, record size or
+  request count (this tier opens one file at a time and closes it before it
+  returns, so littlefs's per-open-file buffer is transient and its four-entry
+  descriptor cache never has to grow).
 * A record is read into a `reqbudget` slot, decoded, used and forgotten.
   Records are a **binary** format (`program_core::record`) rather than the JSON
   they are served as, precisely so the worst case is ~936 bytes and fits one
@@ -398,8 +431,10 @@ blob for the profile.
 That is the property whose absence let ~15 unauthenticated requests exhaust the
 C++ tier's heap and reboot it mid-run, dropping the relay.
 `test_records.py::test_resident_memory_does_not_grow_with_writes_or_with_requests`
-drives 240 writes and 10 full list reads and asserts both the ring residency
-and the free heap.
+drives 240 writes and 10 full list reads and asserts both the residency figure
+and the free heap. Both it and `test_store_persistence.py` passed the LittleFS
+swap **completely unmodified**, which is what makes the swap a proof rather
+than a claim.
 
 Proven in QEMU by `tools/qemu_scenarios/test_records.py` (11 scenarios):
 a saved workout survives a **reboot**, read back through the same endpoint;
