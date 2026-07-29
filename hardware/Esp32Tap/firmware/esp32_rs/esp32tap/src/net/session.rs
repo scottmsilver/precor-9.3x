@@ -79,10 +79,13 @@ const _: () = assert!(
      stack — raise net::session::STACK_BYTES"
 );
 
-/// Stack [`push_frames`] puts on the HTTPD task: the three rendered frames plus
+/// Stack [`push_frames`] puts on the HTTPD task: the four rendered frames plus
 /// the call frames around them.
-const PUSH_FRAME_BYTES: usize =
-    crate::net::program::STATE_BUF + crate::net::api::STATUS_BUF + SESSION_BUF + 512;
+const PUSH_FRAME_BYTES: usize = crate::net::program::STATE_BUF
+    + crate::net::api::STATUS_BUF
+    + SESSION_BUF
+    + crate::net::hrm::HR_FRAME_BUF
+    + 512;
 
 const _: () = assert!(
     PUSH_FRAME_BYTES + 4096 < crate::net::http::HTTPD_STACK_BYTES as usize,
@@ -222,11 +225,48 @@ pub fn push_frames() {
 
     let sess = render_session(&lock(&SNAPSHOT));
 
-    // ONE call, so the three frames share one budget and one enumeration.
+    // The `hr` frame. SENT UNCONDITIONALLY, including when nothing is
+    // connected: `TreadmillViewModel.handleMessage` writes `heartRate` from
+    // this message, so a device that only ever sent it while a strap was
+    // attached would leave the last live bpm frozen on screen after the strap
+    // walked away. Zero bpm is what every consumer already reads as "no
+    // reading" (`heartRate > 0` gates all three Kotlin call sites).
+    let mut hrf = [0u8; crate::net::hrm::HR_FRAME_BUF];
+    let hr_n = crate::net::hrm::render_ws(&mut hrf);
+
+    // ONE call, so the frames share one budget and one enumeration.
     match prog_n {
-        0 => crate::net::ws::send_all(&[&status[..status_n], &sess.b[..sess.n]]),
-        n => crate::net::ws::send_all(&[&status[..status_n], &prog[..n], &sess.b[..sess.n]]),
+        0 => crate::net::ws::send_all(&[
+            &status[..status_n],
+            &sess.b[..sess.n],
+            &hrf[..hr_n],
+        ]),
+        n => crate::net::ws::send_all(&[
+            &status[..status_n],
+            &prog[..n],
+            &sess.b[..sess.n],
+            &hrf[..hr_n],
+        ]),
     }
+}
+
+/// Distance in METRES and workout elapsed in seconds, for FTMS Treadmill Data.
+///
+/// The recorder keeps distance in thousandths of a MILE (`distance_milli`,
+/// which is what `record.rs` renders as `x.xx mi` and what the app's session
+/// frame carries); FTMS's Total Distance field is metres. The conversion is
+/// `ble_core`'s and host-tested — doing it here with a hand-written constant
+/// is how a treadmill ends up reporting 1.6x its real distance to Zwift.
+///
+/// Elapsed SATURATES at `u16::MAX` (18h12m) rather than wrapping: a workout
+/// that long is not going to happen, and a wrap would send a client an elapsed
+/// time that went backwards.
+pub fn ftms_metrics() -> (u32, u16) {
+    let s = *lock(&SNAPSHOT);
+    (
+        ble_core::ftms::miles_milli_to_meters(s.distance_milli),
+        s.elapsed_s.min(u16::MAX as u32) as u16,
+    )
 }
 
 /// The history entry the loaded program came from, so its progress can be

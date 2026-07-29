@@ -179,3 +179,38 @@ CONFIG_MDNS_MAX_INTERFACES=1
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="/project/hardware/Esp32Tap/firmware/esp32_rs/partitions_esp32tap.csv"
+
+# --- Slice 6: BLE (NimBLE). --------------------------------------------------
+#
+# TWO KEYS ARE THE WHOLE ENABLEMENT, and they were found by READING rather than
+# probing — esp-idf-sys 0.37's own src/include/esp-idf/bindings.h gates the
+# NimBLE headers on exactly `CONFIG_BT_ENABLED` plus `CONFIG_BT_NIMBLE_ENABLED`
+# (and excludes only S2/P4, so the S3 is fine). BUILD-OPTIONS.md does NOT
+# document them; it points at `cargo pio espidf menuconfig`, which applies to
+# the `pio` builder and not the `native` one this port uses.
+#
+# NO `extra_components` AND NO `bindings_header` ARE NEEDED, and that is not an
+# oversight — it is the mDNS lesson applied in reverse. mDNS needed
+# `extra_components` because it is a MANAGED (remote) component outside base
+# ESP-IDF. `bt` is a BASE component, compiled by the native builder's own CMake
+# tree and gated purely by Kconfig, exactly like `esp_https_server` above:
+# turning the symbol on is sufficient to make `nimble_port_*`, `ble_hs_*`,
+# `ble_gap_*`, `ble_gatts_*` and `ble_gattc_*` appear in the generated bindings.
+CONFIG_BT_ENABLED=y
+# Bluedroid is the DEFAULT stack when BT is enabled and it is the wrong one:
+# it is a Kconfig `choice`, so naming NimBLE selects it, and the explicit
+# negative below makes the intent unmissable to anyone reading this file.
+# CONFIG_BT_BLUEDROID_ENABLED is not set
+CONFIG_BT_NIMBLE_ENABLED=y
+#
+# TWO connections, not the IDF default of 3. This device needs exactly two: one
+# inbound (a fitness app on the FTMS peripheral) and one outbound (a heart-rate
+# strap on the central). Each slot costs controller and host memory whether or
+# not it is used, and "resident memory must not move with connection count"
+# starts with bounding the count.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+# The FTMS Treadmill Data value is 13 bytes and an HR Measurement is 2-3, so
+# nothing here needs a large MTU. The default (256) buys a bigger msys pool for
+# no benefit; 128 still clears every payload this firmware sends or receives
+# with room to spare.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=128

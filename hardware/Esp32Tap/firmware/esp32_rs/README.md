@@ -66,7 +66,7 @@ cd safety_core && cargo test
 cargo test --manifest-path program_core/Cargo.toml
 cargo test --manifest-path reqbudget/Cargo.toml
 
-# Host — the BLE protocol tier (70 cases, ~1 s). Every vector is the Pi
+# Host — the BLE protocol tier (89 cases, ~1 s). Every vector is the Pi
 # daemon's, ported byte for byte. This is where nearly all the real BLE
 # behaviour is verifiable; the radio is not (see "BLE" below).
 cargo test --manifest-path ble_core/Cargo.toml
@@ -473,7 +473,7 @@ encode as 1930 while Speed Range advertises 1931; the uint24 distance field).
 If this crate and a daemon disagree, this crate is wrong: a phone that has been
 talking to the Pi must see the same bytes from the ESP32.
 
-Proven, on the host, in about a second (70 cases):
+Proven, on the host, in about a second (89 cases):
 
 * Every characteristic's bytes: Treadmill Data (13 bytes, fixed flags 0x040C),
   Feature, Speed Range, Incline Range, Training Status, Machine Status, and the
@@ -495,17 +495,120 @@ Proven, on the host, in about a second (70 cases):
   controller, and the peer is told `INVALID_PARAM` — where the Pi silently
   substituted 12 mph and moved the belt at a speed nobody asked for.
 
-Not proven, and not claimed — **there is no radio in this phase and none in
-QEMU**:
+### The BLE tier on the device (`esp32tap/src/ble/`, feature `ble`)
 
-* No advertising, connection, pairing, bonding, notification or indication has
-  been exercised anywhere. `ble_core` contains no radio code at all; NimBLE is
-  not yet enabled in `sdkconfig.defaults`.
-* Nothing here says the stack FITS. NimBLE's heap cost alongside TLS and the
-  app tier is unmeasured, and unmeasured is the state in which a device
-  reboots on a real board.
+`ble_core` is bytes; this is the radio. `ble/ftms.rs` registers the FTMS GATT
+service and advertises; `ble/central.rs` scans for a heart-rate strap and
+subscribes to its notifications; `ble/mod.rs` owns the NimBLE port lifecycle.
+`src/hr.rs` holds the reading (fixed-size, `#![forbid(unsafe_code)]`) and
+`net/hrm.rs` serves it on `/api/hrm*`, the `/ws` `hr` frame and `/api/status`.
+
+**A Control Point write reaches the belt through `control::command` and nowhere
+else** — the same function `POST /api/speed` and the interval executor use, so
+one lease, one set of clamps, one auto-emulate policy. The BLE surface shares
+`Surface::Http` deliberately: a third surface would be a third lease holder,
+and a phone on Bluetooth would emergency-stop the same phone on HTTP every time
+the user touched the other control.
+
+**Enabling NimBLE is two Kconfig keys and nothing else** — `CONFIG_BT_ENABLED=y`
+plus `CONFIG_BT_NIMBLE_ENABLED=y`. They came from reading esp-idf-sys 0.37.2's
+own `src/include/esp-idf/bindings.h:603-688`, which gates the NimBLE headers on
+exactly those two symbols (BUILD-OPTIONS.md does not document them; it points
+at a `menuconfig` flow that applies to the `pio` builder, not the `native` one
+this port uses). `bt` is a BASE ESP-IDF component, so — unlike mDNS — no
+`extra_components` and no `bindings_header` are involved.
+
+#### THE FIRST BLE-ENABLED IMAGE REBOOT-LOOPED, and that is the design constraint
+
+`nimble_port_init` does **not** return an error when the controller cannot come
+up. Measured, under esp-QEMU 9.2.2 (esp32s3):
+
+```
+I (15990) BLE_INIT: BT controller compile version [b7de11e]
+I (15991) BLE_INIT: Using main XTAL as clock source
+assert failed: 0x4206ea5c <cached disabled>:1753
+Backtrace: ...
+Rebooting...
+```
+
+An `assert()` inside the closed-source BT blob is a panic; under this
+firmware's PLAN-normative `CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT` a panic is an
+immediate reset; **and a reset drops the relay mid-run**. The device booted,
+served HTTPS for a moment, and died, every ~1.8 s, forever.
+
+So "a failing radio is survivable" could not be written as a `match` on a
+return code — by the time that call returns there is nothing left to handle. It
+is a guard in FRONT of the call: `ble::identity_address` refuses to hand the
+controller a part whose eFuse identity address is not a factory unicast MAC
+(OUI not `00:00:00`, multicast bit clear). That is a question *about the radio*
+and it is meaningful on hardware — a part with a blank eFuse block cannot
+advertise a valid address — rather than an "am I an emulator?" sniff, which is
+a check that lies on any hardware it has not met. QEMU reports
+`00:00:00:00:00:02`, which is why a bare all-zero test was not enough.
+
+The BLE task is also spawned **last**, at the lowest priority in the system,
+after the belt is already controllable and the server is already answering, and
+it is deliberately **not** WDT-supervised: the watchdog's remedy is a reboot,
+and trading a working treadmill for a stalled radio is the wrong trade. That
+exemption is written into the normative matrix in `tasks/mod.rs` with its cost
+stated (a wedged NimBLE host is not detected or recovered; Bluetooth goes
+quiet and nothing else changes).
+
+#### Memory — measured, and one number honestly missing
+
+Same image, same sdkconfig, `--features qemu-test,net` with and without `ble`:
+
+| | no BLE | with BLE | delta |
+|---|---|---|---|
+| app image | 890 560 B | 1 141 104 B | **+250 544 B** (54% of the 2 MB factory partition) |
+| internal RAM free at `heap_init` | 281 024 B (274 KiB) | 252 352 B (246 KiB) | **-28 672 B (28 KiB)** |
+
+The 28 KiB is the static cost of *linking* the stack — `.data`/`.bss` plus the
+IRAM carve-out, which on the S3 comes out of the same SRAM (from the link map:
+~1.5 KB DRAM and ~18 KB IRAM attributable to `libbt.a`/`libbtdm_app.a`). It is
+paid before `app_main` whether or not the radio ever starts.
+
+**The runtime heap cost of a NimBLE host that actually initialises is
+UNMEASURED, and no number is quoted for it here.** It cannot be measured
+without a radio: the controller aborts before `nimble_port_init` returns. The
+firmware carries the instrument for it — `bring_up` samples the free heap
+either side of that call and logs `ble: heap cost N bytes (free X -> Y)` — so
+the figure comes off the first real board rather than out of a blog post.
+Whether the stack fits alongside TLS and the app tier is therefore **an open
+question**, and it is the first thing to check on hardware.
+
+#### What QEMU DOES prove: the device survives a dead radio
+
+`tools/qemu_scenarios/test_ble_degraded.py` (sweep gate `bledegrade`, 7 cases,
+~36 s) asserts, on a device whose radio was refused:
+
+* one boot, no `Rebooting...`, no `assert failed:`, no Guru Meditation — and it
+  fails loudly if NimBLE ever *does* come up under QEMU, because then the suite
+  would be vacuous;
+* HTTPS still serves the banner and a complete `/api/status` over a real TLS
+  handshake;
+* `/ws` still pushes `status`, `session` and `hr`;
+* `POST /api/speed` still reaches the belt;
+* `/api/hrm`, `/api/hrm/select`, `/api/hrm/forget`, `/api/hrm/scan` all answer
+  rather than 404 — the Pi's contract with `hrm-daemon` stopped — and a
+  malformed address is rejected without wedging the surface;
+* the heap does not drift while the parked BLE task ticks.
+
+The whole qemu-test image is built `--features qemu-test,net,ble`, so **every**
+scenario in the tree already runs against a device whose radio failed to come
+up. That file states the property; the other twenty would go red with it.
+
+Not proven, and not claimed — **QEMU has no BLE radio and there is no board**:
+
+* No advertising, connection, pairing, bonding, MTU negotiation, notification
+  or indication has ever run. Every line in `ble/ftms.rs` and `ble/central.rs`
+  past the identity guard is UNEXECUTED code.
+* NimBLE's runtime heap cost alongside TLS and the app tier is unmeasured (see
+  above), and unmeasured is the state in which a device reboots on a real board.
 * No real client (Zwift, QZ, Kinomap, Apple Watch, Garmin, a chest strap) has
   connected to this device.
+* The HRM strap address is kept in RAM only, not NVS — a known difference from
+  the Pi's `hrm_config.json`, so a strap must be re-picked after a power cycle.
 
 That work is tracked in **precor-9_3x-l0h**, which names each unproven item;
 it needs a physical board, which does not exist yet.

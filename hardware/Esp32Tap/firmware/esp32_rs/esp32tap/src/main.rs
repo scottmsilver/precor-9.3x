@@ -18,10 +18,14 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(feature = "ble")]
+#[allow(unsafe_code)] // NimBLE FFI only — see ble/mod.rs.
+mod ble;
 mod context;
 mod control;
 #[allow(unsafe_code)] // THE ONLY unsafe in the firmware — see hal/mod.rs.
 mod hal;
+mod hr;
 #[cfg(feature = "net")]
 #[allow(unsafe_code)] // esp_netif/esp_eth FFI only — see net/mod.rs.
 mod net;
@@ -44,12 +48,20 @@ use safety_core::safety::controller::SafeMode;
 /// buffers and a 256-slot audit ring (PLAN's QEMU-validated stack constraint).
 static CTX: FirmwareContext = FirmwareContext::new();
 
-/// Spawn one supervised core-0 task.
+/// Spawn one pinned core-0 task.
 ///
-/// `ThreadSpawnConfiguration` is GLOBAL-then-spawn, so all three spawns must
-/// happen single-threaded, in order, from `main`. They cannot be reordered or
+/// `ThreadSpawnConfiguration` is GLOBAL-then-spawn, so every spawn must happen
+/// single-threaded, in order, from `main`. They cannot be reordered or
 /// parallelised without the configuration racing.
-fn spawn_supervised(
+///
+/// WHETHER A TASK IS WDT-SUPERVISED IS THE TASK'S OWN DECISION, taken in its
+/// body by calling `wdt::subscribe_current_task()`. Every task spawned here
+/// except the BLE tier does; `tools/check_wdt_chain.py` DISCOVERS the set from
+/// those calls and holds it against the normative matrix in `tasks/mod.rs`.
+/// The radio's exemption is argued at `ble::run`: the watchdog's remedy is a
+/// reboot, and a reboot drops the relay mid-run — which is the wrong trade for
+/// a stalled convenience feature.
+fn spawn_pinned(
     name: &'static core::ffi::CStr,
     stack: usize,
     prio: u8,
@@ -145,9 +157,9 @@ fn main() {
     }
 
     // (4) Supervised tasks — all pinned to core 0.
-    spawn_supervised(c"serial_engine", 8192, 10, tasks::serial_engine::run);
-    spawn_supervised(c"emulate_cycle", 6144, 9, tasks::emulate_cycle::run);
-    spawn_supervised(c"interval_exec", 16384, 5, tasks::interval_executor::run);
+    spawn_pinned(c"serial_engine", 8192, 10, tasks::serial_engine::run);
+    spawn_pinned(c"emulate_cycle", 6144, 9, tasks::emulate_cycle::run);
+    spawn_pinned(c"interval_exec", 16384, 5, tasks::interval_executor::run);
 
     // (5) Network/application tier — out of scope for this port; absent.
 
@@ -156,7 +168,7 @@ fn main() {
     #[cfg(feature = "qemu-test")]
     {
         logw!("esp32tap QEMU-TEST build (never flash to hardware)");
-        spawn_supervised(c"qemu_test", 6144, 4, qemu_test::run);
+        spawn_pinned(c"qemu_test", 6144, 4, qemu_test::run);
     }
 
     logi!("esp32tap phase-1 safety core started (Proxy)");
@@ -194,7 +206,7 @@ fn main() {
         // several temporaries on its way out of the store. Level-1 interrupts
         // also run on the interrupted task's stack, so the headroom above that
         // is reserved, not spare.
-        spawn_supervised(c"session", net::session::STACK_BYTES, 4, net::session::run);
+        spawn_pinned(c"session", net::session::STACK_BYTES, 4, net::session::run);
 
         match net::bring_up() {
             Ok(()) => match net::wait_for_ip(15_000) {
@@ -251,6 +263,18 @@ fn main() {
                                         Ok(()) => logi!("profile routes registered"),
                                         Err(e) => logi!("net: profile register failed ({})", e),
                                     }
+                                    // The heart-rate routes. Registered
+                                    // WHETHER OR NOT this build has a radio:
+                                    // the app calls all four, and a device
+                                    // without Bluetooth must answer
+                                    // "not connected" rather than 404, which
+                                    // to a client looks like much older
+                                    // firmware. Same contract as the Pi with
+                                    // hrm-daemon stopped.
+                                    match net::hrm::register(h) {
+                                        Ok(()) => logi!("hrm routes registered"),
+                                        Err(e) => logi!("net: hrm register failed ({})", e),
+                                    }
                                     // EXACT STRING: the net scenarios wait on
                                     // this before issuing their first request.
                                     logi!("https server up on :{}", net::http::port());
@@ -276,6 +300,19 @@ fn main() {
             Err(e) => logi!("net: bring-up failed (err {}) — continuing headless", e),
         }
     }
+
+    // (7) The radio. DEAD LAST, and that ordering is the whole safe-degradation
+    // argument in one line: the belt is already controllable, the server is
+    // already answering, and `/ws` is already pushing before NimBLE is asked
+    // to exist. Nothing above this point waits on anything below it, so a
+    // controller that is absent (QEMU), broken, or simply slow to come up
+    // costs a log line and nothing else.
+    //
+    // Spawned rather than called: `nimble_port_init` runs on the spawned task,
+    // so even a HANG inside it leaves `main` free to return and every other
+    // task running.
+    #[cfg(feature = "ble")]
+    spawn_pinned(c"ble", ble::STACK_BYTES, ble::PRIORITY, ble::run);
 
     // app_main returns into the IDF main task, which then idles. The
     // supervised tasks own the machine from here.

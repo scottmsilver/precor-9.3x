@@ -65,3 +65,4 @@
 
 pub mod ftms;
 pub mod hrm;
+pub mod peer;

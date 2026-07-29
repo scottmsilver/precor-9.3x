@@ -74,16 +74,53 @@ def rel(p: Path, root: Path) -> str:
     return str(p.relative_to(root)).replace("\\", "/")
 
 
+def strip_comments(text: str) -> str:
+    """Blank out `//` and `/* */` comments, keeping line structure.
+
+    NEEDED, not cosmetic. Discovery below matched raw file text, so a file that
+    merely DISCUSSED `wdt::subscribe_current_task()` in a doc comment was
+    classified as a supervised task — and then failed for not aborting and not
+    feeding. Three files did: `main.rs` (which spawns them), `tasks/mod.rs`
+    (which holds the normative matrix), and `ble/mod.rs` (which explains why
+    the radio is deliberately unsupervised). A gate that cannot tell code from
+    prose about code punishes exactly the documentation it wants.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        if text[i] == "/" and i + 1 < n and text[i + 1] == "*":
+            while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+            out.append("  ")
+            i += 2
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def discover_supervised() -> list[Path]:
     """Every firmware file that subscribes a task to the WDT.
 
     DISCOVERED, NOT LISTED. The previous version named three files and printed
     "3/3 supervised tasks" while a fourth existed.
 
-    Matched on the QUALIFIED call `wdt::subscribe_current_task()`, so
-    `hal/wdt.rs` — which DEFINES it — is not mistaken for a task.
+    Matched on the QUALIFIED call `wdt::subscribe_current_task()` in CODE, so
+    `hal/wdt.rs` — which DEFINES it — is not mistaken for a task, and neither
+    is a file that only writes about it.
     """
-    return [p for p in FW_SRC.rglob("*.rs") if "wdt::subscribe_current_task()" in p.read_text(encoding="utf-8")]
+    return [
+        p
+        for p in FW_SRC.rglob("*.rs")
+        if "wdt::subscribe_current_task()" in strip_comments(p.read_text(encoding="utf-8"))
+    ]
 
 
 def matrix_rows() -> set[str]:

@@ -27,6 +27,11 @@ reqbudget = { path = "../reqbudget" }
 recstore = { path = "../recstore" }
 # The interval executor's decisions: portable, allocation-free, host-tested.
 program_core = { path = "../program_core" }
+# The BLE wire bytes: FTMS encoding + HR Measurement parsing, ported from the
+# working Pi daemons and host-tested against their vectors. Taken
+# UNCONDITIONALLY, not behind `feature = "ble"`, because `src/hr.rs` uses its
+# `HrReading`/`peer` types to answer `/api/hrm` on a build with no radio.
+ble_core = { path = "../ble_core" }
 
 # Espressif-provided. NOTE ON esp-idf-svc: it would be the natural home for
 # the HTTP/TLS server and mDNS wrappers, but its latest release (0.51) pins
@@ -88,3 +93,17 @@ qemu-test = ["safety_core/exit-ordering-audit"]
 # Gated while it is developed so the safety image and its gates are
 # unaffected until the stack is proven.
 net = []
+# The BLE tier: FTMS peripheral + HRM central over NimBLE.
+#
+# GATED FOR THE SAME REASON `net` IS, and with the same honesty about what is
+# proven: QEMU has no BLE radio, so nothing about advertising, connecting,
+# pairing or notifying can be tested here. What CAN be tested — and is, by
+# every QEMU gate in the tree, because the test image carries this feature —
+# is that a device whose radio does not come up still boots, still serves
+# HTTPS, still pushes `/ws`, and still moves the belt. See bead
+# precor-9_3x-l0h for what stays unproven until a board exists.
+#
+# The Kconfig side (`CONFIG_BT_ENABLED`, `CONFIG_BT_NIMBLE_ENABLED`) lives in
+# sdkconfig.defaults; a build with this feature off simply never references
+# libbt, so the linker drops it.
+ble = []

@@ -21,6 +21,7 @@
 //! IDF changes a default, that citation is what to re-check.
 
 pub mod api;
+pub mod hrm;
 pub mod profile;
 pub mod records;
 pub mod session;

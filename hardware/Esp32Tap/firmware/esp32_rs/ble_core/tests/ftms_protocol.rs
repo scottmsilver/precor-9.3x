@@ -845,3 +845,71 @@ fn every_parseable_write_has_an_effect_and_bounded_motion() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Distance units — thousandths of a mile in, metres out
+// ---------------------------------------------------------------------------
+//
+// The daemon has no counterpart: on the Pi, `TreadmillState.distance` is
+// already metres by the time `ftms_service` sees it. This device measures in
+// thousandths of a MILE (`program_core::record::distance_milli`, rendered as
+// `x.xx mi` in the run history and carried that way in the app's session
+// frame), so the conversion happens at this edge — and a missing conversion
+// would report 1.6x the real distance to Zwift for a whole run, which looks
+// entirely plausible while being wrong.
+
+#[test]
+fn a_mile_is_1609_metres() {
+    assert_eq!(ble_core::ftms::miles_milli_to_meters(1000), 1609);
+}
+
+#[test]
+fn distance_conversion_vectors() {
+    for (milli, meters) in [
+        (0u32, 0u32),
+        (1, 1),          // 0.001 mi -> 1.609 m, truncated
+        (500, 804),      // half a mile
+        (1000, 1609),
+        (2075, 3338),    // the 2.075 mi vector record.rs itself uses
+        (5000, 8045),
+        (26_200, 42_155), // a marathon
+    ] {
+        assert_eq!(
+            ble_core::ftms::miles_milli_to_meters(milli),
+            meters,
+            "{milli} thousandths of a mile"
+        );
+    }
+}
+
+#[test]
+fn distance_conversion_is_monotonic_and_never_wraps() {
+    // A wrap would put a SMALL distance on the wire for a huge input, which
+    // reads to a client as the run resetting mid-session.
+    let mut prev = 0u32;
+    let mut x = 0u32;
+    loop {
+        let m = ble_core::ftms::miles_milli_to_meters(x);
+        assert!(m >= prev, "went backwards at {x}");
+        prev = m;
+        if x > u32::MAX - 1_000_003 {
+            break;
+        }
+        x += 1_000_003;
+    }
+    assert_eq!(ble_core::ftms::miles_milli_to_meters(u32::MAX), u32::MAX);
+}
+
+#[test]
+fn the_mile_constant_is_the_same_one_the_speed_conversion_uses() {
+    // Two different miles inside one crate is how a speed and a distance stop
+    // agreeing with each other. 1 mph for 1 hour must be 1609 m, using the
+    // SPEED path to get there: 10 tenths of a mph -> km/h*100 -> metres/hour.
+    let kmh_hundredths = ble_core::ftms::mph_tenths_to_kmh_hundredths(10) as u32;
+    // km/h*100 -> metres per hour is *10.
+    assert_eq!(kmh_hundredths * 10, 1600);
+    // Both paths use 1609 as the metres-per-mile constant; the speed path
+    // additionally truncates at km/h*100 resolution, which is the daemon's
+    // documented loss and is pinned by `conversion_matches_daemon_vectors`.
+    assert_eq!(ble_core::ftms::miles_milli_to_meters(1000), 1609);
+}

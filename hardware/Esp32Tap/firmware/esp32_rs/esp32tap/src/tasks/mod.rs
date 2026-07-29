@@ -8,6 +8,22 @@
 //! | session        | 0    | 4    | 12288 | subscribe, ABORT on fail  | 1 s     | net/session (feature `net`) |
 //! | shim_task      | 0    | 4    | 6144  | subscribe, ABORT on fail  | 100 ms  | qemu_test/shim_task (feature `qemu-test`, NEVER flashed) |
 //!
+//! THE BLE TIER IS NOT IN THE MATRIX, AND THAT IS A DECISION RATHER THAN A
+//! HOLE. `ble::run` (core 0, prio 3 — the lowest in the system, stack 4096,
+//! 1 s cadence, feature `ble`) deliberately does NOT subscribe to the task
+//! watchdog. The watchdog's action here is `panic -> silent reboot`, and a
+//! reboot DROPS THE RELAY MID-RUN. Trading a working treadmill for a stalled
+//! radio is the wrong trade every time: Bluetooth is a convenience, the belt
+//! is the point. `tools/check_wdt_chain.py` discovers supervised tasks by
+//! their `wdt::subscribe_current_task()` call, so a task that does not
+//! subscribe needs no row — it is named here anyway so the absence is
+//! findable, and so the next person does not "fix" it.
+//!
+//! What that costs, stated plainly: a wedged NimBLE host is NOT detected or
+//! recovered. The observable symptom is Bluetooth going quiet; the belt, the
+//! console, the HTTPS server and `/ws` are all unaffected, because nothing
+//! above them waits on the radio (see the spawn ordering in `main`).
+//!
 //! THE SESSION RECORDER IS IN THE MATRIX EVEN THOUGH IT LIVES IN `net`. It was
 //! absent from this table for a whole slice while being a fourth
 //! WDT-supervised task — and the only one that touches flash, which is the

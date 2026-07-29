@@ -195,6 +195,11 @@ if [ "$ONLY" != "prod" ]; then
     # the scenarios drive the device over HTTP. Production never enables it
     # until the tier is signed off, which is what keeps the safety image and
     # its gates unaffected.
-    build_one ../build_qemu_test target/qemu --features qemu-test,net
+    # ...and `ble`, for the same reason and with the same honesty: QEMU has no
+    # BLE radio, so carrying the feature here is what makes every gate below
+    # run against a device whose radio FAILED TO COME UP. That is the one BLE
+    # property this environment can actually prove, and proving it on every
+    # scenario rather than in one test is the strongest form of it.
+    build_one ../build_qemu_test target/qemu --features qemu-test,net,ble
 fi
 '

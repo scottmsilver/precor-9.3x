@@ -315,6 +315,66 @@ pub(crate) fn parse_key_hundredths(body: &[u8], key: &[u8]) -> Option<i32> {
     parse_value_hundredths(&buf[..head.len() + n])
 }
 
+/// The STRING after `"<key>"`, copied into `out`. Returns its length.
+///
+/// The number parsers above cover every endpoint that carries a value; this
+/// covers the one that carries an identifier (`POST /api/hrm/select` with a
+/// BLE address). Anchored as a JSON member the same way [`parse_key_hundredths`]
+/// is, for the same reason: searching for the bare key bytes matches inside a
+/// VALUE, so `{"note":"address","x":"..."}` would set the address.
+///
+/// BOUNDED AND TOTAL. The copy stops at `out.len()` and the scan stops at the
+/// end of the body, so a body with an unterminated string yields `None` rather
+/// than running off the end. Escape sequences are NOT interpreted — nothing
+/// this parses has any (a BLE address is hex and colons), and a `\"` inside the
+/// value therefore ends it early, which is a rejected address rather than a
+/// misread one.
+pub(crate) fn parse_key_str(body: &[u8], key: &[u8], out: &mut [u8]) -> Option<usize> {
+    if key.is_empty() {
+        return None;
+    }
+    let mut pat = [0u8; 24];
+    if key.len() + 2 > pat.len() {
+        return None;
+    }
+    pat[0] = b'"';
+    pat[1..1 + key.len()].copy_from_slice(key);
+    pat[1 + key.len()] = b'"';
+    let pat = &pat[..key.len() + 2];
+    if pat.len() > body.len() {
+        return None;
+    }
+    let pos = body.windows(pat.len()).position(|w| w == pat)?;
+    let mut i = pos + pat.len();
+    while i < body.len() && body[i] == b' ' {
+        i += 1;
+    }
+    if i >= body.len() || body[i] != b':' {
+        return None;
+    }
+    i += 1;
+    while i < body.len() && body[i] == b' ' {
+        i += 1;
+    }
+    if i >= body.len() || body[i] != b'"' {
+        return None;
+    }
+    i += 1;
+    let start = i;
+    while i < body.len() && body[i] != b'"' {
+        i += 1;
+    }
+    if i >= body.len() {
+        return None; // unterminated
+    }
+    let n = i - start;
+    if n > out.len() {
+        return None;
+    }
+    out[..n].copy_from_slice(&body[start..i]);
+    Some(n)
+}
+
 /// GET /api/status — read-only, no lease, no belt effect.
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
@@ -406,13 +466,25 @@ fn format_status(
         incline_half / 2,
         if incline_half % 2 == 0 { 0 } else { 5 },
     );
+    // HEART RATE RIDES IN THE STATUS FRAME, and not only in the `hr` one. The
+    // app's `StatusMessage` declares `heart_rate`, `hrm_connected` and
+    // `hrm_device` (with lenient defaults, so they are optional), and
+    // `TreadmillViewModel` writes the SAME three StateFlow fields from both
+    // the status frame and the dedicated `hr` push. Sending them here means a
+    // client that connected mid-session sees the current bpm on its first
+    // frame instead of waiting for the next heartbeat.
+    //
+    // The device name came off the air from a stranger; it is safe between
+    // two `"` because `ble_core::peer::FixedName` made it safe at ingest.
+    let hr = crate::hr::snapshot();
     let _ = write!(
         w,
         concat!(
             r#"{{{}"type":"status","proxy":{},"emulate":{},"emu_speed":{},"#,
             r#""emu_speed_mph":{}.{},"emu_incline":{}.{},"speed":{}.{},"#,
             r#""incline":{}.{},"treadmill_connected":{},"mode":"{}","#,
-            r#""relay":{},"fault":{}}}"#
+            r#""relay":{},"fault":{},"heart_rate":{},"hrm_connected":{},"#,
+            r#""hrm_device":"{}"}}"#
         ),
         lead,
         !emulating,
@@ -429,7 +501,10 @@ fn format_status(
         connected,
         mode_name(mode),
         relay,
-        fault
+        fault,
+        hr.bpm,
+        hr.connected,
+        hr.name.as_str(),
     );
     w.len
 }
@@ -447,8 +522,10 @@ const fn mode_name(m: safety_core::safety::controller::SafeMode) -> &'static str
 /// Status bodies are rendered into a fixed stack buffer; `BufWriter` REFUSES to
 /// overflow it, so a body that outgrows this is truncated into a visible
 /// failure rather than smashing the httpd task's stack. Measured longest
-/// rendering (`"ok":true,` lead, negative-free maxima) is ~215 bytes.
-pub(crate) const STATUS_BUF: usize = 320;
+/// rendering (`"ok":true,` lead, negative-free maxima) was ~215 bytes before
+/// the three heart-rate fields; those add at most 24 (`MAX_NAME`) + 46 for the
+/// keys and a five-digit bpm, so ~285. 448 keeps the same margin the 320 had.
+pub(crate) const STATUS_BUF: usize = 448;
 
 struct BufWriter<'a> {
     buf: &'a mut [u8; STATUS_BUF],

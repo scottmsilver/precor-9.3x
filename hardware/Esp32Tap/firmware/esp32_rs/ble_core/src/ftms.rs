@@ -400,6 +400,33 @@ pub fn kmh_hundredths_to_mph_tenths(kmh_hundredths: u16) -> u16 {
     ((kmh_hundredths as u32) * 100 / 1609) as u16
 }
 
+/// Thousandths of a MILE -> whole METRES, for Treadmill Data's Total Distance.
+///
+/// The device measures distance in thousandths of a mile — `distance_milli` in
+/// `program_core::record`, which is what the run history renders as `x.xx mi`
+/// and what the app's session frame carries. FTMS's Total Distance is metres.
+/// A firmware that skipped this would report 1.6x its real distance to Zwift,
+/// which is the kind of wrong that looks plausible for an entire run.
+///
+/// `1609` metres per mile, matching [`mph_tenths_to_kmh_hundredths`]'s
+/// constant exactly rather than being separately rounded to 1609.344 — two
+/// different miles inside one crate is how a speed and a distance stop
+/// agreeing with each other.
+///
+/// SATURATES rather than wrapping. The uint24 field the result goes into is
+/// itself truncating (inherited from the daemon), but arriving there through a
+/// u32 wrap would put a SMALL distance on the wire for a huge input, which
+/// reads as the run resetting. u64 intermediate: `u32::MAX * 1609` overflows
+/// u32 by four orders of magnitude.
+pub fn miles_milli_to_meters(miles_milli: u32) -> u32 {
+    let m = (miles_milli as u64) * 1609 / 1000;
+    if m > u32::MAX as u64 {
+        u32::MAX
+    } else {
+        m as u32
+    }
+}
+
 /// [`SpeedTenths`] -> km/h x 100 for the notify path.
 ///
 /// SATURATES THE RESULT, and that is a DELIBERATE, DOCUMENTED DIVERGENCE from

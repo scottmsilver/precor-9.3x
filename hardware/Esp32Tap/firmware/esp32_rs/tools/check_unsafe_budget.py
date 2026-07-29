@@ -52,7 +52,7 @@ CORE_SRC = ESP32_RS / "safety_core" / "src"
 PURE_FORBID_CRATES = ("safety_core", "program_core", "ble_core")
 
 # Firmware modules whose unsafe-freedom is COMPILER-enforced.
-FORBID_MODULES = ("tasks/mod.rs", "context.rs", "pins.rs", "control.rs")
+FORBID_MODULES = ("tasks/mod.rs", "context.rs", "pins.rs", "control.rs", "hr.rs")
 
 # Production (flashed) unsafe-bearing files.
 PRODUCTION_UNSAFE = {
@@ -92,12 +92,27 @@ QEMU_UNSAFE = {
     # The `/ws` push. See net/ws.rs — the FFI is socket enumeration plus one
     # frame send; `net/session.rs` still contains no FFI at all.
     "net/ws.rs",
+    # Slice 6 BLE tier, behind `feature = "ble"` (which, like `net`, the
+    # PRODUCTION image does not enable). `ble/mod.rs` is the NimBLE port
+    # lifecycle, `ble/ftms.rs` the GATT peripheral and `ble/central.rs` the
+    # HRM client. All three are pure FFI: the bytes they move are produced and
+    # consumed by `ble_core`, which is forbid+unsafe-free and host-tested.
+    #
+    # `hr.rs` and `net/hrm.rs` are DELIBERATELY ABSENT from this list.
+    # `net/hrm.rs` contains the IDF handler callbacks and so does appear below;
+    # `hr.rs` — the shared state a peer's bytes actually land in — contains no
+    # FFI at all and is `#![forbid(unsafe_code)]`, which is why it is in
+    # FORBID_MODULES instead.
+    "ble/mod.rs",
+    "ble/ftms.rs",
+    "ble/central.rs",
+    "net/hrm.rs",
 }
 UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
 
 # Exactly where `allow(unsafe_code)` may appear: file -> the modules it grants.
 ALLOW_SITES = {
-    "main.rs": {"hal", "log", "qemu_test", "net"},
+    "main.rs": {"hal", "log", "qemu_test", "net", "ble"},
 }
 
 # The documented budget.
@@ -211,7 +226,36 @@ PRODUCTION_UNSAFE_LINES = 69
 # could be a megabyte. The FFI is unchanged (one `httpd_req_to_sockfd`, one
 # `lwip_shutdown`); the growth is the counting rule attributing the second
 # function's body.
-QEMU_UNSAFE_LINES = 597
+# 597 -> 1094, +497, ALL of it Slice 6 (the BLE tier) and none of it in the
+# production image — `feature = "ble"`, like `net`, is carried only by the
+# QEMU-test build. The parts:
+#   + ble/central.rs  223  the HRM client. Five NimBLE callbacks (GAP events,
+#                          service/characteristic/descriptor discovery) plus
+#                          scan/connect/terminate. The real C boundary is 11
+#                          calls; the rest is the counting rule attributing the
+#                          whole body of every `unsafe extern "C" fn`.
+#   + ble/ftms.rs     163  the GATT peripheral: the access callback, the GAP
+#                          callback, registration, advertising, notify and
+#                          indicate. 14 C calls.
+#   + net/hrm.rs       77  four IDF request handlers. The C boundary added is
+#                          ZERO calls — every one of them reads a scalar,
+#                          delegates to `crate::hr` (which is
+#                          `#![forbid(unsafe_code)]`), and answers through
+#                          `net::api`'s existing helpers.
+#   + net/api.rs      +25  `parse_key_str` sits inside a file the rule
+#                          attributes generously; the parser itself is safe
+#                          code and the handlers around it did not change.
+#   + ble/mod.rs       34  the NimBLE port lifecycle: `nimble_port_init`, the
+#                          `ble_hs_cfg` callback wiring, the two service
+#                          constructors and the host task.
+#
+# THE NUMBER IS LARGE AND THE SHAPE IS THE POINT. Every byte these files move
+# is produced or consumed by `ble_core`, which is `#![forbid(unsafe_code)]`,
+# zero-dependency and host-tested against the Pi daemons' own vectors — and
+# `crate::hr`, where an untrusted peer's bytes actually land, is
+# `forbid(unsafe_code)` too (FORBID_MODULES above). What is inside the unsafe
+# regions is transport: mbufs in, mbufs out, handles stored in atomics.
+QEMU_UNSAFE_LINES = 1094
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

@@ -63,6 +63,15 @@ run memreview  env -C tools/qemu_scenarios python3 -m pytest test_mem_review.py 
 run tls        env -C tools/qemu_scenarios python3 -m pytest test_tls.py -q
 run tlspersist env -C tools/qemu_scenarios python3 -m pytest test_tls_persistence.py -q
 run mdns       env -C tools/qemu_scenarios python3 -m pytest test_mdns.py -q
+# The device with NO WORKING RADIO. This is the one BLE property QEMU can
+# prove, and it was NOT free: the first BLE-enabled image REBOOT-LOOPED, because
+# `nimble_port_init` does not return an error when the controller cannot come
+# up — it assert()s inside the closed-source blob, which panics, which resets
+# the SoC, which drops the relay mid-run. The guard in front of that call is
+# what this gate holds in place. Note that the whole qemu-test image carries
+# `--features ble`, so every scenario above ALSO runs against a device whose
+# radio failed; this file states the property rather than leaving it implied.
+run bledegrade env -C tools/qemu_scenarios python3 -m pytest test_ble_degraded.py -q -n 3
 run smoke      bash tools/qemu_smoke.sh
 run scenarios  env -C tools/qemu_harness python3 -m pytest test_scenarios.py -q -n 4
 if [ -n "${DEEP:-}" ]; then
