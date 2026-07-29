@@ -185,6 +185,10 @@ fn main() {
         // because the profile is read from it and that read happens first.
         net::tls::nvs_init();
         net::profile::load();
+        // The coach's key and endpoint. Read here, with the rest of NVS, and
+        // BEFORE the link comes up: whether a key exists is a fact about the
+        // device, not about the network.
+        net::coach::load();
         if net::store::mount_once() {
             logi!(
                 "store: mounted, {} bytes resident",
@@ -207,6 +211,17 @@ fn main() {
         // also run on the interrupted task's stack, so the headroom above that
         // is reserved, not spare.
         spawn_pinned(c"session", net::session::STACK_BYTES, 4, net::session::run);
+        // The AI coach. Spawned with the other network-tier tasks and NOT
+        // WDT-supervised — see net/coach.rs for the whole argument, and
+        // tasks/mod.rs for its named absence from the matrix. It idles until a
+        // message arrives, so a device nobody talks to pays a task and nothing
+        // else.
+        spawn_pinned(
+            c"coach",
+            net::coach::STACK_BYTES,
+            net::coach::PRIORITY,
+            net::coach::run,
+        );
 
         match net::bring_up() {
             Ok(()) => match net::wait_for_ip(15_000) {
@@ -274,6 +289,17 @@ fn main() {
                                     match net::hrm::register(h) {
                                         Ok(()) => logi!("hrm routes registered"),
                                         Err(e) => logi!("net: hrm register failed ({})", e),
+                                    }
+                                    // The coach routes. Registered whether or
+                                    // not a key is configured, for the same
+                                    // reason the HRM routes are registered
+                                    // without a radio: the app calls them, and
+                                    // a 404 reads as much older firmware where
+                                    // an honest "not set up yet" reads as the
+                                    // truth.
+                                    match net::coach::register(h) {
+                                        Ok(()) => logi!("coach routes registered"),
+                                        Err(e) => logi!("net: coach register failed ({})", e),
                                     }
                                     // EXACT STRING: the net scenarios wait on
                                     // this before issuing their first request.

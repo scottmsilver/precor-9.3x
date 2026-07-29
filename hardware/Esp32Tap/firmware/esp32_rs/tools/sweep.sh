@@ -67,6 +67,19 @@ run wspush     env -C tools/qemu_scenarios python3 -m pytest test_ws.py -q -n 3
 # committed, passing test that nothing runs is not a test. The two
 # heap-convergence cases in the file cost ~5 min between them and are DEEP-only.
 run memreview  env -C tools/qemu_scenarios python3 -m pytest test_mem_review.py -q -n 4 -k "not storm and not rejected"
+# The AI coach tier, against a LOCAL STUB the test controls. The live endpoint
+# is DELIBERATELY not a gate — a real key, nondeterministic words and somebody
+# else's uptime is the definition of an intermittent, and an intermittent is
+# worse than a hard failure. `test_coach_live.py` is the opt-in confirmation
+# (COACH_LIVE_KEY=...), never run here.
+#
+# The headline case is `test_stop_stays_responsive_while_a_coach_call_is_in
+# _flight`: belt moving under a program, a model call in flight against an
+# endpoint that will not answer for 8 s, and `POST /api/program/stop` must still
+# complete promptly. That is the same belt-availability class as the TLS
+# handshake budget and the dribbling-body deadline, and it is the reason the
+# round trip is on its own task rather than on the ONE httpd worker.
+run coach      env -C tools/qemu_scenarios python3 -m pytest test_coach.py -q -n 4
 run tls        env -C tools/qemu_scenarios python3 -m pytest test_tls.py -q
 run tlspersist env -C tools/qemu_scenarios python3 -m pytest test_tls_persistence.py -q
 run mdns       env -C tools/qemu_scenarios python3 -m pytest test_mdns.py -q

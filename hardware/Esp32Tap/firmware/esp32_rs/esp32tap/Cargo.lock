@@ -225,6 +225,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "coach_core"
+version = "0.0.0"
+dependencies = [
+ "program_core",
+ "safety_core",
+]
+
+[[package]]
 name = "const_format"
 version = "0.2.36"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -532,6 +540,7 @@ name = "esp32tap"
 version = "0.0.0"
 dependencies = [
  "ble_core",
+ "coach_core",
  "embuild",
  "esp-idf-hal",
  "esp-idf-sys",

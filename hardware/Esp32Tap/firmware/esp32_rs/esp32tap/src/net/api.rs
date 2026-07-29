@@ -159,6 +159,17 @@ pub(crate) fn read_body(
     req: *mut sys::httpd_req_t,
     out: &mut [u8; MAX_CMD_BODY],
 ) -> Option<usize> {
+    read_body_into(req, out)
+}
+
+/// [`read_body`] over a caller-sized buffer.
+///
+/// The command endpoints want 128 bytes and the coach endpoints want 512, and
+/// the correct answer to that is ONE reader with a caller-supplied cap rather
+/// than a second copy of the admission, the deadline and the abandon path. The
+/// array-typed `read_body` above is kept because a dozen call sites read better
+/// with it, and it is now a one-line delegation rather than a duplicate.
+pub(crate) fn read_body_into(req: *mut sys::httpd_req_t, out: &mut [u8]) -> Option<usize> {
     // SAFETY: reading a scalar field of a live request.
     let declared = unsafe { (*req).content_len };
 
@@ -182,7 +193,7 @@ pub(crate) fn read_body(
     };
     // The lease is what bounds us; this handler additionally caps at its own
     // stack buffer, so `declared` can never exceed `out`.
-    if declared > MAX_CMD_BODY {
+    if declared > out.len() {
         drop(lease);
         respond(
             req,

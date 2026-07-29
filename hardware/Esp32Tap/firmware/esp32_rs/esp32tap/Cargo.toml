@@ -32,6 +32,12 @@ program_core = { path = "../program_core" }
 # UNCONDITIONALLY, not behind `feature = "ble"`, because `src/hr.rs` uses its
 # `HrReading`/`peer` types to answer `/api/hrm` on a build with no radio.
 ble_core = { path = "../ble_core" }
+# The AI coach's judgement: the bounded reply scanner, the clamps applied to a
+# model's tool call, the request builder and the truncation salvage. Taken
+# UNCONDITIONALLY, not behind `feature = "net"`, for the same reason `ble_core`
+# is: it is a pure host-tested crate with no IDF surface, and gating it would
+# mean the safety build could not even typecheck the tier it declines to run.
+coach_core = { path = "../coach_core" }
 
 # Espressif-provided. NOTE ON esp-idf-svc: it would be the natural home for
 # the HTTP/TLS server and mDNS wrappers, but its latest release (0.51) pins

@@ -8,6 +8,21 @@
 //! | session        | 0    | 4    | 12288 | subscribe, ABORT on fail  | 1 s     | net/session (feature `net`) |
 //! | shim_task      | 0    | 4    | 6144  | subscribe, ABORT on fail  | 100 ms  | qemu_test/shim_task (feature `qemu-test`, NEVER flashed) |
 //!
+//! THE COACH TIER IS NOT IN THE MATRIX EITHER, for a reason that is one step
+//! stronger than the radio's. `net::coach::run` (core 0, prio 3, stack 12288,
+//! feature `net`) BLOCKS ON A NETWORK CALL — a Gemini round trip takes seconds
+//! and its duration is a remote server's choice — and a 2 s task watchdog whose
+//! remedy is a panic cannot coexist with that: the first slow answer would
+//! reboot the device and DROP THE RELAY MID-RUN. It is bounded by its own
+//! budgets instead (`HTTP_TIMEOUT_MS` per socket operation, `TURN_BUDGET` over
+//! the whole turn), and a turn that overruns is abandoned and reported.
+//!
+//! What that costs, stated plainly: a wedged coach task is NOT detected or
+//! recovered, and the symptom is that `POST /api/chat` starts answering 429
+//! ("still working on the last one") forever. The belt, the console, the HTTPS
+//! server and `/ws` are all unaffected — the coach task holds no lock across
+//! its network call and touches the belt only through `control::command`.
+//!
 //! THE BLE TIER IS NOT IN THE MATRIX, AND THAT IS A DECISION RATHER THAN A
 //! HOLE. `ble::run` (core 0, prio 3 — the lowest in the system, stack 4096,
 //! 1 s cadence, feature `ble`) deliberately does NOT subscribe to the task

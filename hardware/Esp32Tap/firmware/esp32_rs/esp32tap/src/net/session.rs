@@ -85,6 +85,7 @@ const PUSH_FRAME_BYTES: usize = crate::net::program::STATE_BUF
     + crate::net::api::STATUS_BUF
     + SESSION_BUF
     + crate::net::hrm::HR_FRAME_BUF
+    + crate::net::coach::WS_FRAME_BUF
     + 512;
 
 const _: () = assert!(
@@ -234,21 +235,51 @@ pub fn push_frames() {
     let mut hrf = [0u8; crate::net::hrm::HR_FRAME_BUF];
     let hr_n = crate::net::hrm::render_ws(&mut hrf);
 
+    // THE COACH FRAME IS SENT ONCE PER ANSWER, NOT ONCE PER SECOND, and that is
+    // the whole reason this static exists. Unlike status/program/session/hr —
+    // which are STATE, and where re-sending the same value is how a client that
+    // connected late catches up — a coach reply is an EVENT. Repeating it every
+    // tick would make the app's chat transcript grow by one identical line a
+    // second, forever, and would spend ~900 bytes of the single httpd worker's
+    // send budget on nothing.
+    //
+    // A late client therefore does NOT get the last answer over the socket; it
+    // reads it from `GET /api/chat`, which is why that endpoint exists as well
+    // as the push.
+    let mut coach: FixedStr<{ crate::net::coach::WS_FRAME_BUF }> = FixedStr::new();
+    let coach_n = {
+        let turn = crate::net::coach::published_turn();
+        let mut last = lock(&LAST_COACH_TURN);
+        if turn != 0 && turn != *last {
+            *last = turn;
+            crate::net::coach::render_ws(&mut coach)
+        } else {
+            0
+        }
+    };
+
     // ONE call, so the frames share one budget and one enumeration.
-    match prog_n {
-        0 => crate::net::ws::send_all(&[
-            &status[..status_n],
-            &sess.b[..sess.n],
-            &hrf[..hr_n],
-        ]),
-        n => crate::net::ws::send_all(&[
-            &status[..status_n],
-            &prog[..n],
-            &sess.b[..sess.n],
-            &hrf[..hr_n],
-        ]),
+    let mut frames: [&[u8]; 5] = [&[]; 5];
+    let mut k = 0;
+    frames[k] = &status[..status_n];
+    k += 1;
+    if let n @ 1.. = prog_n {
+        frames[k] = &prog[..n];
+        k += 1;
     }
+    frames[k] = &sess.b[..sess.n];
+    k += 1;
+    frames[k] = &hrf[..hr_n];
+    k += 1;
+    if coach_n > 0 {
+        frames[k] = coach.as_bytes();
+        k += 1;
+    }
+    crate::net::ws::send_all(&frames[..k]);
 }
+
+/// The coach turn already pushed. See the note in [`push_frames`].
+static LAST_COACH_TURN: Mutex<u32> = Mutex::new(0);
 
 /// Distance in METRES and workout elapsed in seconds, for FTMS Treadmill Data.
 ///

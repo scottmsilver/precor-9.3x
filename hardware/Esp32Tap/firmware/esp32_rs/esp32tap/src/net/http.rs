@@ -199,12 +199,23 @@ pub fn start(id: &'static Identity) -> Result<sys::httpd_handle_t, sys::esp_err_
     // DEVIATION from Slice 1's 7 — see the module header: TLS sessions cost
     // ~40 KB each, and 4 is IDF's own SSL default for that reason.
     cfg.max_open_sockets = 4;
-    // 2 (banner, ws) + 3 control + 10 program + 8 record + 11 profile = 34, and
-    // registration fails with ESP_ERR_HTTPD_HANDLERS_FULL the moment the table
-    // is full. Raised with headroom rather than sized exactly, because the
-    // failure mode is a route that SILENTLY does not exist — which is how the
-    // app came to show `HTTP 404 Not Found` on its first screen.
-    cfg.max_uri_handlers = 40;
+    // 2 (banner, ws) + 3 control + 10 program + 8 record + 11 profile
+    // + 4 hrm + 5 coach = 43, and registration fails with
+    // ESP_ERR_HTTPD_HANDLERS_FULL the moment the table is full.
+    //
+    // RAISED FROM 40, AND IT WAS ALREADY FULL. The coach tier's five routes
+    // could not register at all: the log said
+    // `httpd_register_uri_handler: no slots left`, `main` printed
+    // `coach register failed (45057)` — and every other route kept working, so
+    // the device looked completely healthy while `POST /api/chat` answered
+    // `404 Nothing matches the given URI`. That is the failure mode this
+    // comment already warned about, reproduced by the very next tier to be
+    // added, which is the argument for headroom rather than an exact size.
+    //
+    // 56 is not "40 plus what we needed". A handler slot is a small struct in
+    // the server's own allocation, so the cost of being generous is bytes, and
+    // the cost of being exact is a route that silently does not exist.
+    cfg.max_uri_handlers = 56;
     // DEVIATION from the IDF default's exact-match `httpd_uri_match_wildcard`
     // is REQUIRED, not a convenience: `/api/workouts/{id}` and
     // `/api/programs/history/{id}/load` carry the record id IN THE PATH, which

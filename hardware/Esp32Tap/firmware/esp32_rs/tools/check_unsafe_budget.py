@@ -107,6 +107,14 @@ QEMU_UNSAFE = {
     "ble/ftms.rs",
     "ble/central.rs",
     "net/hrm.rs",
+    # Slice 7 the coach tier, behind `feature = "net"` like the rest of it. The
+    # ONLY unsafe here is the `esp_http_client` boundary (init/set_header/open/
+    # write/fetch_headers/read/get_status_code/cleanup — 8 calls) plus four
+    # `unsafe extern "C"` IDF handlers whose bodies the counting rule attributes
+    # in full, which is why each is a thin wrapper that reads one raw field and
+    # delegates. `coach_core` — where every decision about what a model reply
+    # MEANS is made — is forbid + unsafe-free and adds nothing.
+    "net/coach.rs",
 }
 UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
 
@@ -274,7 +282,15 @@ PRODUCTION_UNSAFE_LINES = 69
 #                                  and becomes a measurement on the first real
 #                                  board. It takes no arguments, returns an
 #                                  integer, and dereferences nothing.
-QEMU_UNSAFE_LINES = 1129
+# 1129 -> 1200, +71: `net/coach.rs`, the AI tier's socket half. The real C
+# boundary is 8 `esp_http_client` calls plus one `crt_bundle_attach` function
+# pointer; the rest is the counting rule attributing the whole body of four
+# `unsafe extern "C"` IDF handlers, which is why each of them reads one raw
+# field and delegates to safe code. NOTHING that decides what a model reply
+# MEANS is inside an unsafe region: `coach_core` is forbid + unsafe-free, and
+# the belt is only ever reached through `control::command`, which is
+# `#![forbid(unsafe_code)]` too.
+QEMU_UNSAFE_LINES = 1200
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")
