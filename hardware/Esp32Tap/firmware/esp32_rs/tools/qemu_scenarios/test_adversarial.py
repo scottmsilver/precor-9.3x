@@ -519,10 +519,44 @@ def test_a_program_owns_the_belt_and_a_manual_command_cannot_steal_it(qemu):
 
 
 def _belt_reaches(s, needle, tx0, timeout=45):
+    """Wait for `needle` on the motor wire, but give up IMMEDIATELY on a
+    latched fault.
+
+    A latched fault is TERMINAL: `enforce_due_safety` refuses every subsequent
+    motion, so once `/api/status` reports `fault: true` no amount of further
+    waiting can succeed and the remaining timeout only delays the report. Worse,
+    it delays it past the point where the evidence still exists — the device's
+    audit ring is `EVENT_CAPACITY` (256) entries and `complete_console_frame`
+    fires at the pacer's rate, so the event that LATCHED the fault is evicted by
+    console-frame traffic within seconds. That is exactly the eviction hazard
+    `tasks/serial_engine.rs` already calls out for VBUS_PRESENT_N.
+
+    So: check the fault flag on every poll and raise naming it while the ring
+    may still hold the cause. Not a tolerance and not a shortened bound — it
+    fails EARLIER and more loudly than before.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if needle in s.tx_bytes()[tx0:]:
             return True
+        st = status(s)
+        if st.get("fault"):
+            interesting = [
+                (i, t) for i, t in s.audit_events() if t != "complete_console_frame"
+            ]
+            raise AssertionError(
+                "the controller has a LATCHED FAULT, so the belt can never "
+                f"reach {needle!r} — every further motion is refused.\n"
+                f"  status: {st}\n"
+                f"  non-console audit events: {interesting[-30:] or 'NONE LEFT — '
+                'the ring was flushed by complete_console_frame before the dump'}\n"
+                "  A latched fault under QEMU is most often the 10 ms "
+                "RELAY_FEEDBACK_DEADLINE window failing closed "
+                "(`entry_feedback_timeout`) because the host descheduled the "
+                "guest mid-transfer — see bead precor-9_3x-9aj. Confirm from "
+                "the audit events above before treating it as a firmware "
+                "regression, and do NOT widen the deadline."
+            )
         time.sleep(0.25)
     return False
 
