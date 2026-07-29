@@ -364,8 +364,17 @@ pub fn stop_belt(g: &mut Guarded, now: Micros) -> bool {
         if g.controller.owner() != Some(id) {
             continue;
         }
-        let inc = g.controller.incline_half_percent();
-        let _ = command(g, surface, SpeedTenths::ZERO, inc, now);
+        // ZEROING ONLY WHILE EMULATING, and that guard is load-bearing rather
+        // than an optimisation. `command` ATTEMPTS auto-emulate whenever the
+        // controller is in Proxy, so zeroing unconditionally would let a STOP
+        // START A RELAY TRANSFER — for a belt this device is not even driving,
+        // since in Proxy the motor is the console's. `release` below already
+        // zeroes commanded motion on that path (`disconnect`), so the
+        // post-condition holds either way.
+        if g.controller.mode() == SafeMode::Emulating {
+            let inc = g.controller.incline_half_percent();
+            let _ = command_as(g, surface, &id, SpeedTenths::ZERO, inc, now);
+        }
         release(g, surface, now);
     }
     g.controller.speed_tenths() == SpeedTenths::ZERO
