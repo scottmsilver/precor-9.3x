@@ -338,6 +338,14 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
             }
         }
 
+        // Report any command the ring had to drop. Without this the harness
+        // sees a probe that never answers, which is indistinguishable from a
+        // wedged device — the adversarial storm scenario hit exactly that.
+        let dropped = crate::qemu_test::motor_tap::take_dropped();
+        if dropped > 0 {
+            qt!("QTERR queue_full dropped={}", dropped);
+        }
+
         delay_ms(QEMU_TEST_TICK_MS);
     }
 }

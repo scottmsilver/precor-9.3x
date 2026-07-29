@@ -358,7 +358,21 @@ _HEAP_RE = re.compile(r"QTOK heap free=(\d+) minfree=(\d+) largest=(\d+)")
 
 
 def heap(s):
-    line = s.cmd_ok("QT heap", timeout=20)
+    # The command ring can legitimately drop a probe when the storm starves the
+    # shim's consumer task — the firmware now SAYS SO ("QTERR queue_full") in-
+    # stead of dropping silently. Retry only on that explicit signal: silence
+    # still means the device is wedged, which is what this test exists to catch.
+    for attempt in range(4):
+        try:
+            line = s.cmd_ok("QT heap", timeout=20)
+            break
+        except Exception:
+            dropped = [ln for ln in s.lines()[-200:] if "QTERR queue_full" in ln]
+            if not dropped:
+                raise  # genuine silence — do NOT paper over it
+            time.sleep(0.5)
+    else:
+        raise AssertionError("heap probe dropped 4x running; shim consumer starved")
     m = _HEAP_RE.search(line)
     assert m, f"unparseable heap line: {line!r}"
     return int(m.group(1)), int(m.group(2)), int(m.group(3))

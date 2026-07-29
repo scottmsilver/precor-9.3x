@@ -29,6 +29,15 @@ pub const CMD_MAX: usize = 96;
 /// Queue capacity.
 pub const QUEUE_SLOTS: usize = 8;
 
+/// Commands dropped because the queue was full. Reported by the shim task, not
+/// logged here — this is reached from the serial read path.
+pub static DROPPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Take and clear the dropped-command count.
+pub fn take_dropped() -> u32 {
+    DROPPED.swap(0, core::sync::atomic::Ordering::Relaxed)
+}
+
 const CMD_PREFIX: &[u8] = b"QT ";
 
 pub type CmdLine = FixedStr<CMD_MAX>;
@@ -99,8 +108,17 @@ impl QemuTestMotorTap {
             let tail = (q.head + q.len) % QUEUE_SLOTS;
             q.slots[tail] = line;
             q.len += 1;
+        } else {
+            // A DROP MUST BE VISIBLE. This used to drop silently on the
+            // assumption that "the harness sends at a low rate" — false under
+            // the adversarial storm scenario, which starves the consumer task
+            // while still probing. The symptom was a probe that simply never
+            // answered: 3 of 7 replies, no error, indistinguishable from a
+            // wedged device. Counting here (no logging: this runs on the 5 ms
+            // serial read path) lets the shim task report it on its next turn,
+            // so silence keeps meaning "something is genuinely wrong".
+            DROPPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
-        // else: drop (the harness sends at a low rate) — same as the C++ ring.
     }
 
     /// Pop one queued command line (`"QT ..."`, no newline). Single consumer:

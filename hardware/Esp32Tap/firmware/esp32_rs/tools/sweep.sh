@@ -9,6 +9,11 @@ run() { local n="$1"; shift
   local t0=$(date +%s)
   if "$@" >/tmp/sweep_$n.log 2>&1; then printf '%-14s PASS  %3ds\n' "$n" "$(( $(date +%s)-t0 ))"
   else printf '%-14s ***FAIL*** %3ds (see /tmp/sweep_%s.log)\n' "$n" "$(( $(date +%s)-t0 ))" "$n"; fail=1; fi; }
+# DEEP=1 adds the adversarial soak (11 scenarios, ~5 min: 420 HTTP requests,
+# WS abuse, TCP churn, heap-convergence measurement). It is deliberately NOT in
+# the per-commit gate — a 5-minute suite run after every increment is the kind
+# of waste that cost hours earlier. Run it before merging, and any time the
+# memory or request path changes.
 S=$(date +%s)
 # A gate nothing runs is not a gate. verify_harness_copy.py and
 # check_log_contract.sh were both committed, both passing-or-failing on their
@@ -27,11 +32,13 @@ run normalexit env -C tools/qemu_scenarios python3 -m pytest test_normal_exit.py
 run httpentry  env -C tools/qemu_scenarios python3 -m pytest test_http_entry.py -q
 run profiles   env -C tools/qemu_scenarios python3 -m pytest test_profiles.py -q
 run program    env -C tools/qemu_scenarios python3 -m pytest test_program.py -q -n 4
-run adversar   env -C tools/qemu_scenarios python3 -m pytest test_adversarial.py -q -n 4
 run tls        env -C tools/qemu_scenarios python3 -m pytest test_tls.py -q
 run tlspersist env -C tools/qemu_scenarios python3 -m pytest test_tls_persistence.py -q
 run mdns       env -C tools/qemu_scenarios python3 -m pytest test_mdns.py -q
 run smoke      bash tools/qemu_smoke.sh
 run scenarios  env -C tools/qemu_harness python3 -m pytest test_scenarios.py -q -n 4
+if [ -n "${DEEP:-}" ]; then
+  run adversar   env -C tools/qemu_scenarios python3 -m pytest test_adversarial.py -q
+fi
 echo "SWEEP: $(( $(date +%s)-S ))s  $([ $fail -eq 0 ] && echo ALL GREEN || echo HAS FAILURES)"
 exit $fail
