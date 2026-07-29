@@ -8,14 +8,21 @@
 CXX      ?= g++
 REPO     := $(abspath ../../../../..)
 CORE     := ../components/portable_core
+EXEC     := ../components/executor
+STORAGE  := ../components/storage
+NETAPI   := ../components/net_server/api
 CXXFLAGS := -std=c++20 -fno-exceptions -fno-rtti -Wall -Wextra -Werror -O2 \
-            -pthread -MMD -MP -I$(CORE) -I. -I$(REPO)/third_party
+            -pthread -MMD -MP -I$(CORE) -I$(EXEC) -I$(STORAGE) -I$(NETAPI) \
+            -I. -I$(REPO)/third_party -isystem ../third_party/rapidjson \
+            -DRAPIDJSON_ALLOCATOR_DEFAULT_CHUNK_CAPACITY=4096
 
 BUILD := build
 
 TEST_NAMES := test_kv_protocol test_mode_state test_ring_buffer \
               test_emulation test_safety_controller test_safety_boot_envelope \
-              test_key_cache
+              test_key_cache \
+              test_program_state test_stores test_router test_ws_hub \
+              test_ws_outbox
 TEST_BINS  := $(addprefix $(BUILD)/,$(TEST_NAMES))
 
 CORE_SRCS := $(CORE)/protocol/kv_protocol.cpp \
@@ -23,6 +30,8 @@ CORE_SRCS := $(CORE)/protocol/kv_protocol.cpp \
              $(CORE)/safety/safety_controller.cpp
 CORE_OBJS := $(BUILD)/kv_protocol.o $(BUILD)/mode_state.o \
              $(BUILD)/safety_controller.o
+SERVER_OBJS := $(BUILD)/program_state.o $(BUILD)/workout_session.o \
+               $(BUILD)/server_core.o $(BUILD)/router.o
 
 .PHONY: test clean check-pins check-no-rtti
 
@@ -79,6 +88,35 @@ $(BUILD)/test_safety_boot_envelope: $(BUILD)/test_safety_boot_envelope.o $(BUILD
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 $(BUILD)/test_key_cache: $(BUILD)/test_key_cache.o $(BUILD)/mode_state.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+# --- native server tier ---
+
+$(BUILD)/program_state.o: $(EXEC)/program_state.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD)/workout_session.o: $(EXEC)/workout_session.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD)/server_core.o: $(NETAPI)/server_core.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD)/router.o: $(NETAPI)/router.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD)/test_program_state: $(BUILD)/test_program_state.o $(BUILD)/program_state.o $(BUILD)/workout_session.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD)/test_stores: $(BUILD)/test_stores.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD)/test_router: $(BUILD)/test_router.o $(SERVER_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD)/test_ws_hub: $(BUILD)/test_ws_hub.o
+	$(CXX) $(CXXFLAGS) -o $@ $^
+
+$(BUILD)/test_ws_outbox: $(BUILD)/test_ws_outbox.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 clean:

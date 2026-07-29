@@ -23,6 +23,7 @@
 #include "esp_timer.h"
 
 #include "firmware_context.h"
+#include "transport_httpd.h"
 #include "wdt.h"
 
 namespace esp32tap::qemu_test {
@@ -373,6 +374,22 @@ void execute_command(FirmwareContext* ctx, std::string_view line,
         }
         std::printf("QTOK k1 mode=%.*s\n", static_cast<int>(args.size()),
                     args.data());
+        return;
+    }
+    if (verb == "wsdrophello") {
+        // Fault injection for the native server tier: force the WS
+        // handshake's "hello could not be queued" branch so the harness
+        // can prove a client that never receives its hello frames is
+        // still registered and still gets the 1 Hz broadcast stream
+        // (regression: registration used to live inside the hello
+        // delivery callback).
+        auto v = parse_int(args);
+        if (!v.has_value() || (*v != 0 && *v != 1)) {
+            std::printf("QTERR level_args\n");
+            return;
+        }
+        net::ws_test_force_hello_drop(*v == 1);
+        std::printf("QTOK wsdrophello v=%d\n", *v);
         return;
     }
     if (verb == "tread" || verb == "vbus") {

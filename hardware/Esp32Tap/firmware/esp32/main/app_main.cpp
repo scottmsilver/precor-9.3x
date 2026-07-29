@@ -25,11 +25,11 @@
 #include "emulate_cycle_task.h"
 #include "firmware_context.h"
 #include "interval_executor_task.h"
+#include "net_server_task.h"
 #include "serial_engine_task.h"
+#include "server_context.h"
 #include "tiers/ftms_stub.h"
 #include "tiers/hrm_stub.h"
-#include "tiers/mdns_stub.h"
-#include "tiers/wss_api_stub.h"
 
 namespace {
 
@@ -39,8 +39,12 @@ const char* TAG = "esp32tap";
 // parse buffers (PLAN's QEMU-validated stack constraint).
 esp32tap::FirmwareContext g_ctx;
 
-// Connectivity tiers are compiled but disabled in phase 1 (PLAN M4/M5).
-constexpr bool kTiersEnabled = false;
+// Native server tier state (executor-owned ServerCore + stores + RPC
+// queues). Static for the same stack reason.
+esp32tap::ServerContext g_server_ctx{g_ctx};
+
+// BLE tiers (FTMS/HRM) are compiled but disabled — separate workflow.
+constexpr bool kBleTiersEnabled = false;
 
 }  // namespace
 
@@ -84,14 +88,38 @@ extern "C" void app_main(void) {
                  g_ctx.controller.fault_latched() ? 1 : 0);
     }
 
-    // (4) Supervised tasks — all pinned to core 0 (core 1 is reserved
-    // for the RF tiers per PLAN's task layout).
+    // (4) Supervised tasks — all pinned to core 0 (core 1 belongs to
+    // the network tiers per PLAN's task layout). The executor gets the
+    // server context first (RPC queue + ServerCore single writer);
+    // 8 KB stack: rapidjson serialization happens on this task.
+#if defined(ESP32TAP_NET)
+    esp32tap::set_executor_server_context(&g_server_ctx);
+#endif
     xTaskCreatePinnedToCore(esp32tap::serial_engine_task, "serial_engine",
                             8192, &g_ctx, 10, nullptr, 0);
     xTaskCreatePinnedToCore(esp32tap::emulate_cycle_task, "emulate_cycle",
                             6144, &g_ctx, 9, nullptr, 0);
     xTaskCreatePinnedToCore(esp32tap::interval_executor_task,
-                            "interval_exec", 4096, &g_ctx, 5, nullptr, 0);
+                            "interval_exec", 16384, &g_ctx, 5, nullptr, 0);
+
+    // (5) Native server tier: core-1 bring-up (storage -> netif -> TLS
+    // -> httpd:8000 -> mDNS). Never blocks or gates the safety tasks.
+    //
+    // ESP32TAP_NET gates the tier at RUNTIME (the code is still compiled
+    // and still string-gated by test_default_build.py). Two reasons:
+    //  1. The behavioral image (tools/qemu_harness S1-S7) measures
+    //     MICROSECOND-scale safety deadlines — RELAY_FEEDBACK_DEADLINE_US
+    //     is 10 ms. WiFi/lwIP/mbedTLS/mDNS tasks sharing the emulated SoC
+    //     steal guest CPU inside that window; the safety core must be
+    //     measured on its own, exactly as the committed harness assumes.
+    //  2. Without the tier there is no LittleFS "storage" partition to
+    //     mount, so the behavioral image fits the stock 2 MB / single-app
+    //     flash layout the committed harness pads to.
+    // The network scenarios build their own image with ESP32TAP_NET=1
+    // (tools/build_images.sh build_qemu_net).
+#if defined(ESP32TAP_NET)
+    esp32tap::start_net_server_task(&g_server_ctx);
+#endif
 
 #if defined(ESP32TAP_QEMU_TEST)
     // Behavioral-harness shim task (tools/qemu_harness). The banner makes
@@ -100,11 +128,9 @@ extern "C" void app_main(void) {
     esp32tap::qemu_test::start_qemu_test_task(&g_ctx);
 #endif
 
-    if (kTiersEnabled) {
+    if (kBleTiersEnabled) {
         esp32tap::tiers::FtmsTier::start();
         esp32tap::tiers::HrmTier::start();
-        esp32tap::tiers::WssApiTier::start();
-        esp32tap::tiers::MdnsTier::start();
     }
 
     ESP_LOGI(TAG, "esp32tap phase-1 safety core started (Proxy)");

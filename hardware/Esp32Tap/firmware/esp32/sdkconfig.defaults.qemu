@@ -1,0 +1,22 @@
+# sdkconfig.defaults.qemu — QEMU-ONLY overrides for the ESP32TAP_QEMU_TEST
+# behavioral/network image (tools/qemu_harness). Applied ONLY by test
+# builds via
+#   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.qemu"
+# Production images never see these keys ("never weaken production
+# semantics for testability").
+#
+# 1. openeth: the esp32s3 QEMU machine exposes the OpenCores ethernet MAC
+#    (-nic user,model=open_eth). Production attaches esp_wifi STA instead;
+#    everything from esp_netif/lwIP up is identical.
+CONFIG_ETH_USE_OPENETH=y
+#
+# 2. Interrupt-driven hardware-MPI crashes under QEMU (Guru Meditation in
+#    esp_mpi_isr_initialise — QEMU machine gap, proven in the network
+#    experiment). Polled hardware MPI works. QEMU-only override;
+#    production keeps the IDF default.
+# CONFIG_MBEDTLS_MPI_USE_INTERRUPT is not set
+#
+# 3. Diagnostic-only: print the panic before rebooting so harness dumps
+#    show WHY a guest died. Production keeps SILENT_REBOOT (PLAN
+#    normative); the reboot behavior itself is identical.
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y

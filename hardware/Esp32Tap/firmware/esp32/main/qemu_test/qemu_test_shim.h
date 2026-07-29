@@ -39,6 +39,10 @@
  *                         Exercises the fail-closed feedback paths
  *                         (entry_feedback_timeout, relay_feedback_invalid)
  *                         that the command-coupled model can never reach.
+ *   QT wsdrophello <0|1>  native server tier fault injection: force the
+ *                         WS handshake's "hello could not be queued"
+ *                         branch (proves a client whose hello is lost is
+ *                         still registered and still gets broadcasts)
  *   QT state              print one QTSTATE snapshot line
  * Observability (UART0 TX):
  *   QTAUDIT <abs_index> <event_text>   drained SafetyController audit ring

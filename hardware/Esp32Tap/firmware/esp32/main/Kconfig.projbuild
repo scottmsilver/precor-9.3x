@@ -1,0 +1,17 @@
+menu "Esp32Tap"
+
+    config ESP32TAP_WIFI_SSID
+        string "WiFi SSID (bring-up fallback)"
+        default ""
+        help
+            Station SSID used when NVS namespace "net" has no "ssid"
+            key. Bring-up convenience only — production devices get
+            credentials via NVS (softAP provisioning is a follow-up).
+
+    config ESP32TAP_WIFI_PASS
+        string "WiFi password (bring-up fallback)"
+        default ""
+        help
+            Station password paired with ESP32TAP_WIFI_SSID.
+
+endmenu

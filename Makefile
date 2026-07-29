@@ -104,4 +104,10 @@ ship-check-nobelt:
 esp32tap-qemu-behavior:
 	bash hardware/Esp32Tap/firmware/esp32/tools/qemu_harness/run.sh
 
-.PHONY: esp32tap-qemu-behavior
+# Esp32Tap network-level QEMU scenarios (native server tier: HTTPS/WS/
+# mDNS/persistence over the openeth NIC; ~10 min headless). Builds the
+# test image first via run.sh's build path when missing.
+esp32tap-qemu-net:
+	python3 -m pytest hardware/Esp32Tap/firmware/esp32/tools/qemu_harness/test_net_scenarios.py -m net -v
+
+.PHONY: esp32tap-qemu-behavior esp32tap-qemu-net

@@ -80,6 +80,9 @@ void serial_engine_task(void* arg) {
         ctx->mode.add_console_bytes(static_cast<uint32_t>(raw.size()));
     });
     ctx->console_reader.on_kv([ctx](const KvPair& kv) {
+        // Native server tier: cache raw console KV so the app's Debug
+        // WS stream shows the inbound side of the bus, not just motor.
+        ctx->console_kv.put(kv.key_view(), kv.value_view());
         // prev_buf is caller-owned so the view returned by exchange()
         // stays valid for the whole auto_proxy call (KeyCache lifetime
         // contract — see key_cache.h).
@@ -99,6 +102,11 @@ void serial_engine_task(void* arg) {
     });
     ctx->motor_reader.on_raw([ctx](std::span<const uint8_t> raw) {
         ctx->mode.add_motor_bytes(static_cast<uint32_t>(raw.size()));
+    });
+    ctx->motor_reader.on_kv([ctx](const KvPair& kv) {
+        // Native server tier: cache raw motor KV (fixed slots, zero
+        // alloc) for /api/status "motor" + live speed/incline decode.
+        ctx->motor_kv.put(kv.key_view(), kv.value_view());
     });
 
     for (;;) {

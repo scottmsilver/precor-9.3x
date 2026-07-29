@@ -43,6 +43,14 @@ void emulate_cycle_task(void* arg) {
     ESP_LOGI(TAG, "emulate_cycle task started (WDT-supervised)");
 
     EmulateTaskPolicy policy;
+    // Native server tier: cache the KV pairs this device SYNTHESIZES so
+    // the app's Debug WS stream shows the emulate source (server.py
+    // forwards {"type":"kv","source":"emulate",...} the same way).
+    // Runs inside the cycle's write path, under controller_mu.
+    ctx->emulate_cycle.on_kv_event(
+        [ctx](std::string_view key, std::string_view value) {
+            ctx->emulate_kv.put(key, value);
+        });
 
     for (;;) {
         esp_hal::wdt_feed();

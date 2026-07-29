@@ -24,19 +24,38 @@ even in sight.
   input-only), `esp_timer` clock, task-WDT helpers. Pin constants in
   `pins.hpp` are derived from the Rev E hardware sources and verified by
   `tools/check_pins.py` against `hardware/Esp32Tap/tools/design.py`.
-- `main/` — boot sequence + three WDT-supervised tasks (serial engine,
-  emulate cycle, interval-executor stub) and deferred-tier stubs
-  (FTMS/HRM/WSS/mDNS — TODO(M4/M5), not compiled in).
+- `components/executor/` — pure C++ port of `python/program_engine.py`
+  ProgramState + `python/workout_session.py` (interval execution, ACSM
+  calories) for the standalone native server tier. Host-testable.
+- `components/storage/` — LittleFS-backed JSON stores (`/data`):
+  program history (cap 20, dedup-by-name), saved workouts, run records
+  (cap 200, 30 s checkpoints, boot recovery in_progress→disconnect).
+- `components/net_server/` — `api/` is the pure router + ServerCore
+  (python/server.py's business logic, single-writer on the executor
+  task) + WsHub; `device/` binds esp_https_server(:8000, per-device EC
+  P-256 self-signed cert generated at first boot), mDNS
+  (`_treadmill._tcp` 8000, TXT scheme=https path=/), and netif bring-up
+  (WiFi STA from NVS `net/ssid`+`net/pass` or Kconfig fallback;
+  openeth under `ESP32TAP_QEMU_TEST`).
+- `main/` — boot sequence + three WDT-supervised core-0 safety tasks
+  (serial engine, emulate cycle, interval executor — the executor is the
+  standing EXECUTOR-lease owner and the single writer of the server
+  core), plus core-1 net bring-up/storage tasks. BLE tier stubs
+  (FTMS/HRM) remain deferred.
 - `host/` — host test build: forked `cpp/tests` doctest suites (golden
-  parity) + new safety-envelope suites against `fakes/fake_hal.h`.
+  parity), safety-envelope suites, and the native-server-tier suites
+  (program state, stores, router API contract — golden-asserting every
+  JSON key the Kotlin app requires — and ws hub).
 
 ## Build & test
 
 ```bash
-# Host suite (pin-map check + no-RTTI-construct guard + 7 doctest binaries)
+# Host suite (pin-map check + no-RTTI-construct guard + 12 doctest binaries)
 make -C host test
 
-# Firmware build (esp32s3) via the PINNED espressif/idf Docker image
+# Firmware build (esp32s3) via the PINNED espressif/idf Docker image.
+# The mount is self-contained: rapidjson is vendored at
+# third_party/rapidjson inside this directory (see its README).
 docker run --rm \
   -v "$(pwd)":/project -w /project espressif/idf:release-v5.5 \
   idf.py set-target esp32s3 build
@@ -58,6 +77,14 @@ tools/qemu_smoke.sh
 # re-runs the unmodified qemu_smoke.sh on the default build and proves
 # the test surface is absent from the production binary.
 # See tools/qemu_harness/README.md.
+
+# Network-level QEMU scenarios (native server tier): openeth NIC +
+# hostfwd to the guest's :8000 + pcap. Covers in-guest TLS cert
+# generation, the REST->executor->SafetyController path (Emulate entry
+# driven by POST /api/speed), the /ws stream, mDNS advertisement, and
+# run-record persistence across a hard kill. From the repo root:
+#   make esp32tap-qemu-net
+python3 -m pytest tools/qemu_harness/test_net_scenarios.py -m net -v
 tools/qemu_harness/run.sh
 
 # Artifact-level RTTI gate: no typeinfo symbols for firmware classes in

@@ -54,11 +54,72 @@ CONFIG_ESP_BROWNOUT_DET=y
 # keep headroom per the QEMU-validated KvPair stack constraint ---
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 
-# --- M4 (radios) keys — LISTED, NOT ENABLED: the BT/WiFi components are
-# not part of the phase-1 build, and enabling these without them fails
-# the build. Uncomment at M4 with the NimBLE/WiFi components.
+# --- M4 BT keys — LISTED, NOT ENABLED: the BT components are not part
+# of this build, and enabling these without them fails the build.
+# Uncomment at the BLE workflow with the NimBLE components.
 # M4: CONFIG_BT_NIMBLE_PINNED_TO_CORE=1
 # M4: CONFIG_BT_CTRL_PINNED_TO_CORE_1=y
-# M4: CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1=y
 # M4: CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
 # M4: CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+
+# ======================================================================
+# Native server tier (standalone-device architecture decision — see
+# PLAN.md dated note). WiFi STA + lwIP + esp_https_server + mDNS +
+# LittleFS on the 8 MB ESP32-S3-WROOM-1-N8.
+# ======================================================================
+
+# --- Flash really is 8 MB (N8 module). The previous 2 MB value was a
+# config bug (flagged in the RAM/flash budget investigation); the server
+# tier does not fit a 1 MB factory partition, so the partition table is
+# custom: 2 MB factory app + 1 MB LittleFS "storage" data partition.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_esp32tap.csv"
+
+# --- HTTP server: WebSocket support + TLS (esp_https_server).
+# POST_HANDSHAKE_CB: IDF 5.5 does NOT invoke the URI handler on the WS
+# handshake GET — the on-connect triple-send (status/session/program)
+# runs from the post-handshake callback instead.
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT=y
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+
+# --- mbedTLS RAM policy (PLAN): no PSRAM on the N8 module — the record
+# buffers are the biggest per-session allocation, so OUTBOUND records
+# are capped at 4 KB (we control what we send; ~12 KB saved per session).
+#
+# INBOUND must stay at the TLS maximum. The earlier 4 KB inbound cap was
+# a correctness bug, not a tuning choice: RFC 8449 max_fragment_length
+# is NOT negotiated by BoringSSL/Conscrypt (OkHttp on Android) or by
+# python's OpenSSL, so a peer may legally send any record up to 16 KB.
+# mbedTLS then rejects the record and TEARS THE CONNECTION DOWN before
+# the response is delivered — measured under QEMU: a single-record
+# 9000-byte POST body died with "read error :-0x7100" / "Remote end
+# closed connection without response", while the SAME body split into
+# <=4 KB records was answered correctly. Any app request bigger than
+# 4 KB in one write (a 64-interval program is ~4.5 KB) hit this. The
+# oversized-body 400 is regression-tested in QEMU scenario N1.
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+
+# --- On-device self-signed cert generation (EC P-256 at first boot).
+CONFIG_MBEDTLS_X509_CRT_WRITE_C=y
+CONFIG_MBEDTLS_X509_CSR_WRITE_C=y
+
+# --- Core pinning (PLAN normative): all network work on core 1; the
+# three safety tasks own core 0.
+CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_1=y
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU1=y
+
+# --- lwIP/socket caps (PLAN RAM policy). esp_http_server refuses to
+# start unless max_open_sockets + 3 <= CONFIG_LWIP_MAX_SOCKETS, so this
+# is the hard ceiling on httpd concurrency. It was 6 (=> 3 httpd
+# sockets), and the WebSocket occupied one of those three: the app's own
+# emergencyStop burst (three concurrent OkHttp requests) then forced an
+# LRU purge whose victim was always the WS. 10 gives httpd 4 sockets —
+# WS + the three-request burst — with room for mDNS/SNTP.
+CONFIG_LWIP_MAX_SOCKETS=10
+
+# --- WiFi power save: MIN_MODEM is set at runtime (esp_wifi_set_ps);
+# static buffer counts kept at IDF defaults pending the measured-RAM
+# gate (heap logged before/after net bring-up at boot).
