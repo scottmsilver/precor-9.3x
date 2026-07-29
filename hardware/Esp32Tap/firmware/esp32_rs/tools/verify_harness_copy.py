@@ -1,24 +1,36 @@
 #!/usr/bin/env python3
-"""verify_harness_copy.py — prove the Rust image is gated by THE SAME harness
-bytes that gate the C++ image, and that those bytes differ from HEAD only by
-an explicitly enumerated, justified STRENGTHENING.
+"""verify_harness_copy.py — prove the Rust image is gated by the SAME harness
+bytes that gate the C++ image, save for an explicitly enumerated, sha-pinned,
+diff-printed STRENGTHENING.
 
 Two legs, both hard:
 
   LEG 1  esp32_rs/tools/qemu_harness/  ==  firmware/esp32/tools/qemu_harness/
-         byte for byte, file for file. This is what makes the Rust run and the
-         C++ run the same gate rather than two similar ones. A copy exists at
-         all only because the harness resolves its firmware tree positionally
-         (`Path(__file__).resolve().parents[1]`); placing it at the same
-         relative depth inside esp32_rs/ points it at the Rust image with NO
-         environment hook and NO edit to a committed file.
+         byte for byte, file for file, EXCEPT the files named in
+         ALLOWED_STRENGTHENING below, each pinned to an exact sha256 and
+         accompanied by the reason it deviates. The deviating diff is PRINTED
+         on every run, so "the copy is the C++ harness except for X" is not a
+         claim in a report — it is output of the gate. Any other edit, to any
+         file, fails. A copy exists at all only because the harness resolves
+         its firmware tree positionally (`Path(__file__).resolve().parents[1]`);
+         placing it at the same relative depth inside esp32_rs/ points it at
+         the Rust image with NO environment hook.
 
   LEG 2  firmware/esp32/tools/qemu_harness/  ==  `git show HEAD:` for every
-         file, EXCEPT the files named in ALLOWED_STRENGTHENING below, each of
-         which is pinned to an exact sha256 and accompanied by the reason it
-         deviates. The deviating diff is PRINTED on every run, so "the harness
-         is unchanged except for X" is not a claim in a report — it is output
-         of the gate. Any other edit, to any file, fails.
+         file, and likewise firmware/esp32/tools/qemu_smoke.sh. Plain equality,
+         no allowlist: firmware/esp32/ is the C++ tier and is READ-ONLY to this
+         tree, so any deviation there — committed or not — is drift, and the
+         anchor the Rust copy is measured against has moved.
+
+WHY THE ALLOWLIST HANGS OFF LEG 1 AND NOT LEG 2 — this gate FAILED for three
+sweeps in a row, deterministically, and the reason is the shape below. It used
+to anchor the allowlist on LEG 2 (live-vs-HEAD) and demand byte equality on
+LEG 1. That only ever holds while the strengthening sits UNCOMMITTED in the
+working tree of a file this tree is forbidden to edit: the instant it is
+committed (or, as happened here, only ever applied to the Rust side), live ==
+HEAD makes LEG 2 fall silent and LEG 1 reports the divergence it can never
+resolve. The strengthening lives in the Rust copy, permanently and in git, so
+that is where it must be pinned. LEG 2 keeps its teeth as plain equality.
 
 A fork is a copy that can drift. Neither leg can drift silently.
 
@@ -42,9 +54,10 @@ HEAD_DIR = "hardware/Esp32Tap/firmware/esp32/tools/qemu_harness"
 
 IGNORE_NAMES = {"__pycache__", ".pytest_cache"}
 
-# --- LEG 2 allowlist -------------------------------------------------------
+# --- LEG 1 allowlist -------------------------------------------------------
 #
-# Each entry: filename -> (sha256 of the permitted content, why it deviates).
+# Each entry: filename -> (sha256 of the permitted content OF THE RUST COPY,
+# why it deviates from the C++ live file).
 # A STRENGTHENING only: a deterministic guest timebase and an emulated flash
 # that matches the image under test. Neither touches an assertion, a bound, a
 # comparison or a control flow. Deliberately sha-pinned so that "one more
@@ -77,20 +90,15 @@ ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
 }
 
 # The other committed gate script the Rust tree reuses. esp32_rs/tools/
-# qemu_smoke.sh is a SYMLINK to this exact file (LEG 1 is therefore trivially
-# satisfied — it is not a copy at all), so only the HEAD anchor needs checking.
+# qemu_smoke.sh is a SYMLINK to this exact file — not a copy at all, so LEG 1
+# is satisfied by construction and only the HEAD anchor needs checking.
+#
+# There used to be a SMOKE_ALLOWED pin here whose sha was the literal string
+# "@SMOKE_SHA@". It was unreachable (it is only consulted when live != HEAD,
+# which cannot happen for a read-only tier) and it would have failed closed
+# with a nonsense message if it ever had been reached. A byte-lock pinned to a
+# placeholder is not a byte-lock; the requirement is plain equality.
 SMOKE_REL = "hardware/Esp32Tap/firmware/esp32/tools/qemu_smoke.sh"
-SMOKE_ALLOWED: tuple[str, str] = (
-    "@SMOKE_SHA@",
-    "(a) + (b) as for qemu_session.py — the same deterministic timebase and "
-    "the same image-derived flash size, so smoke and harness boot the guest "
-    "identically. (c) SMOKE_WALL_TIMEOUT_S default 90 -> 20: it bounds only "
-    "the CAPTURE WINDOW and exit 124 is the expected healthy ending, so a "
-    "healthy run always paid the whole 90 s. The gate itself is "
-    "SMOKE_UPTIME_S=15 s of GUEST uptime and is UNCHANGED; measured, 15 s of "
-    "guest uptime now costs ~0.6 s of wall, and a 20 s window still delivered "
-    "485 s of guest uptime (32x the requirement).",
-)
 
 
 def _sha(b: bytes) -> str:
@@ -121,14 +129,14 @@ def head_blob(name: str) -> bytes:
     return head_blob_at(f"{HEAD_DIR}/{name}")
 
 
-def show_diff(head_text: str, live_text: str, label: str, why: str, from_rel: str) -> None:
+def show_diff(base_text: str, derived_text: str, label: str, why: str, from_rel: str) -> None:
     print(f"verify_harness_copy: APPROVED STRENGTHENING — {label}")
     print(f"  reason: {why}")
     for line in difflib.unified_diff(
-        head_text.splitlines(),
-        live_text.splitlines(),
-        fromfile=f"HEAD:{from_rel}",
-        tofile=f"live:{label}",
+        base_text.splitlines(),
+        derived_text.splitlines(),
+        fromfile=from_rel,
+        tofile=label,
         lineterm="",
     ):
         print(f"  {line}")
@@ -152,7 +160,8 @@ def main() -> int:
 
     expected = head_files()
 
-    # --- LEG 1: the copy IS the live committed harness ---------------------
+    # --- LEG 1: the copy IS the live harness, modulo the pinned allowlist --
+    deviations: list[str] = []
     for name in expected:
         live, copy = LIVE_DIR / name, COPY_DIR / name
         if not live.is_file():
@@ -161,82 +170,65 @@ def main() -> int:
         if not copy.is_file():
             problems.append(f"LEG1 MISSING-COPY {name}")
             continue
-        if _sha(live.read_bytes()) != _sha(copy.read_bytes()):
+        live_sha, copy_sha = _sha(live.read_bytes()), _sha(copy.read_bytes())
+        if live_sha == copy_sha:
+            continue
+        if name not in ALLOWED_STRENGTHENING:
             problems.append(
-                f"LEG1 DIVERGED {name} — the Rust copy is not the C++ harness\n"
-                f"           live {_sha(live.read_bytes())}\n"
-                f"           copy {_sha(copy.read_bytes())}"
+                f"LEG1 DIVERGED {name} — the Rust copy is not the C++ harness and is "
+                f"not in ALLOWED_STRENGTHENING\n           live {live_sha}\n"
+                f"           copy {copy_sha}"
             )
+            continue
+        pinned, why = ALLOWED_STRENGTHENING[name]
+        if copy_sha != pinned:
+            problems.append(
+                f"LEG1 PIN MISMATCH {name} — the copy deviates from the C++ harness by "
+                f"something other than the approved patch\n           pinned {pinned}\n"
+                f"           copy   {copy_sha}"
+            )
+            continue
+        deviations.append(name)
+        show_diff(
+            live.read_text(),
+            copy.read_text(),
+            f"esp32_rs copy of {name}",
+            why,
+            f"{HEAD_DIR}/{name}",
+        )
     for name in listing(COPY_DIR):
         if name not in expected:
             problems.append(f"LEG1 EXTRA {name} — not part of the committed harness")
 
-    # --- LEG 2: the live harness == HEAD, modulo the pinned allowlist ------
-    deviations: list[str] = []
+    # --- LEG 2: the live harness == HEAD, plainly -------------------------
+    # firmware/esp32/ is read-only to this tree. Any deviation, committed or
+    # not, has moved the anchor LEG 1 measures the copy against.
     for name in expected:
         live = LIVE_DIR / name
         if not live.is_file():
             continue
-        want = _sha(head_blob(name))
-        got = _sha(live.read_bytes())
-        if want == got:
-            continue
-        if name not in ALLOWED_STRENGTHENING:
+        want, got = _sha(head_blob(name)), _sha(live.read_bytes())
+        if want != got:
             problems.append(
-                f"LEG2 UNAPPROVED EDIT {name} — differs from HEAD and is not in "
-                f"ALLOWED_STRENGTHENING\n           HEAD {want}\n           live {got}"
+                f"LEG2 EDITED {name} — firmware/esp32/ is read-only to this tree but "
+                f"this file differs from HEAD\n           HEAD {want}\n           live {got}"
             )
-            continue
-        pinned, why = ALLOWED_STRENGTHENING[name]
-        if got != pinned:
-            problems.append(
-                f"LEG2 PIN MISMATCH {name} — deviates from HEAD by something other "
-                f"than the approved patch\n           pinned {pinned}\n           live   {got}"
-            )
-            continue
-        deviations.append(name)
-        diff = difflib.unified_diff(
-            head_blob(name).decode().splitlines(),
-            live.read_text().splitlines(),
-            fromfile=f"HEAD:{HEAD_DIR}/{name}",
-            tofile=f"live:{name}",
-            lineterm="",
-        )
-        print(f"verify_harness_copy: APPROVED STRENGTHENING — {name}")
-        print(f"  reason: {why}")
-        for line in diff:
-            print(f"  {line}")
 
     for name in listing(LIVE_DIR):
         if name not in expected:
             problems.append(f"LEG2 EXTRA {name} — a new file appeared in the committed harness")
 
     # --- LEG 2b: the OTHER committed gate script, anchored the same way ----
-    # SMOKE_ALLOWED sat here unread for its whole life. A byte-lock nothing
-    # evaluates is not a byte-lock, so it is evaluated now.
     smoke_live = REPO_ROOT / SMOKE_REL
-    smoke_deviated = False
     if not smoke_live.is_file():
         problems.append(f"LEG2 MISSING {SMOKE_REL}")
     else:
         want, got = _sha(head_blob_at(SMOKE_REL)), _sha(smoke_live.read_bytes())
         if want != got:
-            pinned, why = SMOKE_ALLOWED
-            if got != pinned:
-                problems.append(
-                    f"LEG2 PIN MISMATCH qemu_smoke.sh — deviates from HEAD by something "
-                    f"other than the approved patch\n           pinned {pinned}\n"
-                    f"           live   {got}"
-                )
-            else:
-                smoke_deviated = True
-                show_diff(
-                    head_blob_at(SMOKE_REL).decode(),
-                    smoke_live.read_text(),
-                    "qemu_smoke.sh",
-                    why,
-                    SMOKE_REL,
-                )
+            problems.append(
+                f"LEG2 EDITED qemu_smoke.sh — firmware/esp32/ is read-only to this tree "
+                f"but this file differs from HEAD\n           HEAD {want}\n           live {got}"
+            )
 
     if problems:
         print("verify_harness_copy: FAIL", file=sys.stderr)
@@ -244,12 +236,11 @@ def main() -> int:
             print(f"  {p}", file=sys.stderr)
         return 1
 
-    unchanged = len(expected) - len(deviations)
+    identical = len(expected) - len(deviations)
     print(
-        f"verify_harness_copy: OK — copy == live for {len(expected)}/{len(expected)} files; "
-        f"live == HEAD for {unchanged}/{len(expected)}, "
+        f"verify_harness_copy: OK — copy == live for {identical}/{len(expected)} files, "
         f"{len(deviations)} approved strengthening ({', '.join(deviations) or 'none'}); "
-        f"qemu_smoke.sh {'approved-deviation' if smoke_deviated else '== HEAD'}"
+        f"live == HEAD for {len(expected)}/{len(expected)} files and for qemu_smoke.sh"
     )
     return 0
 

@@ -66,6 +66,7 @@ def http(s, method, path, body=None, timeout=20):
         except ValueError:
             return e.code, {"raw": raw}
 
+
 # Durations are the engine's MIN_DURATION (program_engine.MIN_DURATION = 10 s,
 # ported verbatim). Shorter would be clamped UP by the device and the test
 # would be asserting against a program it did not send.
@@ -99,6 +100,40 @@ def armed(qemu):
     s.start_pacer(synth.console_cycle_bytes(0, 0), PACER_INTERVAL)
     s.wait_audit("complete_console_frame", timeout=30)
     return s
+
+
+def assert_emulate_entry_completed(s, since: int, timeout: float = 30.0) -> None:
+    """Wait for the guest fact that emulate entry FINISHED, not for its effects.
+
+    WHY THIS EXISTS, AND WHY IT IS NOT A SLEEP OR A RETRY.
+
+    Entry is `relay_cmd_on` -> a 10 ms feedback window -> `feedback_emulate_stable`
+    -> the emulate cycle starts transmitting. `relay_cmd_on` therefore proves
+    only that entry BEGAN. The window is a busy-poll at `FEEDBACK_POLL_US`
+    (200 us) against `RELAY_FEEDBACK_DEADLINE_US` (10 ms), and blowing it is
+    fail-closed by design: `entry_feedback_timeout` latches a fault, the relay
+    drops, and the belt never transmits a byte.
+
+    A test that waits for wire bytes after `relay_cmd_on` cannot tell those two
+    outcomes apart. It reports "UART1 TX never contained b'[hmph:...]' (have 0
+    bytes)" THIRTY SECONDS after the entry already failed, which reads as a
+    silent firmware or a dead capture thread and sends the reader looking in
+    the wrong place. That is exactly the ambiguity `_check_stimulus` was added
+    to remove on the harness side, applied here to the guest side.
+
+    So: assert the entry outcome AT the entry, where the audit ring still names
+    the mechanism, and only then look at the wire. This TIGHTENS the test — it
+    can now fail for a reason it previously could only fail obliquely — and
+    adds no tolerance of any kind.
+    """
+    s.wait_audit("feedback_emulate_stable", timeout=timeout, since=since)
+    # Fail-closed entry aborts are emergencies. If one fired between the
+    # command and the transfer completing, say WHICH.
+    s.assert_no_audit(
+        lambda t: t.startswith("emergency:") or t.startswith("entry_abort:"),
+        since=since,
+        label="during emulate entry",
+    )
 
 
 def prog(s):
@@ -307,9 +342,12 @@ def test_repeated_manual_commands_do_not_cycle_the_relay(qemu):
     """
     s = armed(qemu)
 
+    entry_from = len(s.audit_events())
     st, body = http(s, "POST", "/api/speed", {"value": 2.0})
     assert st == 200 and body["ok"] is True, body
-    s.wait_audit("relay_cmd_on", timeout=30)
+    s.wait_audit("relay_cmd_on", timeout=30, since=entry_from)
+    # Entry BEGAN above; this is where it is proven to have FINISHED.
+    assert_emulate_entry_completed(s, since=entry_from)
     s.wait_tx_contains(b"[hmph:C8]", timeout=30)
 
     n0 = len(s.audit_events())

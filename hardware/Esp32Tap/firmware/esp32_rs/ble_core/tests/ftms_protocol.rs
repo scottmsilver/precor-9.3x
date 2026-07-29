@@ -542,10 +542,52 @@ fn incline_tenths_round_to_the_nearest_half_percent() {
             "{tenths} tenths"
         );
     }
-    // Negative side rounds away from zero symmetrically; the controller then
-    // refuses it (the belt has no negative incline).
-    assert_eq!(ftms_tenths_to_incline_half_pct(-28).get(), -6);
-    assert_eq!(ftms_tenths_to_incline_half_pct(-27).get(), -5);
+    // BELOW the range the daemon clamped to 0.0% and answered SUCCESS, and so
+    // does this. It used to round away from zero symmetrically and hand the
+    // negative to the controller, which refuses `incline < 0` — so a descent
+    // in a route-simulating app left the belt on the previous UPHILL grade for
+    // the whole downhill and error-indicated at the client the entire way.
+    for tenths in [-1i16, -27, -28, -100, i16::MIN] {
+        assert_eq!(
+            ftms_tenths_to_incline_half_pct(tenths).get(),
+            0,
+            "{tenths} tenths must flatten to 0, not refuse"
+        );
+    }
+}
+
+#[test]
+fn a_descent_flattens_the_belt_rather_than_leaving_it_on_the_last_hill() {
+    // The exact write a route simulator sends on a downhill: opcode 0x03,
+    // i16 LE -100 = -10.0%. End to end, parse -> effect -> motion, with the
+    // belt currently commanded 8.0% uphill by the previous segment.
+    let cmd = parse_control_point(&[0x03, 0x9C, 0xFF]).expect("well-formed");
+    assert_eq!(cmd, ControlCommand::SetTargetInclination(-100));
+    let effect = effect_of(cmd);
+    assert_eq!(effect, CpEffect::SetIncline(InclineHalfPct::new(0)));
+
+    let now = BeltNow {
+        speed: SpeedTenths::new(60),
+        incline: InclineHalfPct::new(16), // 8.0%
+        resume_speed: SpeedTenths::new(60),
+    };
+    let (speed, incline) = motion_for(effect, now).expect("commands motion");
+    // Speed carries through untouched; the grade flattens rather than sticking.
+    assert_eq!(speed, SpeedTenths::new(60));
+    assert_eq!(incline, InclineHalfPct::ZERO);
+}
+
+#[test]
+fn above_the_range_is_still_refused_rather_than_silently_substituted() {
+    // The other half of the asymmetry, pinned so a future "just clamp both
+    // ends" cannot land quietly: 40.0% stays 40.0% and the controller refuses
+    // it, where the daemon would have moved the belt at 15%.
+    let cmd = parse_control_point(&[0x03, 0x90, 0x01]).expect("well-formed");
+    assert_eq!(cmd, ControlCommand::SetTargetInclination(400));
+    assert_eq!(
+        effect_of(cmd),
+        CpEffect::SetIncline(InclineHalfPct::new(80)) // 40.0%, unclamped
+    );
 }
 
 #[test]
@@ -554,8 +596,13 @@ fn incline_rounding_agrees_with_the_daemons_float_maths_over_its_whole_domain() 
     // expression evaluated in f64. This is the vector set the daemon never
     // had: a rounding rule stated in integers has to be PROVEN equal to the
     // float one, not asserted to be.
+    //
+    // The daemon's expression is `(tenths / 10.0).clamp(0.0, 15.0)` and then
+    // `(pct * 2.0).round()`. Only the LOW end of that clamp is reproduced here
+    // — deliberately, see `ftms_tenths_to_incline_half_pct` — so the float
+    // reference carries `.max(0.0)` and not `.min(15.0)`.
     for tenths in i16::MIN..=i16::MAX {
-        let float_half = ((tenths as f64) / 10.0 * 2.0).round() as i32;
+        let float_half = (((tenths as f64) / 10.0).max(0.0) * 2.0).round() as i32;
         assert_eq!(
             ftms_tenths_to_incline_half_pct(tenths).get(),
             float_half,
@@ -912,4 +959,22 @@ fn the_mile_constant_is_the_same_one_the_speed_conversion_uses() {
     // additionally truncates at km/h*100 resolution, which is the daemon's
     // documented loss and is pinned by `conversion_matches_daemon_vectors`.
     assert_eq!(ble_core::ftms::miles_milli_to_meters(1000), 1609);
+}
+
+#[test]
+fn the_default_status_reads_are_the_daemons_and_are_never_zero_length() {
+    // Both characteristics have MANDATORY fixed leading fields, so 2 octets is
+    // the minimum legal value. The device answered READ_CHR on both with a
+    // ZERO-length value and justified it as "what the daemon's snapshot read
+    // does" — the daemon does no such thing; these are its literal vectors.
+    assert_eq!(encode_training_status_idle(), [0x00, 0x01]);
+    assert_eq!(encode_machine_status_stopped(), [0x02, 0x01]);
+
+    // The on-subscribe initial value and the read value are the SAME bytes in
+    // the daemon, which is why one constant serves both call sites.
+    assert_eq!(
+        encode_training_status(ControlCommand::StopOrPause(1)),
+        Some(encode_training_status_idle()),
+        "a Stop notification and the idle read must agree"
+    );
 }

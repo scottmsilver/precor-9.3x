@@ -349,6 +349,33 @@ pub fn encode_training_status(cmd: ControlCommand) -> Option<[u8; 2]> {
     }
 }
 
+/// The Training Status value a client gets when it READS 0x2AD3, or the
+/// moment it subscribes — `ftms_service.rs`'s unconditional read handler and
+/// its on-subscribe `notify(vec![0x00, 0x01])`. Flags = 0 (no string),
+/// Status = 0x01 Idle.
+///
+/// This characteristic is MANDATORY whenever the Control Point is present, and
+/// both its fields are mandatory and fixed-width, so its minimum legal length
+/// is 2 octets. A read answered with ZERO bytes — which is what this device
+/// did before this constant existed — is a malformed characteristic value, not
+/// an empty-but-legal one: a client that reads 0x2AD3 during discovery to
+/// decide whether the machine is controllable cannot decode Flags or Status
+/// and either gives up on the machine or logs a decode error.
+pub const fn encode_training_status_idle() -> [u8; 2] {
+    [0x00, 0x01]
+}
+
+/// The Fitness Machine Status value for a READ of 0x2ADA, or the moment a
+/// client subscribes — `ftms_service.rs`'s read handler and its on-subscribe
+/// `notify(vec![0x02, 0x01])`. Opcode 0x02 "Stopped or Paused by the User",
+/// parameter 0x01 = stop.
+///
+/// Same argument as [`encode_training_status_idle`]: opcode plus parameter is
+/// the mandatory shape, and a zero-length read is undecodable.
+pub const fn encode_machine_status_stopped() -> [u8; 2] {
+    [0x02, 0x01]
+}
+
 /// Fitness Machine Status (0x2ADA), port of
 /// `ftms_service::encode_status_notification`. Opcodes per FTMS Table 4.16:
 /// 0x02 stopped/paused by user (param 1=stop, 2=pause), 0x04 started/resumed
@@ -478,7 +505,29 @@ pub fn incline_half_pct_to_ftms_tenths(incline: InclineHalfPct) -> i16 {
 /// `tenths / 5` is never a half-integer (it would need `tenths = 5k + 2.5`),
 /// so there is no tie to break and no rounding mode to pick.
 ///
-/// NO CLAMP, DELIBERATELY. See [`CpEffect`].
+/// ## The LOW side clamps to zero; the HIGH side does not
+///
+/// This is asymmetric on purpose, and the asymmetry is the whole point.
+///
+/// ABOVE the range, [`CpEffect`]'s header argues — correctly — that a peer
+/// asking for 40% should be REFUSED rather than silently given 15%, because
+/// "as much as you allow" is not what it asked for and the belt moving at a
+/// grade nobody requested is the worse outcome. That reasoning is kept.
+///
+/// BELOW the range it does not hold. A route-simulating client (Zwift,
+/// Kinomap) writes the terrain's real grade, and terrain goes downhill: `03 9C
+/// FF` is SetTargetInclination(-10.0%) on a descent. "Go below your minimum"
+/// has exactly one safe reading, the machine's floor is already published to
+/// the client in Supported Inclination Range (0x2AD5, min = 0), and the daemon
+/// shipped that reading — `(*incline_tenths as f64 / 10.0).clamp(0.0, 15.0)`
+/// in `ftms_service.rs`, which flattened the belt and answered SUCCESS.
+///
+/// Without this clamp the negative survived into `SafetyController`, which
+/// refuses `incline < 0` outright: the write failed, the incline was NOT
+/// changed, and the belt stayed on whatever the last UPHILL segment had set
+/// for the whole of the descent, error-indicating at the client the entire
+/// way. Refusing to go down is not a safe default — it is the belt stuck at 8%
+/// while the app draws a hill going the other way.
 pub fn ftms_tenths_to_incline_half_pct(tenths: i16) -> InclineHalfPct {
     let t = tenths as i32;
     // round-half-away-from-zero on t/5, in integers: (2t +/- 5) / 10.
@@ -487,7 +536,7 @@ pub fn ftms_tenths_to_incline_half_pct(tenths: i16) -> InclineHalfPct {
     } else {
         (2 * t - 5) / 10
     };
-    InclineHalfPct::new(half)
+    InclineHalfPct::new(half.max(0))
 }
 
 /// km/h x 100 -> [`SpeedTenths`]. No clamp; see [`CpEffect`].
