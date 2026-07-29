@@ -243,9 +243,13 @@ pub fn push_frames() {
     // second, forever, and would spend ~900 bytes of the single httpd worker's
     // send budget on nothing.
     //
-    // A late client therefore does NOT get the last answer over the socket; it
-    // reads it from `GET /api/chat`, which is why that endpoint exists as well
-    // as the push.
+    // WHICH LATE CLIENTS STILL GET IT, precisely, because "once" alone would be
+    // misleading: the counter only advances when a frame is actually SENT, and
+    // `push_frames` returns early when no socket is open. So a client that
+    // connects after an answer landed with nobody listening DOES receive it, on
+    // the next tick. A client that joins a conversation somebody else was
+    // already watching does not, and reads it from `GET /api/chat` — which is
+    // why that endpoint exists as well as the push.
     let mut coach: FixedStr<{ crate::net::coach::WS_FRAME_BUF }> = FixedStr::new();
     let coach_n = {
         let turn = crate::net::coach::published_turn();

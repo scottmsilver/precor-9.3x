@@ -35,11 +35,37 @@
 //! the wait bought nothing but the outage. There is no middle setting that is
 //! both useful and safe, which is why there is no wait.
 //!
-//! `coach_stop_stays_responsive_during_a_call` in `tools/qemu_scenarios/
-//! test_coach.py` is the assertion, not this paragraph: a stub endpoint holds
-//! the device's request open for seconds while the scenario drives
-//! `POST /api/program/stop` and requires it to complete promptly, with the belt
-//! moving.
+//! `test_stop_stays_responsive_while_a_coach_call_is_in_flight` in
+//! `tools/qemu_scenarios/test_coach.py` is the assertion, not this paragraph: a
+//! stub endpoint holds the device's request open for 8 s while the scenario
+//! drives `POST /api/program/stop` with a program running and the belt moving,
+//! and requires Stop to complete within 2 s of its own baseline.
+//!
+//! WHAT THIS COSTS THE ANDROID APP, stated rather than left to be discovered.
+//! `ChatResponse` decodes the 202 body without complaint (`text` and `actions`
+//! have kotlinx defaults), so nothing crashes — and nothing is SHOWN either,
+//! because the app does not yet handle the `coach` frame or poll
+//! `GET /api/chat`. Bead precor-9_3x-lsx is that change; it is small, it is in
+//! `TreadmillViewModel.handleMessage`, and it is a no-op against the Pi (which
+//! answers 200 with the full body and never sends a coach frame), so one client
+//! works with both machines.
+//!
+//! # ONE MODEL CALL PER TURN, NOT THE PI'S THREE
+//!
+//! `server.py::_run_chat_core` loops up to three times: it executes the tool
+//! calls, appends a `functionResponse` for each, and asks again so the model can
+//! narrate what happened. This device makes ONE call (plus the generation call,
+//! when a workout is asked for), and that is a deliberate divergence rather than
+//! an unfinished port.
+//!
+//! Each extra round trip is SECONDS of latency on a device whose whole point is
+//! that the answer arrives while you are still running, and it buys narration —
+//! the RESULTS are already reported to the user directly, in the `result` string
+//! of each action, rendered from the same `describe()` the model would have been
+//! told. What is genuinely lost is the model's chance to react to a refusal
+//! ("a workout is running, so I left the belt alone") within the same turn; the
+//! user sees the sentence and can ask again, which is one message instead of
+//! several seconds on every message.
 //!
 //! # THE COACH TASK IS NOT WDT-SUPERVISED, and that is deliberate
 //!
@@ -53,9 +79,14 @@
 //! through. It is named in `tasks/mod.rs`'s matrix as an absence so the next
 //! person does not "fix" it.
 //!
-//! It also never holds a lock across a network call. It takes `CTX.guarded` /
-//! `CTX.program` only to APPLY an already-validated, already-clamped action,
-//! for microseconds, exactly as the interval executor does.
+//! It never holds the SAFETY or PROGRAM lock across a network call, which is
+//! the part that matters: it takes `CTX.guarded` / `CTX.program` only to APPLY
+//! an already-validated, already-clamped action, for microseconds, exactly as
+//! the interval executor does. It DOES hold its own `WORK` lock across the
+//! round trip — stated rather than glossed, because "holds no lock" would be
+//! false. `WORK` is the coach's own request buffer, scanner and history ring,
+//! and this task is the only code that can name it, so nothing else can ever
+//! wait on it.
 //!
 //! # THE KEY IS A PER-DEVICE SECRET
 //!
@@ -85,11 +116,16 @@
 //! `CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y`), so nothing here changes
 //! Kconfig — but referencing `esp_crt_bundle_attach` is what pulls the embedded
 //! blob into the image. **MEASURED FLASH COST: 68,983 bytes** (the generated
-//! `esp-idf/mbedtls/x509_crt_bundle`, the full Mozilla root store). The
-//! whole coach tier — the bundle, `esp_http_client`, `coach_core` and this
-//! module — took the qemu-test image from 1,143,152 to 1,265,568 bytes of a
-//! 2,097,152-byte factory partition (54% -> 60%), so ~122 KB total is
-//! affordable. `..._DEFAULT_CMN` would cut it to roughly a third and
+//! `esp-idf/mbedtls/x509_crt_bundle`, the full Mozilla root store). That figure
+//! is exact because it is a file on disk.
+//!
+//! The IMAGE delta is not attributed to this tier, and that is deliberate
+//! rather than coy: the qemu-test image went from 1,143,152 to 1,295,952 bytes
+//! of a 2,097,152-byte factory partition (54% -> 61%) across a window in which
+//! the persistence tier ALSO swapped `recstore` for LittleFS, so the ~150 KB is
+//! two changes and splitting it by eye would be a number nobody could
+//! reproduce. What is certain: the bundle is 68,983 of it, and the partition
+//! has ~800 KB spare. `..._DEFAULT_CMN` would cut the bundle to roughly a third and
 //! is the obvious lever if the image ever gets tight; it is NOT taken now
 //! because changing an sdkconfig key is gated by `check_sdkconfig.py` and
 //! deserves its own deliberate act.
@@ -369,7 +405,15 @@ fn turn_impl(turn: u32, msg: &str) {
 
     let mut text: FixedStr<REPLY_BYTES> = FixedStr::new();
     let mut actions: FixedStr<ACTIONS_BYTES> = FixedStr::new();
-    let mut pending_gen: Option<FixedStr<{ coach_core::tool::DESC_BYTES }>> = None;
+    // A generation is DEFERRED, not executed in the loop, because it is a
+    // second model call and the loop is holding the work buffers it needs. The
+    // call's own arguments ride along so the transcript still shows what the
+    // model asked for — pushing an entry in the loop AND another after the
+    // generation gave the user two `generate_workout` lines for one request.
+    let mut pending_gen: Option<(
+        FixedStr<{ coach_core::tool::DESC_BYTES }>,
+        FixedStr<{ coach_core::scan::ARGS_BYTES }>,
+    )> = None;
 
     {
         let mut w = lock(&WORK);
@@ -424,8 +468,10 @@ fn turn_impl(turn: u32, msg: &str) {
                     // asked for cannot diverge.
                     describe(&action, &mut result);
                     if let Action::GenerateWorkout(d) = action {
-                        pending_gen = Some(d);
-                    } else if let Some(why) = apply(&action) {
+                        pending_gen = Some((d, call.args));
+                        continue; // its entry is pushed with its OUTCOME, below
+                    }
+                    if let Some(why) = apply(&action) {
                         result = FixedStr::from_str_truncating(why);
                     }
                 }
@@ -445,14 +491,9 @@ fn turn_impl(turn: u32, msg: &str) {
 
     // The generation is a SECOND call and happens outside the borrow above so
     // the work buffers can be reused for it.
-    if let Some(desc) = pending_gen {
+    if let Some((desc, args)) = pending_gen {
         let outcome = generate(desc.as_str(), &url, key_hdr.as_ref(), started);
-        push_action(
-            &mut actions,
-            "generate_workout",
-            &FixedStr::new(),
-            outcome,
-        );
+        push_action(&mut actions, "generate_workout", &args, outcome);
     }
 
     // COMMITTED ONLY NOW. Nothing was written to the ring while the turn could
@@ -782,6 +823,13 @@ fn post_inner(
             c"application/json".as_ptr(),
         )
     };
+    // CHECKED BEFORE THE NEXT CALL, not after both. Assigning over `rc` and
+    // testing once means a failed Content-Type is ERASED by a successful
+    // auth header — the request would then go out as the wrong media type and
+    // come back 400, with nothing on the device naming the cause.
+    if rc != sys::ESP_OK {
+        return Err(rc);
+    }
     if let Some(k) = key_c {
         // THE KEY GOES IN A HEADER, NEVER IN THE URL. See the module header.
         // SAFETY: as above — live handle, NUL-terminated buffer that outlives
@@ -793,9 +841,9 @@ fn post_inner(
                 k.as_ptr() as *const core::ffi::c_char,
             )
         };
-    }
-    if rc != sys::ESP_OK {
-        return Err(rc);
+        if rc != sys::ESP_OK {
+            return Err(rc);
+        }
     }
 
     // SAFETY: `client` is live; the length is the body we are about to write.

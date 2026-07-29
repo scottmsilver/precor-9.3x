@@ -737,3 +737,28 @@ def test_the_answer_is_pushed_down_ws_exactly_once(qemu, stub):
     # repeating it would grow the app's transcript by an identical line a second
     # forever and spend the single worker's send budget on nothing.
     assert len(coach) == 1, f"the coach frame was pushed {len(coach)} times"
+
+
+def test_a_client_that_arrives_after_the_answer_still_receives_it(qemu, stub):
+    """The other half of "once", and the reason it is not simply "once".
+
+    The pushed-turn counter only advances when a frame is actually SENT, and
+    `push_frames` returns early when no socket is open — so an answer that
+    landed while nobody was listening is still waiting for the first client to
+    arrive. Without this the app would have to poll after every reconnect to
+    find out whether it had missed anything.
+    """
+    s = booted(qemu)
+    point_at(s, stub, "/plain")
+    st, chat = ask(s, "nobody is listening yet")
+    assert st == 202, chat
+    got = await_reply(s, chat["turn"])  # completes with no WS client attached
+    assert got["text"], got
+
+    with wsc.WsClient(s) as ws:
+        ws.frame(timeout=20)  # the connection greeting
+        frames = ws.collect(8)
+    coach = [f for f in frames if f.get("type") == "coach"]
+    assert coach, "a client that connected after the answer never saw it"
+    assert coach[0]["turn"] == chat["turn"], coach[0]
+    assert coach[0]["pending"] is False, coach[0]

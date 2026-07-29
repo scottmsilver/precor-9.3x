@@ -71,6 +71,13 @@ cargo test --manifest-path reqbudget/Cargo.toml
 # behaviour is verifiable; the radio is not (see "BLE" below).
 cargo test --manifest-path ble_core/Cargo.toml
 
+# Host — the AI coach's judgement (41 cases, ~0 s): the bounded streaming reply
+# extractor, the clamps applied to a model's tool call, the truncation salvage.
+# The fixtures are the shapes that BREAK things (a reply delivered one byte at a
+# time, one cut off mid-argument, one 100x the buffer, an HTTP error envelope, an
+# HTML 502 page), because the live endpoint is deliberately not a gate.
+cargo test --manifest-path coach_core/Cargo.toml
+
 # Host — differential against the COMMITTED, UNMODIFIED C++ core.
 cd difftest && cargo test
 
@@ -190,6 +197,26 @@ the harness: relay entry/exit ordering, fail-closed on unknown feedback,
 `BOTH_CLOSED` as a latched fault in every mode, `BOTH_OPEN` as transit-only, the
 exact-deadline-loses rule, the 1.5 s console freshness, the 4 s lease, the
 0–120 / 0–30 / 0–198 clamps, and the 3-hour timeout.
+
+**The AI coach's live endpoint is not a gate, on purpose.** `net/coach.rs` +
+`coach_core/` are proven against a local stub the test controls
+(`tools/qemu_scenarios/test_coach.py`, 19 scenarios), and that stub is strictly
+better than the real API at everything except two things it cannot do: confirm
+that the request body Gemini ACCEPTS is the one we build, and confirm that the
+embedded CA bundle validates the real chain. Those need a live per-device key and
+are the opt-in `test_coach_live.py` (`COACH_LIVE_KEY=…`), tracked by bead
+`precor-9_3x-zt8`. Wiring a real call into the sweep would buy those two facts and
+pay for them with an intermittent — a live secret, nondeterministic words, and
+somebody else's uptime.
+
+**The Android app does not yet show a coach answer**, and that follows from the
+shape of the call rather than from an oversight. `POST /api/chat` answers `202`
+immediately and delivers the reply on a `/ws` `coach` frame (and at
+`GET /api/chat`), because IDF runs ONE httpd worker and holding it for a
+multi-second model round trip is a Stop-button outage with the belt moving. The
+app decodes the 202 without complaint and renders nothing; bead
+`precor-9_3x-lsx` is the one-place change in `TreadmillViewModel.handleMessage`,
+and it is a no-op against the Pi.
 
 Two verification gaps that are **not Rust's fault** and must not be papered over:
 
