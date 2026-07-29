@@ -226,7 +226,7 @@ PRODUCTION_UNSAFE_LINES = 69
 # could be a megabyte. The FFI is unchanged (one `httpd_req_to_sockfd`, one
 # `lwip_shutdown`); the growth is the counting rule attributing the second
 # function's body.
-# 597 -> 1094, +497, ALL of it Slice 6 (the BLE tier) and none of it in the
+# 597 -> 1106, +509, ALL of it Slice 6 (the BLE tier) and none of it in the
 # production image — `feature = "ble"`, like `net`, is carried only by the
 # QEMU-test build. The parts:
 #   + ble/central.rs  223  the HRM client. Five NimBLE callbacks (GAP events,
@@ -255,7 +255,7 @@ PRODUCTION_UNSAFE_LINES = 69
 # `crate::hr`, where an untrusted peer's bytes actually land, is
 # `forbid(unsafe_code)` too (FORBID_MODULES above). What is inside the unsafe
 # regions is transport: mbufs in, mbufs out, handles stored in atomics.
-QEMU_UNSAFE_LINES = 1094
+QEMU_UNSAFE_LINES = 1106
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

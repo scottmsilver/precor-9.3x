@@ -62,6 +62,15 @@ static HR_VAL_HANDLE: AtomicU16 = AtomicU16::new(0);
 static SVC_START: AtomicU16 = AtomicU16::new(0);
 static SVC_END: AtomicU16 = AtomicU16::new(0);
 static SCANNING: AtomicBool = AtomicBool::new(false);
+/// A `ble_gap_connect` is in flight: started, no CONNECT event yet.
+///
+/// WITHOUT THIS, `tick` STARTS A SCAN EVERY SECOND DURING A CONNECT. `conn()`
+/// is None for the whole connection interval and `SCANNING` was cleared by
+/// `stop_scan`, so the reconnect branch fires — and NimBLE refuses a discovery
+/// while a connection is pending, so the device logs a failure once a second
+/// for as long as the connect takes. Noise on a healthy path is how a real
+/// failure stops being visible.
+static CONNECTING: AtomicBool = AtomicBool::new(false);
 
 fn conn() -> Option<u16> {
     match CONN.load(Ordering::Relaxed) {
@@ -170,8 +179,20 @@ unsafe extern "C" fn disc_event(
         }
         sys::BLE_GAP_EVENT_CONNECT => {
             let c = &(*event).__bindgen_anon_1.connect;
+            CONNECTING.store(false, Ordering::Release);
             if c.status == 0 {
                 CONN.store(c.conn_handle, Ordering::Relaxed);
+                // RESET THE DISCOVERY STATE HERE, not only in `drop_link`. A
+                // link that ends with a plain DISCONNECT event never goes
+                // through `drop_link`, so a service range left over from the
+                // PREVIOUS strap would make `on_service` believe it had found
+                // a Heart Rate service on a device that has none — and then
+                // hunt for a characteristic inside a handle range that belongs
+                // to nothing. Clearing it at the START of every connection is
+                // the one place that cannot be skipped.
+                SVC_START.store(0, Ordering::Relaxed);
+                SVC_END.store(0, Ordering::Relaxed);
+                HR_VAL_HANDLE.store(0, Ordering::Relaxed);
                 logi!("ble: strap connected (handle {})", c.conn_handle);
                 let u = hr_uuid();
                 // SAFETY: `u` is a live stack value read for the duration of
@@ -412,11 +433,15 @@ fn target() -> (Addr, ble_core::peer::FixedName) {
 
 /// Open a link to `addr`.
 fn connect(addr: Addr) {
-    if !addr.present || conn().is_some() {
+    // A connect already in flight is left alone: NimBLE refuses a second one
+    // anyway, and starting one would clear `CONNECTING` on the first failure
+    // and re-open the scan churn this flag exists to close.
+    if !addr.present || conn().is_some() || CONNECTING.load(Ordering::Relaxed) {
         return;
     }
     hr::with(|s| s.saved = addr);
     stop_scan();
+    CONNECTING.store(true, Ordering::Release);
     // SAFETY: `peer` is a live stack value read for the duration of the call;
     // NimBLE copies it into its connection state.
     let rc = unsafe {
@@ -439,6 +464,7 @@ fn connect(addr: Addr) {
         }
     };
     if rc != 0 {
+        CONNECTING.store(false, Ordering::Release);
         logw!("ble: connect to strap failed to start ({})", rc);
     }
 }
@@ -452,6 +478,7 @@ fn drop_link() {
         unsafe { sys::ble_gap_terminate(c, sys::ble_error_codes_BLE_ERR_REM_USER_CONN_TERM as u8) };
     }
     CONN.store(NO_CONN, Ordering::Relaxed);
+    CONNECTING.store(false, Ordering::Release);
     HR_VAL_HANDLE.store(0, Ordering::Relaxed);
     SVC_START.store(0, Ordering::Relaxed);
     hr::on_disconnected();
@@ -506,9 +533,16 @@ pub fn tick() {
         Some(hr::Command::Connect(addr)) => {
             hr::with(|s| s.saved = addr);
             if conn().is_some() {
+                // Drop the old link and let the NEXT tick open the new one.
+                // Calling `connect` here would issue `ble_gap_connect` while
+                // `ble_gap_terminate` is still in flight — the old link is not
+                // down when `drop_link` returns, only asked to go down — and
+                // NimBLE refuses that, which would cost a scan cycle to
+                // recover from. One second is cheaper and has no failure path.
                 drop_link();
+            } else {
+                connect(addr);
             }
-            connect(addr);
             return;
         }
         Some(hr::Command::Forget) => {
@@ -519,11 +553,30 @@ pub fn tick() {
         None => {}
     }
 
-    // Nothing connected and nothing in flight: look again. This is the whole
-    // reconnect story — no backoff ladder, no retry counter. A strap that
-    // walked out of range comes back when it comes back, and the cost of
-    // asking is one bounded scan.
-    if conn().is_none() && !SCANNING.load(Ordering::Relaxed) {
-        start_scan();
+    // Nothing connected and nothing in flight. This is the whole reconnect
+    // story — no backoff ladder, no retry counter. A strap that walked out of
+    // range comes back when it comes back.
+    //
+    // A REMEMBERED STRAP IS RECONNECTED DIRECTLY, not scanned for. Its address
+    // AND its address type are already known, so the scan would only be a way
+    // of learning what we already know — at eight seconds a go, before every
+    // attempt. `ble_gap_connect` is itself bounded (30 s) and holds
+    // `CONNECTING` for its duration, so an out-of-range strap costs one
+    // pending connection rather than a scan every second.
+    //
+    // Consequence, stated because it is a behaviour and not an accident: once
+    // a strap is remembered this device stops looking for others. That is the
+    // Pi daemon's behaviour too, and `POST /api/hrm/scan` is how the user asks
+    // for a fresh list.
+    if conn().is_none()
+        && !SCANNING.load(Ordering::Relaxed)
+        && !CONNECTING.load(Ordering::Relaxed)
+    {
+        let saved = hr::with(|s| s.saved);
+        if saved.present {
+            connect(saved);
+        } else {
+            start_scan();
+        }
     }
 }

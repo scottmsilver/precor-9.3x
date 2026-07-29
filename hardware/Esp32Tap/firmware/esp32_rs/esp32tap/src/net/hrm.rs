@@ -24,10 +24,34 @@ use crate::net::api::{
 };
 use esp_idf_sys as sys;
 
-/// Longest `/api/hrm` body. Six devices at ~70 bytes each plus the fixed
-/// header; `BufWriter` REFUSES to overflow, so a wrong number here truncates
-/// into a visible failure rather than smashing the httpd task's stack.
+/// Longest `/api/hrm` body.
+///
+/// DERIVED AND COMPILE-ASSERTED, not estimated. The writer below refuses to
+/// overflow, so a buffer that is too small does not smash the httpd stack —
+/// but what it produces instead is a body cut off mid-array, which is INVALID
+/// JSON and unparseable by the client. A truncated status frame degrades; a
+/// truncated array is a parse error. So the bound is checked by the compiler
+/// against the worst case each field can reach.
 pub const HRM_BUF: usize = 768;
+
+/// The longest `/api/hrm` rendering, term by term.
+const HRM_WORST: usize = 1                       // `{`
+    + 10                                          // `"ok":true,` lead
+    + 13 + 5                                      // `"heart_rate":` + 65535
+    + 13 + 5                                      // `,"connected":` + false
+    + 11 + ble_core::peer::MAX_NAME + 1           // `,"device":"` + name + `"`
+    + 12 + hr::ADDR_TEXT_LEN + 1                  // `,"address":"` + addr + `"`
+    + 12 + 5                                      // `,"scanning":` + false
+    + 22                                          // `,"available_devices":[`
+    + hr::MAX_DEVICES
+        * (1 + 12 + hr::ADDR_TEXT_LEN + 10 + ble_core::peer::MAX_NAME + 9 + 4 + 1)
+    + 2; // `]}`
+
+const _: () = assert!(
+    HRM_WORST <= HRM_BUF,
+    "the /api/hrm body can now exceed HRM_BUF and would be truncated into \
+     invalid JSON — raise HRM_BUF"
+);
 
 struct W<'a> {
     b: &'a mut [u8],
@@ -228,8 +252,21 @@ pub fn register(handle: sys::httpd_handle_t) -> Result<(), sys::esp_err_t> {
 // The `/ws` frame
 // ---------------------------------------------------------------------------
 
-/// Bytes an `hr` frame renders into.
+/// Bytes an `hr` frame renders into. Compile-asserted below, for the same
+/// reason `HRM_BUF` is: a truncated frame is a `MissingFieldException` in the
+/// client, which drops the whole message.
 pub const HR_FRAME_BUF: usize = 128;
+
+const HR_FRAME_WORST: usize = 19 + 5             // `{"type":"hr","bpm":` + 65535
+    + 13 + 5                                      // `,"connected":` + false
+    + 11 + ble_core::peer::MAX_NAME + 1           // `,"device":"` + name + `"`
+    + 12 + hr::ADDR_TEXT_LEN + 1                  // `,"address":"` + addr + `"`
+    + 1; // `}`
+
+const _: () = assert!(
+    HR_FRAME_WORST <= HR_FRAME_BUF,
+    "the /ws `hr` frame can now exceed HR_FRAME_BUF — raise it"
+);
 
 /// Render the `hr` WebSocket frame — `HRMessage` in `ServerMessages.kt`, field
 /// for field.

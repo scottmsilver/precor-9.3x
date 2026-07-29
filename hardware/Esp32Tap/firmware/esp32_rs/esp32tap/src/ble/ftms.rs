@@ -47,7 +47,7 @@
 use crate::control::{self, Surface};
 use crate::{logi, logw};
 use ble_core::ftms as proto;
-use core::sync::atomic::{AtomicI32, AtomicU16, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use esp_idf_sys as sys;
 use safety_core::units::SpeedTenths;
 
@@ -65,7 +65,10 @@ static CONN: AtomicU16 = AtomicU16::new(NO_CONN);
 
 /// Characteristic value handles, filled by NimBLE during registration.
 static H_TREADMILL_DATA: AtomicU16 = AtomicU16::new(0);
-static H_CONTROL_POINT: AtomicU16 = AtomicU16::new(0);
+// The Control Point's own handle is deliberately NOT kept: the indication is
+// answered on the `attr_handle` NimBLE passes to the access callback for the
+// write being answered, which is that handle by definition. A cached second
+// copy would be state that can disagree with the request in hand.
 static H_MACHINE_STATUS: AtomicU16 = AtomicU16::new(0);
 static H_TRAINING_STATUS: AtomicU16 = AtomicU16::new(0);
 
@@ -134,7 +137,8 @@ pub fn register() -> Result<(), sys::esp_err_t> {
 
     // Value-handle out-params. NimBLE writes through these during
     // registration and never again; they are leaked so the pointers stay
-    // valid for the call and beyond it.
+    // valid for the call and beyond it. Slot 1 (the Control Point) is written
+    // by NimBLE and never read back — see the note on H_MACHINE_STATUS.
     let handles: &'static mut [u16; 4] = Box::leak(Box::new([0u16; 4]));
 
     let mut chrs: Vec<sys::ble_gatt_chr_def> = Vec::with_capacity(8);
@@ -221,14 +225,21 @@ pub fn register() -> Result<(), sys::esp_err_t> {
     // The handles are filled during `ble_gatts_start`, which NimBLE calls from
     // its host task on sync. Publish the ADDRESSES now and read the values
     // later — see `publish_handles`.
-    HANDLE_STORE.store(handles.as_mut_ptr() as usize as i32, Ordering::Relaxed);
+    HANDLE_STORE.store(handles.as_mut_ptr() as usize, Ordering::Relaxed);
     logi!("ble: FTMS service registered");
     Ok(())
 }
 
-/// Address of the four-handle array, as an `i32` so it can live in an atomic.
-/// Set once by [`register`], read once by [`publish_handles`].
-static HANDLE_STORE: AtomicI32 = AtomicI32::new(0);
+/// Address of the four-handle array, so it can live in an atomic.
+///
+/// `AtomicUsize` and not `AtomicI32`: a heap address on this part happens to
+/// sit below `0x8000_0000` and would survive the round trip through a signed
+/// integer, but "happens to" is not a property to depend on — an address with
+/// the top bit set would read back negative and any future comparison against
+/// it would be wrong.
+///
+/// Set once by [`register`], read by [`publish_handles`].
+static HANDLE_STORE: AtomicUsize = AtomicUsize::new(0);
 
 /// Copy the value handles NimBLE filled in during `ble_gatts_start`.
 ///
@@ -243,9 +254,8 @@ fn publish_handles() {
     // SAFETY: `p` is the address of a leaked `[u16; 4]` that is never freed
     // and never moved. NimBLE has finished writing it (this runs after
     // `ble_gatts_start`), and this is the only reader.
-    let h = unsafe { *(p as usize as *const [u16; 4]) };
+    let h = unsafe { *(p as *const [u16; 4]) };
     H_TREADMILL_DATA.store(h[0], Ordering::Relaxed);
-    H_CONTROL_POINT.store(h[1], Ordering::Relaxed);
     H_MACHINE_STATUS.store(h[2], Ordering::Relaxed);
     H_TRAINING_STATUS.store(h[3], Ordering::Relaxed);
 }
@@ -390,6 +400,20 @@ unsafe fn on_control_point(conn_handle: u16, cp_handle: u16, bytes: &[u8]) {
 /// Returns the FTMS result code for the indication. No clamping, no
 /// pre-validation: `control::command` decides, and this function reports what
 /// it decided.
+///
+/// # Why the BLE surface is `Surface::Http`, and why that is not a shortcut
+///
+/// `Surface` selects an owner slot in `Guarded` and a `Transport`/handle pair
+/// for the lease. A THIRD surface would be a third lease holder, and
+/// `SafetyController::connect` emergency-stops when a new generation
+/// supersedes a lease-holding one — so a phone on Bluetooth and the same phone
+/// on HTTP would take the belt from each other, relay-cycling the treadmill
+/// mid-stride every time the user touched the other control.
+///
+/// They are the same person commanding the same machine from the same room,
+/// and treating them as one owner is the honest model. It also leaves the
+/// existing arbitration untouched: a running program still refuses BOTH, and
+/// `Reject::NotOwner` still means what it meant.
 fn apply(effect: proto::CpEffect) -> u8 {
     let now_belt = {
         let g = crate::context::lock(&crate::CTX.guarded);
@@ -438,21 +462,6 @@ fn apply(effect: proto::CpEffect) -> u8 {
         }
     }
 }
-
-/// WHY THE BLE SURFACE IS `Surface::Http`, and why that is not a shortcut.
-///
-/// `Surface` selects an owner slot in `Guarded` and a `Transport`/handle pair
-/// for the lease. A THIRD surface would mean a third lease holder, and
-/// `SafetyController::connect` emergency-stops when a new generation
-/// supersedes a lease-holding one — so a phone on Bluetooth and the same phone
-/// on HTTP would take the belt from each other, relay-cycling the treadmill
-/// mid-stride every time the user touched the other control.
-///
-/// They are the same user commanding the same machine from the same room, and
-/// treating them as one owner is the honest model. It also means the existing
-/// arbitration is unchanged: a running program still refuses BOTH, with the
-/// same 409-shaped answer.
-const _WHY_HTTP_SURFACE: () = ();
 
 // ---------------------------------------------------------------------------
 // Notifications

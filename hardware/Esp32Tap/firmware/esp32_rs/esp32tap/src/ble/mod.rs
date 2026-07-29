@@ -211,7 +211,12 @@ fn bring_up() -> Result<(), sys::esp_err_t> {
     let after = free_heap();
     let cost = before.saturating_sub(after);
     HEAP_COST.store(cost as i32, Ordering::Relaxed);
-    // EXACT STRING — the memory scenario greps it, and the README quotes it.
+    // THE INSTRUMENT FOR THE ONE NUMBER NOBODY HAS. NimBLE's runtime heap cost
+    // alongside TLS and the app tier is UNMEASURED and no figure is quoted for
+    // it anywhere in this tree — the controller aborts before this call returns
+    // under QEMU, so it cannot be measured here. Nothing greps this line yet,
+    // and that is the honest state: it exists so the figure comes off the first
+    // real board rather than out of an estimate. Bead precor-9_3x-l0h item 2.
     logi!(
         "ble: heap cost {} bytes (free {} -> {})",
         cost,
