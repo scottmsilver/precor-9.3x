@@ -28,6 +28,13 @@ run safety     cargo test --manifest-path safety_core/Cargo.toml -q
 run reqbudget  cargo test --manifest-path reqbudget/Cargo.toml -q
 run recstore   cargo test --manifest-path recstore/Cargo.toml -q
 run progcore   cargo test --manifest-path program_core/Cargo.toml -q
+# The coach tier's judgement, host-only and ~0 s. EVERY property that decides
+# what a model reply MEANS lives here: the bounded streaming extractor, the
+# clamps applied to a tool call, and the truncation salvage. The live endpoint
+# is DELIBERATELY not a gate (it needs a real key, it is nondeterministic, and
+# it costs money), so this file is what stands in for it — which is why its
+# fixtures are the failure shapes rather than the happy path.
+run coachcore  cargo test --manifest-path coach_core/Cargo.toml -q
 # The BLE protocol tier. Pure, host-only, ~1 s — and it is where nearly all the
 # real BLE behaviour lives, because the radio itself CANNOT be tested here
 # (QEMU has no BLE). Every vector is the Pi daemon's, ported byte for byte, so

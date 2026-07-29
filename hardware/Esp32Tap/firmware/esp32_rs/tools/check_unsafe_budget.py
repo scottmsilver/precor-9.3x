@@ -49,7 +49,7 @@ CORE_SRC = ESP32_RS / "safety_core" / "src"
 # Crates that are `#![forbid(unsafe_code)]` and contain no `unsafe` token at
 # all. `reqbudget` and `recstore` are deliberately absent: reqbudget owns the
 # static request pool and needs FFI-free `unsafe` for it.
-PURE_FORBID_CRATES = ("safety_core", "program_core", "ble_core")
+PURE_FORBID_CRATES = ("safety_core", "program_core", "ble_core", "coach_core")
 
 # Firmware modules whose unsafe-freedom is COMPILER-enforced.
 FORBID_MODULES = ("tasks/mod.rs", "context.rs", "pins.rs", "control.rs", "hr.rs")

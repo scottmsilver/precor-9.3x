@@ -1,0 +1,14 @@
+[package]
+name = "coach_core"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.90"
+
+[dependencies]
+# Units and `FixedStr` only. The coach tier decides nothing about the belt on
+# its own: it produces `Action`s in safety_core's newtypes, which the firmware
+# then feeds through the SAME `control::command` every other surface uses.
+safety_core = { path = "../safety_core" }
+# The clamps a generated workout is held to are the interval executor's own —
+# this crate never re-implements them, it calls them.
+program_core = { path = "../program_core" }
