@@ -114,7 +114,7 @@ pub enum Origin {
 // One `unsafe` per C call, each with the invariant it depends on. All of it
 // runs once, on the main task, before the server exists.
 
-fn nvs_init() -> sys::esp_err_t {
+pub(crate) fn nvs_init() -> sys::esp_err_t {
     // SAFETY: no arguments; idempotent IDF init returning esp_err_t.
     let rc = unsafe { sys::nvs_flash_init() };
     if rc == sys::ESP_ERR_NVS_NO_FREE_PAGES || rc == sys::ESP_ERR_NVS_NEW_VERSION_FOUND {
@@ -129,7 +129,7 @@ fn nvs_init() -> sys::esp_err_t {
     rc
 }
 
-fn nvs_open_rw(out: &mut sys::nvs_handle_t) -> sys::esp_err_t {
+pub(crate) fn nvs_open_rw(out: &mut sys::nvs_handle_t) -> sys::esp_err_t {
     // SAFETY: the namespace is a `'static` NUL-terminated literal read for the
     // call; `out` is a live exclusive borrow written once on success.
     unsafe {
@@ -142,7 +142,7 @@ fn nvs_open_rw(out: &mut sys::nvs_handle_t) -> sys::esp_err_t {
 }
 
 /// Read one blob into `buf`, returning the byte count actually read.
-fn nvs_read(h: sys::nvs_handle_t, key: &core::ffi::CStr, buf: &mut [u8]) -> Option<usize> {
+pub(crate) fn nvs_read(h: sys::nvs_handle_t, key: &core::ffi::CStr, buf: &mut [u8]) -> Option<usize> {
     let mut len = buf.len();
     // SAFETY: `h` is a live handle; `key` is a `'static` literal; `buf` is a
     // live exclusive borrow and `len` tells the callee its exact capacity, so
@@ -162,7 +162,7 @@ fn nvs_read(h: sys::nvs_handle_t, key: &core::ffi::CStr, buf: &mut [u8]) -> Opti
     }
 }
 
-fn nvs_write(h: sys::nvs_handle_t, key: &core::ffi::CStr, data: &[u8]) -> sys::esp_err_t {
+pub(crate) fn nvs_write(h: sys::nvs_handle_t, key: &core::ffi::CStr, data: &[u8]) -> sys::esp_err_t {
     // SAFETY: `h` is live; `key` is a `'static` literal; `data` is a live
     // shared borrow read for exactly `data.len()` bytes.
     unsafe {
@@ -175,12 +175,12 @@ fn nvs_write(h: sys::nvs_handle_t, key: &core::ffi::CStr, data: &[u8]) -> sys::e
     }
 }
 
-fn nvs_commit(h: sys::nvs_handle_t) -> sys::esp_err_t {
+pub(crate) fn nvs_commit(h: sys::nvs_handle_t) -> sys::esp_err_t {
     // SAFETY: `h` is a live handle.
     unsafe { sys::nvs_commit(h) }
 }
 
-fn nvs_close(h: sys::nvs_handle_t) {
+pub(crate) fn nvs_close(h: sys::nvs_handle_t) {
     // SAFETY: `h` is a live handle and is never used again after this.
     unsafe { sys::nvs_close(h) }
 }

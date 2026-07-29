@@ -229,44 +229,43 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
         // Store probes. The persistence tier's only claim that matters is
         // "it survives a reboot", and that cannot be shown from the HTTP API
         // alone — the harness must be able to write, reboot, and read back.
+        // THE PROBES USE THE MOUNTED STORE, not a private mount of their own.
+        // They used to call `Stores::mount()` per command, which was harmless
+        // while nothing else touched flash and is a BUG now that the endpoints
+        // do: two mounts of one ring hold two independent indexes, so a write
+        // through either is invisible to the other until it re-mounts, and
+        // both would eventually choose the same slot for different records.
         "store_put" => {
-            match crate::net::store::Stores::mount() {
-                Some(mut st) => {
-                    let payload = args.as_bytes();
-                    match st.history.append(&mut st.flash, payload) {
-                        Ok(seq) => qt!("QTOK store_put seq={} len={}", seq, payload.len()),
-                        Err(()) => qt!("QTERR store_put write_failed"),
-                    }
-                }
+            let payload = args.as_bytes();
+            match crate::net::store::with(|st| st.history.append(&mut st.flash, payload)) {
+                Some(Ok(seq)) => qt!("QTOK store_put seq={} len={}", seq, payload.len()),
+                Some(Err(())) => qt!("QTERR store_put write_failed"),
                 None => qt!("QTERR store_put no_partition"),
             }
         }
 
         "store_get" => {
             let n: usize = args.trim().parse().unwrap_or(0);
-            match crate::net::store::Stores::mount() {
-                Some(st) => {
-                    let mut buf = [0u8; 256];
-                    match st.history.read_nth(&st.flash, n, &mut buf) {
-                        Ok(Some(len)) => {
-                            let text = core::str::from_utf8(&buf[..len]).unwrap_or("<non-utf8>");
-                            qt!("QTOK store_get n={} len={} body={}", n, len, text);
-                        }
-                        Ok(None) => qt!("QTOK store_get n={} absent", n),
-                        Err(()) => qt!("QTERR store_get read_failed"),
-                    }
+            let mut buf = [0u8; 256];
+            match crate::net::store::with(|st| st.history.read_nth(&st.flash, n, &mut buf)) {
+                Some(Ok(Some(len))) => {
+                    let text = core::str::from_utf8(&buf[..len]).unwrap_or("<non-utf8>");
+                    qt!("QTOK store_get n={} len={} body={}", n, len, text);
                 }
+                Some(Ok(None)) => qt!("QTOK store_get n={} absent", n),
+                Some(Err(())) => qt!("QTERR store_get read_failed"),
                 None => qt!("QTERR store_get no_partition"),
             }
         }
 
         "store_stat" => {
-            match crate::net::store::Stores::mount() {
-                Some(st) => qt!(
+            match crate::net::store::with(|st| (st.history.len(), st.workouts.len(), st.runs.len()))
+            {
+                Some((h, w, r)) => qt!(
                     "QTOK store_stat history={} workouts={} runs={} resident={}",
-                    st.history.len(),
-                    st.workouts.len(),
-                    st.runs.len(),
+                    h,
+                    w,
+                    r,
                     crate::net::store::Stores::resident_bytes()
                 ),
                 None => qt!("QTERR store_stat no_partition"),

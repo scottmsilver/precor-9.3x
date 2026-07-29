@@ -167,6 +167,35 @@ fn main() {
     // physical console whether or not any network ever comes up.
     #[cfg(feature = "net")]
     {
+        // The persistence tier comes up BEFORE the link, and independently of
+        // it: a run must be recorded whether or not a network ever appears.
+        // NVS is initialised here rather than inside `tls::identity` alone,
+        // because the profile is read from it and that read happens first.
+        net::tls::nvs_init();
+        net::profile::load();
+        if net::store::mount_once() {
+            logi!(
+                "store: mounted, {} bytes resident",
+                net::store::Stores::resident_bytes()
+            );
+        } else {
+            logw!("store: no usable storage partition — nothing will persist");
+        }
+        // Lower priority than the interval executor: it must never delay a
+        // tick, and a 4 KB sector erase is the slowest thing this firmware
+        // does on purpose.
+        //
+        // 12288 BYTES, MEASURED RATHER THAN CHOSEN. At 6144 this task
+        // overflowed and rebooted the device ("A stack overflow in task
+        // session has been detected"), which drops the relay mid-run. The
+        // frame is dominated by ONE read-modify-write of a stored entry:
+        // decoding it materialises a `Program` (a `[Interval; 24]` array,
+        // ~900 B) and the `Entry` around it, and the value passes through
+        // several temporaries on its way out of the store. Level-1 interrupts
+        // also run on the interrupted task's stack, so the headroom above that
+        // is reserved, not spare.
+        spawn_supervised(c"session", net::session::STACK_BYTES, 4, net::session::run);
+
         match net::bring_up() {
             Ok(()) => match net::wait_for_ip(15_000) {
                 Ok(addr) => {
@@ -200,6 +229,20 @@ fn main() {
                                     match net::program::register(h) {
                                         Ok(()) => logi!("program routes registered"),
                                         Err(e) => logi!("net: program register failed ({})", e),
+                                    }
+                                    // The persistence tier. Registered even if
+                                    // the store failed to mount: the list
+                                    // endpoints answer with an empty array in
+                                    // that case, which the app handles, and a
+                                    // missing route would look like a much
+                                    // older firmware.
+                                    match net::records::register(h) {
+                                        Ok(()) => logi!("record routes registered"),
+                                        Err(e) => logi!("net: record register failed ({})", e),
+                                    }
+                                    match net::profile::register(h) {
+                                        Ok(()) => logi!("profile routes registered"),
+                                        Err(e) => logi!("net: profile register failed ({})", e),
                                     }
                                     // EXACT STRING: the net scenarios wait on
                                     // this before issuing their first request.

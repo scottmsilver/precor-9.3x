@@ -18,8 +18,36 @@
 //! below occupy 44 sectors = 176 KB, leaving the rest of the partition free for
 //! the tiers still to come.
 
+//! ## The record layer
+//!
+//! Below the rings sits one rule, and every operation in this file obeys it:
+//! **a record is read into a `reqbudget` slot, decoded into a value, and the
+//! slot is released.** Nothing parsed is retained between requests, and the
+//! only per-request memory is the slot the request already had to lease. That
+//! is why `program_core::record` is a binary codec rather than JSON — the
+//! worst-case record is ~936 bytes, so it fits one 2048-byte slot with room
+//! to spare (`record::max_entry_bytes`, asserted against the slot size by a
+//! host test).
+//!
+//! ## Divergences from `python/db.py`, all deliberate
+//!
+//! * **Order is write order, not `created_at`/`last_used_at`.** The ring knows
+//!   sequences; there is no clock here to sort by. Updating a record makes it
+//!   newest, so "most recently touched first" is what a client sees — which is
+//!   what the Pi's `ORDER BY last_used_at DESC` produces for workouts anyway,
+//!   and differs for history only in that reloading an entry re-floats it.
+//! * **Caps are the rings'.** History's 20 matches `db.MAX_HISTORY`; workouts
+//!   are capped at 20 where the Pi has no cap, and runs at 4 where the Pi
+//!   keeps 200. Stated in the module header above; not hidden.
+//! * **One profile**, so every ownership check in `server.py` is vacuous and
+//!   none is ported. Building `profile_id` plumbing for a device with one
+//!   profile would add an id-confusion surface for no user-visible benefit.
+
 use esp_idf_sys as sys;
+use program_core::record::{self, Entry, Run};
 use recstore::{Flash, Ring, SECTOR};
+use safety_core::FixedStr;
+use std::sync::Mutex;
 
 /// Slots per ring. Program history matches python/db.py's MAX_HISTORY (20).
 pub const HISTORY_SLOTS: usize = 20;
@@ -156,5 +184,234 @@ impl Stores {
         Ring::<HISTORY_SLOTS, SLOT>::resident_bytes()
             + Ring::<WORKOUT_SLOTS, SLOT>::resident_bytes()
             + Ring::<RUN_SLOTS, SLOT>::resident_bytes()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The mounted store.
+//
+// ONE INSTANCE, MOUNTED ONCE, BEHIND ONE LOCK. Mounting per request would
+// re-scan 44 sector headers every time and — worse — two mounts of the same
+// ring would hold two independent indexes, so an append through one would be
+// invisible to the other until it re-mounted. `recstore` is a single-writer
+// design; this is where that is enforced.
+//
+// The lock is taken by HTTP handlers and by the session recorder. Neither is
+// on the belt path: the serial engine, the emulate cycle and the interval
+// executor cannot reach this module at all (they do not name it, and `net` is
+// behind a cargo feature they do not depend on), so a slow flash erase can
+// never stall the belt.
+// ---------------------------------------------------------------------------
+
+static STORES: Mutex<Option<Stores>> = Mutex::new(None);
+
+/// Mount the rings. Call once, at boot, before the server starts.
+///
+/// Returns false if the partition is missing or unreadable — the device then
+/// runs with NO persistence rather than refusing to run, because a treadmill
+/// whose belt works and whose history does not is strictly better than one
+/// that will not start.
+pub fn mount_once() -> bool {
+    let mut g = crate::context::lock(&STORES);
+    if g.is_some() {
+        return true;
+    }
+    *g = Stores::mount();
+    g.is_some()
+}
+
+/// Run `f` against the mounted store, or return `None` if there is none.
+///
+/// Every store access in the firmware goes through here, so "is it mounted?"
+/// is answered in one place and a handler cannot forget to ask.
+pub fn with<R>(f: impl FnOnce(&mut Stores) -> R) -> Option<R> {
+    let mut g = crate::context::lock(&STORES);
+    g.as_mut().map(f)
+}
+
+/// Which ring an operation addresses. An enum rather than three copies of
+/// every helper: the two entry rings differ only in their slot count, and a
+/// generic function per ring would be two monomorphisations of identical code
+/// in a firmware image with a size budget.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Which {
+    History,
+    Workouts,
+}
+
+/// Slots in the addressed ring — the upper bound of any scan over it.
+pub const fn slots(w: Which) -> usize {
+    match w {
+        Which::History => HISTORY_SLOTS,
+        Which::Workouts => WORKOUT_SLOTS,
+    }
+}
+
+impl Stores {
+    fn read_at(&self, w: Which, n: usize, buf: &mut [u8]) -> Option<usize> {
+        let r = match w {
+            Which::History => self.history.read_nth(&self.flash, n, buf),
+            Which::Workouts => self.workouts.read_nth(&self.flash, n, buf),
+        };
+        r.ok().flatten()
+    }
+
+    /// Decode the nth-newest entry of a ring, or `None` if the slot is empty
+    /// or unreadable. `scratch` is the caller's `reqbudget` slot.
+    pub fn entry_at(&self, w: Which, n: usize, scratch: &mut [u8]) -> Option<Entry> {
+        let len = self.read_at(w, n, scratch)?;
+        record::decode_entry(&scratch[..len])
+    }
+
+    /// The identifying head of the nth-newest entry — id and name only.
+    pub fn head_at(&self, w: Which, n: usize, scratch: &mut [u8]) -> Option<record::Head> {
+        let len = self.read_at(w, n, scratch)?;
+        record::peek_entry(&scratch[..len])
+    }
+
+    /// Position of the entry matching `pred`, by head alone.
+    ///
+    /// A LINEAR SCAN over 20 slots, and it costs ONE `Head` (~80 bytes) rather
+    /// than one `Entry` (~1 KB): decoding 24 intervals to compare an id is
+    /// both wasteful and — nested inside an HTTP handler that already holds an
+    /// entry — enough to overflow the httpd task's stack and reboot the
+    /// device. An index instead of a scan would have to be rebuilt at mount
+    /// and kept in step with every write; more state to be wrong, for a saving
+    /// nobody can perceive at this size.
+    pub fn find_pos(
+        &self,
+        w: Which,
+        scratch: &mut [u8],
+        pred: impl Fn(&record::Head) -> bool,
+    ) -> Option<(usize, record::Head)> {
+        for n in 0..slots(w) {
+            if let Some(h) = self.head_at(w, n, scratch) {
+                if pred(&h) {
+                    return Some((n, h));
+                }
+            }
+        }
+        None
+    }
+
+    /// Position of the entry with this id.
+    pub fn find_by_id(&self, w: Which, id: &str, scratch: &mut [u8]) -> Option<usize> {
+        self.find_pos(w, scratch, |h| h.id.as_str() == id)
+            .map(|(n, _)| n)
+    }
+
+    /// Position and value of the entry with this id. Decodes ONE entry, and
+    /// only after the scan has already found it.
+    pub fn find(&self, w: Which, id: &str, scratch: &mut [u8]) -> Option<(usize, Entry)> {
+        let n = self.find_by_id(w, id, scratch)?;
+        Some((n, self.entry_at(w, n, scratch)?))
+    }
+
+    /// The id the next record written to this ring will be given.
+    pub fn next_id(&self, w: Which) -> FixedStr<{ record::MAX_ID }> {
+        let (tag, seq) = match w {
+            Which::History => ('h', self.history.next_seq()),
+            Which::Workouts => ('w', self.workouts.next_seq()),
+        };
+        let mut s = FixedStr::new();
+        s.push_byte(tag as u8);
+        s.push_i64(seq as i64);
+        s
+    }
+
+    fn put_at(&mut self, w: Which, n: Option<usize>, payload: &[u8]) -> bool {
+        match (w, n) {
+            (Which::History, None) => self.history.append(&mut self.flash, payload).is_ok(),
+            (Which::History, Some(n)) => self
+                .history
+                .replace_nth(&mut self.flash, n, payload)
+                .unwrap_or(false),
+            (Which::Workouts, None) => self.workouts.append(&mut self.flash, payload).is_ok(),
+            (Which::Workouts, Some(n)) => self
+                .workouts
+                .replace_nth(&mut self.flash, n, payload)
+                .unwrap_or(false),
+        }
+    }
+
+    /// Write `e` into the ring. `at` selects update-in-place (the record keeps
+    /// its slot) versus append (evicting the oldest when full).
+    pub fn put(&mut self, w: Which, at: Option<usize>, e: &Entry, scratch: &mut [u8]) -> bool {
+        match record::encode_entry(e, scratch) {
+            // The encoded bytes go straight to flash out of the caller's slot
+            // and are not retained anywhere.
+            Some(n) => self.put_at(w, at, &scratch[..n]),
+            None => false,
+        }
+    }
+
+    pub fn erase(&mut self, w: Which, n: usize) -> bool {
+        match w {
+            Which::History => self.history.erase_nth(&mut self.flash, n),
+            Which::Workouts => self.workouts.erase_nth(&mut self.flash, n),
+        }
+        .unwrap_or(false)
+    }
+
+    /// `db.add_to_history`'s dedup: a program with the same name REPLACES the
+    /// existing entry rather than sitting beside it. The Pi deletes and
+    /// re-inserts; here the record is written into the same slot, which costs
+    /// one erase instead of two and keeps the ring's occupancy stable.
+    pub fn add_history(&mut self, e: &mut Entry, scratch: &mut [u8]) -> bool {
+        let name = e.program.name;
+        let existing = self.find_pos(Which::History, scratch, |h| h.name.as_str() == name.as_str());
+        match existing {
+            Some((n, old)) => {
+                // Keep the id so a client holding it still resolves — the Pi
+                // mints a new one here, and a stale id 404s on its next tap.
+                e.id = old.id;
+                self.put(Which::History, Some(n), e, scratch)
+            }
+            None => {
+                e.id = self.next_id(Which::History);
+                self.put(Which::History, None, e, scratch)
+            }
+        }
+    }
+
+    // --- runs -------------------------------------------------------------
+
+    pub fn run_at(&self, n: usize, scratch: &mut [u8]) -> Option<Run> {
+        let len = self.runs.read_nth(&self.flash, n, scratch).ok().flatten()?;
+        record::decode_run(&scratch[..len])
+    }
+
+    pub fn find_run(&self, id: &str, scratch: &mut [u8]) -> Option<usize> {
+        for n in 0..RUN_SLOTS {
+            if let Some(r) = self.run_at(n, scratch) {
+                if r.id.as_str() == id {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn next_run_id(&self) -> FixedStr<{ record::MAX_ID }> {
+        let mut s = FixedStr::new();
+        s.push_byte(b'r');
+        s.push_i64(self.runs.next_seq() as i64);
+        s
+    }
+
+    /// Write a run record. `at` is `Some` for a checkpoint or a finalisation —
+    /// the SAME slot is rewritten, so a 30-second checkpoint cadence cannot
+    /// evict the other three runs (it would empty the ring in two minutes).
+    pub fn put_run(&mut self, at: Option<usize>, r: &Run, scratch: &mut [u8]) -> bool {
+        let Some(n) = record::encode_run(r, scratch) else {
+            return false;
+        };
+        match at {
+            None => self.runs.append(&mut self.flash, &scratch[..n]).is_ok(),
+            Some(pos) => self
+                .runs
+                .replace_nth(&mut self.flash, pos, &scratch[..n])
+                .unwrap_or(false),
+        }
     }
 }

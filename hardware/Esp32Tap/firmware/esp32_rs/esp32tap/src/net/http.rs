@@ -48,10 +48,22 @@ const PORT: u16 = 8000;
 /// its worst-case frame against this number at compile time. Raising it here
 /// without re-deriving there is the drift this exists to stop.
 ///
-/// DEVIATION from `HTTPD_DEFAULT_CONFIG`'s 4096, and NOT a guess: this is
-/// esp_https_server's own default. The handshake runs on the server task and
-/// mbedtls' ECDHE/ASN.1 frames do not fit in 4 KB.
-pub const HTTPD_STACK_BYTES: u32 = 10_240;
+/// DEVIATION from `HTTPD_DEFAULT_CONFIG`'s 4096, and NOT a guess: 10240 is
+/// esp_https_server's own default, because the handshake runs on the server
+/// task and mbedtls' ECDHE/ASN.1 frames do not fit in 4 KB.
+///
+/// RAISED to 14336 for the persistence tier, with the arithmetic rather than
+/// by feel. A stored record decodes to a ~1 KB `Entry`, and the largest frame
+/// in the image — `net::program::post_impl`, measured at 4288 B against the
+/// built ELF — now performs the history write inside itself. 4288 + ~1.4 KB
+/// for that write + 4096 reserved for the mbedtls record layer that sits on
+/// top of every `respond` is ~9.8 KB, which fitted 10240 only by ~450 bytes;
+/// level-1 interrupts also run on the interrupted task's stack, so that is not
+/// a margin. It cost a reboot to find that out, and a reboot drops the relay.
+/// `net::program` and `net::records` both assert their frames against this
+/// number at COMPILE time, so the next thing that grows fails the build
+/// instead of the device.
+pub const HTTPD_STACK_BYTES: u32 = 14_336;
 
 /// GET / — the discovery banner.
 ///
@@ -161,10 +173,23 @@ pub fn start(id: &'static Identity) -> Result<sys::httpd_handle_t, sys::esp_err_
     // DEVIATION from Slice 1's 7 — see the module header: TLS sessions cost
     // ~40 KB each, and 4 is IDF's own SSL default for that reason.
     cfg.max_open_sockets = 4;
-    // 2 (banner, ws) + 6 api routes fills the IDF default of 8 exactly, and
+    // 2 (banner, ws) + 3 control + 10 program + 8 record + 4 profile = 27, and
     // registration fails with ESP_ERR_HTTPD_HANDLERS_FULL the moment one more
-    // is added. Raised with headroom for the endpoints still to come.
-    cfg.max_uri_handlers = 20;
+    // is added. Raised with headroom rather than sized exactly, because the
+    // failure mode is a route that silently does not exist.
+    cfg.max_uri_handlers = 32;
+    // DEVIATION from the IDF default's exact-match `httpd_uri_match_wildcard`
+    // is REQUIRED, not a convenience: `/api/workouts/{id}` and
+    // `/api/programs/history/{id}/load` carry the record id IN THE PATH, which
+    // an exact matcher cannot express at all.
+    //
+    // It changes nothing for the routes already registered. The IDF matcher
+    // only relaxes templates that END in `*` or `?`; every other template is
+    // still compared for exact equality including length, so `/api/status`
+    // cannot start answering `/api/statusXYZ`. Handlers are walked in
+    // REGISTRATION ORDER and the first match wins, which is why each module's
+    // table lists its exact routes before its wildcards.
+    cfg.uri_match_fn = Some(sys::httpd_uri_match_wildcard);
     cfg.max_resp_headers = 8;
     cfg.backlog_conn = 5;
     // DEVIATION from the SSL default's `true`: purging the least-recently-used

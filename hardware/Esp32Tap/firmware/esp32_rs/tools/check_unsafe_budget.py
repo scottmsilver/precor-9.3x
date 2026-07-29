@@ -78,6 +78,12 @@ QEMU_UNSAFE = {
     "net/tls.rs",
     "net/mdns.rs",
     "net/program.rs",
+    # Slice 5 persistence tier. `net/session.rs` is deliberately ABSENT: the
+    # session recorder reaches flash through `net::store` and NVS through
+    # `net::profile`, so the task that runs every second on its own contains no
+    # FFI at all.
+    "net/records.rs",
+    "net/profile.rs",
 }
 UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
 
@@ -136,7 +142,35 @@ PRODUCTION_UNSAFE_LINES = 69
 # "qemu-test"` is never enabled in the flashed build — and it exists so the
 # adversarial memory scenarios can plot a real heap curve instead of asserting
 # convergence from the absence of a reboot.
-QEMU_UNSAFE_LINES = 381
+# 381 -> 470 with NO code change, when `strip_comments_and_strings` learned
+# what a raw string is. The old lexer treated the inner quotes of
+# `br#"{"ok":false}"#` as delimiters, which blanked the rest of `net/api.rs`
+# from `status_handler` to the profile block — so two `unsafe extern "C"`
+# functions were never counted at all and the published figure was 89 lines
+# short of what the stated rule measures. The number below is the first one
+# that is reproducible from the rule.
+#
+# 470 -> 528 for Slice 5 (the persistence tier), +58, and the parts do not all
+# have the same sign:
+#   + net/records.rs   49  two IDF callbacks, the chunked-response sink and one
+#                         body reader. The real C boundary is 7 calls; the rest
+#                         is the counting rule attributing the bodies of the
+#                         `unsafe extern "C"` callbacks, which is why both are
+#                         thin wrappers that read one scalar and delegate.
+#   + net/profile.rs   34  four IDF callbacks and the registration table. The
+#                         NVS boundary is REUSED from net/tls.rs rather than
+#                         reopened, so persistence itself adds no unsafe here.
+#   - net/api.rs      -25  the profile handlers left it for net/profile.rs.
+# net/session.rs adds ZERO: the task that runs every second reaches flash
+# through net::store and NVS through net::profile and contains no FFI.
+#
+# 528 -> 537, +9, all of it review fixes that made two FFI boundaries stricter
+# rather than wider: `uri_of` now borrows the request (`&sys::httpd_req_t`) so
+# the URI's lifetime is bounded by the compiler instead of chosen by the
+# caller, and `net/profile.rs`'s update callback reads and CHECKS the id in the
+# path — a wildcard route hands it everything under `/api/profiles/`, and
+# without the check any id rewrote the local profile.
+QEMU_UNSAFE_LINES = 537
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")
@@ -154,36 +188,102 @@ def strip_comments_and_strings(text: str) -> str:
     """Blank out // comments, /* */ comments and string/char literals.
 
     Keeps line structure so line numbers stay meaningful.
+
+    RAW STRINGS AND CHAR LITERALS ARE HANDLED, and that is not a refinement —
+    it is the difference between this gate measuring something and measuring
+    noise. The block counter below balances braces on the OUTPUT of this
+    function, so a `{` or `}` this misses is counted as code:
+
+      * `br#"{"ok":false}"#` — the earlier lexer took the inner `"` characters
+        as string delimiters, so the literal's braces and the parity of every
+        quote after it leaked into "code". In `net/api.rs` that swallowed
+        `status_handler` and `motion_handler` whole: both are
+        `unsafe extern "C"` functions and NEITHER was counted, so the file's
+        published figure was ~64 lines short of what the rule says it is.
+      * `write_char('}')` — a brace char literal closed an enclosing block
+        early, ending an `unsafe` block's attribution at the wrong line.
+
+    Both defects moved the total when unrelated code changed, which makes a
+    budget nobody can reproduce. The numbers below were re-derived after this
+    fix; see the note on QEMU_UNSAFE_LINES.
     """
     out = []
     i = 0
     n = len(text)
+
+    def blank(ch: str) -> str:
+        return "\n" if ch == "\n" else " "
+
     while i < n:
         c = text[i]
         if c == "/" and i + 1 < n and text[i + 1] == "/":
             while i < n and text[i] != "\n":
                 out.append(" ")
                 i += 1
-        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
             while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
-                out.append("\n" if text[i] == "\n" else " ")
+                out.append(blank(text[i]))
                 i += 1
             out.append("  ")
             i += 2
-        elif c == '"':
+            continue
+
+        # Raw string: r"…", r#"…"#, br##"…"##. Detected at the token start so
+        # the trailing `r` of an identifier (`for`, `str`) cannot open one.
+        j = i
+        if text[j] == "b" and j + 1 < n and text[j + 1] == "r":
+            j += 1
+        if text[j] == "r":
+            k = j + 1
+            hashes = 0
+            while k < n and text[k] == "#":
+                hashes += 1
+                k += 1
+            if k < n and text[k] == '"':
+                close = '"' + "#" * hashes
+                end = text.find(close, k + 1)
+                end = n if end < 0 else end + len(close)
+                out.extend(blank(ch) for ch in text[i:end])
+                i = end
+                continue
+
+        if c == '"':
             out.append(" ")
             i += 1
             while i < n and text[i] != '"':
                 if text[i] == "\\":
                     out.append(" ")
                     i += 1
-                out.append("\n" if text[i] == "\n" else " ")
+                    if i < n:
+                        out.append(blank(text[i]))
+                        i += 1
+                    continue
+                out.append(blank(text[i]))
                 i += 1
-            out.append(" ")
-            i += 1
-        else:
-            out.append(c)
-            i += 1
+            if i < n:
+                out.append(" ")
+                i += 1
+            continue
+
+        if c == "'":
+            # A char literal, or a lifetime. `'\n'` and `'x'` are literals;
+            # `'a>` and `'static` are lifetimes and must stay as code.
+            if i + 1 < n and text[i + 1] == "\\":
+                k = i + 2
+                while k < n and text[k] != "'":
+                    k += 1
+                k = min(k + 1, n)
+                out.extend(blank(ch) for ch in text[i:k])
+                i = k
+                continue
+            if i + 2 < n and text[i + 2] == "'":
+                out.append("   ")
+                i += 3
+                continue
+
+        out.append(c)
+        i += 1
     return "".join(out)
 
 

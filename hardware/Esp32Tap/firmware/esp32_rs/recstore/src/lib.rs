@@ -155,6 +155,17 @@ impl<const SLOTS: usize, const SLOT: usize> Ring<SLOTS, SLOT> {
         Ok(r)
     }
 
+    /// The sequence the NEXT write will be given.
+    ///
+    /// Exposed so a caller can mint a record id from it BEFORE the record is
+    /// written — an id has to be inside the payload, so it cannot be derived
+    /// from the return value of `append`. It is monotonic within the ring and
+    /// is rebuilt from flash on mount, so ids stay unique across reboots
+    /// without a second counter to keep in step.
+    pub fn next_seq(&self) -> u32 {
+        self.next_seq
+    }
+
     /// Number of valid records held.
     pub fn len(&self) -> usize {
         self.seqs.iter().filter(|s| **s != 0).count()
@@ -168,9 +179,6 @@ impl<const SLOTS: usize, const SLOT: usize> Ring<SLOTS, SLOT> {
     ///
     /// Returns the sequence number assigned.
     pub fn append<F: Flash>(&mut self, flash: &mut F, payload: &[u8]) -> Result<u32, ()> {
-        if payload.len() > capacity(SLOT) {
-            return Err(());
-        }
         // Prefer an empty slot; otherwise evict the lowest sequence.
         let idx = match self.seqs.iter().position(|s| *s == 0) {
             Some(i) => i,
@@ -184,9 +192,38 @@ impl<const SLOTS: usize, const SLOT: usize> Ring<SLOTS, SLOT> {
                 lo
             }
         };
+        self.write_slot(flash, idx, payload)
+    }
+
+    /// Write `payload` into slot `idx`, erasing it first and assigning the next
+    /// sequence number. The ONE write path — `append` and `replace_nth` differ
+    /// only in how they choose the slot.
+    fn write_slot<F: Flash>(
+        &mut self,
+        flash: &mut F,
+        idx: usize,
+        payload: &[u8],
+    ) -> Result<u32, ()> {
+        if payload.len() > capacity(SLOT) || idx >= SLOTS {
+            return Err(());
+        }
         let off = self.base + idx * SLOT;
         flash.erase(off)?;
+        // The slot's old record is GONE from here on, so its index entry must
+        // not survive a failure below — an erased slot that still claims a
+        // sequence would be read back as a record whose CRC check never runs.
+        self.seqs[idx] = 0;
 
+        // SEQUENCE EXHAUSTION IS REFUSED, NOT WRAPPED. Ordering here IS the
+        // sequence, and `u32::MAX` additionally means "erased". Wrapping back
+        // to 1 would make every new record sort OLDER than every pre-wrap one,
+        // so a full ring would evict the record it had just written, forever —
+        // a silent, permanent corruption of the newest-first contract. At one
+        // write every 30 s this is ~4000 years away; refusing costs nothing and
+        // makes the code total. `clear()` resets the counter.
+        if self.next_seq >= u32::MAX - 1 {
+            return Err(());
+        }
         let seq = self.next_seq;
         let mut hdr = [0u8; HDR];
         hdr[0..4].copy_from_slice(&MAGIC.to_le_bytes());
@@ -201,8 +238,68 @@ impl<const SLOTS: usize, const SLOT: usize> Ring<SLOTS, SLOT> {
         flash.write(off, &hdr)?;
 
         self.seqs[idx] = seq;
-        self.next_seq = seq.wrapping_add(1).max(1);
+        self.next_seq = seq + 1;
         Ok(seq)
+    }
+
+    /// Slot index holding the record with the nth-highest sequence (0 = newest).
+    ///
+    /// ONE ordering, used by every by-position operation. `read_nth` and
+    /// `erase_nth` disagreeing about what "the third record" means would delete
+    /// a different record than the one the caller just read, which is the kind
+    /// of defect that only shows up once a user has data.
+    fn nth_slot(&self, n: usize) -> Option<usize> {
+        let mut order: [(u32, usize); SLOTS] = [(0, 0); SLOTS];
+        for i in 0..SLOTS {
+            order[i] = (self.seqs[i], i);
+        }
+        // Descending by sequence; empties (0) sort last.
+        order.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        if n >= SLOTS || order[n].0 == 0 {
+            return None;
+        }
+        Some(order[n].1)
+    }
+
+    /// Erase the record with the nth-highest sequence. Returns whether one was
+    /// there.
+    ///
+    /// DELETE-BY-POSITION IS THE ONLY DELETE. A record's identity (an id, a
+    /// name) is the caller's concern; this crate knows only sequences, so a
+    /// caller deletes by finding the position first with [`Ring::read_nth`].
+    pub fn erase_nth<F: Flash>(&mut self, flash: &mut F, n: usize) -> Result<bool, ()> {
+        let Some(idx) = self.nth_slot(n) else {
+            return Ok(false);
+        };
+        flash.erase(self.base + idx * SLOT)?;
+        self.seqs[idx] = 0;
+        Ok(true)
+    }
+
+    /// Overwrite the record with the nth-highest sequence, in its own slot.
+    ///
+    /// It becomes the NEWEST record (a fresh sequence), which is what an
+    /// update means here: the ring has no notion of created-at, only of write
+    /// order.
+    ///
+    /// THE CRASH WINDOW IS ONE RECORD WIDE AND THAT IS DELIBERATE. Erase then
+    /// write touches only this record's own sector, so a power cut loses the
+    /// record being updated and nothing else — never an earlier one. The
+    /// alternative (write the new copy first, erase the old second) would
+    /// leave TWO records claiming one identity after a crash, and every reader
+    /// would then need de-duplication it could get wrong. A bounded, visible
+    /// loss beats an ambiguous state.
+    pub fn replace_nth<F: Flash>(
+        &mut self,
+        flash: &mut F,
+        n: usize,
+        payload: &[u8],
+    ) -> Result<bool, ()> {
+        let Some(idx) = self.nth_slot(n) else {
+            return Ok(false);
+        };
+        self.write_slot(flash, idx, payload)?;
+        Ok(true)
     }
 
     /// Read the record with the nth-highest sequence (0 = newest) into `buf`.
@@ -213,16 +310,10 @@ impl<const SLOTS: usize, const SLOT: usize> Ring<SLOTS, SLOT> {
         n: usize,
         buf: &mut [u8],
     ) -> Result<Option<usize>, ()> {
-        let mut order: [(u32, usize); SLOTS] = [(0, 0); SLOTS];
-        for i in 0..SLOTS {
-            order[i] = (self.seqs[i], i);
-        }
-        // Descending by sequence; empties (0) sort last.
-        order.sort_unstable_by(|a, b| b.0.cmp(&a.0));
-        if n >= SLOTS || order[n].0 == 0 {
+        let Some(slot) = self.nth_slot(n) else {
             return Ok(None);
-        }
-        let off = self.base + order[n].1 * SLOT;
+        };
+        let off = self.base + slot * SLOT;
         let mut hdr = [0u8; HDR];
         flash.read(off, &mut hdr)?;
         let Some((_seq, len)) = parse_hdr(&hdr) else {
@@ -424,6 +515,126 @@ mod tests {
             }
             assert!(seen_good, "a torn write destroyed an EARLIER record (cut={cut})");
         }
+    }
+
+    #[test]
+    fn erase_nth_removes_exactly_the_record_that_was_read() {
+        let mut f = Fake::new(SECTOR * 8);
+        let mut r = R::mount(&f, 0).unwrap();
+        for i in 0..4u8 {
+            r.append(&mut f, &[i]).unwrap();
+        }
+        let mut buf = [0u8; 4080];
+        // n=1 is the second-newest: 2.
+        assert_eq!(r.read_nth(&f, 1, &mut buf).unwrap(), Some(1));
+        assert_eq!(buf[0], 2);
+        assert!(r.erase_nth(&mut f, 1).unwrap());
+        assert_eq!(r.len(), 3);
+        // ...and it is 2 that is gone, not a neighbour.
+        let mut seen = Vec::new();
+        for n in 0..3 {
+            r.read_nth(&f, n, &mut buf).unwrap().unwrap();
+            seen.push(buf[0]);
+        }
+        assert_eq!(seen, vec![3, 1, 0]);
+        // The freed slot is reused rather than leaked.
+        r.append(&mut f, b"\x09").unwrap();
+        assert_eq!(r.len(), 4);
+        let r2 = R::mount(&f, 0).unwrap();
+        assert_eq!(r2.len(), 4, "the deletion must survive a remount");
+    }
+
+    #[test]
+    fn next_seq_is_monotonic_and_survives_a_remount() {
+        // Record ids are minted from this, so a repeat after a reboot would
+        // give two records the same id.
+        let mut f = Fake::new(SECTOR * 8);
+        let mut r = R::mount(&f, 0).unwrap();
+        assert_eq!(r.next_seq(), 1);
+        r.append(&mut f, b"a").unwrap();
+        r.append(&mut f, b"b").unwrap();
+        assert_eq!(r.next_seq(), 3);
+        let r2 = R::mount(&f, 0).unwrap();
+        assert_eq!(r2.next_seq(), 3, "the id counter must be rebuilt from flash");
+    }
+
+    #[test]
+    fn erasing_nothing_is_not_an_error() {
+        let mut f = Fake::new(SECTOR * 8);
+        let mut r = R::mount(&f, 0).unwrap();
+        assert!(!r.erase_nth(&mut f, 0).unwrap());
+        assert!(!r.replace_nth(&mut f, 0, b"x").unwrap());
+    }
+
+    #[test]
+    fn replace_nth_updates_in_place_and_does_not_consume_a_second_slot() {
+        // The run-record checkpoint pattern: one record rewritten many times
+        // must not evict the other runs. Appending instead would blow a
+        // 4-slot ring away in two minutes of 30 s checkpoints.
+        let mut f = Fake::new(SECTOR * 8);
+        let mut r = R::mount(&f, 0).unwrap();
+        r.append(&mut f, b"older").unwrap();
+        r.append(&mut f, b"run@0").unwrap();
+        for i in 1..40u8 {
+            let mut body = *b"run@0";
+            body[4] = b'0' + (i % 10);
+            assert!(r.replace_nth(&mut f, 0, &body).unwrap());
+            assert_eq!(r.len(), 2, "a replace must not consume a slot");
+        }
+        let r2 = R::mount(&f, 0).unwrap();
+        let mut buf = [0u8; 4080];
+        r2.read_nth(&f, 0, &mut buf).unwrap().unwrap();
+        assert_eq!(&buf[..5], b"run@9");
+        r2.read_nth(&f, 1, &mut buf).unwrap().unwrap();
+        assert_eq!(&buf[..5], b"older", "the neighbour must be untouched");
+    }
+
+    #[test]
+    fn a_replace_torn_at_every_offset_never_damages_a_neighbour() {
+        // Same guarantee as `torn_write_is_ignored_not_recovered`, for the
+        // update path: the record being replaced may be lost, but the OTHER
+        // records may not be, and the ring must always mount.
+        let new = b"a replacement record of some length";
+        for cut in 0..(HDR + new.len()) {
+            let mut f = Fake::new(SECTOR * 8);
+            let mut r = R::mount(&f, 0).unwrap();
+            r.append(&mut f, b"keep-me").unwrap();
+            r.append(&mut f, b"victim").unwrap();
+
+            f.budget = Some(cut);
+            let _ = r.replace_nth(&mut f, 0, new);
+            f.budget = None;
+
+            let r2 = R::mount(&f, 0).unwrap();
+            let mut buf = [0u8; 4080];
+            let mut seen_keep = false;
+            for n in 0..8 {
+                if let Some(len) = r2.read_nth(&f, n, &mut buf).unwrap() {
+                    if &buf[..len] == b"keep-me" {
+                        seen_keep = true;
+                    } else {
+                        assert_eq!(&buf[..len], new, "a partial record read as valid");
+                    }
+                }
+            }
+            assert!(seen_keep, "a torn replace destroyed a NEIGHBOUR (cut={cut})");
+        }
+    }
+
+    #[test]
+    fn sequence_exhaustion_is_refused_rather_than_wrapped() {
+        // A wrap would make new records sort as the OLDEST and a full ring
+        // would evict what it had just written, silently and forever.
+        let mut f = Fake::new(SECTOR * 8);
+        let mut r = R::mount(&f, 0).unwrap();
+        r.append(&mut f, b"a").unwrap();
+        // Fast-forward the counter rather than doing 4 billion writes.
+        for _ in 0..3 {
+            r.next_seq = u32::MAX - 2;
+            assert!(r.append(&mut f, b"b").is_ok());
+            assert!(r.append(&mut f, b"c").is_err(), "a wrapped sequence was accepted");
+        }
+        assert!(r.len() > 0, "the store is still readable after refusing");
     }
 
     #[test]

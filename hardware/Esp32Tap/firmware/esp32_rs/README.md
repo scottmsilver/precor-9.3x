@@ -24,8 +24,11 @@ esp32_rs/
 ├── esp32tap/       CRATE 2 — the ESP32-S3 binary (esp-idf-hal + esp-idf-sys)
 ├── difftest/       CRATE 3 — host-only differential harness vs the C++ core
 ├── reqbudget/      CRATE 4 — fixed per-request memory, no_std, zero deps
-├── program_core/   CRATE 5 — the interval executor (port of ProgramState),
-│                             no_std, forbid(unsafe), depends only on safety_core
+├── program_core/   CRATE 5 — the interval executor (port of ProgramState) and
+│                             the stored-record codec, no_std, forbid(unsafe),
+│                             depends only on safety_core
+├── recstore/       CRATE 6 — fixed-record flash rings, no_std, ZERO deps,
+│                             torn-write tested at every byte offset
 │
 ├── experiments/wdt_qemu_control/  plain-C control proving the task-WDT panic
 │                                  path is unreachable under esp-QEMU
@@ -316,20 +319,134 @@ Not proven, and not claimed:
 * **A loaded program does not survive a reboot.** It lives in RAM. That is a
   decision, not an omission: a reboot drops the relay and ends the run, so
   silently resuming a workout on the next boot would be wrong without an
-  explicit human gesture. Nothing here writes flash, which is also what keeps
-  the executor off any path that can block.
+  explicit human gesture. Slice 5 persists the program to history and offers
+  `/{id}/resume` as exactly that gesture; the executor itself still writes no
+  flash, which is what keeps it off any path that can block.
 * **A manual speed change DURING a program is refused (409), not merged.** The
   executor owns the lease while a program runs, and taking it away would
   emergency-stop — relay open, belt dead. The Pi's answer is
   `ProgramState.split_for_manual`, which rewrites the running manual program at
   the new speed; that behaviour needs its own slice and is not faked here.
-* **No resume-from-position over HTTP.** `ProgramState::start` takes
-  `resume_interval`/`resume_elapsed` and the host tests cover them, but no
-  endpoint exposes them yet — the Pi drives that from `run_history.json`, which
-  this device does not have.
 * **`_check_encouragement` is not ported at all** — see the divergence list.
 * **Real hardware.** Everything above is QEMU. The executor has never driven a
   physical treadmill.
+
+---
+
+### Slice 5 (the persistence tier) — what is proven, and what is not
+
+The device keeps its own data: program history, saved workouts, run records
+and the profile. `/api/programs/history` (+ `/{id}/load`, `/{id}/resume`),
+`/api/workouts` (list, save, rename, delete, load), `/api/runs` and
+`PUT /api/profiles/{id}` are served straight out of flash — three `recstore`
+rings on the `storage` partition (20 history, 20 workouts, 4 runs) plus one NVS
+blob for the profile.
+
+**Memory is the design, not a consideration**, and there are three mechanisms:
+
+* `recstore::Ring` keeps `SLOTS*4+8` bytes resident and nothing else — 200
+  bytes for all three rings, independent of what is stored.
+* A record is read into a `reqbudget` slot, decoded, used and forgotten.
+  Records are a **binary** format (`program_core::record`) rather than the JSON
+  they are served as, precisely so the worst case is ~936 bytes and fits one
+  2048-byte slot; the served JSON of the same record would not. Nothing parsed
+  outlives the request.
+* List responses are **chunked** through a fixed 512-byte buffer, so a
+  20-entry, ~50 KB history body has no relationship to memory at all.
+
+That is the property whose absence let ~15 unauthenticated requests exhaust the
+C++ tier's heap and reboot it mid-run, dropping the relay.
+`test_records.py::test_resident_memory_does_not_grow_with_writes_or_with_requests`
+drives 240 writes and 10 full list reads and asserts both the ring residency
+and the free heap.
+
+Proven in QEMU by `tools/qemu_scenarios/test_records.py` (11 scenarios):
+a saved workout survives a **reboot**, read back through the same endpoint;
+history dedups by name and holds its cap of 20, losing the oldest;
+rename rewrites the stored program too and delete un-marks the history entry
+that claimed it; a run record is **created** once a session passes 5 s,
+**checkpointed in the same slot** past 30 s (appending would empty the 4-slot
+ring in two minutes) and **finalised** with the real reason — `user_stop` when
+the program is stopped, `program_complete` when it finishes; and a profile
+rename survives a reboot, which is what makes offering rename honest.
+
+**Three defects were found by building it**, all of them stack, all of them a
+reboot — and a reboot drops the relay:
+
+1. The history write ran inside `net::program::post_impl`, already the largest
+   frame in the image, and its lookup decoded a whole ~1 KB `Entry` per slot to
+   compare a name. Fixed by `record::peek_entry`, an ~80-byte `Head` that every
+   by-id and by-name scan uses instead, and by counting the write in
+   `POST_FRAME_BYTES` so the compiler asserts it.
+2. `HTTPD_STACK_BYTES` 10240 fitted the result by ~450 bytes, which is not a
+   margin when level-1 interrupts run on the interrupted task's stack. Raised
+   to 14336, with the arithmetic written down.
+3. The session recorder overflowed a 6144-byte stack on one read-modify-write
+   of a stored entry. Raised to 12288, measured rather than chosen.
+
+**An adversarial review then found five more**, four of which are reachable by
+any client on the LAN:
+
+* **The store lock was held across a network write.** A list response chunked
+  to the socket under the store lock, and a chunk flush blocks for up to
+  `send_wait_timeout` (1 s). A client that stopped reading mid-list parked the
+  WDT-supervised session recorder behind the httpd worker — 2 s watchdog,
+  reboot, relay dropped. Each record is now read under a short hold and the
+  lock is released before anything is written to the socket. The resume reply
+  had the same shape with the PROGRAM lock, and now renders through
+  `net::program::respond_state`, which buffers and releases before sending.
+* **The action in the path was not matched.** `POST .../history/{id}/delete`
+  loaded a program and `DELETE /api/workouts/{id}/load` deleted a workout,
+  because a wildcard route hands the handler everything under its prefix and
+  "not `resume`" was treated as "load". Every action is now matched exactly and
+  anything else is 404. `PUT /api/profiles/{id}` did not check the id at all.
+* **The history id and the loaded program were set separately**, so a 30 s
+  checkpoint landing between them wrote one program's progress into the other's
+  entry. Both are now published under the program lock, and the recorder reads
+  them in one hold.
+* **`hundredths * 2 / 100` wrapped.** `{"value":21474836.47}` parses to
+  `i32::MAX`; doubling it is a negative incline in release and a panic in
+  debug. It is `/ 50` now — identical for every representable value, and total.
+* **A failed flash write reported success**, and a failed finalisation was
+  never retried, so a finished run could read `in_progress` forever. Writes are
+  checked, the checkpoint clock only advances on a write that landed, and a
+  finalisation retries every tick until it does.
+
+`tools/check_unsafe_budget.py` also grew a real fix: its lexer did not
+understand Rust raw strings or char literals, so `br#"{"ok":false}"#` leaked
+braces into "code" and two `unsafe extern "C"` functions in `net/api.rs` were
+never counted at all. The published figure was 89 lines short of what the
+stated rule measures. The rule now measures what it says (`470` at the previous
+commit, `528` here).
+
+`tools/sweep.sh` gained `records` and `storepers`. `test_store_persistence.py`
+was committed, passing, and invoked by NOTHING — the same hole
+`verify_harness_copy.py` was in — and it is the only gate that proves a record
+reaches real flash and survives a real SoC reset.
+`test_reviewer_attacks.py` is deliberately still not a gate, and the reason is
+written at the site: it is RED BY DESIGN (4 of its 7 fail on an untouched
+tree), a record of open defects in the safety/control tier rather than a
+regression check, and gating on it would train everyone to ignore the sweep.
+
+Not proven, and not claimed:
+
+* **No timestamps.** There is no RTC and no SNTP, so `created_at` is `""` and
+  `last_used`/`started_at`/`ended_at` are `null`. Both are shapes the Kotlin
+  models already accept, and the app renders `usage_text`/`last_run_text`
+  rather than raw dates — but a device that showed you when you ran would need
+  a clock it does not have.
+* **`last_run`/`last_run_text` are always `null`/`""`.** The Pi links runs to
+  programs by fingerprint; this device does not.
+* **`end_reason: "disconnect"` is never written.** The Pi produces it when the
+  client's WebSocket drops; nothing about a run here depends on a client being
+  present, so inventing that dependency to produce the value would be worse
+  than not producing it.
+* **Smaller than the Pi, deliberately.** 4 runs against its 200, 20 workouts
+  against its unlimited. It is a notebook, not an archive.
+* **Still one profile, still no avatars.** `POST /api/profiles` and
+  `DELETE /api/profiles/{id}` are not implemented; `has_avatar` is `false` and
+  says so.
+* **Real hardware.** Everything above is QEMU.
 
 ---
 

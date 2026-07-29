@@ -166,6 +166,30 @@ pub(crate) fn parse_value_hundredths(body: &[u8]) -> Option<i32> {
     Some(if neg { -v } else { v })
 }
 
+/// The number after `"<key>"`, in hundredths.
+///
+/// [`parse_value_hundredths`] anchored on an arbitrary key rather than on the
+/// literal `value`, so the small-body endpoints that carry several named
+/// numbers (`weight_lbs`, `vest_lbs`) share ONE number parser with
+/// `/api/speed` instead of growing a second one.
+pub(crate) fn parse_key_hundredths(body: &[u8], key: &[u8]) -> Option<i32> {
+    if key.is_empty() || key.len() > body.len() {
+        return None;
+    }
+    let pos = body.windows(key.len()).position(|w| w == key)?;
+    let rest = &body[pos + key.len()..];
+    let colon = rest.iter().position(|&b| b == b':')?;
+    // Splice the marker the shared scanner looks for in front of the value,
+    // rather than duplicating forty lines of digit handling.
+    let mut buf = [0u8; 40];
+    let head = b"\"value\":";
+    buf[..head.len()].copy_from_slice(head);
+    let tail = &rest[colon + 1..];
+    let n = core::cmp::min(tail.len(), buf.len() - head.len());
+    buf[head.len()..head.len() + n].copy_from_slice(&tail[..n]);
+    parse_value_hundredths(&buf[..head.len() + n])
+}
+
 /// GET /api/status — read-only, no lease, no belt effect.
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
@@ -346,7 +370,12 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
         let (sp, inc) = if is_incline {
             (
                 g.controller.speed_tenths(),
-                InclineHalfPct::new(hundredths * 2 / 100),
+                // `/50`, not `*2/100`: identical for every value either can
+                // represent, and total. `{"value":21474836.47}` parses to
+                // i32::MAX, and `* 2` on that wraps to a NEGATIVE incline in
+                // release and panics in debug — a panic here is a reboot, and
+                // a reboot drops the relay.
+                InclineHalfPct::new(hundredths / 50),
             )
         } else {
             (
@@ -403,80 +432,19 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
 }
 
 
-// ---------------------------------------------------------------------------
-// Profiles — the surface the Android app needs to get past its FIRST screen.
-//
-// The app opens on ProfilePickerScreen and cannot reach the Lobby without
-// these. That is why they exist now, ahead of the storage tier.
-//
-// ONE BUILT-IN PROFILE, HELD IN RAM, NOT PERSISTED. This is honest rather than
-// pretend: a rename or a second profile would be lost on reboot, so neither is
-// offered. Real multi-profile support needs the flash store (Slice 5), and the
-// Pi's own model is richer still (avatars as BLOBs, guest mode, per-profile
-// history). Emitting a believable-but-unstorable profile set would be worse
-// than emitting one true one.
-//
-// Every field the Kotlin `Profile` model declares has a default, so a client
-// tolerates anything we omit — but the fields below are the ones it renders,
-// so they are all present and real.
-// br##"..."## and not br#"..."#: the colour value contains `"#`, which
-// terminates the single-hash raw string early.
-const PROFILE_JSON: &[u8] = br##"{"id":"local","name":"Runner","color":"#d4c4a8","initials":"R","weight_lbs":154.0,"vest_lbs":0.0,"has_avatar":false}"##;
-
-/// GET /api/profiles — the list the picker renders.
+/// Register the control-path routes on an already-started server.
 ///
-/// SAFETY: `req` is live for the call; nothing derived from it is retained.
-unsafe extern "C" fn profiles_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
-    let mut buf = [0u8; 256];
-    buf[0] = b'[';
-    buf[1..1 + PROFILE_JSON.len()].copy_from_slice(PROFILE_JSON);
-    buf[1 + PROFILE_JSON.len()] = b']';
-    respond(req, c"200 OK", &buf[..PROFILE_JSON.len() + 2])
-}
-
-/// GET /api/profile/active — which profile is current, and whether we are a guest.
-///
-/// SAFETY: `req` is live for the call; nothing derived from it is retained.
-unsafe extern "C" fn active_profile_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
-    let mut buf = [0u8; 256];
-    let head = br#"{"guest_mode":false,"profile":"#;
-    let n = head.len();
-    buf[..n].copy_from_slice(head);
-    buf[n..n + PROFILE_JSON.len()].copy_from_slice(PROFILE_JSON);
-    buf[n + PROFILE_JSON.len()] = b'}';
-    respond(req, c"200 OK", &buf[..n + PROFILE_JSON.len() + 1])
-}
-
-/// POST /api/profile/select — accept the selection of the only profile there is.
-///
-/// Deliberately does NOT read or validate a body: with one built-in profile
-/// there is nothing to choose between, and pretending to honour an arbitrary id
-/// would be a lie the storage tier has to keep later.
-///
-/// SAFETY: `req` is live for the call; nothing derived from it is retained.
-unsafe extern "C" fn select_profile_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
-    let mut buf = [0u8; 256];
-    let head = br#"{"ok":true,"guest_mode":false,"profile":"#;
-    let n = head.len();
-    buf[..n].copy_from_slice(head);
-    buf[n..n + PROFILE_JSON.len()].copy_from_slice(PROFILE_JSON);
-    buf[n + PROFILE_JSON.len()] = b'}';
-    respond(req, c"200 OK", &buf[..n + PROFILE_JSON.len() + 1])
-}
-
-/// Register the control-path and profile routes on an already-started server.
+/// The profile routes moved to `net::profile` when they stopped being a
+/// constant: they now read and write NVS, which is not this module's concern.
 pub fn register(handle: sys::httpd_handle_t) -> Result<(), sys::esp_err_t> {
     // SAFETY: a type alias only. IDF handlers are `unsafe extern "C"` by
     // signature; naming that type lets the table below hold them uniformly
     // and introduces no unsafe operation of its own.
     type H = unsafe extern "C" fn(*mut sys::httpd_req_t) -> sys::esp_err_t;
-    let routes: [(&core::ffi::CStr, u32, H, usize); 6] = [
+    let routes: [(&core::ffi::CStr, u32, H, usize); 3] = [
         (c"/api/status", sys::http_method_HTTP_GET, status_handler, usize::MAX),
         (c"/api/speed", sys::http_method_HTTP_POST, motion_handler, 0),
         (c"/api/incline", sys::http_method_HTTP_POST, motion_handler, 1),
-        (c"/api/profiles", sys::http_method_HTTP_GET, profiles_handler, usize::MAX),
-        (c"/api/profile/active", sys::http_method_HTTP_GET, active_profile_handler, usize::MAX),
-        (c"/api/profile/select", sys::http_method_HTTP_POST, select_profile_handler, usize::MAX),
     ];
     for (path, method, handler, ctx) in routes {
         let uri = sys::httpd_uri_t {

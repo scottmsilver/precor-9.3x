@@ -64,8 +64,14 @@ const STATE_BUF: usize = program_core::model::max_program_json_bytes() + 192;
 /// underneath it, so the program is counted twice. Measured against the built
 /// ELF, `post_handler` is the largest single frame in the image (4288 B), so
 /// this is the number that matters, not the response buffer.
-const POST_FRAME_BYTES: usize =
-    STATE_BUF + 2 * core::mem::size_of::<Option<Program>>() + MAX_CMD_BODY;
+/// `record_loaded` runs INSIDE this frame (the history write happens before
+/// the program lock is taken), so its own worst case is part of this number
+/// rather than a separate budget. Leaving it out is what rebooted the device
+/// the first time this tier ran — see that constant's note.
+const POST_FRAME_BYTES: usize = STATE_BUF
+    + 2 * core::mem::size_of::<Option<Program>>()
+    + MAX_CMD_BODY
+    + crate::net::records::HISTORY_WRITE_FRAME_BYTES;
 
 /// Stack that must remain BELOW this module's frame for the code it calls.
 ///
@@ -109,7 +115,7 @@ impl core::fmt::Write for Sink<'_> {
 ///
 /// Takes the caller's buffer rather than returning one, and takes `&state`
 /// rather than a copy: `ProgramState` is ~1.5 KB, and neither a copy of it nor
-/// a second buffer belongs on the httpd task's 10 KB stack alongside an
+/// a second buffer belongs on the httpd task's stack alongside an
 /// mbedtls handshake.
 fn render_state(buf: &mut [u8; STATE_BUF], state: &ProgramState, lead: &str) -> Option<usize> {
     let mut sink = Sink {
@@ -135,6 +141,22 @@ fn render_state(buf: &mut [u8; STATE_BUF], state: &ProgramState, lead: &str) -> 
 /// GET keeps the bare `to_dict()` shape.
 const OK_LEAD: &str = r#""ok":true,"#;
 
+/// Lock, render into a stack buffer, RELEASE, then send.
+///
+/// The order matters and is the whole reason this is a function rather than
+/// three lines at each call site: a chunked send blocks for up to
+/// `send_wait_timeout` per flush, and the interval executor takes this same
+/// lock every tick under a 2 s watchdog. Holding it across the socket write
+/// would let a client that stops reading reboot the device.
+pub(crate) fn respond_state(req: *mut sys::httpd_req_t, lead: &str) -> sys::esp_err_t {
+    let mut buf = [0u8; STATE_BUF];
+    let n = {
+        let p = lock(&crate::CTX.program);
+        render_state(&mut buf, &p, lead)
+    };
+    respond_rendered(req, &buf, n)
+}
+
 fn respond_rendered(req: *mut sys::httpd_req_t, buf: &[u8], n: Option<usize>) -> sys::esp_err_t {
     match n {
         Some(n) => respond(req, c"200 OK", &buf[..n]),
@@ -151,7 +173,7 @@ fn respond_rendered(req: *mut sys::httpd_req_t, buf: &[u8], n: Option<usize>) ->
 /// Called with the PROGRAM lock already held — that is the mandatory order
 /// (`program` then `guarded`, see `context.rs`) and the reason the decision
 /// and the belt command cannot be interleaved with a concurrent tick.
-fn drive(plan: Plan, release_belt: bool) {
+pub(crate) fn drive(plan: Plan, release_belt: bool) {
     if plan.is_empty() && !release_belt {
         return;
     }
@@ -321,6 +343,18 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
         _ => None,
     };
 
+    // `server.py::_add_to_history` — every program that is LOADED is
+    // remembered, not only ones that are saved. Done here, before the program
+    // lock is taken, so a 4 KB sector erase never sits inside the critical
+    // section the interval executor contends for.
+    //
+    // Quick Start is deliberately excluded, exactly as on the Pi:
+    // `ensure_manual` does not write history, and a lobby full of "Quick
+    // Start" entries would evict the workouts the user actually built.
+    let history_id = program
+        .as_ref()
+        .and_then(|p| crate::net::records::record_loaded(p, ""));
+
     // Small-body verbs read their scalar exactly the way `/api/speed` does.
     let mut small_buf = [0u8; MAX_CMD_BODY];
     let small_len = match verb {
@@ -342,6 +376,13 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
 
     let now = crate::CTX.clock.now();
     let mut p = lock(&crate::CTX.program);
+    // UNDER THE PROGRAM LOCK, in the same hold as the `load` below. The
+    // session recorder reads the program and this id together while holding
+    // the same lock, so it can never write one program's progress into the
+    // other's history entry.
+    if let Some(id) = history_id.as_ref() {
+        crate::net::session::set_current(id);
+    }
 
     let (plan, release_belt, error): (Plan, bool, Option<&[u8]>) = match verb {
         V_LOAD => {
@@ -488,7 +529,7 @@ fn quick_program(body: &[u8]) -> Program {
         "Seg 1",
         seconds.clamp(0, u32::MAX as i64) as u32,
         SpeedTenths::new(speed / 10),
-        InclineHalfPct::new(incline * 2 / 100),
+        InclineHalfPct::new(incline / 50),
     ));
     p
 }

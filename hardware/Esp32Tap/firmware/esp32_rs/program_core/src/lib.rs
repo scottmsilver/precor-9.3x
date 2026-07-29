@@ -73,6 +73,7 @@
 
 pub mod json;
 pub mod model;
+pub mod record;
 pub mod state;
 
 pub use model::{
