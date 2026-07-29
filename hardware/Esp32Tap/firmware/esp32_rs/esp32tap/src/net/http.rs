@@ -14,11 +14,19 @@
 //! client which dribbles bytes can hold the single worker indefinitely. Both
 //! are why `recv_wait_timeout`/`send_wait_timeout` are set low here and why a
 //! request-duration bound belongs on top of them before any endpoint that can
-//! command the belt exists. Those endpoints now exist, and the LAST piece of
-//! that bound is `tls_handshake_timeout_ms` below: it is the one phase of a
-//! connection that runs on the worker BEFORE any of the recv/send timeouts
-//! apply, so at the IDF default it was a 10 s outage of the whole surface per
-//! silent connection. See the derivation there.
+//! command the belt exists.
+//!
+//! THE BOUND HAS TWO PIECES AND BOTH ARE NEEDED. `tls_handshake_timeout_ms`
+//! below covers the one phase of a connection that runs on the worker BEFORE
+//! any recv/send timeout applies (at the IDF default it was a 10 s outage of
+//! the whole surface per silent connection — see the derivation there). It was
+//! once described here as the LAST piece, and that was WRONG: `recv_wait_timeout`
+//! is a PER-RECV budget, and every body reader loops until the declared length
+//! arrives, so a peer that answers each recv — one byte every 0.5 s — held the
+//! single worker for 60 s with the belt moving and `POST /api/program/stop`
+//! unable to complete its own handshake. The second piece is
+//! `net::api::Deadline`, a stamp taken at handler entry that abandons the body
+//! read once the WHOLE read has run past budget.
 //!
 //! TLS MOVES THAT BUDGET, so it is re-derived rather than carried over: an
 //! mbedtls session is ~40 KB of context and record buffers, not a bare socket,
@@ -60,10 +68,28 @@ const PORT: u16 = 8000;
 /// top of every `respond` is ~9.8 KB, which fitted 10240 only by ~450 bytes;
 /// level-1 interrupts also run on the interrupted task's stack, so that is not
 /// a margin. It cost a reboot to find that out, and a reboot drops the relay.
-/// `net::program` and `net::records` both assert their frames against this
-/// number at COMPILE time, so the next thing that grows fails the build
-/// instead of the device.
-pub const HTTPD_STACK_BYTES: u32 = 14_336;
+///
+/// RAISED AGAIN to 20480, and this time because 14336 was ALSO not a margin —
+/// it was a number that happened to fit. `POST /api/programs/history/{id}/resume`
+/// overflowed it intermittently: `history_load` holds a decoded `Entry` (~1 KB)
+/// while `store::find` has one or two more live from its own returns, hands
+/// `install` a `Program` (~900 B) BY VALUE, and then renders a full program
+/// snapshot into `net::program::STATE_BUF` (~2.1 KB) on top of all of it,
+/// underneath mbedtls. That is ~10 KB of the firmware's own frames before the
+/// TLS record layer, and mbedtls' own usage varies with the record size and
+/// the handshake — which is exactly why it failed in some runs and not others.
+/// An INTERMITTENT stack overflow is the worst version of this bug: it reboots
+/// the device, which drops the relay mid-run, and it does so unpredictably.
+/// 20480 puts ~10 KB between the measured frames and the ceiling.
+///
+/// The three modules that build large frames on this task —
+/// `net::program`, `net::records` and `net::session`'s WebSocket push — all
+/// assert against this number at COMPILE time, so the next thing that grows
+/// fails the build instead of the device. Those assertions did NOT catch this
+/// one, and that is worth stating: they count the frames this code declares,
+/// not the ones the compiler actually lays out or the ones mbedtls adds
+/// underneath. They are a floor, not a proof.
+pub const HTTPD_STACK_BYTES: u32 = 20_480;
 
 /// GET / — the discovery banner.
 ///
@@ -173,11 +199,12 @@ pub fn start(id: &'static Identity) -> Result<sys::httpd_handle_t, sys::esp_err_
     // DEVIATION from Slice 1's 7 — see the module header: TLS sessions cost
     // ~40 KB each, and 4 is IDF's own SSL default for that reason.
     cfg.max_open_sockets = 4;
-    // 2 (banner, ws) + 3 control + 10 program + 8 record + 4 profile = 27, and
-    // registration fails with ESP_ERR_HTTPD_HANDLERS_FULL the moment one more
-    // is added. Raised with headroom rather than sized exactly, because the
-    // failure mode is a route that silently does not exist.
-    cfg.max_uri_handlers = 32;
+    // 2 (banner, ws) + 3 control + 10 program + 8 record + 11 profile = 34, and
+    // registration fails with ESP_ERR_HTTPD_HANDLERS_FULL the moment the table
+    // is full. Raised with headroom rather than sized exactly, because the
+    // failure mode is a route that SILENTLY does not exist — which is how the
+    // app came to show `HTTP 404 Not Found` on its first screen.
+    cfg.max_uri_handlers = 40;
     // DEVIATION from the IDF default's exact-match `httpd_uri_match_wildcard`
     // is REQUIRED, not a convenience: `/api/workouts/{id}` and
     // `/api/programs/history/{id}/load` carry the record id IN THE PATH, which

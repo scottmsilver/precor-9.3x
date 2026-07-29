@@ -36,6 +36,103 @@ use safety_core::units::{InclineHalfPct, Micros, SpeedTenths};
 /// `{"value":12.5}` is 15 bytes.
 pub(crate) const MAX_CMD_BODY: usize = 128;
 
+// ---------------------------------------------------------------------------
+// The request-duration bound.
+//
+// `recv_wait_timeout` (net::http) is a PER-RECV budget and nothing more. Every
+// body reader in this firmware loops until `got == declared`, so a peer that
+// answers each recv within a second — one byte every 0.5 s is plenty — never
+// trips it and holds the SINGLE IDF worker for as long as it likes. MEASURED
+// before this existed: one TLS connection posting `Content-Length: 900` a space
+// at a time held the whole surface for 60 s, during which
+// `POST /api/program/stop` could not even complete its TLS handshake, WITH THE
+// BELT MOVING. Same belt-availability class as the handshake budget in
+// net::http, one phase later.
+//
+// So the bound is on the WHOLE body read, stamped at handler entry, exactly the
+// way `tls_handshake_timeout_ms` bounds the phase before it.
+// ---------------------------------------------------------------------------
+
+/// How long a handler may spend reading a request body, end to end.
+///
+/// NOT a limit on a healthy client: a full 2048-byte slot is one or two TLS
+/// records on a LAN, delivered in milliseconds. What it selects is how long a
+/// peer that has stopped making progress may keep the one worker — and the
+/// answer has to be short, because the Stop button is behind that worker.
+/// 2.5 s is one `recv_wait_timeout` (1 s) of legitimate silence plus slack,
+/// and it is the same order as the 500 ms handshake budget it continues.
+///
+/// THE WORST CASE IS THIS PLUS ONE RECV, and that is stated rather than
+/// rounded away: the deadline is tested BEFORE each blocking `httpd_req_recv`,
+/// so a peer that goes silent immediately after the last check still costs a
+/// full `recv_wait_timeout` on top — ~3.5 s in total, per attempt, and
+/// repeatable by anyone on the LAN. Checking after the recv instead would not
+/// help (the time is already spent). What bounds the damage is that 3.5 s is
+/// the whole exposure: it was 60 s and rising when this was measured, and at
+/// that client's pacing one connection would have held the worker for 450 s.
+const BODY_DEADLINE: Micros = Micros::from_millis(2_500);
+
+/// A stamp taken at handler entry, against which the whole body read is bounded.
+#[derive(Clone, Copy)]
+pub(crate) struct Deadline(Micros);
+
+impl Deadline {
+    pub(crate) fn start() -> Deadline {
+        Deadline(crate::CTX.clock.now())
+    }
+
+    pub(crate) fn expired(&self) -> bool {
+        crate::CTX.clock.now() - self.0 > BODY_DEADLINE
+    }
+}
+
+/// Answer 408 and make sure IDF cannot re-block on the body we did not read.
+///
+/// THE SHUTDOWN IS THE POINT, not the status line. `httpd_req_delete`
+/// (httpd_parse.c) PURGES any unread body after the handler returns, in a loop
+/// of `httpd_req_recv` calls governed by the same per-recv timeout — so simply
+/// answering and returning would hand the dribbling client the worker straight
+/// back through IDF's own code. Shutting the read half down makes the next
+/// recv return 0, the purge fail, and the session close. It is the one action
+/// that ends the request rather than deferring it.
+pub(crate) fn abandon_body(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    respond_and_close(
+        req,
+        c"408 Request Timeout",
+        br#"{"ok":false,"error":"body not delivered in time"}"#,
+    );
+    sys::ESP_FAIL
+}
+
+/// Answer, then stop reading. For any handler that will NOT consume the body.
+///
+/// A HANDLER THAT ANSWERS WITHOUT READING ITS BODY IS NOT FINISHED WITH THE
+/// CONNECTION — `httpd_req_delete` purges whatever is left through the same
+/// per-recv timeout, with no deadline of ours anywhere near it. So a route that
+/// declines its input (the multi-profile answers in `net::profile`, an avatar
+/// upload this device has no storage for) is exactly as dribble-able as the
+/// body readers were, on a body that could be a megabyte. Shutting the read
+/// half down makes the next recv return 0, the purge fail, and the session
+/// close — after the response has already gone out, so the client still reads
+/// the sentence it needs.
+pub(crate) fn respond_and_close(
+    req: *mut sys::httpd_req_t,
+    status: &core::ffi::CStr,
+    body: &[u8],
+) -> sys::esp_err_t {
+    respond(req, status, body);
+    // SAFETY: `httpd_req_to_sockfd` reads a scalar out of the live request and
+    // returns -1 if there is no socket, which the guard below rejects. Both
+    // calls take integers only; no Rust memory is shared with either.
+    unsafe {
+        let fd = sys::httpd_req_to_sockfd(req);
+        if fd >= 0 {
+            sys::lwip_shutdown(fd, sys::SHUT_RD as i32);
+        }
+    }
+    sys::ESP_OK
+}
+
 pub(crate) fn respond(
     req: *mut sys::httpd_req_t,
     status: &core::ffi::CStr,
@@ -95,8 +192,14 @@ pub(crate) fn read_body(
         return None;
     }
 
+    let deadline = Deadline::start();
     let mut got = 0usize;
     while got < declared {
+        if deadline.expired() {
+            drop(lease);
+            abandon_body(req);
+            return None;
+        }
         // SAFETY: `out` is a live exclusive borrow with room for `declared`
         // bytes (checked above); IDF writes at most the length we pass.
         let n = unsafe {
@@ -173,18 +276,40 @@ pub(crate) fn parse_value_hundredths(body: &[u8]) -> Option<i32> {
 /// numbers (`weight_lbs`, `vest_lbs`) share ONE number parser with
 /// `/api/speed` instead of growing a second one.
 pub(crate) fn parse_key_hundredths(body: &[u8], key: &[u8]) -> Option<i32> {
-    if key.is_empty() || key.len() > body.len() {
+    if key.is_empty() {
         return None;
     }
-    let pos = body.windows(key.len()).position(|w| w == key)?;
-    let rest = &body[pos + key.len()..];
-    let colon = rest.iter().position(|&b| b == b':')?;
+    // ANCHORED AS A JSON MEMBER: `"key"` followed by optional spaces and a
+    // colon. Searching for the bare key bytes and then "the next colon
+    // anywhere" made `{"note":"weight_lbs","x":500}` set the weight — the key
+    // matched inside a VALUE — and made `{"delta_seconds":300}` satisfy a scan
+    // for `seconds`, because one key is a suffix of the other. Neither is a
+    // parser bug worth a parser; both are a missing quote.
+    let mut pat = [0u8; 24];
+    if key.len() + 2 > pat.len() {
+        return None;
+    }
+    pat[0] = b'"';
+    pat[1..1 + key.len()].copy_from_slice(key);
+    pat[1 + key.len()] = b'"';
+    let pat = &pat[..key.len() + 2];
+    if pat.len() > body.len() {
+        return None;
+    }
+    let pos = body.windows(pat.len()).position(|w| w == pat)?;
+    let mut i = pos + pat.len();
+    while i < body.len() && body[i] == b' ' {
+        i += 1;
+    }
+    if i >= body.len() || body[i] != b':' {
+        return None;
+    }
     // Splice the marker the shared scanner looks for in front of the value,
     // rather than duplicating forty lines of digit handling.
     let mut buf = [0u8; 40];
     let head = b"\"value\":";
     buf[..head.len()].copy_from_slice(head);
-    let tail = &rest[colon + 1..];
+    let tail = &body[i + 1..];
     let n = core::cmp::min(tail.len(), buf.len() - head.len());
     buf[head.len()..head.len() + n].copy_from_slice(&tail[..n]);
     parse_value_hundredths(&buf[..head.len() + n])
@@ -204,7 +329,7 @@ unsafe extern "C" fn status_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
 ///
 /// `lead` is inserted immediately after the opening brace (`"ok":true,` for the
 /// POST replies, empty for GET).
-fn render_status(buf: &mut [u8; STATUS_BUF], lead: &str) -> usize {
+pub(crate) fn render_status(buf: &mut [u8; STATUS_BUF], lead: &str) -> usize {
     let (speed_tenths, incline_half, mode, relay, fault, connected) = {
         let g = lock(&crate::CTX.guarded);
         let now = crate::CTX.clock.now();
@@ -323,7 +448,7 @@ const fn mode_name(m: safety_core::safety::controller::SafeMode) -> &'static str
 /// overflow it, so a body that outgrows this is truncated into a visible
 /// failure rather than smashing the httpd task's stack. Measured longest
 /// rendering (`"ok":true,` lead, negative-free maxima) is ~215 bytes.
-const STATUS_BUF: usize = 320;
+pub(crate) const STATUS_BUF: usize = 320;
 
 struct BufWriter<'a> {
     buf: &'a mut [u8; STATUS_BUF],

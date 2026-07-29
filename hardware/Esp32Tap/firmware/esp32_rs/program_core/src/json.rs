@@ -124,6 +124,20 @@ impl<'a> Scanner<'a> {
                             // Consume exactly 4 hex digits and substitute. No
                             // UTF-16 surrogate assembly: a label is not worth
                             // a decoder, and `_` is total.
+                            //
+                            // THE COST IS REAL AND IS NOT ONLY A TRUNCATION.
+                            // MEASURED: a program named with 40 U+00E9, sent
+                            // the way `json.dumps` sends it (ensure_ascii, so
+                            // `é`), stored and returned as 40 underscores.
+                            // The Android app is unaffected —
+                            // kotlinx-serialization emits raw UTF-8 and never
+                            // escapes, and raw multi-byte bytes pass through
+                            // the `other` arm intact — but the iOS client,
+                            // curl, and several JS serializers escape by
+                            // default, and for them a non-ASCII name is
+                            // ANNIHILATED rather than shortened. Stated in
+                            // `net::records`' module header too, where a
+                            // client author would look.
                             for _ in 0..4 {
                                 let h = self.bump().ok_or(ParseError::Malformed)?;
                                 if !h.is_ascii_hexdigit() {

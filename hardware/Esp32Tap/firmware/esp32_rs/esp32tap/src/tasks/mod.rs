@@ -1,10 +1,20 @@
-//! The three supervised core-0 tasks (PLAN's normative WDT matrix).
+//! The supervised core-0 tasks (PLAN's normative WDT matrix).
 //!
-//! | Task           | Core | Prio | Stack | WDT                       | Cadence |
-//! |----------------|------|------|-------|---------------------------|---------|
-//! | serial_engine  | 0    | 10   | 8192  | subscribe, ABORT on fail  | 5 ms    |
-//! | emulate_cycle  | 0    | 9    | 6144  | subscribe, ABORT on fail  | 100 ms  |
-//! | interval_exec  | 0    | 5    | 16384 | subscribe, ABORT on fail  | 1 s     |
+//! | Task           | Core | Prio | Stack | WDT                       | Cadence | Source              |
+//! |----------------|------|------|-------|---------------------------|---------|---------------------|
+//! | serial_engine  | 0    | 10   | 8192  | subscribe, ABORT on fail  | 5 ms    | tasks/serial_engine |
+//! | emulate_cycle  | 0    | 9    | 6144  | subscribe, ABORT on fail  | 100 ms  | tasks/emulate_cycle |
+//! | interval_exec  | 0    | 5    | 16384 | subscribe, ABORT on fail  | 1 s     | tasks/interval_executor |
+//! | session        | 0    | 4    | 12288 | subscribe, ABORT on fail  | 1 s     | net/session (feature `net`) |
+//! | shim_task      | 0    | 4    | 6144  | subscribe, ABORT on fail  | 100 ms  | qemu_test/shim_task (feature `qemu-test`, NEVER flashed) |
+//!
+//! THE SESSION RECORDER IS IN THE MATRIX EVEN THOUGH IT LIVES IN `net`. It was
+//! absent from this table for a whole slice while being a fourth
+//! WDT-supervised task — and the only one that touches flash, which is the
+//! slowest thing this firmware does on purpose. A matrix that does not name
+//! every supervised task is not a matrix; `tools/check_wdt_chain.py` now
+//! DISCOVERS the subscribers instead of hard-coding three of them, and fails if
+//! the set drifts from this table.
 //!
 //! A stall in any of them panics -> silent reboot -> GPIO21 Hi-Z -> R23
 //! pull-down -> relay released. The hardware completes the guarantee; there is

@@ -546,3 +546,109 @@ def test_a_body_that_is_not_json_does_not_rename_a_workout(qemu):
     assert code == 400, code
     st, workouts = http(s, "GET", "/api/workouts")
     assert workouts[0]["name"] == "Original", workouts
+
+
+def test_a_rename_keeps_the_saved_link_and_does_not_create_a_duplicate(qemu):
+    """The heart icon must survive a rename — keying it on the NAME did not.
+
+    MEASURED before the fix: save from history gave
+    `saved:true, saved_workout_id:"w1"`; `PUT /api/workouts/w1 {"name":...}`
+    gave `saved:false, saved_workout_id:null`; `HistoryList.kt` then drew an
+    OUTLINE heart and `handleToggleSave` took its else branch and POSTed
+    `/api/workouts` again — two saved workouts for one program, the older
+    unreachable from the row that created it, and another on every rename.
+    `python/server.py` keys this on `_program_fingerprint`, which ignores the
+    name, so a rename cannot break it there either.
+    """
+    s = booted(qemu)
+    assert http(s, "POST", "/api/program/load", program("Tempo"))[0] == 200
+    st, hist = http(s, "GET", "/api/programs/history")
+    hid = hist[0]["id"]
+
+    st, body = http(s, "POST", "/api/workouts", {"history_id": hid})
+    assert st == 200 and body["ok"] is True, body
+    wid = body["workout"]["id"]
+    st, hist = http(s, "GET", "/api/programs/history")
+    assert hist[0]["saved"] is True and hist[0]["saved_workout_id"] == wid, hist[0]
+
+    st, body = http(s, "PUT", f"/api/workouts/{wid}", {"name": "Tempo Redux"})
+    assert st == 200 and body["workout"]["name"] == "Tempo Redux", body
+
+    st, hist = http(s, "GET", "/api/programs/history")
+    assert hist[0]["saved"] is True, (
+        "a rename desynced the history row's heart icon; the app's next tap "
+        f"would create a duplicate workout: {hist[0]}"
+    )
+    assert hist[0]["saved_workout_id"] == wid, hist[0]
+
+    # ...and a DIFFERENT program is still not saved. The join must not have
+    # become "anything matches".
+    assert http(s, "POST", "/api/program/load", program("Other", speed=9.0))[0] == 200
+    st, hist = http(s, "GET", "/api/programs/history")
+    other = [h for h in hist if h["program"]["name"] == "Other"][0]
+    assert other["saved"] is False and other["saved_workout_id"] is None, other
+
+
+def test_a_finished_run_reaches_the_history_row_and_the_workout_that_saved_it(qemu):
+    """`last_run` / `last_run_text` / `usage_text` — the app's only view of a run.
+
+    `TreadmillApi` declares no `/api/runs` method at all, so the ONLY two places
+    run data can reach a screen are `HistoryList.kt`'s
+    `if (entry.lastRunText.isNotBlank())` and `WorkoutList.kt`'s
+    `usageText.ifBlank { "Never used" }`. Both were fed `null`/`""`
+    unconditionally, so a device that recorded every run perfectly could never
+    show one.
+    """
+    s = armed(qemu)
+    short = {
+        "name": "Joinable",
+        "intervals": [
+            {"name": "A", "duration": 10, "speed": 2.0, "incline": 0},
+            {"name": "B", "duration": 10, "speed": 3.0, "incline": 1.0},
+        ],
+    }
+    st, body = http(s, "POST", "/api/program/start", short)
+    assert st == 200 and body["running"] is True, body
+
+    def runs():
+        return http(s, "GET", "/api/runs")[1]
+
+    final = poll(
+        runs,
+        lambda r: r and r[0]["end_reason"] != "in_progress",
+        "the run to finalise",
+        timeout=180,
+    )[0]
+    assert final["end_reason"] == "program_complete", final
+    s.stop_pacer()
+
+    st, hist = http(s, "GET", "/api/programs/history")
+    e = [h for h in hist if h["program"]["name"] == "Joinable"][0]
+    # OBJECT-shaped or null — `HistoryEntry.lastRun` is a `RunRecord?`, and a
+    # scalar throws rather than degrading.
+    assert isinstance(e["last_run"], dict), e
+    assert e["last_run"]["id"] == final["id"], e
+    assert e["last_run_text"].startswith("Last run: "), e
+
+    # ...and the saved workout made from it says the same thing.
+    st, body = http(s, "POST", "/api/workouts", {"history_id": e["id"]})
+    assert st == 200 and body["ok"] is True, body
+    st, workouts = http(s, "GET", "/api/workouts")
+    w = workouts[0]
+    assert isinstance(w["last_run"], dict) and w["last_run"]["id"] == final["id"], w
+    assert w["usage_text"].startswith("Last run: "), w
+    # A never-run program keeps the blank the app turns into "Never used".
+    assert http(s, "POST", "/api/workouts", {"program": program("Unrun"), "source": "manual"})[0] == 200
+    st, workouts = http(s, "GET", "/api/workouts")
+    unrun = [x for x in workouts if x["name"] == "Unrun"][0]
+    assert unrun["last_run"] is None and unrun["usage_text"] == "", unrun
+    # An explicit source on the direct-program path is honoured...
+    assert unrun["source"] == "manual", unrun
+    # ...and a non-manual program saved FROM HISTORY infers "generated", as on
+    # the Pi. It used to infer "manual" for everything, because the device's
+    # inference carried an empty-prompt clause `server.py` does not have and
+    # every program stored here has an empty prompt.
+    st, hist = http(s, "GET", "/api/programs/history")
+    gen = [h for h in hist if h["program"]["name"] == "Joinable"][0]
+    st, body = http(s, "POST", "/api/workouts", {"history_id": gen["id"]})
+    assert body["workout"]["source"] == "generated", body["workout"]

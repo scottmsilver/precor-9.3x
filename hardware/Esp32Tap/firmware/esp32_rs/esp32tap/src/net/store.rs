@@ -294,6 +294,25 @@ impl Stores {
         None
     }
 
+    /// The id of the entry at `n`, if its program is EXACTLY `program`.
+    ///
+    /// One slot read, answering both "is this the one?" and "what is its id?".
+    /// Names are deliberately not compared — see `record::fingerprint`: the
+    /// join this serves must survive a rename.
+    pub fn match_at(
+        &self,
+        w: Which,
+        n: usize,
+        program: &program_core::Program,
+        scratch: &mut [u8],
+    ) -> Option<FixedStr<{ record::MAX_ID }>> {
+        let len = self.read_at(w, n, scratch)?;
+        if !record::entry_matches_program(&scratch[..len], program) {
+            return None;
+        }
+        record::peek_entry(&scratch[..len]).map(|h| h.id)
+    }
+
     /// Position of the entry with this id.
     pub fn find_by_id(&self, w: Which, id: &str, scratch: &mut [u8]) -> Option<usize> {
         self.find_pos(w, scratch, |h| h.id.as_str() == id)
@@ -319,7 +338,33 @@ impl Stores {
         s
     }
 
+    /// Whether an in-place write would change nothing on flash.
+    ///
+    /// A REPLACE THAT CHANGES NOTHING IS STILL A 4 KB SECTOR ERASE, and the
+    /// dedup path aims every repeat at the same physical slot — so an
+    /// unauthenticated client re-POSTing one identical program in a loop was
+    /// spending the flash's endurance one request at a time. See
+    /// `recstore::Ring::nth_equals`. Only the in-place path is checked:
+    /// appending is by definition a new record in a different slot.
+    ///
+    /// THE COST IS ORDERING, and it is stated rather than hidden: a re-load of
+    /// an unchanged program no longer re-sequences its history entry to the
+    /// top of the lobby's recent list. Anything the user can perceive a
+    /// difference in — a new speed, a checkpointed elapsed time, a use count —
+    /// changes the bytes and therefore still writes.
+    fn unchanged(&self, w: Which, n: usize, payload: &[u8]) -> bool {
+        match w {
+            Which::History => self.history.nth_equals(&self.flash, n, payload),
+            Which::Workouts => self.workouts.nth_equals(&self.flash, n, payload),
+        }
+    }
+
     fn put_at(&mut self, w: Which, n: Option<usize>, payload: &[u8]) -> bool {
+        if let Some(n) = n {
+            if self.unchanged(w, n, payload) {
+                return true;
+            }
+        }
         match (w, n) {
             (Which::History, None) => self.history.append(&mut self.flash, payload).is_ok(),
             (Which::History, Some(n)) => self
@@ -408,6 +453,10 @@ impl Stores {
         };
         match at {
             None => self.runs.append(&mut self.flash, &scratch[..n]).is_ok(),
+            // A checkpoint that carries the same numbers as the last one —
+            // a paused session, a belt at zero under a running program —
+            // erases a sector for nothing. See `Stores::unchanged`.
+            Some(pos) if self.runs.nth_equals(&self.flash, pos, &scratch[..n]) => true,
             Some(pos) => self
                 .runs
                 .replace_nth(&mut self.flash, pos, &scratch[..n])

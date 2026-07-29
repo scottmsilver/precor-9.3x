@@ -27,13 +27,44 @@
 //! one slot is refused 413 before a byte is parsed. The C++ tier had unbounded
 //! name and prompt fields.
 //!
+//! TWO OF THOSE BOUNDS ARE VISIBLE TO A CLIENT AUTHOR AND ARE STATED HERE
+//! RATHER THAN DISCOVERED:
+//!
+//! * `POST /api/workouts` refuses a body over one 2048-byte slot with 413,
+//!   before parsing. The Pi's `SaveWorkoutRequest` accepts a 5000-character
+//!   `prompt`; a client that fills it gets a 413 that Retrofit turns into an
+//!   `HttpException` and the app renders as "Failed to save workout" with no
+//!   indication why. The stored field is bounded to `record::MAX_PROMPT`
+//!   anyway and truncates rather than refusing, so the 413 comes purely from
+//!   the slot size. The unchanged Android app cannot reach it — its only
+//!   `saveWorkout` call site sends `{"history_id":…}`, ~20 bytes.
+//! * A `\uXXXX`-escaped name is DESTROYED, one `_` per escape, by
+//!   `program_core::json`'s escape handling (`extract_str` here does the same).
+//!   That is a deliberate trade — "a label is not worth a decoder" — and it is
+//!   invisible to the Android app, whose kotlinx-serialization emits raw UTF-8
+//!   and never escapes. It is NOT invisible to the iOS client, to curl, or to
+//!   several JS serializers, all of which escape by default: for them a
+//!   non-ASCII workout name is annihilated rather than truncated.
+//!
 //! # Types, not just fields
 //!
-//! Every field in the Kotlin models here has a default, so an OMITTED field
-//! passes silently and only a WRONG TYPE breaks a screen. The two that can
-//! break one are object-shaped: `program` (whose own `name`/`intervals` have
-//! NO kotlinx default) and `last_run`. Both are emitted whole or as `null`,
-//! never as a scalar. `program_core::record`'s host tests pin the shapes.
+//! Every field in `HistoryEntry`, `SavedWorkout` and `RunRecord` — the three
+//! models THIS module emits — has a kotlinx default, so an OMITTED field passes
+//! silently and only a WRONG TYPE breaks a screen. The two that can break one
+//! are object-shaped: `program` and `last_run`. Both are emitted whole or as
+//! `null`, never as a scalar.
+//!
+//! THAT RULE IS ABOUT THESE THREE MODELS ONLY, and this header used to state it
+//! as though it were universal. It is FALSE of `Program` (`name`, `intervals`),
+//! `Interval` (all four), `ProgramMessage`, `StatusMessage` and
+//! `SessionMessage`, every one of which declares fields with no default —
+//! `coerceInputValues` rewrites an explicit null into a default that EXISTS, it
+//! cannot invent one, so an omission there throws MissingFieldException. A
+//! reader who carried the old wording over to `net::api` or `net::session`
+//! would believe dropping a field from a status or program body was safe. It is
+//! not; see the derivations at `net::api::format_status` and
+//! `program_core::json::write_state_with_lead`. `program_core::record`'s host
+//! tests pin the shapes this module emits.
 
 use crate::context::lock;
 use crate::net::api::{respond, MAX_CMD_BODY};
@@ -284,8 +315,14 @@ fn read_slot_body(req: *mut sys::httpd_req_t, lease: &mut reqbudget::Lease) -> O
         );
         return None;
     }
+    // Bounded end to end, not per recv — see `net::api::Deadline`.
+    let deadline = crate::net::api::Deadline::start();
     let mut got = 0usize;
     while got < declared {
+        if deadline.expired() {
+            crate::net::api::abandon_body(req);
+            return None;
+        }
         let buf = lease.buf();
         // SAFETY: `buf` is a live exclusive borrow of a slot with room for
         // `declared` bytes; IDF writes at most the length we pass, at an
@@ -344,26 +381,27 @@ const NOT_FOUND: &[u8] = br#"{"ok":false,"error":"Not found"}"#;
 // `saved` / `saved_workout_id` — the heart icon in the app's history list.
 // ---------------------------------------------------------------------------
 
-/// Where each saved workout lives, keyed by a hash of its name.
+/// Where each saved workout lives, keyed by its program FINGERPRINT.
 ///
-/// A HASH IS A FILTER, NOT AN ANSWER. A collision would mark an unsaved
-/// program as saved and — far worse — hand the app the id of a DIFFERENT
-/// workout, which its unsave button would then delete. So a hit is verified by
-/// reading that record and comparing the name exactly; the hash only keeps the
+/// NOT BY NAME, and that is the fix for a defect the app made visible: keying
+/// on `program.name` meant `PUT /api/workouts/{id}` desynced the history row's
+/// heart icon (measured: `saved:true, saved_workout_id:"w1"` became
+/// `saved:false, saved_workout_id:null` on a rename), the app's `handleToggleSave`
+/// then took its else branch and POSTed `/api/workouts` again, and the store
+/// ended up with TWO records for one program — the older one unreachable from
+/// the row that created it, and another added by every subsequent rename.
+/// `python/server.py` keys this on `_program_fingerprint`, whose docstring says
+/// in as many words that it ignores the name, so a rename cannot break the link
+/// there.
+///
+/// A HASH IS A FILTER, NOT AN ANSWER. A collision would mark an unsaved program
+/// as saved and — far worse — hand the app the id of a DIFFERENT workout, which
+/// its unsave button would then delete. So a hit is confirmed against the
+/// stored bytes by [`record::entry_matches_program`]; the hash only keeps the
 /// scan from being 20x20 record reads.
 struct SavedIndex {
     n: usize,
-    items: [(u32, u8); store::WORKOUT_SLOTS],
-}
-
-fn name_hash(s: &str) -> u32 {
-    // FNV-1a. Not for security — see the type's note.
-    let mut h: u32 = 0x811c_9dc5;
-    for &b in s.as_bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x0100_0193);
-    }
-    h
+    items: [(u64, u8); store::WORKOUT_SLOTS],
 }
 
 fn build_saved_index(st: &store::Stores, scratch: &mut [u8]) -> SavedIndex {
@@ -373,34 +411,89 @@ fn build_saved_index(st: &store::Stores, scratch: &mut [u8]) -> SavedIndex {
     };
     for n in 0..store::WORKOUT_SLOTS {
         if let Some(h) = st.head_at(Which::Workouts, n, scratch) {
-            idx.items[idx.n] = (name_hash(h.name.as_str()), n as u8);
+            idx.items[idx.n] = (h.fp, n as u8);
             idx.n += 1;
         }
     }
     idx
 }
 
-/// The id of the saved workout with this exact name, if there is one.
+/// The id of the saved workout holding this exact program, if there is one.
 ///
 /// Reads the record's HEAD, not the record: the history list already holds one
-/// decoded [`Entry`] live, and a second one is ~1 KB of the httpd task's stack
-/// to compare a string.
+/// decoded [`Entry`] live, and a second one is ~1 KB of the httpd task's stack.
 fn saved_id_for(
     st: &store::Stores,
     idx: &SavedIndex,
-    name: &str,
+    program: &Program,
     scratch: &mut [u8],
 ) -> Option<FixedStr<{ record::MAX_ID }>> {
-    let want = name_hash(name);
+    let want = record::fingerprint(program);
     for k in 0..idx.n {
-        let (h, pos) = idx.items[k];
-        if h != want {
+        let (fp, pos) = idx.items[k];
+        if fp != want {
             continue;
         }
-        if let Some(w) = st.head_at(Which::Workouts, pos as usize, scratch) {
-            if w.name.as_str() == name {
-                return Some(w.id);
+        if let Some(id) = st.match_at(Which::Workouts, pos as usize, program, scratch) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// The newest run per program fingerprint — `server.py::_last_run_by_fingerprint`.
+///
+/// Four slots, so this is four `Run` decodes (~100 bytes each, no `Program`
+/// inside one) and no scan at render time. Built once per list request, exactly
+/// as the Pi builds its dict once per request.
+struct RunIndex {
+    n: usize,
+    items: [(u64, u8); store::RUN_SLOTS],
+}
+
+fn build_run_index(st: &store::Stores, scratch: &mut [u8]) -> RunIndex {
+    let mut idx = RunIndex {
+        n: 0,
+        items: [(0, 0); store::RUN_SLOTS],
+    };
+    for n in 0..store::RUN_SLOTS {
+        if let Some(r) = st.run_at(n, scratch) {
+            // Ring order is newest-first, so the FIRST fingerprint seen wins —
+            // the same rule the Pi's `by_fp` dict uses over its newest-first
+            // rows.
+            if idx.items[..idx.n].iter().any(|(fp, _)| *fp == r.fp) {
+                continue;
             }
+            idx.items[idx.n] = (r.fp, n as u8);
+            idx.n += 1;
+        }
+    }
+    idx
+}
+
+/// The newest run of this program, if the ring still holds one.
+///
+/// THE FINGERPRINT ALONE DECIDES HERE, unlike [`saved_id_for`], and the
+/// asymmetry is deliberate rather than an oversight. A `Run` stores its
+/// program's fingerprint, not its intervals — the record is ~120 bytes and
+/// carrying a whole `Program` per run would cost more flash than the four run
+/// slots are worth — so there is nothing to confirm a hit against. What bounds
+/// the damage is the CONSEQUENCE: a 64-bit FNV collision between two of at most
+/// four stored runs would put the wrong duration and distance in one
+/// `last_run_text` LABEL. It cannot delete anything and it cannot mis-address a
+/// record, which is exactly why the saved-workout join — whose id the app's
+/// unsave button deletes — is confirmed exactly and this one is not.
+fn last_run_for(
+    st: &store::Stores,
+    idx: &RunIndex,
+    program: &Program,
+    scratch: &mut [u8],
+) -> Option<record::Run> {
+    let want = record::fingerprint(program);
+    for k in 0..idx.n {
+        let (fp, pos) = idx.items[k];
+        if fp == want {
+            return st.run_at(pos as usize, scratch);
         }
     }
     None
@@ -455,7 +548,7 @@ fn list_impl(req: *mut sys::httpd_req_t, kind: usize) -> sys::esp_err_t {
 
     let _ = sink.write_char('[');
     let mut first = true;
-    let mut sep = |sink: &mut ChunkSink, first: &mut bool| {
+    let sep = |sink: &mut ChunkSink, first: &mut bool| {
         if !*first {
             let _ = sink.write_char(',');
         }
@@ -473,33 +566,46 @@ fn list_impl(req: *mut sys::httpd_req_t, kind: usize) -> sys::esp_err_t {
             }
         }
         R_WORKOUTS => {
+            let runs = store::with(|st| build_run_index(st, lease.buf()));
             for n in 0..store::WORKOUT_SLOTS {
-                let e = store::with(|st| st.entry_at(Which::Workouts, n, lease.buf())).flatten();
-                if let Some(e) = e {
+                let row = store::with(|st| {
+                    let e = st.entry_at(Which::Workouts, n, lease.buf())?;
+                    let run = runs
+                        .as_ref()
+                        .and_then(|r| last_run_for(st, r, &e.program, lease.buf()));
+                    Some((e, run))
+                })
+                .flatten();
+                if let Some((e, run)) = row {
                     sep(&mut sink, &mut first);
-                    let _ = record::write_saved_workout(&mut sink, &e);
+                    let _ = record::write_saved_workout(&mut sink, &e, run.as_ref());
                 }
             }
         }
         _ => {
             let idx = store::with(|st| build_saved_index(st, lease.buf()));
+            let runs = store::with(|st| build_run_index(st, lease.buf()));
             for n in 0..store::HISTORY_SLOTS {
-                // Entry AND its saved-workout id resolved in ONE hold, so the
-                // pair a client sees is at least self-consistent.
+                // Entry, saved-workout id AND last run resolved in ONE hold, so
+                // the row a client sees is at least self-consistent.
                 let row = store::with(|st| {
                     let e = st.entry_at(Which::History, n, lease.buf())?;
                     let saved = idx
                         .as_ref()
-                        .and_then(|i| saved_id_for(st, i, e.name(), lease.buf()));
-                    Some((e, saved))
+                        .and_then(|i| saved_id_for(st, i, &e.program, lease.buf()));
+                    let run = runs
+                        .as_ref()
+                        .and_then(|r| last_run_for(st, r, &e.program, lease.buf()));
+                    Some((e, saved, run))
                 })
                 .flatten();
-                if let Some((e, saved)) = row {
+                if let Some((e, saved, run)) = row {
                     sep(&mut sink, &mut first);
                     let _ = record::write_history_entry(
                         &mut sink,
                         &e,
                         saved.as_ref().map(|s| s.as_str()),
+                        run.as_ref(),
                     );
                 }
             }
@@ -570,8 +676,24 @@ fn install(program: Program, resume: Option<(usize, i64)>, history: &FixedStr<{ 
     let now = crate::CTX.clock.now();
     let mut p = lock(&crate::CTX.program);
     let stop = p.stop();
+    // THE BELT IS HANDED BACK WHEN NOTHING IS ABOUT TO TAKE IT, which is what
+    // `POST /api/program/load` does (`net::program::post_impl` V_LOAD drives
+    // the identical plan with `release_belt = true`). Driving it with `false`
+    // here left the lease with an executor that was no longer running, and the
+    // only thing that took it back was the executor noticing its own `ended`
+    // edge on its NEXT tick — an unstated rescue in another task that nothing
+    // asserted. A paused plan, or a longer tick, and manual control would be
+    // dead until an explicit `/api/program/stop`.
+    //
+    // ...and NOT when a resume is about to re-command in this same lock hold.
+    // That is the Quick Start defect exactly (see `net::program` V_QUICK):
+    // releasing puts the controller in ExitWaitGap, the replacement plan is
+    // accepted by the still-current lease owner but does NOT re-enter emulate,
+    // and the exit then completes and drops the relay under a program that
+    // reports itself running.
+    let release_belt = resume.is_none();
     if !stop.is_empty() {
-        crate::net::program::drive(stop, false);
+        crate::net::program::drive(stop, release_belt);
     }
     p.load(program);
     // UNDER THE PROGRAM LOCK, with the load. The session recorder reads both
@@ -719,12 +841,21 @@ fn workout_save(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
         let mut e = if by_history {
             let (_, h) = st.find(Which::History, history_id.as_str(), buf)?;
             let mut e = h;
-            // `server.py` INFERS the source on this path (its pydantic
-            // validator only guards the direct-program path): a manual program
-            // is "manual", anything with a prompt behind it is "generated".
-            e.source = if e.program.manual {
-                Source::Manual
-            } else if e.prompt.is_empty() {
+            // `server.py::api_save_workout` INFERS the source on this path (its
+            // pydantic validator only guards the direct-program path), and this
+            // is its rule EXACTLY: a "GPX:" prompt is gpx, a manual program is
+            // manual, and ANYTHING ELSE is generated.
+            //
+            // There is deliberately no empty-prompt clause any more. The extra
+            // `else if e.prompt.is_empty() { Manual }` that used to sit here had
+            // no counterpart on the Pi, and since every program this device
+            // stores has an empty prompt (`record_loaded`'s only call site
+            // passes ""), it made EVERY saved workout report "manual" —
+            // confirmed on the device: a non-manual program came back as
+            // `{"source":"manual"}`.
+            e.source = if e.prompt.as_str().starts_with("GPX:") {
+                Source::Gpx
+            } else if e.program.manual {
                 Source::Manual
             } else {
                 Source::Generated
@@ -748,20 +879,26 @@ fn workout_save(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
         if !st.put(Which::Workouts, None, &e, buf) {
             return None;
         }
-        Some(e)
+        // Looked up in the SAME hold, so the single-workout reply carries the
+        // same `last_run`/`usage_text` the next list request will — a reply
+        // that disagreed with the list would show the user two different
+        // "Never used" / "Last run:" states for one tap.
+        let runs = build_run_index(st, buf);
+        let run = last_run_for(st, &runs, &e.program, buf);
+        Some((e, run))
     });
 
     let Some(saved) = saved else {
         return no_store(req);
     };
-    let Some(e) = saved else {
+    let Some((e, run)) = saved else {
         return respond(req, c"200 OK", NOT_FOUND);
     };
     use core::fmt::Write;
     begin_json(req);
     let mut sink = ChunkSink::new(req);
     let _ = sink.write_str(r#"{"ok":true,"workout":"#);
-    let _ = record::write_saved_workout(&mut sink, &e);
+    let _ = record::write_saved_workout(&mut sink, &e, run.as_ref());
     let _ = sink.write_char('}');
     sink.finish()
 }
@@ -797,19 +934,21 @@ fn workout_rename(req: *mut sys::httpd_req_t, id: &str) -> sys::esp_err_t {
         if !st.put(Which::Workouts, Some(pos), &e, buf) {
             return None;
         }
-        Some(e)
+        let runs = build_run_index(st, buf);
+        let run = last_run_for(st, &runs, &e.program, buf);
+        Some((e, run))
     });
     let Some(updated) = updated else {
         return no_store(req);
     };
-    let Some(e) = updated else {
+    let Some((e, run)) = updated else {
         return respond(req, c"200 OK", NOT_FOUND);
     };
     use core::fmt::Write;
     begin_json(req);
     let mut sink = ChunkSink::new(req);
     let _ = sink.write_str(r#"{"ok":true,"workout":"#);
-    let _ = record::write_saved_workout(&mut sink, &e);
+    let _ = record::write_saved_workout(&mut sink, &e, run.as_ref());
     let _ = sink.write_char('}');
     sink.finish()
 }

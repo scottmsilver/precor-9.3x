@@ -57,6 +57,11 @@ const TICK_MS: u32 = 1000;
 ///
 /// MEASURED, NOT CHOSEN: at 6144 this task overflowed and rebooted the device
 /// on one read-modify-write of a stored entry, and a reboot drops the relay.
+///
+/// THE WEBSOCKET FRAMES ARE NOT IN THIS BUDGET, and that is a consequence of
+/// where they are rendered rather than an omission: [`push_frames`] runs on the
+/// HTTPD task (see `net::ws`), so its ~2.7 KB of buffers is asserted against
+/// `net::http::HTTPD_STACK_BYTES` below. This task only asks.
 pub const STACK_BYTES: usize = 12_288;
 
 /// Worst-case frame: the progress write holds one decoded `Entry` while the
@@ -73,6 +78,156 @@ const _: () = assert!(
     "the session recorder's frame plus interrupt reserve no longer fits its \
      stack — raise net::session::STACK_BYTES"
 );
+
+/// Stack [`push_frames`] puts on the HTTPD task: the three rendered frames plus
+/// the call frames around them.
+const PUSH_FRAME_BYTES: usize =
+    crate::net::program::STATE_BUF + crate::net::api::STATUS_BUF + SESSION_BUF + 512;
+
+const _: () = assert!(
+    PUSH_FRAME_BYTES + 4096 < crate::net::http::HTTPD_STACK_BYTES as usize,
+    "the WebSocket push frame plus mbedtls headroom no longer fits the httpd \
+     task stack — raise net::http::HTTPD_STACK_BYTES"
+);
+
+// ---------------------------------------------------------------------------
+// The live push. See `net::ws` for why it is here and not in a fifth task.
+// ---------------------------------------------------------------------------
+
+/// Bytes a `session` frame renders into. Measured longest (six-digit elapsed,
+/// three-decimal distance) is ~140; the writer below REFUSES to overflow, so a
+/// wrong number here truncates into a dropped frame rather than smashing the
+/// stack.
+const SESSION_BUF: usize = 256;
+
+struct FrameBuf {
+    b: [u8; SESSION_BUF],
+    n: usize,
+}
+
+impl core::fmt::Write for FrameBuf {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let x = s.as_bytes();
+        if self.n + x.len() > SESSION_BUF {
+            return Err(core::fmt::Error);
+        }
+        self.b[self.n..self.n + x.len()].copy_from_slice(x);
+        self.n += x.len();
+        Ok(())
+    }
+}
+
+/// What a `session` frame needs, published for the httpd task to render.
+///
+/// A FIXED-SIZE VALUE BEHIND A LOCK, not a rendered buffer handed across: the
+/// push runs on the httpd task (see `net::ws`) and this task keeps advancing
+/// while it does, so a shared BUFFER would be a second writer to the bytes IDF
+/// is reading. Six integers copied under a lock cannot be half-written.
+#[derive(Clone, Copy, Default)]
+struct Snapshot {
+    active: bool,
+    elapsed_s: u32,
+    distance_milli: u32,
+    vert_feet_tenths: u32,
+    calories_tenths: u32,
+    end_reason: Option<EndReason>,
+}
+
+static SNAPSHOT: Mutex<Snapshot> = Mutex::new(Snapshot {
+    active: false,
+    elapsed_s: 0,
+    distance_milli: 0,
+    vert_feet_tenths: 0,
+    calories_tenths: 0,
+    end_reason: None,
+});
+
+fn publish(s: &Session, active: bool, reason: Option<EndReason>) {
+    let mut r = Run::new("", "", false);
+    s.metrics.write_into(&mut r);
+    *lock(&SNAPSHOT) = Snapshot {
+        active,
+        elapsed_s: r.elapsed_s,
+        distance_milli: r.distance_milli,
+        vert_feet_tenths: r.vert_feet_tenths,
+        calories_tenths: r.calories_tenths,
+        end_reason: reason,
+    };
+}
+
+/// Render the `session` frame — `WorkoutSession.to_dict()`, field for field.
+///
+/// `wall_started_at` is `""`, and that is the Pi's own value for a session that
+/// has not started rather than an invention: this device has no RTC and no
+/// SNTP, so any ISO timestamp here would be a number computed from uptime and
+/// presented as a date. The Kotlin model types it `String` with NO default, so
+/// it must be PRESENT — an omission throws MissingFieldException and kills the
+/// whole frame — but nothing in the app renders it.
+///
+/// `end_reason` is `String?`; `null` while a session is live is what the Pi
+/// sends too.
+fn render_session(s: &Snapshot) -> FrameBuf {
+    use core::fmt::Write;
+    let mut b = FrameBuf {
+        b: [0u8; SESSION_BUF],
+        n: 0,
+    };
+    let _ = write!(
+        b,
+        r#"{{"type":"session","active":{},"elapsed":{}.0,"distance":{}.{:03},"vert_feet":{}.{},"calories":{}.{},"wall_started_at":""#,
+        s.active,
+        s.elapsed_s,
+        s.distance_milli / 1000,
+        s.distance_milli % 1000,
+        s.vert_feet_tenths / 10,
+        s.vert_feet_tenths % 10,
+        s.calories_tenths / 10,
+        s.calories_tenths % 10,
+    );
+    let _ = match s.end_reason {
+        Some(x) => write!(b, r#"","end_reason":"{}"}}"#, x.as_str()),
+        None => b.write_str(r#"","end_reason":null}"#),
+    };
+    b
+}
+
+/// Push `status`, `program` and `session` down every open WebSocket.
+///
+/// RUNS ON THE HTTPD TASK, invoked by `net::ws`'s queued work item — never on
+/// the recorder. See that module: sending from a second task raced the server's
+/// own session teardown over one mbedtls context, intermittently.
+///
+/// THE APP HAS NO OTHER SOURCE for any of this. Its program-endpoint calls
+/// discard their response bodies entirely, so without these three frames the
+/// belt moves and the Running screen does not.
+///
+/// Rendered under the locks, sent OUTSIDE them, exactly as every HTTP handler
+/// here does it: a frame send blocks for up to `send_wait_timeout` per socket,
+/// and the interval executor takes the program lock every tick under a 2 s
+/// watchdog. A program that cannot be rendered is SKIPPED rather than sent
+/// truncated — half a workout would decode as a different one.
+pub fn push_frames() {
+    if !crate::net::ws::any_client() {
+        return;
+    }
+    let mut status = [0u8; crate::net::api::STATUS_BUF];
+    let status_n = crate::net::api::render_status(&mut status, "");
+
+    let mut prog = [0u8; crate::net::program::STATE_BUF];
+    let prog_n = {
+        let p = lock(&crate::CTX.program);
+        crate::net::program::render_state(&mut prog, &p, "")
+    }
+    .unwrap_or(0);
+
+    let sess = render_session(&lock(&SNAPSHOT));
+
+    // ONE call, so the three frames share one budget and one enumeration.
+    match prog_n {
+        0 => crate::net::ws::send_all(&[&status[..status_n], &sess.b[..sess.n]]),
+        n => crate::net::ws::send_all(&[&status[..status_n], &prog[..n], &sess.b[..sess.n]]),
+    }
+}
 
 /// The history entry the loaded program came from, so its progress can be
 /// written back. Empty when the running program did not come from the store
@@ -158,6 +313,11 @@ struct Session {
     run_pos: Option<usize>,
     id: FixedStr<{ program_core::record::MAX_ID }>,
     program_name: FixedStr<{ program_core::MAX_PROGRAM_NAME }>,
+    /// `record::fingerprint` of the program this session is running, captured
+    /// when it starts. It is what lets a history entry or a saved workout find
+    /// this run afterwards — `program_fingerprint` on the Pi — and it CANNOT be
+    /// the program's name: a rename would orphan every run of it.
+    program_fp: u64,
     is_manual: bool,
     last_checkpoint_s: u32,
 }
@@ -169,6 +329,7 @@ impl Session {
             run_pos: None,
             id: FixedStr::new(),
             program_name: FixedStr::new(),
+            program_fp: 0,
             is_manual: false,
             last_checkpoint_s: 0,
         }
@@ -176,6 +337,7 @@ impl Session {
 
     fn run(&self, reason: EndReason, completed: bool) -> Run {
         let mut r = Run::new(self.id.as_str(), self.program_name.as_str(), self.is_manual);
+        r.fp = self.program_fp;
         r.end_reason = reason;
         r.program_completed = completed;
         self.metrics.write_into(&mut r);
@@ -247,23 +409,41 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
 
     let mut s = Session::new();
     let mut active = false;
-    /// A finalisation that has not reached flash yet. It is RETRIED every tick
-    /// until it lands: the budget pool can be momentarily full, and giving up
-    /// after one attempt would leave a finished run reading `in_progress`
-    /// forever — which is exactly the state a reader cannot distinguish from a
-    /// crash mid-workout.
+    // A finalisation that has not reached flash yet. It is RETRIED every tick
+    // until it lands: the budget pool can be momentarily full, and giving up
+    // after one attempt would leave a finished run reading `in_progress`
+    // forever — which is exactly the state a reader cannot distinguish from a
+    // crash mid-workout.
     let mut pending_final: Option<(EndReason, bool)> = None;
+    // Why the session that just ended ended, carried into the LAST `session`
+    // frame and no further. The Pi's own `to_dict()` reports `end_reason`
+    // alongside `active: false`, which is how the app's Running screen knows
+    // to run its completion transition rather than just going quiet.
+    let mut final_reason: Option<EndReason> = None;
 
     loop {
         wdt::feed();
         delay_ms(TICK_MS);
+        // FED AGAIN AFTER THE DELAY, and this is arithmetic rather than
+        // belt-and-braces. The budget is CONFIG_ESP_TASK_WDT_TIMEOUT_S = 2 with
+        // PANIC=y, and a panic here is a reboot, which drops the relay mid-run.
+        // Feeding only at the top of the loop spent HALF the budget on the
+        // delay before any work began, leaving ~1000 ms for a tick that can
+        // perform TWO read-modify-writes (`persist` and `persist_progress`, and
+        // both again at session end) — each a 4 KB sector erase, datasheet
+        // worst case ~400 ms on the W25Q/GD25Q-class parts, before any wait on
+        // the STORES mutex behind an HTTP handler doing its own erase. 800 ms
+        // of work inside a 1000 ms remainder is not a margin. `wdt::feed()` is
+        // one register write; the full 2 s belongs to the work, not to the
+        // sleep that precedes it.
+        wdt::feed();
 
         // Program first, then the safety lock — the firmware's one mandatory
         // lock order. The history id is read INSIDE the program hold, so it
         // and the program it describes are one snapshot. Both locks are
         // released before any flash is touched, so a sector erase never
         // happens under either.
-        let (running, paused, completed, interval, prog_elapsed, name, manual, hist_id) = {
+        let (running, paused, completed, interval, prog_elapsed, name, fp, manual, hist_id) = {
             let p = lock(&ctx.program);
             (
                 p.running(),
@@ -272,6 +452,9 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
                 p.current_interval() as u32,
                 p.total_elapsed() as u32,
                 p.program().map(|x| x.name),
+                // Folded HERE, under the lock, rather than by copying the
+                // ~900-byte `Program` out to fold it later.
+                p.program().map(program_core::record::fingerprint).unwrap_or(0),
                 p.is_manual(),
                 current_locked(),
             )
@@ -300,8 +483,10 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
             // there is no accumulation across runs to leak.
             s = Session::new();
             s.program_name = name.unwrap_or_else(FixedStr::new);
+            s.program_fp = fp;
             s.is_manual = manual;
             active = true;
+            final_reason = None;
         }
 
         if active && live {
@@ -333,14 +518,15 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
 
         if active && !live {
             active = false;
+            let reason = if completed {
+                EndReason::ProgramComplete
+            } else {
+                EndReason::UserStop
+            };
+            final_reason = Some(reason);
             // A session that never reached the floor never existed, exactly as
             // on the Pi: `_save_run_record` is a no-op without a row.
             if s.run_pos.is_some() {
-                let reason = if completed {
-                    EndReason::ProgramComplete
-                } else {
-                    EndReason::UserStop
-                };
                 if !persist(&mut s, reason, completed) {
                     pending_final = Some((reason, completed));
                 }
@@ -354,5 +540,12 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
                 *lock(&CURRENT_HISTORY) = FixedStr::new();
             }
         }
+
+        // LAST, after every lock is released and every flash write is done.
+        // This only PUBLISHES and ASKS — the frames are rendered and sent on
+        // the httpd task (see `net::ws`), so nothing here can block on a
+        // network write and nothing here is a second writer to a TLS session.
+        publish(&s, active, final_reason);
+        crate::net::ws::request_push();
     }
 }

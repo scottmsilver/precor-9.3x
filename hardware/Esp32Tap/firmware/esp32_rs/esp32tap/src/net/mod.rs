@@ -29,6 +29,7 @@ pub mod tls;
 pub mod http;
 pub mod mdns;
 pub mod program;
+pub mod ws;
 
 use esp_idf_sys as sys;
 

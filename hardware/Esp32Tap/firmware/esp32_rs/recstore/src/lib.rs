@@ -302,6 +302,60 @@ impl<const SLOTS: usize, const SLOT: usize> Ring<SLOTS, SLOT> {
         Ok(true)
     }
 
+    /// Whether the record with the nth-highest sequence already holds EXACTLY
+    /// `payload`.
+    ///
+    /// EXISTS TO SKIP AN ERASE, and that is a wear bound rather than a
+    /// performance one. Every write here begins with an unconditional 4 KB NOR
+    /// sector erase ([`Ring::write_slot`]), and the dedup path makes a repeat
+    /// worse rather than better: a replace re-sequences the record to newest,
+    /// so the SAME physical slot is chosen again next time. One unauthenticated
+    /// client POSTing one identical program in a loop therefore erased one
+    /// sector per request — at ~10 req/s a 100k-cycle sector is gone in under
+    /// three hours, permanently, with no reboot and no log line to notice it
+    /// by. An app retry loop produces the same shape by accident.
+    ///
+    /// Reads through a fixed 64-byte window rather than into a caller buffer:
+    /// needing a second record-sized buffer to discover that a write can be
+    /// skipped would cost more memory than the erase saves, and this crate's
+    /// whole contract is that resident memory does not grow.
+    pub fn nth_equals<F: Flash>(&self, flash: &F, n: usize, payload: &[u8]) -> bool {
+        let Some(slot) = self.nth_slot(n) else {
+            return false;
+        };
+        let off = self.base + slot * SLOT;
+        let mut hdr = [0u8; HDR];
+        if flash.read(off, &mut hdr).is_err() {
+            return false;
+        }
+        let Some((_seq, len)) = parse_hdr(&hdr) else {
+            return false;
+        };
+        if len != payload.len() || len > capacity(SLOT) {
+            return false;
+        }
+        // The CRC is a filter, not the answer: it is 32 bits over the same
+        // bytes, so a mismatch is decisive but a match is not. The window
+        // compare below is what makes this exact — skipping a write on a
+        // collision would silently keep the OLD record under the new one's id.
+        if u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]) != crc32(payload) {
+            return false;
+        }
+        let mut win = [0u8; 64];
+        let mut i = 0;
+        while i < len {
+            let take = if len - i < 64 { len - i } else { 64 };
+            if flash.read(off + HDR + i, &mut win[..take]).is_err() {
+                return false;
+            }
+            if win[..take] != payload[i..i + take] {
+                return false;
+            }
+            i += take;
+        }
+        true
+    }
+
     /// Read the record with the nth-highest sequence (0 = newest) into `buf`.
     /// Returns the payload length.
     pub fn read_nth<F: Flash>(
@@ -381,6 +435,10 @@ mod tests {
         mem: Vec<u8>,
         /// Stop accepting writes after this many bytes, to simulate power loss.
         budget: Option<usize>,
+        /// Sector erases performed. COUNTED, because erases are the resource
+        /// this store actually spends: a NOR sector has ~100k of them and
+        /// nothing in the system reports when they are being burned.
+        erases: usize,
     }
 
     impl Fake {
@@ -388,6 +446,7 @@ mod tests {
             Fake {
                 mem: vec![0xFF; size],
                 budget: None,
+                erases: 0,
             }
         }
     }
@@ -426,12 +485,63 @@ mod tests {
             for b in &mut self.mem[s..s + SECTOR] {
                 *b = 0xFF;
             }
+            self.erases += 1;
             Ok(())
         }
     }
 
     // One slot per 4 KB sector — see slot_is_sector_safe.
     type R = Ring<8, 4096>;
+
+    #[test]
+    fn an_identical_replace_is_recognised_and_a_changed_one_is_not() {
+        let mut f = Fake::new(SECTOR * 8);
+        let mut r = R::mount(&f, 0).unwrap();
+        r.append(&mut f, b"same-bytes").unwrap();
+        assert!(r.nth_equals(&f, 0, b"same-bytes"));
+        // Length, content and absence all read as NOT equal — a false positive
+        // here would keep the OLD record under the new one's identity.
+        assert!(!r.nth_equals(&f, 0, b"same-byte"));
+        assert!(!r.nth_equals(&f, 0, b"same-byteS"));
+        assert!(!r.nth_equals(&f, 0, b""));
+        assert!(!r.nth_equals(&f, 1, b"same-bytes"));
+        // ...and it survives a remount, because it reads flash rather than the
+        // index.
+        let r2 = R::mount(&f, 0).unwrap();
+        assert!(r2.nth_equals(&f, 0, b"same-bytes"));
+    }
+
+    #[test]
+    fn repeated_identical_writes_need_not_erase_a_sector() {
+        // THE WEAR BOUND. `write_slot`'s first act is an unconditional 4 KB
+        // erase, and a replace re-sequences the record to newest — so the same
+        // physical slot is chosen again next time. Without a skip, one client
+        // POSTing one identical body in a loop spends one erase per request.
+        let mut f = Fake::new(SECTOR * 8);
+        let mut r = R::mount(&f, 0).unwrap();
+        r.append(&mut f, b"payload").unwrap();
+        let after_first = f.erases;
+
+        for _ in 0..100 {
+            if !r.nth_equals(&f, 0, b"payload") {
+                r.replace_nth(&mut f, 0, b"payload").unwrap();
+            }
+        }
+        assert_eq!(
+            f.erases, after_first,
+            "100 identical writes cost {} extra sector erases",
+            f.erases - after_first
+        );
+
+        // A CHANGED record still writes — the skip must not be a mute button.
+        if !r.nth_equals(&f, 0, b"different") {
+            r.replace_nth(&mut f, 0, b"different").unwrap();
+        }
+        assert_eq!(f.erases, after_first + 1);
+        let mut buf = [0u8; 4080];
+        let n = r.read_nth(&f, 0, &mut buf).unwrap().unwrap();
+        assert_eq!(&buf[..n], b"different");
+    }
 
     #[test]
     fn resident_memory_is_constant_and_stated() {

@@ -84,6 +84,9 @@ QEMU_UNSAFE = {
     # FFI at all.
     "net/records.rs",
     "net/profile.rs",
+    # The `/ws` push. See net/ws.rs — the FFI is socket enumeration plus one
+    # frame send; `net/session.rs` still contains no FFI at all.
+    "net/ws.rs",
 }
 UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
 
@@ -170,7 +173,40 @@ PRODUCTION_UNSAFE_LINES = 69
 # caller, and `net/profile.rs`'s update callback reads and CHECKS the id in the
 # path — a wildcard route hands it everything under `/api/profiles/`, and
 # without the check any id rewrote the local profile.
-QEMU_UNSAFE_LINES = 537
+# 537 -> 543, +6: `net/api.rs::abandon_body`. ONE block, two calls
+# (`httpd_req_to_sockfd`, `lwip_shutdown`), and it is the whole reason the
+# request-duration bound WORKS rather than defers: `httpd_req_delete` purges an
+# unread body after the handler returns, through the same per-recv timeout, so
+# answering 408 and returning would have handed the dribbling client the single
+# worker straight back through IDF's own code.
+# 543 -> 552, +9: `net/ws.rs`. Three FFI calls in three one-expression blocks
+# (`httpd_get_client_list`, `httpd_ws_get_fd_info`) plus one block that fills a
+# `httpd_ws_frame_t` and sends it. It is the whole C boundary of the live push,
+# and `net/session.rs` — the WDT-supervised task that drives it — STILL contains
+# no FFI, which is why the pusher is a module rather than three lines in the
+# task.
+# 552 -> 580, +28: `net/profile.rs` gains the routes it was missing. Three more
+# IDF callbacks (`/api/user` GET/PUT, the unsupported-feature answer and the
+# DELETE that picks its message from the path) plus a wider registration table.
+# The counting rule attributes the whole body of an `unsafe extern "C" fn`,
+# which is why each is a thin wrapper that reads one raw field and delegates —
+# the actual C boundary added is zero calls. Leaving these routes UNREGISTERED
+# was cheaper in this number and cost the user a raw `HTTP 404 Not Found` on the
+# app's first screen and a weight the calorie maths could never be told.
+# 580 -> 589, +9: `net/ws.rs` moved its sends onto the httpd task through
+# `httpd_queue_work`, which adds the queue call and the queued `unsafe extern
+# "C"` callback and drops nothing (the send is still one block, and the
+# close-on-failure is one more). Nine lines for the removal of a data race
+# between the recorder and the server's own session teardown.
+# 589 -> 597, +8: `net::api::respond_and_close` split out of `abandon_body` so
+# the routes that DECLINE a body can use it. A handler that answers without
+# reading is not finished with the connection — IDF purges the rest through the
+# per-recv timeout with no deadline near it — so the four profile routes added
+# for the app's picker had reopened the dribbling-writer hole on a body that
+# could be a megabyte. The FFI is unchanged (one `httpd_req_to_sockfd`, one
+# `lwip_shutdown`); the growth is the counting rule attributing the second
+# function's body.
+QEMU_UNSAFE_LINES = 597
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

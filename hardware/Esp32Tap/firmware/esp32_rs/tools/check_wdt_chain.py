@@ -23,10 +23,20 @@ from the repository, so that if the bench measurement ever fails, the failure
 is narrowed to the one link nobody can check statically (the panic itself
 actually resetting the SoC promptly):
 
-  1. All three supervised tasks SUBSCRIBE to the task WDT and ABORT if the
+  1. Every supervised task SUBSCRIBES to the task WDT and ABORTS if the
      subscribe fails — an unsupervised task is a silent hole in the matrix.
-  2. All three FEED the WDT inside their loop, so a stall is what trips it
-     rather than normal operation.
+     The set of supervised tasks is DISCOVERED by scanning the firmware for
+     `subscribe_current_task`, not hard-coded: this script listed exactly three
+     files while `grep -rn subscribe_current_task esp32tap/src/` returned FOUR,
+     so the session recorder — the only supervised task that touches flash —
+     was invisible to its own gate. If its `wdt::feed()` had been removed the
+     gate stayed green and the device silently rebooted every 2 s.
+  2. Every one of them FEEDS the WDT inside its loop, so a stall is what trips
+     it rather than normal operation.
+  2b. The discovered set matches the normative matrix in
+     `esp32tap/src/tasks/mod.rs`, in BOTH directions — a new supervised task
+     that nobody wrote into the matrix fails here, and a matrix row with no
+     task behind it fails too.
   3. No task feeds the WDT from inside an unbounded wait (specifically: the
      feedback window, which spins with the relay closed, must not feed it).
   4. The generated sdkconfig enables the WDT, initialises it, sets the 2 s
@@ -53,32 +63,84 @@ ESP32_RS = HERE.parent
 FW_SRC = ESP32_RS / "esp32tap" / "src"
 DESIGN_PY = ESP32_RS.parents[1] / "tools" / "design.py"
 
-SUPERVISED_TASKS = {
-    "tasks/serial_engine.rs": "serial_engine",
-    "tasks/emulate_cycle.rs": "emulate_cycle",
-    "tasks/interval_executor.rs": "interval_executor",
-}
+# The normative matrix lives here; this script reads it rather than restating
+# it, so the table and the gate cannot drift apart.
+MATRIX = FW_SRC / "tasks" / "mod.rs"
 
 RELAY_NET = "RELAY_CMD"
 
 
+def rel(p: Path, root: Path) -> str:
+    return str(p.relative_to(root)).replace("\\", "/")
+
+
+def discover_supervised() -> list[Path]:
+    """Every firmware file that subscribes a task to the WDT.
+
+    DISCOVERED, NOT LISTED. The previous version named three files and printed
+    "3/3 supervised tasks" while a fourth existed.
+
+    Matched on the QUALIFIED call `wdt::subscribe_current_task()`, so
+    `hal/wdt.rs` — which DEFINES it — is not mistaken for a task.
+    """
+    return [p for p in FW_SRC.rglob("*.rs") if "wdt::subscribe_current_task()" in p.read_text(encoding="utf-8")]
+
+
+def matrix_rows() -> set[str]:
+    """Task names from the markdown table in tasks/mod.rs."""
+    if not MATRIX.exists():
+        return set()
+    rows: set[str] = set()
+    for line in MATRIX.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("//! |"):
+            continue
+        cells = [c.strip() for c in line[len("//! |") :].split("|")]
+        if not cells or not cells[0]:
+            continue
+        head = cells[0]
+        if head in ("Task",) or set(head) <= set("-: "):
+            continue
+        rows.add(head)
+    return rows
+
+
 def check_tasks() -> list[str]:
     failures: list[str] = []
-    for rel, name in SUPERVISED_TASKS.items():
-        p = FW_SRC / rel
-        if not p.exists():
-            failures.append(f"supervised task source missing: {rel}")
-            continue
+    found = discover_supervised()
+    if not found:
+        return ["no file in esp32tap/src calls wdt::subscribe_current_task — the matrix is empty"]
+    for p in found:
+        r = rel(p, FW_SRC)
         text = p.read_text(encoding="utf-8")
-        if "wdt::subscribe_current_task()" not in text:
-            failures.append(f"{rel}: task {name!r} does not subscribe to the task WDT")
         if "wdt::abort(" not in text:
             failures.append(
-                f"{rel}: task {name!r} does not ABORT when the WDT subscribe fails — "
-                "it would run unsupervised, which is a hole in PLAN's watchdog matrix"
+                f"{r}: subscribes to the task WDT but does not ABORT when the subscribe "
+                "fails — it would run unsupervised, which is a hole in PLAN's watchdog matrix"
             )
         if "wdt::feed()" not in text:
-            failures.append(f"{rel}: task {name!r} never feeds the task WDT")
+            failures.append(f"{r}: subscribes to the task WDT but never feeds it")
+
+    # The matrix must name every discovered task, and nothing else. Names are
+    # matched loosely (the table abbreviates `interval_executor` to
+    # `interval_exec`) against the module's file stem.
+    declared = matrix_rows()
+    if not declared:
+        failures.append(f"no WDT matrix table found in {rel(MATRIX, FW_SRC)} — the normative table is gone")
+        return failures
+    for p in found:
+        stem = p.stem
+        if not any(stem.startswith(d) or d.startswith(stem) for d in declared):
+            failures.append(
+                f"{rel(p, FW_SRC)} is a WDT-supervised task but has no row in the normative "
+                f"matrix in tasks/mod.rs (rows: {sorted(declared)})"
+            )
+    stems = {p.stem for p in found}
+    for d in declared:
+        if not any(s.startswith(d) or d.startswith(s) for s in stems):
+            failures.append(
+                f"the WDT matrix in tasks/mod.rs names {d!r}, but no file in esp32tap/src "
+                "subscribes a task by that name"
+            )
     return failures
 
 
@@ -133,8 +195,10 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
+    n = len(discover_supervised())
     print(
-        "check_wdt_chain: OK — 3/3 supervised tasks subscribe+abort+feed; the "
+        f"check_wdt_chain: OK — {n} discovered supervised tasks subscribe+abort+feed "
+        "and each has a row in the normative matrix; the "
         "bounded feedback window does not feed the WDT; RELAY_CMD has a "
         "pull-down to GND in the netlist. "
         "NOT PROVEN HERE (bench gate, esp-QEMU cannot execute it): that the "

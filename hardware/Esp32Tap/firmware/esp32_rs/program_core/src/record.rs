@@ -165,12 +165,42 @@ impl EndReason {
     }
 }
 
+/// A program's identity for JOINING, ignoring its name.
+///
+/// `python/server.py::_program_fingerprint` is `"|".join(f"{speed},{incline},
+/// {duration}")` with a docstring that says, in as many words, "ignoring name".
+/// It is what links a run to the program it ran and a history entry to the
+/// workout that saved it — and keying either of those on the NAME instead was a
+/// real defect here: renaming a saved workout desynced the history row's heart
+/// icon, and the app's next tap created a DUPLICATE workout (measured: two
+/// records for one program, the older unreachable from the row that made it).
+///
+/// A 64-bit FNV-1a over the same three numbers per interval. Not the Pi's
+/// string, because a string of 24 intervals does not belong in a fixed record
+/// — and a hash is only ever a FILTER here: every caller verifies a hit
+/// exactly with [`entry_matches_program`] before acting on it.
+pub fn fingerprint(p: &Program) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for iv in p.intervals() {
+        fold_interval(
+            &mut h,
+            iv.speed.get() as i64,
+            iv.incline.get() as i64,
+            iv.duration_s() as i64,
+        );
+    }
+    h
+}
+
 /// One session. Integers throughout, in the smallest unit each field is shown
 /// in, so there is no float anywhere on the storage path.
 #[derive(Clone, Copy, Debug)]
 pub struct Run {
     pub id: FixedStr<MAX_ID>,
     pub program_name: FixedStr<MAX_PROGRAM_NAME>,
+    /// [`fingerprint`] of the program this run ran, so a history entry or a
+    /// saved workout can find it. `program_fingerprint` on the Pi.
+    pub fp: u64,
     pub elapsed_s: u32,
     /// Miles x 1000 — `db.py` rounds distance to 3 decimals.
     pub distance_milli: u32,
@@ -188,6 +218,7 @@ impl Run {
         Run {
             id: FixedStr::from_str_truncating(id),
             program_name: FixedStr::from_str_truncating(program_name),
+            fp: 0,
             elapsed_s: 0,
             distance_milli: 0,
             vert_feet_tenths: 0,
@@ -210,7 +241,10 @@ impl Run {
 /// `None` and the ring reuses their slots), which is the correct behaviour for
 /// a device whose store is a cache of the user's recent work, not an archive.
 const V_ENTRY: u8 = 1;
-const V_RUN: u8 = 2;
+/// 2 -> 3 when `Run` gained its program fingerprint. Records written by an
+/// older build decode as absent and their slots are reused, which is the
+/// documented behaviour for a store that is a cache of recent work.
+const V_RUN: u8 = 3;
 
 struct Enc<'a> {
     buf: &'a mut [u8],
@@ -224,6 +258,12 @@ impl Enc<'_> {
         Some(())
     }
     fn u32(&mut self, v: u32) -> Option<()> {
+        for b in v.to_le_bytes() {
+            self.u8(b)?;
+        }
+        Some(())
+    }
+    fn u64(&mut self, v: u64) -> Option<()> {
         for b in v.to_le_bytes() {
             self.u8(b)?;
         }
@@ -268,8 +308,29 @@ impl Dec<'_> {
     fn i32(&mut self) -> Option<i32> {
         Some(self.u32()? as i32)
     }
+    fn u64(&mut self) -> Option<u64> {
+        let mut a = [0u8; 8];
+        for slot in a.iter_mut() {
+            *slot = self.u8()?;
+        }
+        Some(u64::from_le_bytes(a))
+    }
     fn bool(&mut self) -> Option<bool> {
         Some(self.u8()? != 0)
+    }
+    /// Step over a length-prefixed string without materialising it.
+    ///
+    /// The scans that walk a record's INTERVALS — the fingerprint peek and the
+    /// exact comparator — care only about the three numbers per interval, and
+    /// interval names are the bulk of the bytes. Skipping them keeps those
+    /// walks free of a `FixedStr` on the httpd task's stack.
+    fn skip_str(&mut self) -> Option<()> {
+        let len = self.u8()? as usize;
+        if self.i + len > self.b.len() {
+            return None;
+        }
+        self.i += len;
+        Some(())
     }
     /// Read a length-prefixed string into a bounded destination. A string
     /// longer than the destination is TRUNCATED, not refused: the field is a
@@ -342,9 +403,19 @@ pub fn encode_entry(e: &Entry, buf: &mut [u8]) -> Option<usize> {
 pub struct Head {
     pub id: FixedStr<MAX_ID>,
     pub name: FixedStr<MAX_PROGRAM_NAME>,
+    /// [`fingerprint`] of the stored program, computed while walking past the
+    /// intervals rather than by decoding them into one. This is what a name
+    /// CANNOT do: it is stable across a rename, which is why the saved/last-run
+    /// joins key on it.
+    pub fp: u64,
 }
 
-/// Read only the head of an encoded entry. Stops before the intervals.
+/// Read only the head of an encoded entry: identity, and nothing that costs a
+/// `Program`.
+///
+/// It DOES walk the intervals now, to fold the fingerprint — but it holds one
+/// `u64` while doing it, not a `[Interval; 24]`. That distinction is the whole
+/// reason this function exists (see the type's note).
 pub fn peek_entry(b: &[u8]) -> Option<Head> {
     let mut r = Dec { b, i: 0 };
     if r.u8()? != V_ENTRY {
@@ -366,7 +437,82 @@ pub fn peek_entry(b: &[u8]) -> Option<Head> {
     }
     let mut name: FixedStr<MAX_PROGRAM_NAME> = FixedStr::new();
     r.str(&mut name)?;
-    Some(Head { id, name })
+    let mut fp: u64 = 0xcbf2_9ce4_8422_2325;
+    for _ in 0..count {
+        r.skip_str()?; // interval name — not part of the fingerprint
+        let duration = r.u32()?;
+        let speed = r.i32()?;
+        let incline = r.i32()?;
+        fold_interval(&mut fp, speed as i64, incline as i64, duration as i64);
+    }
+    Some(Head { id, name, fp })
+}
+
+/// One interval's contribution to a fingerprint. ONE definition, used by both
+/// [`fingerprint`] (over a live `Program`) and [`peek_entry`] (over the encoded
+/// bytes) — two copies of this that drifted would make every join silently
+/// stop matching.
+fn fold_interval(h: &mut u64, speed: i64, incline: i64, duration: i64) {
+    for v in [speed, incline, duration] {
+        for b in v.to_le_bytes() {
+            *h ^= b as u64;
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+}
+
+/// Whether an encoded entry's program has EXACTLY these intervals.
+///
+/// THE EXACT HALF of every fingerprint join. A 64-bit hash makes a collision
+/// vanishingly unlikely, not impossible, and the consequence of one is not
+/// cosmetic: the app would be handed the id of a DIFFERENT workout, which its
+/// unsave button then deletes. So a hash hit is confirmed here, against the
+/// bytes, before anything acts on it — the same shape the name-keyed version
+/// had (hash to filter, string compare to confirm), with a key that survives a
+/// rename.
+///
+/// "EXACTLY" IS OVER THE FINGERPRINT'S DOMAIN, and that is the contract rather
+/// than a shortcut: duration, speed and incline per interval, in order. The
+/// program's name, the `manual` flag and the interval names are deliberately
+/// NOT compared, because `python/server.py::_program_fingerprint` does not
+/// compare them either — two programs with the same numbers ARE the same
+/// workout to the Pi, and matching the Pi is the whole point of this join. A
+/// stricter comparison here would make the device disagree with the server the
+/// app was written against, which is the failure this replaced.
+pub fn entry_matches_program(b: &[u8], p: &Program) -> bool {
+    let mut r = Dec { b, i: 0 };
+    if r.u8() != Some(V_ENTRY) {
+        return false;
+    }
+    let ok = (|| {
+        r.u8()?; // source
+        r.bool()?; // completed
+        r.u32()?; // last_interval
+        r.u32()?; // last_elapsed_s
+        r.u32()?; // times_used
+        r.skip_str()?; // id
+        r.skip_str()?; // prompt
+        r.bool()?; // manual
+        let count = r.u8()? as usize;
+        if count != p.len() {
+            return Some(false);
+        }
+        r.skip_str()?; // program name — deliberately not compared
+        for iv in p.intervals() {
+            r.skip_str()?;
+            if r.u32()? != iv.duration_s() {
+                return Some(false);
+            }
+            if r.i32()? != iv.speed.get() {
+                return Some(false);
+            }
+            if r.i32()? != iv.incline.get() {
+                return Some(false);
+            }
+        }
+        Some(true)
+    })();
+    ok == Some(true)
 }
 
 /// Decode an entry, or `None` for anything not fully understood.
@@ -437,6 +583,7 @@ pub fn encode_run(rn: &Run, buf: &mut [u8]) -> Option<usize> {
     w.u32(rn.distance_milli)?;
     w.u32(rn.vert_feet_tenths)?;
     w.u32(rn.calories_tenths)?;
+    w.u64(rn.fp)?;
     w.str(rn.id.as_str())?;
     w.str(rn.program_name.as_str())?;
     Some(w.n)
@@ -454,6 +601,7 @@ pub fn decode_run(b: &[u8]) -> Option<Run> {
     let distance_milli = r.u32()?;
     let vert_feet_tenths = r.u32()?;
     let calories_tenths = r.u32()?;
+    let fp = r.u64()?;
     let mut id: FixedStr<MAX_ID> = FixedStr::new();
     let mut program_name: FixedStr<MAX_PROGRAM_NAME> = FixedStr::new();
     r.str(&mut id)?;
@@ -461,6 +609,7 @@ pub fn decode_run(b: &[u8]) -> Option<Run> {
     Some(Run {
         id,
         program_name,
+        fp,
         elapsed_s,
         distance_milli,
         vert_feet_tenths,
@@ -472,10 +621,22 @@ pub fn decode_run(b: &[u8]) -> Option<Run> {
 }
 
 // ---------------------------------------------------------------------------
-// Wire shapes. Kotlin decodes these; the types are what matter, because every
-// field has a default so an OMITTED field passes silently while a WRONG TYPE
-// throws. `program` is object-shaped and `Program.name`/`Program.intervals`
-// have NO kotlinx default, so a program is emitted whole or not at all.
+// Wire shapes. Kotlin decodes these; the types are what matter.
+//
+// THE "EVERY FIELD HAS A DEFAULT" RULE IS TRUE OF THE THREE MODELS BELOW —
+// `HistoryEntry`, `SavedWorkout`, `RunRecord` — AND OF NOTHING ELSE. For those,
+// an OMITTED field passes silently while a WRONG TYPE throws. It is FALSE of
+// `Program` (`name`, `intervals`), `Interval` (all four), `ProgramMessage`,
+// `StatusMessage` and `SessionMessage`, each of which declares fields with no
+// default at all: `coerceInputValues` rewrites an explicit null into a default
+// that EXISTS, it cannot invent one, so an omission there is a thrown
+// MissingFieldException. This header stated the rule universally, which is the
+// dangerous direction to be wrong in — `json::write_state_with_lead` and
+// `net::api::format_status` both get it right and say so, and a reader who
+// trusted this version would believe dropping a field from either was safe.
+//
+// `program` and `last_run` are object-shaped and are emitted whole or as
+// `null`, never as a scalar — a scalar there throws in every model.
 // ---------------------------------------------------------------------------
 
 /// `x / 10` rendered with one decimal, without floats.
@@ -488,15 +649,52 @@ fn write_milli<W: Write>(w: &mut W, milli: u32) -> core::fmt::Result {
     write!(w, "{}.{:03}", milli / 1000, milli % 1000)
 }
 
+/// `m:ss` / `h:mm:ss` — `server.py::_fmt_dur`.
+fn write_dur<W: Write>(w: &mut W, secs: u32) -> core::fmt::Result {
+    let m = secs / 60;
+    let s = secs % 60;
+    if m >= 60 {
+        write!(w, "{}:{:02}:{:02}", m / 60, m % 60, s)
+    } else {
+        write!(w, "{m}:{s:02}")
+    }
+}
+
+/// `server.py::_last_run_text`, MINUS the relative-time half.
+///
+/// The Pi renders `Last run: 2d ago · 24:30 · 1.20 mi`; it composes the first
+/// part from `ended_at` and a wall clock, and this device has neither. It emits
+/// the other two parts rather than inventing an elapsed-since from uptime —
+/// the Pi's own function drops any part that is blank and joins what is left,
+/// so `Last run: 24:30 · 1.20 mi` is a shape its own formatter produces.
+///
+/// Returns whether anything was written, because `usage_text` composes on it.
+fn write_last_run_text<W: Write>(w: &mut W, run: Option<&Run>) -> Result<bool, core::fmt::Error> {
+    let Some(r) = run else {
+        return Ok(false);
+    };
+    w.write_str("Last run: ")?;
+    write_dur(w, r.elapsed_s)?;
+    // `>= 0.01 mi` on the Pi, and two decimals there rather than the three
+    // `distance` itself carries.
+    if r.distance_milli >= 10 {
+        write!(w, " \u{b7} {}.{:02} mi", r.distance_milli / 1000, (r.distance_milli % 1000) / 10)?;
+    }
+    Ok(true)
+}
+
 /// `HistoryEntry` — `python/server.py::api_get_history`'s element shape.
 ///
-/// `saved`/`saved_workout_id` are computed by the caller against the workouts
-/// ring; `last_run`/`last_run_text` are `null`/`""` because this device does
-/// not link runs to programs by fingerprint (see the module header).
+/// `saved`/`saved_workout_id` and `last_run` are both computed by the CALLER,
+/// against the workouts and runs rings, and both are keyed on
+/// [`fingerprint`] exactly as the Pi keys them — never on the program's name.
+/// A name key meant a rename desynced the heart icon and the app's next tap
+/// created a duplicate workout.
 pub fn write_history_entry<W: Write>(
     w: &mut W,
     e: &Entry,
     saved_id: Option<&str>,
+    last_run: Option<&Run>,
 ) -> core::fmt::Result {
     write!(w, r#"{{"id":"{}","prompt":"{}","program":"#, e.id.as_str(), e.prompt.as_str())?;
     crate::json::write_program(w, &e.program)?;
@@ -512,11 +710,24 @@ pub fn write_history_entry<W: Write>(
         Some(id) => write!(w, r#","saved":true,"saved_workout_id":"{id}""#)?,
         None => w.write_str(r#","saved":false,"saved_workout_id":null"#)?,
     }
-    w.write_str(r#","last_run":null,"last_run_text":""}"#)
+    // OBJECT-SHAPED OR `null`, never a scalar: `HistoryEntry.lastRun` is a
+    // `RunRecord?`, and a number here would throw rather than degrade.
+    w.write_str(r#","last_run":"#)?;
+    match last_run {
+        Some(r) => write_run(w, r)?,
+        None => w.write_str("null")?,
+    }
+    w.write_str(r#","last_run_text":""#)?;
+    write_last_run_text(w, last_run)?;
+    w.write_str(r#""}"#)
 }
 
 /// `SavedWorkout` — `python/server.py::api_get_workouts`'s element shape.
-pub fn write_saved_workout<W: Write>(w: &mut W, e: &Entry) -> core::fmt::Result {
+pub fn write_saved_workout<W: Write>(
+    w: &mut W,
+    e: &Entry,
+    last_run: Option<&Run>,
+) -> core::fmt::Result {
     write!(
         w,
         r#"{{"id":"{}","name":"{}","program":"#,
@@ -532,15 +743,40 @@ pub fn write_saved_workout<W: Write>(w: &mut W, e: &Entry) -> core::fmt::Result 
         e.times_used,
         e.program.total_duration_s()
     )?;
-    w.write_str(r#","last_run":null,"last_run_text":"","usage_text":""#)?;
-    write_usage_text(w, e.times_used)?;
+    w.write_str(r#","last_run":"#)?;
+    match last_run {
+        Some(r) => write_run(w, r)?,
+        None => w.write_str("null")?,
+    }
+    w.write_str(r#","last_run_text":""#)?;
+    write_last_run_text(w, last_run)?;
+    w.write_str(r#"","usage_text":""#)?;
+    write_usage_text(w, e.times_used, last_run)?;
     w.write_str(r#""}"#)
 }
 
 /// `server.py::_usage_text`, minus the relative-time half it composes from a
-/// clock this device does not have. Blank for an unused workout, which is what
-/// makes the app render its own "Never used".
-fn write_usage_text<W: Write>(w: &mut W, times_used: u32) -> core::fmt::Result {
+/// clock this device does not have.
+///
+/// The Pi prefers the run text and appends the total count; only with no run to
+/// show does it fall back to "Used N times". This device could not do the first
+/// half at all until runs were joined to programs by fingerprint — it emitted
+/// the count and nothing else, so a saved workout the user had run ten times
+/// still said nothing about any of them.
+///
+/// Blank for an unused, never-run workout, which is what makes
+/// `WorkoutList.kt`'s `usageText.ifBlank { "Never used" }` render.
+fn write_usage_text<W: Write>(
+    w: &mut W,
+    times_used: u32,
+    last_run: Option<&Run>,
+) -> core::fmt::Result {
+    if write_last_run_text(w, last_run)? {
+        if times_used > 1 {
+            write!(w, " \u{b7} {times_used} runs total")?;
+        }
+        return Ok(());
+    }
     match times_used {
         0 => Ok(()),
         1 => w.write_str("Used once"),
@@ -730,15 +966,17 @@ mod tests {
 
     // --- wire shapes ------------------------------------------------------
     //
-    // These assert TYPES, not merely presence. Every Kotlin field here has a
-    // default, so an omission degrades silently while a wrong scalar type on
-    // an object-shaped field (`program`) throws and breaks the screen.
+    // These assert TYPES, not merely presence. Every field of the THREE models
+    // rendered here (`HistoryEntry`, `SavedWorkout`, `RunRecord`) has a kotlinx
+    // default, so an omission degrades silently while a wrong scalar type on an
+    // object-shaped field (`program`, `last_run`) throws and breaks the screen.
+    // The rule stops at those three — see the section header above.
 
     #[test]
     fn a_history_entry_carries_every_field_the_app_declares() {
         let mut e = Entry::new("h1", fixture());
         e.last_elapsed_s = 42;
-        let s = render(|w| write_history_entry(w, &e, None));
+        let s = render(|w| write_history_entry(w, &e, None, None));
         assert!(s.starts_with(r#"{"id":"h1","prompt":"","program":{"name":"Test Workout""#), "{s}");
         assert!(s.contains(r#""total_duration":240"#), "{s}");
         assert!(s.contains(r#""completed":false"#), "{s}");
@@ -753,9 +991,118 @@ mod tests {
     }
 
     #[test]
+    fn a_fingerprint_survives_a_rename_and_changes_with_the_intervals() {
+        // THE WHOLE POINT. Keying the saved/last-run joins on the NAME meant a
+        // rename desynced the history heart icon and the app's next tap created
+        // a duplicate workout.
+        let mut a = fixture();
+        let fp = fingerprint(&a);
+        a.name = FixedStr::from_str_truncating("Renamed Entirely");
+        assert_eq!(fingerprint(&a), fp, "a rename moved the fingerprint");
+
+        // ...and it is not a constant: a changed interval must NOT match.
+        let mut b = Program::new("Test Workout", false);
+        for (i, iv) in fixture().intervals().iter().enumerate() {
+            let mut iv = *iv;
+            if i == 1 {
+                iv.speed = safety_core::units::SpeedTenths::new(999);
+            }
+            b.push(iv);
+        }
+        assert_ne!(fingerprint(&b), fp);
+
+        // The encoded form agrees with the live form, in both directions.
+        let e = Entry::new("h1", a);
+        let mut buf = [0u8; 4080];
+        let n = encode_entry(&e, &mut buf).unwrap();
+        assert_eq!(peek_entry(&buf[..n]).unwrap().fp, fp);
+        assert!(entry_matches_program(&buf[..n], &fixture()));
+        assert!(!entry_matches_program(&buf[..n], &b));
+    }
+
+    #[test]
+    fn the_exact_comparator_refuses_a_shorter_or_longer_program() {
+        // A hash hit is CONFIRMED against the bytes, so the comparator has to
+        // be right about length too — a prefix match would hand the app the id
+        // of a different workout, which its unsave button then deletes.
+        let e = Entry::new("w1", fixture());
+        let mut buf = [0u8; 4080];
+        let n = encode_entry(&e, &mut buf).unwrap();
+
+        let mut shorter = Program::new("x", false);
+        shorter.push(fixture().intervals()[0]);
+        assert!(!entry_matches_program(&buf[..n], &shorter));
+
+        let mut longer = fixture();
+        longer.push(crate::Interval::new(
+            "extra",
+            60,
+            safety_core::units::SpeedTenths::new(30),
+            safety_core::units::InclineHalfPct::new(0),
+        ));
+        assert!(!entry_matches_program(&buf[..n], &longer));
+
+        // Garbage in is `false`, never a panic and never a match.
+        assert!(!entry_matches_program(&[], &fixture()));
+        assert!(!entry_matches_program(&buf[..3], &fixture()));
+    }
+
+    #[test]
+    fn a_history_entry_carries_the_run_that_ran_it() {
+        let e = Entry::new("h1", fixture());
+        let mut r = Run::new("r7", "Test Workout", false);
+        r.elapsed_s = 1470; // 24:30
+        r.distance_milli = 1204; // 1.20 mi
+        r.end_reason = EndReason::UserStop;
+        let s = render(|w| write_history_entry(w, &e, None, Some(&r)));
+        // OBJECT-shaped, because `HistoryEntry.lastRun` is a `RunRecord?` and a
+        // scalar would throw rather than degrade.
+        assert!(s.contains(r#""last_run":{"id":"r7""#), "{s}");
+        // No relative time — this device has no clock and does not invent one.
+        assert!(s.contains(r#""last_run_text":"Last run: 24:30 · 1.20 mi""#.replace("\\u00b7", "\u{b7}").as_str()), "{s}");
+        // ...and `null`/`""` when there is no run, which is what the app's
+        // `if (entry.lastRunText.isNotBlank())` keys on.
+        let s = render(|w| write_history_entry(w, &e, None, None));
+        assert!(s.contains(r#""last_run":null,"last_run_text":""}"#), "{s}");
+    }
+
+    #[test]
+    fn usage_text_prefers_the_run_and_keeps_the_total() {
+        let mut e = Entry::new("w1", fixture());
+        e.times_used = 3;
+        let mut r = Run::new("r1", "Test Workout", false);
+        r.elapsed_s = 605; // 10:05
+        r.distance_milli = 5; // under 0.01 mi — the Pi drops the distance part
+        let s = render(|w| write_saved_workout(w, &e, Some(&r)));
+        assert!(s.contains(r#""usage_text":"Last run: 10:05 \u{b7} 3 runs total""#.replace("\\u{b7}", "\u{b7}").as_str()), "{s}");
+        // One run: no "N runs total" tail, exactly as `server.py::_usage_text`.
+        e.times_used = 1;
+        let s = render(|w| write_saved_workout(w, &e, Some(&r)));
+        assert!(s.contains(r#""usage_text":"Last run: 10:05""#), "{s}");
+        // Never run: the count, and blank when there is not even one — which
+        // is what makes `WorkoutList.kt` render its own "Never used".
+        e.times_used = 0;
+        assert!(render(|w| write_saved_workout(w, &e, None)).contains(r#""usage_text":""#));
+    }
+
+    #[test]
+    fn a_run_round_trips_its_fingerprint() {
+        let mut r = Run::new("r1", "Hills", true);
+        r.fp = fingerprint(&fixture());
+        let mut buf = [0u8; 512];
+        let n = encode_run(&r, &mut buf).unwrap();
+        assert_eq!(decode_run(&buf[..n]).unwrap().fp, r.fp);
+        // A run written by the pre-fingerprint build decodes as ABSENT rather
+        // than as a run with a plausible-looking zero fingerprint, which would
+        // join itself to every program that happens to hash to 0.
+        buf[0] = 2;
+        assert!(decode_run(&buf[..n]).is_none());
+    }
+
+    #[test]
     fn a_saved_history_entry_names_the_workout_that_saved_it() {
         let e = Entry::new("h1", fixture());
-        let s = render(|w| write_history_entry(w, &e, Some("w9")));
+        let s = render(|w| write_history_entry(w, &e, Some("w9"), None));
         assert!(s.contains(r#""saved":true,"saved_workout_id":"w9""#), "{s}");
     }
 
@@ -764,7 +1111,7 @@ mod tests {
         let mut e = Entry::new("w1", fixture());
         e.source = Source::Generated;
         e.times_used = 3;
-        let s = render(|w| write_saved_workout(w, &e));
+        let s = render(|w| write_saved_workout(w, &e, None));
         assert!(s.contains(r#""name":"Test Workout""#), "{s}");
         assert!(s.contains(r#""source":"generated""#), "{s}");
         assert!(s.contains(r#""times_used":3"#), "{s}");
@@ -773,9 +1120,9 @@ mod tests {
         assert!(s.contains(r#""usage_text":"Used 3 times""#), "{s}");
         // The app renders "Never used" itself when this is blank.
         e.times_used = 0;
-        assert!(render(|w| write_saved_workout(w, &e)).contains(r#""usage_text":""#));
+        assert!(render(|w| write_saved_workout(w, &e, None)).contains(r#""usage_text":""#));
         e.times_used = 1;
-        assert!(render(|w| write_saved_workout(w, &e)).contains(r#""usage_text":"Used once""#));
+        assert!(render(|w| write_saved_workout(w, &e, None)).contains(r#""usage_text":"Used once""#));
     }
 
     #[test]
@@ -812,7 +1159,7 @@ mod tests {
         .unwrap();
         p.manual = true;
         let e = Entry::new("h1", p);
-        let s = render(|w| write_saved_workout(w, &e));
+        let s = render(|w| write_saved_workout(w, &e, None));
         assert_eq!(s.matches('"').count() % 2, 0, "unbalanced quotes: {s}");
         assert!(!s.contains(r#"said ""#), "{s}");
     }

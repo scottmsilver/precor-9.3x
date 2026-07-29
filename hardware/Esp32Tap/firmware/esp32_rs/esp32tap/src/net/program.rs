@@ -32,7 +32,7 @@
 //! together so they cannot drift.
 
 use crate::context::lock;
-use crate::net::api::{parse_value_hundredths, read_body, respond, MAX_CMD_BODY};
+use crate::net::api::{parse_key_hundredths, read_body, respond, MAX_CMD_BODY};
 use crate::tasks::interval_executor::apply_plan;
 use esp_idf_sys as sys;
 use program_core::{json, Plan, Program, ProgramState};
@@ -52,7 +52,7 @@ const _: () = assert!(program_core::MAX_PROGRAM_JSON_BYTES == reqbudget::SLOT_BY
 /// serialiser writes through [`Sink`], which REFUSES to overflow, so a wrong
 /// number here truncates into a 500 rather than smashing the stack — and the
 /// assertion below makes a wrong number a build failure anyway.
-const STATE_BUF: usize = program_core::model::max_program_json_bytes() + 192;
+pub(crate) const STATE_BUF: usize = program_core::model::max_program_json_bytes() + 192;
 
 /// Worst-case stack this module puts on the httpd task, in bytes.
 ///
@@ -117,7 +117,7 @@ impl core::fmt::Write for Sink<'_> {
 /// rather than a copy: `ProgramState` is ~1.5 KB, and neither a copy of it nor
 /// a second buffer belongs on the httpd task's stack alongside an
 /// mbedtls handshake.
-fn render_state(buf: &mut [u8; STATE_BUF], state: &ProgramState, lead: &str) -> Option<usize> {
+pub(crate) fn render_state(buf: &mut [u8; STATE_BUF], state: &ProgramState, lead: &str) -> Option<usize> {
     let mut sink = Sink {
         buf,
         len: 0,
@@ -231,8 +231,16 @@ fn read_program(req: *mut sys::httpd_req_t) -> Body {
         }
     };
 
+    // The WHOLE read is bounded, not each recv — see `net::api::Deadline`. A
+    // program body is the largest thing this server accepts, so it is also the
+    // easiest one to dribble.
+    let deadline = crate::net::api::Deadline::start();
     let mut got = 0usize;
     while got < declared {
+        if deadline.expired() {
+            crate::net::api::abandon_body(req);
+            return Body::Answered;
+        }
         let buf = lease.buf();
         // SAFETY: `buf` is a live exclusive borrow of a slot that admission
         // proved is at least `declared` bytes; IDF writes at most the length
@@ -374,14 +382,36 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
         );
     }
 
+    // WHICH VERBS REPLACE THE LOADED PROGRAM. This is the question the history
+    // id has to be republished against, and answering it by "did a history
+    // write happen?" was a defect rather than a shortcut: Quick Start reads no
+    // program body, so `record_loaded` was never called, `set_current` was
+    // never called either, and CURRENT_HISTORY still named the program that
+    // was LOADED BEFORE IT. The session recorder then checkpointed the Quick
+    // Start's interval, elapsed time and `completed` into that entry —
+    // MEASURED: a 1-minute Quick Start marked an untouched 60-minute program
+    // completed, which refuses `/resume` for it forever. The same hole swallows
+    // a genuinely new program whenever `record_loaded` returns None (the
+    // reqbudget pool momentarily full, or the ring write failed).
+    //
+    // So it is an ELSE, not an omission: a verb that replaces the program
+    // publishes the new id or CLEARS it. `V_START` WITHOUT a body deliberately
+    // does not, because it does not replace anything — it starts what
+    // `/api/programs/history/{id}/load` just installed, and clearing there
+    // would throw away the entry the run is supposed to be written back to.
+    let replaces_program = matches!(verb, V_LOAD | V_QUICK) || (verb == V_START && program.is_some());
+
     let now = crate::CTX.clock.now();
     let mut p = lock(&crate::CTX.program);
     // UNDER THE PROGRAM LOCK, in the same hold as the `load` below. The
     // session recorder reads the program and this id together while holding
     // the same lock, so it can never write one program's progress into the
     // other's history entry.
-    if let Some(id) = history_id.as_ref() {
-        crate::net::session::set_current(id);
+    if replaces_program {
+        match history_id.as_ref() {
+            Some(id) => crate::net::session::set_current(id),
+            None => crate::net::session::set_current(&safety_core::FixedStr::new()),
+        }
     }
 
     let (plan, release_belt, error): (Plan, bool, Option<&[u8]>) = match verb {
@@ -495,26 +525,13 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
 /// Reuses the value scanner from `/api/speed` by looking for the key first, so
 /// there is one number parser on the small-body path rather than two.
 fn parse_seconds(body: &[u8], key: &[u8]) -> Option<i64> {
-    let pos = body.windows(key.len()).position(|w| w == key)?;
-    let hundredths = parse_value_hundredths_at(&body[pos..])?;
+    // Through the SHARED, ANCHORED key scanner. Finding the bare bytes meant
+    // `seconds` matched inside `delta_seconds`, so a body aimed at
+    // `/adjust-duration` also satisfied `/extend`.
+    let hundredths = parse_key_hundredths(body, key)?;
     // Clamp to the Pi's own bound (`Field(ge=-3600, le=3600)`) so a hostile
     // body cannot ask for a year.
     Some((hundredths as i64 / 100).clamp(-3600, 3600))
-}
-
-/// `parse_value_hundredths` anchored at the start of the slice rather than at
-/// the literal `value`.
-fn parse_value_hundredths_at(body: &[u8]) -> Option<i32> {
-    let colon = body.iter().position(|&b| b == b':')?;
-    // Splice a `value` marker in front so the shared scanner can be reused
-    // verbatim; cheaper than a second copy of the same 40 lines.
-    let mut buf = [0u8; 32];
-    let head = b"\"value\":";
-    buf[..head.len()].copy_from_slice(head);
-    let tail = &body[colon + 1..];
-    let n = core::cmp::min(tail.len(), buf.len() - head.len());
-    buf[head.len()..head.len() + n].copy_from_slice(&tail[..n]);
-    parse_value_hundredths(&buf[..head.len() + n])
 }
 
 /// `sess.ensure_manual()` — the single-interval free-run program.
@@ -535,8 +552,10 @@ fn quick_program(body: &[u8]) -> Program {
 }
 
 fn find_number(body: &[u8], key: &[u8]) -> Option<i32> {
-    let pos = body.windows(key.len()).position(|w| w == key)?;
-    parse_value_hundredths_at(&body[pos..])
+    // ONE number scanner in the firmware, and it is the anchored one. The
+    // unanchored copy that used to live here matched a key inside a VALUE and
+    // matched `speed` inside a longer key.
+    parse_key_hundredths(body, key)
 }
 
 /// Register every program route on the already-started server.

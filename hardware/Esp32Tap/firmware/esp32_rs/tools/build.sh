@@ -88,7 +88,7 @@ build_one() {
     fi
     ESP_IDF_SDKCONFIG_DEFAULTS="$SDK" \
     CARGO_TARGET_DIR="$tgtdir" cargo +esp build --profile "$PROFILE" "${extra[@]}" 2>&1 \
-        | grep -vE "^\s+(Compiling|Downloaded|Checking) " | tail -25
+        | grep -vE "^\s+(Compiling|Downloaded|Checking) " | tail -80
 
     local T="$tgtdir/xtensa-esp32s3-espidf/$PROFILE"
 

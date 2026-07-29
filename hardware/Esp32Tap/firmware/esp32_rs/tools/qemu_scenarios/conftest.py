@@ -59,12 +59,42 @@ def qemu(request):
     yield factory
 
     failed = getattr(request.node, "rep_call", None)
+    crashes: list[str] = []
     for s in sessions:
         try:
             if failed is not None and failed.failed:
                 print(s.debug_dump())
+            crashes += _crash_lines(s)
         finally:
             s.close()
+    # A CRASH IS NAMED, NOT INFERRED. A stack overflow in the httpd task once
+    # reached a test as `RemoteDisconnected: Remote end closed connection
+    # without response` — which reads like a flaky socket and is in fact the
+    # device REBOOTING, which drops the relay mid-run. Every session is checked
+    # for the guest's own crash banners so the failure says what happened, and
+    # so a crash during a test that otherwise PASSED cannot go unnoticed.
+    if crashes:
+        raise AssertionError("the guest crashed:\n  " + "\n  ".join(crashes))
+
+
+# Substrings the guest only ever prints when something went badly wrong. Kept
+# narrow on purpose: `qemu_smoke.sh` owns the exhaustive forbidden-string list,
+# and a broad match here would fire on ordinary ESP_LOGE lines (the emulated
+# NIC logs a benign multicast-filter error on every boot).
+_CRASH_MARKERS = (
+    "A stack overflow in task",
+    "Guru Meditation Error",
+    "Task watchdog got triggered",
+    "assert failed:",
+)
+
+
+def _crash_lines(session) -> list[str]:
+    try:
+        lines = session.lines()
+    except Exception:  # noqa: BLE001 — a session that cannot be read is the
+        return []  # close() path's problem, not this check's
+    return [ln.strip() for ln in lines if any(m in ln for m in _CRASH_MARKERS)]
 
 
 @pytest.hookimpl(hookwrapper=True)

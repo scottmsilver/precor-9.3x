@@ -217,6 +217,13 @@ fn main() {
                             );
                             match net::http::start(id) {
                                 Ok(h) => {
+                                    // Published BEFORE the routes: `/ws` is
+                                    // registered inside `http::start`, so a
+                                    // client can connect the moment it
+                                    // returns, and a socket the pusher does
+                                    // not know about is a screen that never
+                                    // updates.
+                                    net::ws::set_server(h);
                                     match net::api::register(h) {
                                         Ok(()) => logi!("api routes registered"),
                                         Err(e) => logi!("net: api register failed ({})", e),
