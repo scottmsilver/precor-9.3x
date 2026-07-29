@@ -473,7 +473,7 @@ encode as 1930 while Speed Range advertises 1931; the uint24 distance field).
 If this crate and a daemon disagree, this crate is wrong: a phone that has been
 talking to the Pi must see the same bytes from the ESP32.
 
-Proven, on the host, in about a second (89 cases):
+Proven, on the host, in about a second (92 cases):
 
 * Every characteristic's bytes: Treadmill Data (13 bytes, fixed flags 0x040C),
   Feature, Speed Range, Incline Range, Training Status, Machine Status, and the
@@ -488,12 +488,19 @@ Proven, on the host, in about a second (89 cases):
   values an `i16` Control Point write can carry.
 * The belt edge: a Control Point write becomes a `CpEffect` in `safety_core`
   newtypes — never a raw integer — and a speed write cannot disturb the incline
-  or vice versa. **No clamping happens here.** `esp32tap/src/control.rs` is THE
-  ONE PATH TO THE BELT and owns the lease, the clamps and the auto-emulate
-  policy; a clamp in front of it would be a second opinion about what is safe.
-  An out-of-range write therefore converts faithfully, is refused by the
-  controller, and the peer is told `INVALID_PARAM` — where the Pi silently
-  substituted 12 mph and moved the belt at a speed nobody asked for.
+  or vice versa. `esp32tap/src/control.rs` is THE ONE PATH TO THE BELT and owns
+  the lease, the clamps and the auto-emulate policy.
+* **Clamping here is asymmetric, and the asymmetry is the point.** ABOVE the
+  range nothing is clamped: a peer asking for 40 mph converts faithfully, is
+  refused by the controller, and is told `INVALID_PARAM` — where the Pi
+  silently substituted 12 mph and moved the belt at a speed nobody asked for. A
+  clamp in front of the controller would be a second opinion about what is
+  safe. BELOW the range the daemon's clamp is kept: `SetTargetInclination(-10%)`
+  becomes 0.0% and succeeds, because "go under your minimum" has exactly one
+  safe reading, Supported Inclination Range already publishes the floor to the
+  client, and refusing it left a route-simulating app's belt stuck on the last
+  uphill grade for the whole descent. Both directions are pinned by tests so
+  neither can be "tidied" into the other.
 
 ### The BLE tier on the device (`esp32tap/src/ble/`, feature `ble`)
 
