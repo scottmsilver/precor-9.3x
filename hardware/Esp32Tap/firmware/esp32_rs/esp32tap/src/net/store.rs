@@ -42,13 +42,34 @@
 //!
 //! # One atomic rename per write — strictly safer than what it replaces
 //!
-//! Every write goes to a temp file, is closed, and is then RENAMED over the
+//! Every write goes to a temp file, is SYNCED, and is then RENAMED over the
 //! destination. `lfs_rename` is a single metadata commit that both installs
 //! the new name and removes the old one, so a power cut leaves the slot at its
 //! PREVIOUS content — never half-written, never absent, never ambiguous.
 //! `recstore` could not offer that: its update path erased the slot first, so
 //! a cut lost the record being updated (it documented this as an acceptable
 //! bounded loss). There is no such window here.
+//!
+//! THAT IS ONE COMMIT ONLY BECAUSE BOTH NAMES LIVE IN THE MOUNT ROOT. [`TMP`]
+//! is `/rec/t` and [`path_of`] emits `/rec/h0`…`/rec/w19`, so source and
+//! destination are entries in the SAME littlefs metadata pair and commit
+//! together. A CROSS-directory rename in littlefs is not one commit — it is a
+//! create in the destination plus a pending-delete in the source, reconciled at
+//! mount; still crash-safe, but a different and weaker mechanism than the one
+//! this doc names. [`same_dir`] pins the invariant so a future reorganisation
+//! into per-tag subdirectories cannot silently take the guarantee away.
+//!
+//! AND IT IS TESTED AT THE MOUNT, not argued from littlefs's design.
+//! `tools/qemu_scenarios/test_store_power_loss.py` interrupts a real write on a
+//! real guest — at a byte of the staging write, between the sync and the
+//! rename, and immediately after the rename — and asserts the destination slot
+//! reads as EXACTLY the old record or EXACTLY the new one every time. That is
+//! `recstore`'s torn-write test translated to this backend; adopting a
+//! filesystem is a reason to believe the claim, not a reason to stop measuring
+//! it. The interruption space is those three points rather than N byte offsets
+//! because the only in-place mutation of a slot is the single rename commit —
+//! the byte-offset sweep `recstore` needed existed because `recstore` wrote
+//! records IN PLACE.
 //!
 //! # MEMORY IS THE DESIGN, not a consideration
 //!
@@ -65,12 +86,25 @@
 //! program cache and a lookahead bitmap, plus `lfs_t` and the esp_littlefs
 //! wrapper, for the life of the mount. Those buffers are sized explicitly in
 //! `sdkconfig.defaults` (128 + 128 + 32 bytes) rather than defaulted, and the
-//! REST of it is measured rather than estimated: `mount_once` samples the free
+//! REST of it is measured rather than estimated: `register_fs` samples the free
 //! heap either side of `esp_vfs_littlefs_register` and latches the difference,
-//! so `Stores::resident_bytes()` — what `QT store_stat` reports and what
-//! `test_records.py` asserts does not move — is the real figure for this
-//! device rather than an arithmetic hope. It is a CONSTANT: it is paid once at
-//! boot and does not grow with stored volume, record size or request count.
+//! so [`Stores::mount_cost_bytes`] is the real figure for this device rather
+//! than an arithmetic hope. Measured on the QEMU guest: 200 bytes of index
+//! (exactly what the three `recstore` rings held) + 792 bytes of mount = 992,
+//! so the swap costs +792 bytes once, at boot.
+//!
+//! BE PRECISE ABOUT WHAT THAT NUMBER PROVES, because it is easy to over-read.
+//! It is a MEASUREMENT AT MOUNT and a NON-measurement thereafter: both terms
+//! are latched constants, so `QT store_stat`'s `resident=` field cannot move
+//! and an assertion that it does not move is true by construction. It is
+//! reported because the mount cost is worth knowing, NOT as a leak detector.
+//! What actually carries "resident memory does not grow with stored volume" is
+//! the FREE HEAP, which `QT store_stat` now reports alongside it (`heap=`) and
+//! which `test_records.py` asserts across 240 writes and 10 full list reads.
+//! Two things the latched figure cannot see by construction: `esp_littlefs`
+//! mallocs per open file and grows an fd-cache array it never shrinks — both
+//! after the sample window — which is exactly why this module opens one file at
+//! a time and why the heap is the number under test.
 //!
 //! ## Divergences from `python/db.py`, all deliberate
 //!
@@ -125,8 +159,8 @@ pub const INDEX_BYTES: usize = core::mem::size_of::<Index<HISTORY_SLOTS>>()
     + core::mem::size_of::<Index<RUN_SLOTS>>();
 
 /// What `esp_vfs_littlefs_register` cost, measured at mount. Latched once and
-/// never updated, so [`Stores::resident_bytes`] is constant for the life of
-/// the boot — which is exactly what `test_records.py` asserts.
+/// never updated, so [`Stores::mount_cost_bytes`] is constant for the life of
+/// the boot — a price tag, not a leak detector. See that function.
 static FS_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 // ---------------------------------------------------------------------------
@@ -136,6 +170,40 @@ static FS_BYTES: AtomicUsize = AtomicUsize::new(0);
 // calls: an open file costs littlefs a `cache_size` buffer plus its own state,
 // and "resident memory does not grow" is easier to keep than to prove.
 // ---------------------------------------------------------------------------
+
+/// Whether `p` is a direct child of [`BASE`] — an entry in the mount ROOT.
+///
+/// THE RENAME GUARANTEE RESTS ON THIS. `lfs_rename` is one metadata commit only
+/// when both names live in the same directory (the same metadata pair); across
+/// directories it becomes a create plus a pending delete. Both names this module
+/// renames between must therefore be children of `/rec` and nothing deeper.
+/// Checked at compile time for [`TMP`] and at every write for the destination.
+const fn same_dir(p: &str) -> bool {
+    let b = p.as_bytes();
+    let base = BASE.as_bytes();
+    if b.len() <= base.len() + 1 {
+        return false;
+    }
+    let mut i = 0;
+    while i < base.len() {
+        if b[i] != base[i] {
+            return false;
+        }
+        i += 1;
+    }
+    if b[base.len()] != b'/' {
+        return false;
+    }
+    let mut i = base.len() + 1;
+    while i < b.len() {
+        if b[i] == b'/' {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+const _: () = assert!(same_dir(TMP));
 
 /// `/rec/<tag><slot>` — the file backing one record slot.
 fn path_of(tag: u8, slot: usize) -> FixedStr<MAX_PATH> {
@@ -174,16 +242,124 @@ fn read_seq(path: &str) -> Option<u32> {
 ///
 /// The file is CLOSED before the rename, not merely dropped at end of scope:
 /// `vfs_littlefs_rename` refuses outright if either name is open.
+///
+/// THE FLUSH RESULT IS NOT DISCARDED, and that is not a formality. A `write_all`
+/// that returns `Ok` has only reached littlefs's 128-byte file cache: the file's
+/// metadata — its size and block pointers — is committed by `lfs_file_sync`, so
+/// with a ~1 KB record up to 127 bytes plus the WHOLE metadata commit are still
+/// pending when the handle closes. `File`'s `Drop` calls `close` and throws the
+/// result away (documented std behaviour), so without the explicit `sync_all`
+/// below a failed commit (`LFS_ERR_NOSPC` on a block relocation, `LFS_ERR_CORRUPT`)
+/// would be invisible here and the rename would install a SHORT OR EMPTY file
+/// over a good record — "an interrupted write lost a committed record", the exact
+/// class this tier was rewritten to eliminate, surviving on the error path.
+/// `esp_littlefs` registers `vfs_littlefs_fsync`, so `sync_all` returns that
+/// error, and a failed sync refuses the rename and leaves the destination alone.
 fn write_slot(path: &str, seq: u32, payload: &[u8]) -> bool {
+    debug_assert!(same_dir(path), "a slot path must be a child of the mount root");
     {
         let Ok(mut f) = fs::File::create(TMP) else {
             return false;
         };
-        if f.write_all(&seq.to_le_bytes()).is_err() || f.write_all(payload).is_err() {
+        if f.write_all(&seq.to_le_bytes()).is_err() {
             return false;
         }
+        // The staging write is split so an INJECTED power cut can land at a
+        // chosen byte of the payload. In the production image `tear_cut` is the
+        // whole length and `tail` is empty — one `write_all`, as before.
+        let (head, tail) = payload.split_at(tear_cut(payload.len()));
+        if f.write_all(head).is_err() {
+            return false;
+        }
+        tear(TEAR_MID_PAYLOAD);
+        if f.write_all(tail).is_err() {
+            return false;
+        }
+        if f.sync_all().is_err() {
+            return false;
+        }
+        tear(TEAR_BEFORE_RENAME);
     }
-    fs::rename(TMP, path).is_ok()
+    let ok = fs::rename(TMP, path).is_ok();
+    tear(TEAR_AFTER_RENAME);
+    ok
+}
+
+// ---------------------------------------------------------------------------
+// A POWER CUT, INJECTED. Test image only.
+//
+// The claim this module makes — a cut leaves a slot at the old record or the new
+// one, never anything else — is the whole reason a filesystem replaced a
+// hand-rolled store, and `recstore`'s equivalent claim was the one its own
+// torn-write test disproved TWICE. So it is measured rather than argued: the
+// three constants below name the interruption points inside `write_slot`, the
+// harness arms one, and the guest resets THERE.
+//
+// `esp_restart` is the right instrument: it is a soft reset, and QEMU's flash
+// image outlives it (`-drive file=...,if=mtd`), so the next boot re-mounts the
+// same littlefs a real power cut would leave behind. That is precisely how
+// `QT reboot` already proves persistence. Killing the container instead would
+// destroy the flash file with it — see tools/qemu_harness/qemu_session.py.
+//
+// In the production image `tear` is an empty inline fn and `tear_cut` returns
+// the length it was given, so the write path compiles to what it was before.
+// ---------------------------------------------------------------------------
+
+/// Cut the staging write at a chosen byte of the payload.
+const TEAR_MID_PAYLOAD: u8 = 1;
+/// Cut after the staging file is fully written AND synced, before the rename.
+const TEAR_BEFORE_RENAME: u8 = 2;
+/// Cut immediately after the rename commit returns.
+const TEAR_AFTER_RENAME: u8 = 3;
+
+#[cfg(not(feature = "qemu-test"))]
+#[inline(always)]
+fn tear(_point: u8) {}
+
+#[cfg(not(feature = "qemu-test"))]
+#[inline(always)]
+fn tear_cut(len: usize) -> usize {
+    len
+}
+
+#[cfg(feature = "qemu-test")]
+#[inline]
+fn tear(point: u8) {
+    if TEAR_POINT.load(Ordering::Relaxed) == point as usize {
+        // SAFETY: `esp_restart` takes no arguments, never returns, and no Rust
+        // memory crosses the boundary. Test-image only (`feature = "qemu-test"`
+        // is never enabled in the flashed build), and reachable only after
+        // `arm_tear` has been called by a `QT` verb that does not exist there.
+        unsafe { sys::esp_restart() }
+    }
+}
+
+#[cfg(feature = "qemu-test")]
+#[inline]
+fn tear_cut(len: usize) -> usize {
+    if TEAR_POINT.load(Ordering::Relaxed) == TEAR_MID_PAYLOAD as usize {
+        core::cmp::min(TEAR_OFFSET.load(Ordering::Relaxed), len)
+    } else {
+        len
+    }
+}
+
+#[cfg(feature = "qemu-test")]
+static TEAR_POINT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "qemu-test")]
+static TEAR_OFFSET: AtomicUsize = AtomicUsize::new(0);
+
+/// Arm an interruption for the NEXT write. `point` 0 disarms; 1/2/3 are the
+/// three points above. RAM state, so a reset clears it — the guest cannot come
+/// back up still armed.
+#[cfg(feature = "qemu-test")]
+pub fn arm_tear(point: usize, offset: usize) -> bool {
+    if point > TEAR_AFTER_RENAME as usize {
+        return false;
+    }
+    TEAR_OFFSET.store(offset, Ordering::Relaxed);
+    TEAR_POINT.store(point, Ordering::Relaxed);
+    true
 }
 
 /// Read a slot's payload (the bytes after the sequence) into `buf`.
@@ -427,14 +603,30 @@ impl<const SLOTS: usize> Index<SLOTS> {
         let Some(slot) = self.nth_slot(n) else {
             return false;
         };
-        // The index entry is cleared whether or not the unlink reported
-        // success: an entry that survives a failed delete would be read back
-        // through a path that is no longer there on the next boot anyway, and
-        // a stale "this slot has a record" is the state that hides a slot from
-        // reuse forever.
-        let removed = fs::remove_file(path_of(self.tag, slot).as_str()).is_ok();
-        self.seqs[slot] = 0;
-        removed
+        let path = path_of(self.tag, slot);
+        if fs::remove_file(path.as_str()).is_ok() {
+            self.seqs[slot] = 0;
+            return true;
+        }
+        // THE UNLINK FAILED, WHICH MEANS THE FILE IS STILL THERE. Clearing the
+        // index here anyway — which this used to do, justified by a comment
+        // asserting the opposite of what happens — makes `mount` read that
+        // file's nonzero sequence back on the next boot and RESURRECT the
+        // deleted record, while the client is told NOT_FOUND for a record that
+        // has already vanished from the list. Three wrong answers in three
+        // different directions.
+        //
+        // So finish the delete the other way: a zero sequence IS this module's
+        // "no record" (see `read_seq`), and the header write goes through the
+        // same atomic rename as any other write, so the slot becomes genuinely
+        // empty for both RAM and flash.
+        if write_slot(path.as_str(), 0, &[]) {
+            self.seqs[slot] = 0;
+            return true;
+        }
+        // Neither worked. Leave the index ALONE: RAM and flash still agree, the
+        // record is still listed, and the caller's failure answer is truthful.
+        false
     }
 }
 
@@ -496,16 +688,21 @@ impl Stores {
         })
     }
 
-    /// Resident bytes for the whole tier: the sequence indexes (a compile-time
-    /// constant) plus what the mount actually cost (measured once, at boot).
+    /// What this tier COST TO MOUNT: the sequence indexes (a compile-time
+    /// constant) plus what `esp_vfs_littlefs_register` actually took (measured
+    /// once, at boot). 992 bytes on the QEMU guest — 200 index + 792 mount.
     ///
-    /// CONSTANT BY CONSTRUCTION, which is the property `test_records.py`
-    /// asserts and the property whose absence let ~15 requests exhaust the C++
-    /// tier's heap. Neither term moves with stored volume, record size or
-    /// request count: this module opens exactly one file at a time and closes
-    /// it before returning, so littlefs's per-open-file buffer is transient
-    /// and its four-entry descriptor cache never has to grow.
-    pub fn resident_bytes() -> usize {
+    /// NAMED FOR WHAT IT IS. It was `resident_bytes`, which invited the reading
+    /// that it tracks resident memory over time; both terms are latched, so it
+    /// CANNOT move after boot and an assertion that it does not move proves
+    /// nothing. It is the mount's price tag, reported so the price is known.
+    /// The property "resident memory does not grow with stored volume" is
+    /// carried by the FREE HEAP instead (`QT store_stat`'s `heap=`), which is
+    /// the number `test_records.py` watches across 240 writes — and which can
+    /// see the two things this one cannot: `esp_littlefs`'s per-open-file malloc
+    /// and its never-shrunk fd cache. This module opens exactly one file at a
+    /// time and closes it before returning, which is why the heap holds flat.
+    pub fn mount_cost_bytes() -> usize {
         INDEX_BYTES + FS_BYTES.load(Ordering::Relaxed)
     }
 }
@@ -782,6 +979,20 @@ impl Stores {
     /// Read the nth-newest raw record of a set.
     pub fn raw_read(&self, w: Which, n: usize, buf: &mut [u8]) -> Option<usize> {
         self.read_at(w, n, buf)
+    }
+
+    /// Overwrite the nth-newest raw record IN ITS OWN SLOT, bypassing the codec.
+    ///
+    /// The power-loss scenario needs the IN-PLACE path specifically: an append
+    /// lands in a free slot, so an interrupted append can only leave the
+    /// destination absent, while a replace is the case where a cut could destroy
+    /// a record that was already committed. That is the case `recstore` got
+    /// wrong twice.
+    pub fn raw_replace(&mut self, w: Which, n: usize, payload: &[u8]) -> bool {
+        match w {
+            Which::History => self.history.replace_nth(n, payload),
+            Which::Workouts => self.workouts.replace_nth(n, payload),
+        }
     }
 
     /// How many records each set holds.

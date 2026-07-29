@@ -59,6 +59,16 @@ run records    env -C tools/qemu_scenarios python3 -m pytest test_records.py -q 
 # reset, so a silent regression there would look exactly like a working device
 # until somebody power-cycled one.
 run storepers  env -C tools/qemu_scenarios python3 -m pytest test_store_persistence.py -q
+# THE POWER-LOSS GATE, and it is the one the `recstore` deletion removed. That
+# store carried two torn-write tests and they caught BOTH of its original
+# defects; deleting it deleted them, and `QT reboot` above is a CLEAN restart
+# after the write finished — it exercises reload-from-flash and never
+# interruption. This file resets the SoC INSIDE `write_slot` (mid-staging at
+# four byte offsets, between the sync and the rename, and just after the rename)
+# and asserts the slot reads as exactly the old record or exactly the new one.
+# Without it, net/store.rs's central safety claim is littlefs's reputation
+# rather than a measured property of this mount.
+run storetorn  env -C tools/qemu_scenarios python3 -m pytest test_store_power_loss.py -q -n 4
 # The live push down /ws. The app feeds its ENTIRE running screen from this
 # socket — every program-endpoint response body is discarded by
 # TreadmillViewModel — so a firmware that completes the handshake and then never

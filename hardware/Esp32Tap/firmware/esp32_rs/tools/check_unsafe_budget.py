@@ -303,7 +303,23 @@ PRODUCTION_UNSAFE_LINES = 69
 # against the VFS, where it used to be raw pointers against the partition API.
 # A tier that stores MORE safely while touching LESS unsafe is the shape a
 # swap like this is supposed to have.
-QEMU_UNSAFE_LINES = 1180
+#
+# 1180 -> 1182, +2, and both lines exist to MEASURE a safety claim rather than
+# to assert one:
+#   + net/store.rs        1  `esp_restart` inside the injected-power-cut hook.
+#                            One argument-free call that never returns, behind
+#                            `feature = "qemu-test"` and reachable only after a
+#                            `QT` verb that the flashed build does not have, and
+#                            it is what lets test_store_power_loss.py interrupt a
+#                            real write instead of trusting littlefs's design.
+#                            The rename atomicity claim was the whole reason for
+#                            the swap; `recstore`'s equivalent claim was
+#                            disproved twice by its own torn-write test.
+#   + qemu_test/shim_task 1  `esp_get_free_heap_size` in `QT store_stat`, so the
+#                            line beside the LATCHED mount cost is a number that
+#                            can actually move. An assertion against a constant
+#                            is not a leak detector.
+QEMU_UNSAFE_LINES = 1182
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

@@ -286,6 +286,31 @@ CONFIG_LITTLEFS_LOOKAHEAD_SIZE=32
 # One partition is mounted, so do not reserve slots for three.
 CONFIG_LITTLEFS_MAX_PARTITIONS=1
 #
+# BLOCK_CYCLES IS THE WEAR KNOB, so it is stated rather than inherited. It is
+# how many erase cycles littlefs allows a metadata block to take before it
+# RELOCATES that block's contents elsewhere — i.e. it is dynamic wear
+# levelling, and it is the single most wear-relevant setting in this component.
+# 512 happens to be the component's default; it is written here because the
+# block above claims to state the costs, and a defaulted wear setting inside a
+# block that states everything else reads as an oversight.
+#
+# THE ERASE BUDGET THIS TIER ACTUALLY SPENDS, since the cadence is ours:
+# net/session.rs checkpoints the in-progress run every 30 s into the SAME slot,
+# so a 3-hour session is ~360 rewrites — the dominant write load on the device
+# by an order of magnitude (history and workouts are user actions, a handful per
+# session). Each rewrite is a copy-on-write data block plus one metadata commit
+# in the mount root's pair, so ~400 erases per session against a 1 MB / 256-block
+# partition. With relocation at 512 cycles those erases spread across the whole
+# partition rather than pounding two blocks: ~1.6 erases per block per session,
+# and a 100k-cycle NOR sector then survives tens of thousands of sessions —
+# decades of daily use, with the assumption stated so a future cadence change
+# (a 5 s checkpoint would be 6x this) has something to be checked against.
+# net/store.rs::slot_equals is the other half of this bound and belongs in the
+# same budget: a checkpoint whose numbers did not change (a paused session, a
+# belt at zero) writes NOTHING, so an idle hour costs zero erases rather than
+# 120 of them.
+CONFIG_LITTLEFS_BLOCK_CYCLES=512
+#
 # NO MTIME. It costs 4 bytes per file on flash plus an attribute write on every
 # commit, and it would be a LIE on this device: there is no RTC and no
 # guarantee of NTP, so `time(NULL)` at the moment a run record is checkpointed

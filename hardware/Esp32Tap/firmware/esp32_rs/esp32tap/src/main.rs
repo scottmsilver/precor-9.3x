@@ -191,8 +191,8 @@ fn main() {
         net::coach::load();
         if net::store::mount_once() {
             logi!(
-                "store: mounted, {} bytes resident",
-                net::store::Stores::resident_bytes()
+                "store: mounted, {} bytes to mount",
+                net::store::Stores::mount_cost_bytes()
             );
         } else {
             logw!("store: no usable storage partition — nothing will persist");

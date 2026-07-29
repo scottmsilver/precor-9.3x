@@ -259,16 +259,73 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
             }
         }
 
+        // `resident=` KEEPS ITS NAME because the acceptance tests parse it, and
+        // it is what it always was: the LATCHED cost of mounting (index +
+        // `esp_vfs_littlefs_register`), which cannot move after boot. `heap=` is
+        // beside it because a field that cannot move cannot detect growth, and
+        // "resident memory does not grow with stored volume" is the property
+        // that actually matters. See `net::store::Stores::mount_cost_bytes`.
         "store_stat" => {
             match crate::net::store::with(|st| st.counts()) {
-                Some((h, w, r)) => qt!(
-                    "QTOK store_stat history={} workouts={} runs={} resident={}",
-                    h,
-                    w,
-                    r,
-                    crate::net::store::Stores::resident_bytes()
-                ),
+                Some((h, w, r)) => {
+                    // SAFETY: one argument-free IDF accessor that returns an
+                    // integer by value and touches no Rust memory.
+                    let free = unsafe { esp_idf_sys::esp_get_free_heap_size() };
+                    qt!(
+                        "QTOK store_stat history={} workouts={} runs={} resident={} heap={}",
+                        h,
+                        w,
+                        r,
+                        crate::net::store::Stores::mount_cost_bytes(),
+                        free
+                    )
+                }
                 None => qt!("QTERR store_stat no_partition"),
+            }
+        }
+
+        // A POWER CUT AT A CHOSEN POINT INSIDE ONE WRITE.
+        //
+        // `QT store_tear <point> <off> <n> <payload>` replaces the nth-newest
+        // history record IN PLACE and interrupts the write:
+        //   point 0  do not interrupt (the baseline: this must simply succeed)
+        //   point 1  reset after `<off>` bytes of the payload have been staged
+        //   point 2  reset after the staging file is written AND synced,
+        //            immediately before the rename
+        //   point 3  reset immediately after the rename commit returns
+        //
+        // The device RESETS, so there is no QTOK for points 1-3 — the harness
+        // waits for the next boot banner exactly as it does for `QT reboot`, and
+        // then asserts the slot reads as the old record or the new one and
+        // nothing else. This is `recstore`'s torn-write test translated to
+        // LittleFS: the claim that a rename is atomic is measured on a real
+        // guest rather than taken from the component's design.
+        "store_tear" => {
+            let mut it = args.split_whitespace();
+            let point = it.next().and_then(|s| s.parse::<usize>().ok());
+            let off = it.next().and_then(|s| s.parse::<usize>().ok());
+            let n = it.next().and_then(|s| s.parse::<usize>().ok());
+            let payload = it.next().unwrap_or("");
+            let (Some(point), Some(off), Some(n)) = (point, off, n) else {
+                qt!("QTERR store_tear args");
+                return;
+            };
+            if payload.is_empty() {
+                qt!("QTERR store_tear args");
+                return;
+            }
+            if !crate::net::store::arm_tear(point, off) {
+                qt!("QTERR store_tear point");
+                return;
+            }
+            let w = crate::net::store::Which::History;
+            let wrote =
+                crate::net::store::with(|st| st.raw_replace(w, n, payload.as_bytes()));
+            // Only reachable with point 0 (or a point the write never passed).
+            crate::net::store::arm_tear(0, 0);
+            match wrote {
+                Some(ok) => qt!("QTOK store_tear point={} ok={}", point, ok as u32),
+                None => qt!("QTERR store_tear no_partition"),
             }
         }
 
