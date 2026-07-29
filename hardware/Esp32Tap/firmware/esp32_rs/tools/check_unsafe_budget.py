@@ -255,7 +255,26 @@ PRODUCTION_UNSAFE_LINES = 69
 # `crate::hr`, where an untrusted peer's bytes actually land, is
 # `forbid(unsafe_code)` too (FORBID_MODULES above). What is inside the unsafe
 # regions is transport: mbufs in, mbufs out, handles stored in atomics.
-QEMU_UNSAFE_LINES = 1106
+# 1106 -> 1129, +23, all in `ble/ftms.rs` and all of it review fallout:
+#   + on_subscribe            ~20  the missing `BLE_GAP_EVENT_SUBSCRIBE` arm.
+#                                  The device never learned any client's CCCD
+#                                  state, so it pushed a 13-byte Treadmill Data
+#                                  notification every second at peers that had
+#                                  subscribed to nothing, and never sent the
+#                                  initial Machine/Training Status values the
+#                                  daemon sends on subscribe. The C boundary
+#                                  added is ZERO calls — the function reads two
+#                                  bitfield accessors off the event union and
+#                                  delegates to the existing `notify`; the
+#                                  count is the rule attributing the whole body
+#                                  of an `unsafe fn`.
+#   + sample_host_stack        ~3  one call to `uxTaskGetStackHighWaterMark`,
+#                                  which is how the NimBLE host task's newly
+#                                  sized 8192-byte stack stops being arithmetic
+#                                  and becomes a measurement on the first real
+#                                  board. It takes no arguments, returns an
+#                                  integer, and dereferences nothing.
+QEMU_UNSAFE_LINES = 1129
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

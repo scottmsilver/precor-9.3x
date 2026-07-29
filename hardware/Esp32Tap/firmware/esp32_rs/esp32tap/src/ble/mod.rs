@@ -42,11 +42,26 @@
  *
  * # Memory
  *
- * NimBLE is not small, and the cost is MEASURED rather than estimated:
- * [`bring_up`] samples the free heap either side of `nimble_port_init` and
- * logs the delta as `ble: heap cost N bytes`. The QEMU `QT heap` verb reads
- * the same counters, so the number in the README came off a running image.
- * Everything this tier allocates afterwards is bounded by Kconfig
+ * NimBLE is not small. What is MEASURED is the STATIC link cost, and only
+ * that: the same image built with and without `--features ble` differs by
+ * +250,544 B of app image and -28,672 B of free internal RAM at `heap_init`.
+ * Those are the README's numbers and they came off a built image.
+ *
+ * THE RUNTIME HEAP COST IS NOT MEASURED and no figure for it is quoted
+ * anywhere in this tree. [`bring_up`] samples the free heap either side of
+ * `nimble_port_init` and logs the delta as `ble: heap cost N bytes`, but the
+ * controller aborts before that call returns under QEMU — there is no radio —
+ * so the instrument has never produced a reading. Whether the stack FITS
+ * alongside TLS and the app tier is therefore an OPEN QUESTION and the first
+ * thing to check on real hardware; bead precor-9_3x-l0h item 2.
+ *
+ * This header used to claim the runtime cost was measured "rather than
+ * estimated" and that "the number in the README came off a running image",
+ * sixty lines above the code saying the opposite. It is the paragraph a reader
+ * meets first, and a header that overstates a measurement is how the next
+ * reader stops checking.
+ *
+ * Everything this tier allocates AFTER init is bounded by Kconfig
  * (`CONFIG_BT_NIMBLE_MAX_CONNECTIONS`, the msys block counts) or is a `static`
  * here; nothing grows with connection count or with time.
  */
@@ -58,9 +73,22 @@ use crate::{logi, logw};
 use core::sync::atomic::{AtomicI32, Ordering};
 use esp_idf_sys as sys;
 
-/// Advertised name. Also the mDNS instance name's sibling — a user looking at
-/// a Bluetooth picker and at an app's device list should see the same word.
-pub const DEVICE_NAME: &core::ffi::CStr = c"esp32tap";
+/// Advertised name — THE DAEMON'S, not this firmware's codename.
+///
+/// `rust/ftms/src/ftms_service.rs` advertises `local_name: Some("Precor 9.31")`
+/// and has done for the life of the Pi deployment. Zwift and QZ both key their
+/// device pickers and their saved-device lists on the advertised name, so a
+/// phone with a remembered "Precor 9.31" simply would not find a peripheral
+/// calling itself `esp32tap`: the user has to hunt for an unfamiliar name and
+/// re-select it, and every written setup instruction naming "Precor 9.31" is
+/// wrong.
+///
+/// This matters more than it looks, because the whole premise of the
+/// `ble_core` port is compatibility with a device the user may already have
+/// ridden — `ble_core::ftms` keeps a one-count truncation bug on purpose
+/// rather than move every speed a paired phone sees. Changing the far more
+/// visible identifier while preserving that was inconsistent.
+pub const DEVICE_NAME: &core::ffi::CStr = c"Precor 9.31";
 
 /// Sentinel for "bring-up has not run yet". `esp_err_t` is `i32` and IDF never
 /// uses `i32::MIN` as an error code.

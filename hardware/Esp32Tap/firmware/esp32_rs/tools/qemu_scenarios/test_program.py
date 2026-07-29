@@ -126,14 +126,30 @@ def assert_emulate_entry_completed(s, since: int, timeout: float = 30.0) -> None
     can now fail for a reason it previously could only fail obliquely — and
     adds no tolerance of any kind.
     """
-    s.wait_audit("feedback_emulate_stable", timeout=timeout, since=since)
-    # Fail-closed entry aborts are emergencies. If one fired between the
-    # command and the transfer completing, say WHICH.
-    s.assert_no_audit(
-        lambda t: t.startswith("emergency:") or t.startswith("entry_abort:"),
-        since=since,
-        label="during emulate entry",
-    )
+
+    def entry_events():
+        # `complete_console_frame` fires at the pacer's rate and would push the
+        # entry sequence out of any tail; drop it so the report is the transfer.
+        return [(i, t) for i, t in s.audit_events() if i >= since and t != "complete_console_frame"]
+
+    deadline = time.monotonic() + timeout
+    while True:
+        events = entry_events()
+        texts = [t for _, t in events]
+        if "feedback_emulate_stable" in texts:
+            return
+        # A fail-closed abort is TERMINAL — waiting the rest of the timeout out
+        # would only delay the report and then blame the wrong thing.
+        bad = [(i, t) for i, t in events if t.startswith("emergency:") or t.startswith("entry_abort:")]
+        if bad or time.monotonic() > deadline:
+            raise AssertionError(
+                "emulate entry did not complete: no `feedback_emulate_stable`.\n"
+                f"  aborts seen: {bad or 'none'}\n"
+                f"  transfer events since the command: {events[:40]}\n"
+                "  `relay_cmd_on` with no `feedback_emulate_stable` means the "
+                "10 ms RELAY_FEEDBACK_DEADLINE window did not qualify."
+            )
+        time.sleep(0.05)
 
 
 def prog(s):

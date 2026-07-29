@@ -292,6 +292,31 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
             );
         }
 
+        // THE BLE BELT EDGE, WITH NO RADIO.
+        //
+        // `QT ble_cp <hex> [<hex> ...]` feeds bytes to the exact functions a
+        // Control Point write reaches after `access_cb` has copied them out of
+        // the mbuf: `ble::ftms::plan` -> `effect_of` -> `ble::ftms::apply` ->
+        // `control::command`, the lease, the clamps, the auto-emulate policy
+        // and the FTMS result mapping. NONE of that contains FFI or radio —
+        // only the mbuf copy above it does — so the whole belt edge of the BLE
+        // tier runs under the existing QEMU harness on a machine with no
+        // Bluetooth at all.
+        //
+        // This is NOT a second path to the belt and it is NOT a simulated
+        // radio. It is the same two function calls `on_control_point` makes,
+        // in the same order, and it exists only in the `qemu-test` build that
+        // is never flashed. What it does NOT prove is anything about
+        // advertising, connection, pairing, notification or the mbuf copy
+        // itself — bead precor-9_3x-l0h still owns all of that.
+        //
+        // Without it, two real defects were establishable only by READING:
+        // that a Stop arriving while a program owned the lease was answered
+        // FAILED with the belt still running, and that a SetTargetSpeed
+        // carried a stale incline across a lock release.
+        #[cfg(feature = "ble")]
+        "ble_cp" => ble_cp(args),
+
         // `wsdrophello` is NETWORK-TIER ONLY and out of scope for this port,
         // so it is deliberately NOT implemented and falls through to
         // unknown_verb. Nothing in S1-S7 uses it; only `test_net_scenarios.py`
@@ -399,3 +424,66 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
 /// Keep the `SafetyIo`/`QemuTestSafetyIo` bound visible in this file: the
 /// shim reads the poles through the same trait production uses.
 const _: fn(&QemuTestSafetyIo) -> bool = |io| io.tread_ok().get();
+
+/// `QT ble_cp <hex> [<hex> ...]` — THE BLE BELT EDGE, WITH NO RADIO.
+///
+/// Feeds bytes to the exact functions a Control Point write reaches after
+/// `access_cb` has copied them out of the mbuf: `ble::ftms::plan` ->
+/// `effect_of` -> `ble::ftms::apply` -> `control::command`, the lease, the
+/// clamps, the auto-emulate policy and the FTMS result mapping. NONE of that
+/// contains FFI or radio — only the mbuf copy above it does — so the whole
+/// belt edge of the BLE tier runs under the existing QEMU harness on a machine
+/// with no Bluetooth at all.
+///
+/// This is NOT a second path to the belt and it is NOT a simulated radio. It
+/// is the same two calls `on_control_point` makes, in the same order, in a
+/// `qemu-test` build that is never flashed. It proves NOTHING about
+/// advertising, connection, pairing, notification or the mbuf copy itself —
+/// bead precor-9_3x-l0h still owns all of that.
+///
+/// Without it, two real defects were establishable only by READING: that a
+/// Stop arriving while a program owned the lease was answered FAILED with the
+/// belt still running, and that a SetTargetSpeed carried a stale incline
+/// across a released lock.
+///
+/// A SEPARATE FUNCTION RATHER THAN A MATCH ARM, and that is not style. Inlined
+/// into `execute_command` it made that function large enough to trip an xtensa
+/// LLVM backend failure — `error: Undefined temporary symbol`, at assembly
+/// time, with no source location. Keep it out of line.
+#[cfg(feature = "ble")]
+fn ble_cp(args: &str) {
+    // The same bound `access_cb` copies into, so a write this verb can express
+    // is exactly a write the radio path can express — no more.
+    let mut bytes = [0u8; 20];
+    let mut n = 0usize;
+    for tok in args.split(' ').filter(|t| !t.is_empty()) {
+        if n == bytes.len() || tok.len() > 2 {
+            qt!("QTERR ble_cp_args");
+            return;
+        }
+        match u8::from_str_radix(tok, 16) {
+            Ok(b) => {
+                bytes[n] = b;
+                n += 1;
+            }
+            Err(_) => {
+                qt!("QTERR ble_cp_args");
+                return;
+            }
+        }
+    }
+    // A ZERO-LENGTH write is a legitimate case to drive (`QT ble_cp` with no
+    // argument): it is the one that used to be answered "opcode 0x00 not
+    // supported", naming an opcode the peer never sent.
+    match crate::ble::ftms::plan(&bytes[..n]) {
+        Ok(cmd) => {
+            let result = crate::ble::ftms::apply(ble_core::ftms::effect_of(cmd));
+            qt!("QTOK ble_cp op={} result={}", cmd.opcode(), result);
+        }
+        Err(refusal) => qt!(
+            "QTOK ble_cp op={} result={}",
+            refusal.echo_opcode,
+            refusal.result
+        ),
+    }
+}

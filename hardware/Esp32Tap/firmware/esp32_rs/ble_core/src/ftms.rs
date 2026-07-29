@@ -586,10 +586,24 @@ pub enum CpEffect {
     /// itself on any accepted motion (the auto-emulate policy) and asking for
     /// it separately would be the second path this type exists to prevent.
     Start,
-    /// Zero the belt. Speed AND incline, matching `treadmill::send_stop`.
-    /// `param` is 1 = stop, 2 = pause; the belt treats both identically —
-    /// there is no paused state below the application tier, and a "pause" that
-    /// left the belt running would be the dangerous reading of the word.
+    /// Zero the belt. Speed AND incline. `param` is 1 = stop, 2 = pause; the
+    /// belt treats both identically — there is no paused state below the
+    /// application tier, and a "pause" that left the belt running would be the
+    /// dangerous reading of the word.
+    ///
+    /// WHERE THIS DIFFERS FROM THE DAEMON, STATED RATHER THAN IMPLIED. This
+    /// used to claim it matched `treadmill::send_stop`, which it did not:
+    /// `send_stop` sends THREE commands on one connection — `speed 0.0`,
+    /// `incline 0.0` and `emulate:false` — the third so the physical console
+    /// buttons work again. This variant is the motion pair only. The firmware
+    /// surface makes up the rest: `ble::ftms::stop_the_belt` ends the program
+    /// and RELEASES the lease (which is what returns the bridge to copper)
+    /// before commanding the zero, because a lease is a concept the Pi does
+    /// not have and `ble_core` must not know about.
+    ///
+    /// STOP IS NOT DENIABLE. It is the one opcode whose failure mode is
+    /// safety-shaped and the only stop control a BLE-only peer has, so the
+    /// surface must not let it lose a lease arbitration to a running program.
     Stop { param: u8 },
 }
 

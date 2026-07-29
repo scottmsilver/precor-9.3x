@@ -76,6 +76,30 @@ static H_TRAINING_STATUS: AtomicU16 = AtomicU16::new(0);
 /// elapsed field when there is no workout — the daemon's `session_secs`.
 static CONN_SECS: AtomicU32 = AtomicU32::new(0);
 
+/// Which characteristics the CURRENT peer has enabled notifications on, as a
+/// bitmask. One byte, and there is only ever one peripheral connection, so
+/// this does not move with connection count.
+///
+/// WHY THIS EXISTS. `ble_gatts_notify_custom` and `ble_gatts_indicate_custom`
+/// are the UNCONDITIONAL variants — they send the PDU as given, without
+/// consulting anybody's CCCD (`ble_gatts_chr_updated` is the one that does).
+/// With no `BLE_GAP_EVENT_SUBSCRIBE` arm the device never learned a client's
+/// CCCD state at all, so a peer that connected and browsed services without
+/// subscribing was sent an unsolicited 13-byte Handle Value Notification every
+/// second for as long as it stayed connected. GATT forbids notifying a
+/// characteristic the client has not configured: a strict client stack
+/// discards them, a defensive one may disconnect, and it burns radio time on
+/// every connected-but-idle app.
+///
+/// `AtomicU32` for a value that needs three bits, where `AtomicU8` is the
+/// obvious type: the ESP32-S3's only atomic read-modify-write instruction is
+/// the 32-bit `S32C1I`, so a sub-word RMW is a masked compare-exchange loop
+/// the compiler synthesises. A word-sized atomic is the native one here.
+static SUBSCRIBED: AtomicU32 = AtomicU32::new(0);
+const SUB_TREADMILL_DATA: u32 = 1 << 0;
+const SUB_MACHINE_STATUS: u32 = 1 << 1;
+const SUB_TRAINING_STATUS: u32 = 1 << 2;
+
 /// The speed a Start/Resume returns to: the last NON-ZERO speed this surface
 /// accepted. Held here rather than in `ble_core` because that crate holds no
 /// state at all, and rather than read back from the controller because after a
@@ -290,9 +314,23 @@ unsafe extern "C" fn access_cb(
             Some(proto::CHAR_SPEED_RANGE) => append(ctxt, &proto::encode_speed_range()),
             Some(proto::CHAR_INCLINE_RANGE) => append(ctxt, &proto::encode_incline_range()),
             Some(proto::CHAR_TREADMILL_DATA) => append(ctxt, &treadmill_data()),
-            // Machine Status and Training Status are notify-only in practice;
-            // answering a read with an empty value is legal and is what the
-            // daemon's snapshot read does for a machine with nothing to say.
+            // Machine Status and Training Status answer with the DAEMON'S
+            // values. They used to answer with nothing, justified as "what the
+            // daemon's snapshot read does for a machine with nothing to say" —
+            // which is not what the daemon does: `ftms_service.rs` has an
+            // unconditional read handler for each, returning [0x02,0x01] and
+            // [0x00,0x01]. Both characteristics have MANDATORY fixed leading
+            // fields (Training Status is Flags + Status, minimum 2 octets), so
+            // a zero-length read response is a malformed characteristic value.
+            // Training Status is mandatory precisely BECAUSE the Control Point
+            // is present, and a client that reads it during discovery to
+            // decide whether the machine is controllable got 0 bytes.
+            Some(proto::CHAR_MACHINE_STATUS) => {
+                append(ctxt, &proto::encode_machine_status_stopped())
+            }
+            Some(proto::CHAR_TRAINING_STATUS) => {
+                append(ctxt, &proto::encode_training_status_idle())
+            }
             Some(_) => 0,
             None => sys::BLE_ATT_ERR_UNLIKELY as core::ffi::c_int,
         };
@@ -356,37 +394,144 @@ unsafe fn append(ctxt: *mut sys::ble_gatt_access_ctxt, data: &[u8]) -> core::ffi
 // The Control Point — the belt edge
 // ---------------------------------------------------------------------------
 
+/// A Control Point write that will not be acted on, and the answer it gets.
+pub(crate) struct CpRefusal {
+    /// The opcode to echo in the response indication.
+    pub echo_opcode: u8,
+    pub result: u8,
+    pub why: &'static str,
+}
+
+/// Parse a Control Point write, or decide how to refuse it.
+///
+/// SPLIT OUT OF [`on_control_point`] ON PURPOSE, and the split is the seam the
+/// QEMU shim uses. Everything from here down — `plan`, `effect_of`,
+/// `motion_for`, [`apply`], the lease, the clamps and the FTMS result mapping
+/// — contains NO FFI and NO radio. Only `access_cb`'s mbuf copy above it does.
+/// So `QT ble_cp <hex>` can drive the ENTIRE belt edge of the BLE tier under
+/// the existing QEMU harness on a machine with no Bluetooth at all, which is
+/// how the Stop-during-a-program defect and the carried-axis window below
+/// stopped being review-only claims.
+///
+/// A ZERO-LENGTH WRITE IS NOT OPCODE 0x00. `parse_control_point(&[])` returns
+/// `None` because there is no first byte, and the old recovery
+/// (`bytes.first().copied().unwrap_or(0)`) then answered
+/// `[0x80, 0x00, 0x02]` — "RequestControl not supported" — naming an opcode
+/// the peer never sent, for the one opcode this device ALWAYS accepts. A
+/// client debugging its handshake was told the exact opposite of the truth.
+/// An empty write is a malformed request, so it gets INVALID_PARAM, and the
+/// echoed opcode stays 0 only because the response frame has nowhere else to
+/// put "there wasn't one".
+pub(crate) fn plan(bytes: &[u8]) -> Result<proto::ControlCommand, CpRefusal> {
+    let Some(&opcode) = bytes.first() else {
+        return Err(CpRefusal {
+            echo_opcode: 0,
+            result: proto::RESULT_INVALID_PARAM,
+            why: "zero-length write, no opcode",
+        });
+    };
+    match proto::parse_control_point(bytes) {
+        Some(cmd) => Ok(cmd),
+        // Unknown opcode, or a parameter shorter than the opcode requires.
+        // The daemon answers with the byte it saw and NOT_SUPPORTED; do the
+        // same, so a client's error message names the opcode it sent.
+        None => Err(CpRefusal {
+            echo_opcode: opcode,
+            result: proto::RESULT_NOT_SUPPORTED,
+            why: "unknown opcode or short parameter",
+        }),
+    }
+}
+
+/// Smallest free stack ever seen on the NimBLE host task, in bytes.
+/// `u32::MAX` until the first sample.
+static HOST_STACK_LOW: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// The measured free stack on the NimBLE host task, or `None` before the first
+/// Control Point write.
+pub fn host_stack_low_water() -> Option<u32> {
+    match HOST_STACK_LOW.load(Ordering::Relaxed) {
+        u32::MAX => None,
+        n => Some(n),
+    }
+}
+
+/// Replace `CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE`'s arithmetic with a
+/// measurement, taken where the deepest untrusted call chain has just unwound.
+///
+/// LOGS ONLY ON A NEW MINIMUM, which is what makes this safe to call on a path
+/// a radio peer drives. The watermark is monotonically non-increasing, so the
+/// number of lines this can ever emit is bounded by the number of distinct
+/// minima — a handful in practice, and it cannot be pumped by repeating a
+/// write. See the note on log volume in [`apply`].
+#[inline(never)]
+fn sample_host_stack() {
+    // SAFETY: `uxTaskGetStackHighWaterMark(NULL)` reads the calling task's own
+    // TCB and returns a byte count. No pointer is dereferenced by us and
+    // nothing is retained.
+    let free = unsafe { sys::uxTaskGetStackHighWaterMark(core::ptr::null_mut()) } as u32;
+    // LOAD/COMPARE/STORE RATHER THAN `fetch_min`, AND THAT IS NOT A STYLE
+    // CHOICE. `AtomicU32::fetch_min` here made the xtensa backend emit
+    // `error: Undefined temporary symbol` at assembly time — no source
+    // location, no symbol name — and reverting just this expression is what
+    // turned the image green again (measured, twice, both directions). It
+    // lowers to a compare-exchange loop and something in that expansion
+    // confuses the assembler in this toolchain.
+    //
+    // The plain form is also the correct one on the merits: the NimBLE host
+    // task is the ONLY writer, since this runs from its own callbacks, so
+    // there is no contention for an RMW to win.
+    if free < HOST_STACK_LOW.load(Ordering::Relaxed) {
+        HOST_STACK_LOW.store(free, Ordering::Relaxed);
+        logi!("ble: host task stack low-water {} bytes", free);
+    }
+}
+
 /// Handle one Control Point write, end to end: parse, act, answer.
 ///
 /// SAFETY: runs on NimBLE's host task; the only raw operations are the
 /// notify/indicate sends, each of which is its own block below.
 unsafe fn on_control_point(conn_handle: u16, cp_handle: u16, bytes: &[u8]) {
-    let Some(cmd) = proto::parse_control_point(bytes) else {
-        // Unknown opcode, or a parameter shorter than the opcode requires.
-        // The daemon answers with the byte it saw and NOT_SUPPORTED; do the
-        // same, so a client's error message names the opcode it sent.
-        let op = bytes.first().copied().unwrap_or(0);
-        logw!("ble: control point opcode {} not supported", op);
-        indicate(
-            conn_handle,
-            cp_handle,
-            &proto::encode_control_response(op, proto::RESULT_NOT_SUPPORTED),
-        );
-        return;
+    let cmd = match plan(bytes) {
+        Ok(cmd) => cmd,
+        Err(refusal) => {
+            logw!(
+                "ble: control point opcode {} rejected ({})",
+                refusal.echo_opcode,
+                refusal.why
+            );
+            indicate(
+                conn_handle,
+                cp_handle,
+                &proto::encode_control_response(refusal.echo_opcode, refusal.result),
+            );
+            return;
+        }
     };
 
     // Fitness Machine Status and Training Status FIRST, exactly as the daemon
     // orders it: a client's own UI mirrors what it asked for, and it should
     // see that echo whether or not the belt accepts the motion.
     if let Some(note) = proto::encode_status_notification(cmd) {
-        notify(conn_handle, H_MACHINE_STATUS.load(Ordering::Relaxed), note.as_slice());
+        notify(
+            conn_handle,
+            H_MACHINE_STATUS.load(Ordering::Relaxed),
+            SUB_MACHINE_STATUS,
+            note.as_slice(),
+        );
     }
     if let Some(ts) = proto::encode_training_status(cmd) {
-        notify(conn_handle, H_TRAINING_STATUS.load(Ordering::Relaxed), &ts);
+        notify(
+            conn_handle,
+            H_TRAINING_STATUS.load(Ordering::Relaxed),
+            SUB_TRAINING_STATUS,
+            &ts,
+        );
     }
 
     let effect = proto::effect_of(cmd);
     let result = apply(effect);
+    sample_host_stack();
 
     indicate(
         conn_handle,
@@ -414,50 +559,196 @@ unsafe fn on_control_point(conn_handle: u16, cp_handle: u16, bytes: &[u8]) {
 /// and treating them as one owner is the honest model. It also leaves the
 /// existing arbitration untouched: a running program still refuses BOTH, and
 /// `Reject::NotOwner` still means what it meant.
-fn apply(effect: proto::CpEffect) -> u8 {
-    let now_belt = {
-        let g = crate::context::lock(&crate::CTX.guarded);
-        proto::BeltNow {
+#[inline(never)]
+pub(crate) fn apply(effect: proto::CpEffect) -> u8 {
+    // STOP IS NOT A MOTION REQUEST, AND IT CANNOT BE DENIED.
+    //
+    // Every effect used to go straight to `control::command(Surface::Http,..)`,
+    // Stop included. While the interval executor owned the lease that returned
+    // `Reject::NotOwner`, so a user running a 30-minute program at 6 mph who
+    // pressed stop in Zwift got RESULT_FAILED and a belt that kept running —
+    // and the only working stop, `POST /api/program/stop`, is not something a
+    // BLE-only peer can call. On the Pi there is no per-surface lease at all:
+    // `treadmill::send_stop` wrote straight to `treadmill_io` and the zero
+    // always landed. The port introduced the denial, and commit a055117
+    // already settled the principle for the analogous HTTP defect: the Stop
+    // button cannot be denied.
+    //
+    // The fix is NOT a second path to the belt. Stop takes the same route the
+    // app's stop button takes — end the program, which hands the lease back
+    // through `control::release`, and then command zero as this surface. Both
+    // steps are `control::command`; the one path is preserved and the stop
+    // becomes unconditional.
+    if let proto::CpEffect::Stop { .. } = effect {
+        return stop_the_belt();
+    }
+
+    // ONE LOCK HOLD FOR READ-AND-COMMAND.
+    //
+    // `motion_for` carries the OTHER axis through unchanged, so a
+    // SetTargetSpeed commands whatever incline was current when it was read.
+    // Reading under one lock hold and commanding under a second left a window:
+    // the httpd task shares `Surface::Http` with this one BY DESIGN (see the
+    // header above), so the lease does not serialise them — only the mutex
+    // does. A user raising the incline from the app in between the two
+    // acquisitions had it silently reverted by the next BLE speed write.
+    // `net::api`'s motion handler already does the read and the command inside
+    // a single hold; this one now matches it.
+    let outcome = {
+        let mut g = crate::context::lock(&crate::CTX.guarded);
+        let now_belt = proto::BeltNow {
             speed: g.controller.speed_tenths(),
             incline: g.controller.incline_half_percent(),
             resume_speed: SpeedTenths::new(RESUME_TENTHS.load(Ordering::Relaxed)),
-        }
-    };
-
-    let Some((speed, incline)) = proto::motion_for(effect, now_belt) else {
-        // AckOnly — RequestControl. Nothing is commanded, and that is NOT the
-        // same as re-commanding the current motion, which would take the lease
-        // away from a running program.
-        return proto::RESULT_SUCCESS;
-    };
-
-    let outcome = {
-        let mut g = crate::context::lock(&crate::CTX.guarded);
+        };
+        let Some((speed, incline)) = proto::motion_for(effect, now_belt) else {
+            // AckOnly — RequestControl. Nothing is commanded, and that is NOT
+            // the same as re-commanding the current motion, which would take
+            // the lease away from a running program.
+            return proto::RESULT_SUCCESS;
+        };
         let now = crate::CTX.clock.now();
-        control::command(&mut g, Surface::Http, speed, incline, now)
+        (
+            control::command(&mut g, Surface::Http, speed, incline, now),
+            speed,
+            incline,
+        )
     };
+    let (outcome, speed, incline) = outcome;
 
+    let loud = cp_log_due();
     match outcome {
         Ok(()) => {
             if speed.get() > 0 {
                 RESUME_TENTHS.store(speed.get(), Ordering::Relaxed);
             }
-            logi!(
-                "ble: control point accepted (speed {} tenths, incline {} half-pct)",
-                speed.get(),
-                incline.get()
-            );
+            if loud {
+                logi!(
+                    "ble: control point accepted (speed {} tenths, incline {} half-pct)",
+                    speed.get(),
+                    incline.get()
+                );
+            }
             proto::RESULT_SUCCESS
         }
         Err(control::Reject::NotOwner) => {
-            logw!("ble: control point refused — a program owns the belt");
+            if loud {
+                logw!("ble: control point refused — a program owns the belt");
+            }
             proto::result_for_reject(proto::CpReject::NotOwner)
         }
         Err(control::Reject::Refused) => {
-            logw!("ble: control point refused by the safety controller");
+            if loud {
+                logw!("ble: control point refused by the safety controller");
+            }
             proto::result_for_reject(proto::CpReject::Refused)
         }
         Err(control::Reject::GenerationExhausted) => {
+            proto::result_for_reject(proto::CpReject::Other)
+        }
+    }
+}
+
+/// Should this Control Point write emit its log line?
+///
+/// AN UNAUTHENTICATED PEER DRIVES THIS PATH. Each write emitted ~100 bytes of
+/// BLOCKING UART0 logging on the NimBLE host task; at ATT write rate (one per
+/// connection interval, minimum 7.5 ms) that saturates a 115200-baud console
+/// from the car park. It cannot reach the belt and it cannot reboot the device
+/// — the serial engine, emulate cycle and executor all run at higher priority
+/// and this task is deliberately not WDT-supervised — but it starves the radio
+/// and it drowns the console when something else needs reading.
+///
+/// First write is loud, then one in [`CP_LOG_EVERY`]. The counter resets on
+/// disconnect, so an ordinary session (a human pressing buttons) is unchanged
+/// and only a flood is thinned.
+fn cp_log_due() -> bool {
+    CP_WRITES.fetch_add(1, Ordering::Relaxed) % CP_LOG_EVERY == 0
+}
+
+static CP_WRITES: AtomicU32 = AtomicU32::new(0);
+const CP_LOG_EVERY: u32 = 64;
+
+/// `CpEffect::Stop` — the one Control Point opcode whose failure mode is
+/// safety-shaped, and the only stop control a BLE-only peer has.
+///
+/// Exactly what `POST /api/program/stop` does, through the same functions:
+/// `ProgramState::stop` under the program lock, then its plan driven by
+/// `apply_plan` with `release_belt = true`.
+///
+/// # THE ZERO COMES FROM THE PLAN, NOT FROM A SECOND COMMAND
+///
+/// `ProgramState::stop` returns `Plan::zero()` when a program was running, and
+/// `apply_plan` issues it through `control::command` as `Surface::Executor` —
+/// under the lease the executor ALREADY HOLDS. That is what actually stops the
+/// belt, and it cannot be denied because it is the owner commanding.
+///
+/// A first version of this function drove the plan and then commanded zero
+/// again as `Surface::Http`, on the theory that the release had handed the
+/// lease back. IT HAD NOT, and the QEMU scenario caught it: `control::release`
+/// on an emulating controller calls `request_normal_exit`, which begins a
+/// gap-safe exit and holds the lease until that exit COMPLETES. The follow-up
+/// command therefore arrived while the executor still owned the belt and was
+/// answered `NotOwner` — the very defect this function exists to fix, moved
+/// three lines down. `net/program.rs`'s Quick Start comment had already
+/// written the rule down ("if a release is ever wanted it must COMPLETE before
+/// the replacement plan is driven"); this is the same trap.
+///
+/// So the second command is issued ONLY when there was no program to stop, in
+/// which case a moving belt is manually commanded on this surface and there is
+/// no exit in flight to wait for.
+///
+/// LOCK ORDER IS `program` THEN `guarded`, mandatory, see `context.rs`. The
+/// program lock is dropped before the fallback command is issued.
+///
+/// `apply_plan` is called directly rather than through `net::program::drive`
+/// because `drive` IS that call plus the lock (and plus a `net` feature that
+/// the BLE tier does not require). Same function, same arguments, same order.
+#[inline(never)]
+fn stop_the_belt() -> u8 {
+    let program_zeroed_the_belt = {
+        let mut p = crate::context::lock(&crate::CTX.program);
+        let plan = p.stop();
+        let had_plan = !plan.is_empty();
+        let now = crate::CTX.clock.now();
+        let mut g = crate::context::lock(&crate::CTX.guarded);
+        // `release_belt = true` even for an empty plan: it is the half that
+        // hands the lease back, and it is a no-op when this surface never had
+        // it.
+        let accepted = crate::tasks::interval_executor::apply_plan(&mut g, plan, true, now);
+        had_plan && accepted > 0
+    };
+
+    if program_zeroed_the_belt {
+        logi!("ble: control point stop — program ended, belt zeroed");
+        return proto::RESULT_SUCCESS;
+    }
+
+    let outcome = {
+        let mut g = crate::context::lock(&crate::CTX.guarded);
+        let now = crate::CTX.clock.now();
+        control::command(
+            &mut g,
+            Surface::Http,
+            SpeedTenths::ZERO,
+            safety_core::units::InclineHalfPct::ZERO,
+            now,
+        )
+    };
+
+    match outcome {
+        Ok(()) => {
+            logi!("ble: control point stop — belt zeroed");
+            proto::RESULT_SUCCESS
+        }
+        Err(control::Reject::Refused) => {
+            // A latched fault. The belt is not moving in that state, so the
+            // peer's intent is satisfied even though the command was refused.
+            logw!("ble: control point stop refused by the safety controller");
+            proto::result_for_reject(proto::CpReject::Refused)
+        }
+        Err(_) => {
+            logw!("ble: control point stop could not take the lease");
             proto::result_for_reject(proto::CpReject::Other)
         }
     }
@@ -487,14 +778,27 @@ fn treadmill_data() -> [u8; proto::TREADMILL_DATA_LEN] {
         distance_meters,
         elapsed_secs,
     };
-    proto::encode_treadmill_data_with_alive(&snap, CONN_SECS.load(Ordering::Relaxed) as u16)
+    // SATURATE, never truncate. The daemon does
+    // `session_start.elapsed().as_secs().min(u16::MAX as u64) as u16` and this
+    // device's own workout path does `.min(u16::MAX as u32)`; a bare `as u16`
+    // here made the idle alive-signal's elapsed field wrap from 65535 to 0
+    // after 18h12m of connected idle, so a client deriving a duration or a
+    // delta from it saw time run backwards. The rule everywhere else in this
+    // tree is that a huge value must never become a small one.
+    let alive = CONN_SECS.load(Ordering::Relaxed).min(u16::MAX as u32) as u16;
+    proto::encode_treadmill_data_with_alive(&snap, alive)
 }
 
-/// Send a notification. A no-op when nothing is subscribed or the handle has
-/// not been published yet, so a mis-ordered bring-up drops a frame instead of
-/// notifying attribute 0.
-fn notify(conn_handle: u16, attr_handle: u16, data: &[u8]) {
+/// Send a notification, but ONLY to a peer that asked for this characteristic.
+///
+/// A no-op when the handle has not been published yet (so a mis-ordered
+/// bring-up drops a frame instead of notifying attribute 0), and a no-op when
+/// the client's CCCD for `sub_bit` is clear — see [`SUBSCRIBED`].
+fn notify(conn_handle: u16, attr_handle: u16, sub_bit: u32, data: &[u8]) {
     if attr_handle == 0 || data.is_empty() {
+        return;
+    }
+    if SUBSCRIBED.load(Ordering::Relaxed) & sub_bit == 0 {
         return;
     }
     // SAFETY: `ble_hs_mbuf_from_flat` COPIES the bytes into a new mbuf, which
@@ -515,6 +819,13 @@ fn notify(conn_handle: u16, attr_handle: u16, data: &[u8]) {
 }
 
 /// Send an indication (the Control Point's acknowledged response).
+///
+/// DELIBERATELY NOT GATED ON THE CCCD, unlike [`notify`]. This is a SOLICITED
+/// answer to a write the peer made a moment ago on the same characteristic —
+/// the peer has demonstrated it wants it, which is exactly what the CCCD check
+/// exists to establish for the periodic notifications. Suppressing it would
+/// leave a client that writes before it subscribes waiting forever for a
+/// response instead of being told what happened to its request.
 fn indicate(conn_handle: u16, attr_handle: u16, data: &[u8]) {
     if attr_handle == 0 || data.is_empty() {
         return;
@@ -543,7 +854,12 @@ pub fn tick() {
     };
     CONN_SECS.fetch_add(1, Ordering::Relaxed);
     let data = treadmill_data();
-    notify(c, H_TREADMILL_DATA.load(Ordering::Relaxed), &data);
+    notify(
+        c,
+        H_TREADMILL_DATA.load(Ordering::Relaxed),
+        SUB_TREADMILL_DATA,
+        &data,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -634,6 +950,10 @@ unsafe extern "C" fn gap_event(
             if c.status == 0 {
                 CONN.store(c.conn_handle, Ordering::Relaxed);
                 CONN_SECS.store(0, Ordering::Relaxed);
+                // A fresh peer has configured nothing yet. CCCDs are not
+                // persisted (no bonding — see the module header), so every
+                // connection starts from silence.
+                SUBSCRIBED.store(0, Ordering::Relaxed);
                 logi!("ble: FTMS peer connected (handle {})", c.conn_handle);
             } else {
                 // The connection failed; go back to being findable.
@@ -644,12 +964,71 @@ unsafe extern "C" fn gap_event(
             let d = &(*event).__bindgen_anon_1.disconnect;
             logi!("ble: FTMS peer disconnected (reason {})", d.reason);
             CONN.store(NO_CONN, Ordering::Relaxed);
+            SUBSCRIBED.store(0, Ordering::Relaxed);
+            CP_WRITES.store(0, Ordering::Relaxed);
             // A treadmill that stops advertising after its first app closes is
             // a treadmill nobody can find again without a power cycle.
             start_advertising();
         }
         sys::BLE_GAP_EVENT_ADV_COMPLETE => start_advertising(),
+        sys::BLE_GAP_EVENT_SUBSCRIBE => on_subscribe(&(*event).__bindgen_anon_1.subscribe),
         _ => {}
     }
     0
+}
+
+/// A client wrote a CCCD. Record it, and send the initial value the daemon
+/// sends.
+///
+/// THE INITIAL VALUE IS THE POINT, not just the bookkeeping. The daemon pushes
+/// Machine Status `[0x02, 0x01]` and Training Status `[0x00, 0x01]` the instant
+/// a client subscribes, each with the comment "so client knows machine state"
+/// (`ftms_service.rs`). This device sent neither, and — before the read
+/// handlers above were fixed — also answered a READ of those characteristics
+/// with zero bytes. A freshly connected app therefore had NO WAY AT ALL to
+/// learn machine or training state until it wrote the Control Point.
+///
+/// `cur_notify` / `cur_indicate` are bitfield ACCESSORS in the generated
+/// bindings (`ble_gap_event__bindgen_ty_1__bindgen_ty_13`), not fields; either
+/// counts as "the client wants this characteristic".
+///
+/// SAFETY: `sub` is a live borrow of the event union member NimBLE is handing
+/// us for this call, selected by the event type. Nothing is retained.
+#[inline(never)]
+unsafe fn on_subscribe(sub: &sys::ble_gap_event__bindgen_ty_1__bindgen_ty_13) {
+    let wants = sub.cur_notify() != 0 || sub.cur_indicate() != 0;
+    let h = sub.attr_handle;
+
+    let bit = if h == H_TREADMILL_DATA.load(Ordering::Relaxed) {
+        SUB_TREADMILL_DATA
+    } else if h == H_MACHINE_STATUS.load(Ordering::Relaxed) {
+        SUB_MACHINE_STATUS
+    } else if h == H_TRAINING_STATUS.load(Ordering::Relaxed) {
+        SUB_TRAINING_STATUS
+    } else {
+        // The Control Point's own CCCD, or a characteristic that does not
+        // notify. Nothing periodic is gated on it — see `on_control_point`.
+        return;
+    };
+
+    if wants {
+        SUBSCRIBED.fetch_or(bit, Ordering::Relaxed);
+    } else {
+        SUBSCRIBED.fetch_and(!bit, Ordering::Relaxed);
+        return;
+    }
+
+    match bit {
+        SUB_MACHINE_STATUS => notify(
+            sub.conn_handle,
+            h,
+            bit,
+            &proto::encode_machine_status_stopped(),
+        ),
+        SUB_TRAINING_STATUS => {
+            notify(sub.conn_handle, h, bit, &proto::encode_training_status_idle())
+        }
+        // Treadmill Data needs no priming: `tick()` sends one within a second.
+        _ => {}
+    }
 }

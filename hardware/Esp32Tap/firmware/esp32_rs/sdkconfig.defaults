@@ -214,3 +214,41 @@ CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
 # no benefit; 128 still clears every payload this firmware sends or receives
 # with room to spare.
 CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=128
+#
+# THE NIMBLE HOST TASK'S STACK, SIZED RATHER THAN DEFAULTED.
+#
+# This key was absent, so the build took the IDF default of 4096 B — and that
+# is the ONE task in this firmware whose stack was never sized, while being the
+# task with the DEEPEST UNTRUSTED CALL CHAIN. Everything a radio peer can reach
+# runs on it: `access_cb` -> `on_control_point` -> `plan` -> `apply` ->
+# `control::command` -> `SafetyController::command_motion` + `request_emulate`
+# + `apply_outputs` (GPIO), plus `stop_the_belt`'s program-lock path, plus
+# `treadmill_data()` and all five `central.rs` discovery callbacks.
+#
+# Every other task in this tree has its arithmetic written down (see the
+# normative matrix in tasks/mod.rs: serial_engine 8192, emulate_cycle 6144,
+# interval_exec 16384, session 12288). That discipline exists BECAUSE the httpd
+# task already overflowed its stack on POST /history/{id}/resume and silently
+# rebooted (commit a055117) — and a reboot drops the relay mid-run.
+#
+# THE ARITHMETIC, worst case, one Control Point write:
+#   NimBLE host internals (HCI event dispatch, L2CAP, ATT/GATT,
+#     os_mbuf chain walking) — what the 4096 default exists to cover ~2500 B
+#   access_cb frame + the CP_MAX=20 bounded copy                      ~100 B
+#   on_control_point -> plan -> apply -> stop_the_belt                ~400 B
+#   control::command -> command_motion / request_emulate              ~350 B
+#   apply_outputs (GPIO writes through the HAL)                       ~150 B
+#   logging: log_fmt's FixedStr<192> + write_line's SECOND
+#     FixedStr<192> + [u8;193], all live at once                      ~600 B
+#   esp_log_write -> vsnprintf into the console driver                ~500 B
+#                                                              total ~4600 B
+# That is already OVER the 4096 default before any margin, which is the whole
+# point: the overflow was reachable by an unauthenticated peer in radio range
+# writing 3 bytes. 8192 matches the serial engine and leaves ~44% headroom.
+#
+# THE NUMBER IS NOT LEFT AS ARITHMETIC. `ble::ftms::on_control_point` samples
+# uxTaskGetStackHighWaterMark on this task after every write and logs
+# `ble: host task stack low-water N bytes` whenever a NEW minimum is reached,
+# so the first real board replaces this estimate with a measurement. Bead
+# precor-9_3x-l0h.
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192

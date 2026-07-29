@@ -72,6 +72,16 @@ run mdns       env -C tools/qemu_scenarios python3 -m pytest test_mdns.py -q
 # `--features ble`, so every scenario above ALSO runs against a device whose
 # radio failed; this file states the property rather than leaving it implied.
 run bledegrade env -C tools/qemu_scenarios python3 -m pytest test_ble_degraded.py -q -n 3
+# The BLE tier's BELT EDGE, with no radio. `access_cb`'s mbuf copy is the only
+# part of a Control Point write that needs Bluetooth; everything below it —
+# parse, effect, the lease, the clamps, the auto-emulate policy, the FTMS
+# result mapping — is ordinary Rust on the real controller, and the qemu-test
+# `QT ble_cp` verb drives exactly that. Two REAL defects were review-only until
+# this file existed: a Stop denied by the lease while a program owned the belt
+# (answered FAILED with the belt still running at 6 mph), and a negative
+# Set-Target-Inclination refused where the daemon flattened the belt. Both were
+# run RED against the pre-fix image.
+run blecp      env -C tools/qemu_scenarios python3 -m pytest test_ble_control_point.py -q -n 4
 run smoke      bash tools/qemu_smoke.sh
 run scenarios  env -C tools/qemu_harness python3 -m pytest test_scenarios.py -q -n 4
 if [ -n "${DEEP:-}" ]; then
