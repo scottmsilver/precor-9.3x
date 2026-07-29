@@ -26,6 +26,7 @@ run build      bash tools/build.sh
 run logcontr   bash tools/check_log_contract.sh
 run safety     cargo test --manifest-path safety_core/Cargo.toml -q
 run reqbudget  cargo test --manifest-path reqbudget/Cargo.toml -q
+run recstore   cargo test --manifest-path recstore/Cargo.toml -q
 run progcore   cargo test --manifest-path program_core/Cargo.toml -q
 run difftest   cargo test --manifest-path difftest/Cargo.toml -q
 run normalexit env -C tools/qemu_scenarios python3 -m pytest test_normal_exit.py -q

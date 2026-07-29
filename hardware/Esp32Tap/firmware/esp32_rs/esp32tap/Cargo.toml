@@ -74,6 +74,7 @@ embuild = "0.33"
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/mdns", version = "~1.8.0" }
 
+
 [features]
 default = []
 # Compile-time gate for the QEMU behavioral-harness shim. A cfg'd-out module
