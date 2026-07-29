@@ -29,6 +29,11 @@ esp32_rs/
 │                             depends only on safety_core
 ├── recstore/       CRATE 6 — fixed-record flash rings, no_std, ZERO deps,
 │                             torn-write tested at every byte offset
+├── ble_core/       CRATE 7 — FTMS encoding + HR parsing, no_std,
+│                             forbid(unsafe), depends only on safety_core.
+│                             Port of rust/ftms + rust/hrm PROTOCOL logic;
+│                             their bluer transport is Linux-only and stayed
+│                             behind. NO RADIO CODE — see "BLE" below
 │
 ├── experiments/wdt_qemu_control/  plain-C control proving the task-WDT panic
 │                                  path is unreachable under esp-QEMU
@@ -60,6 +65,11 @@ cd safety_core && cargo test
 # this is the fast inner loop when working on program logic.
 cargo test --manifest-path program_core/Cargo.toml
 cargo test --manifest-path reqbudget/Cargo.toml
+
+# Host — the BLE protocol tier (70 cases, ~1 s). Every vector is the Pi
+# daemon's, ported byte for byte. This is where nearly all the real BLE
+# behaviour is verifiable; the radio is not (see "BLE" below).
+cargo test --manifest-path ble_core/Cargo.toml
 
 # Host — differential against the COMMITTED, UNMODIFIED C++ core.
 cd difftest && cargo test
@@ -110,8 +120,12 @@ zero-init-then-assign.
 
 ## What the type system carries here
 
-* **`#![forbid(unsafe_code)]` on `safety_core`** — compiler-enforced, and
-  `forbid` cannot be lifted by an inner `allow` (that is a hard error).
+* **`#![forbid(unsafe_code)]` on the pure crates** — `safety_core`,
+  `program_core` and `ble_core` — compiler-enforced, and `forbid` cannot be
+  lifted by an inner `allow` (that is a hard error). `check_unsafe_budget.py`
+  now asserts the line is still THERE on all three: `program_core` and
+  `ble_core` carried it with nothing verifying it, and deleting it is a
+  one-character act no other gate would have noticed.
   On the **binary**, the containment is partly compiler-enforced and partly
   gate-enforced, and the difference matters:
   * `src/tasks/`, `src/context.rs` and `src/pins.rs` carry their own
@@ -447,6 +461,54 @@ Not proven, and not claimed:
   `DELETE /api/profiles/{id}` are not implemented; `has_avatar` is `false` and
   says so.
 * **Real hardware.** Everything above is QEMU.
+
+### BLE (`ble_core`) — what is proven, and what is not
+
+`ble_core` is the FTMS and Heart Rate **protocol** tier: characteristic
+encoding, Control Point parsing, and the km/h <-> mph conversion. It is a port
+of `rust/ftms/src/protocol.rs` and `rust/hrm/src/scanner.rs` — the working Pi
+daemons — and it keeps their test vectors byte for byte, including the two
+places they are lossy (the truncating mph->km/h divide that makes 12.0 mph
+encode as 1930 while Speed Range advertises 1931; the uint24 distance field).
+If this crate and a daemon disagree, this crate is wrong: a phone that has been
+talking to the Pi must see the same bytes from the ESP32.
+
+Proven, on the host, in about a second (70 cases):
+
+* Every characteristic's bytes: Treadmill Data (13 bytes, fixed flags 0x040C),
+  Feature, Speed Range, Incline Range, Training Status, Machine Status, and the
+  three-byte Control Point response.
+* Control Point parsing is TOTAL over untrusted input — every 1- and 2-byte
+  input, and 3-byte inputs across the whole opcode/parameter space, return
+  rather than panic; short payloads and unknown opcodes are refused.
+* The unit conversion in both directions, including the daemon's truncation at
+  the extremes, a round-trip within 0.1 mph across **every** speed the belt can
+  be commanded (not the daemon's 8 samples), and the integer half-percent
+  rounding proven equal to the daemon's floating-point rule over all 65 536
+  values an `i16` Control Point write can carry.
+* The belt edge: a Control Point write becomes a `CpEffect` in `safety_core`
+  newtypes — never a raw integer — and a speed write cannot disturb the incline
+  or vice versa. **No clamping happens here.** `esp32tap/src/control.rs` is THE
+  ONE PATH TO THE BELT and owns the lease, the clamps and the auto-emulate
+  policy; a clamp in front of it would be a second opinion about what is safe.
+  An out-of-range write therefore converts faithfully, is refused by the
+  controller, and the peer is told `INVALID_PARAM` — where the Pi silently
+  substituted 12 mph and moved the belt at a speed nobody asked for.
+
+Not proven, and not claimed — **there is no radio in this phase and none in
+QEMU**:
+
+* No advertising, connection, pairing, bonding, notification or indication has
+  been exercised anywhere. `ble_core` contains no radio code at all; NimBLE is
+  not yet enabled in `sdkconfig.defaults`.
+* Nothing here says the stack FITS. NimBLE's heap cost alongside TLS and the
+  app tier is unmeasured, and unmeasured is the state in which a device
+  reboots on a real board.
+* No real client (Zwift, QZ, Kinomap, Apple Watch, Garmin, a chest strap) has
+  connected to this device.
+
+That work is tracked in **precor-9_3x-l0h**, which names each unproven item;
+it needs a physical board, which does not exist yet.
 
 ---
 

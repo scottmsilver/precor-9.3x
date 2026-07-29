@@ -18,8 +18,8 @@ This script closes the remaining hole. It is a REQUIRED gate in
 
 Enforced
 --------
-1. ``safety_core`` carries ``#![forbid(unsafe_code)]`` and contains no
-   ``unsafe`` token at all.
+1. Every crate in ``PURE_FORBID_CRATES`` carries ``#![forbid(unsafe_code)]``
+   and contains no ``unsafe`` token at all.
 2. The firmware modules listed in ``FORBID_MODULES`` each carry their own
    module-level ``#![forbid(unsafe_code)]``.
 3. The set of firmware files containing an ``unsafe`` BLOCK/``impl``/``fn`` is
@@ -45,6 +45,11 @@ HERE = Path(__file__).resolve().parent
 ESP32_RS = HERE.parent
 FW_SRC = ESP32_RS / "esp32tap" / "src"
 CORE_SRC = ESP32_RS / "safety_core" / "src"
+
+# Crates that are `#![forbid(unsafe_code)]` and contain no `unsafe` token at
+# all. `reqbudget` and `recstore` are deliberately absent: reqbudget owns the
+# static request pool and needs FFI-free `unsafe` for it.
+PURE_FORBID_CRATES = ("safety_core", "program_core", "ble_core")
 
 # Firmware modules whose unsafe-freedom is COMPILER-enforced.
 FORBID_MODULES = ("tasks/mod.rs", "context.rs", "pins.rs", "control.rs")
@@ -362,14 +367,26 @@ def unsafe_line_count(text: str) -> int:
 def check() -> list[str]:
     failures: list[str] = []
 
-    # --- 1. safety_core is forbid + unsafe-free ---------------------------
-    lib = CORE_SRC / "lib.rs"
-    if "#![forbid(unsafe_code)]" not in lib.read_text(encoding="utf-8"):
-        failures.append("safety_core/src/lib.rs lost `#![forbid(unsafe_code)]`")
-    for p in rs_files(CORE_SRC):
-        code = strip_comments_and_strings(p.read_text(encoding="utf-8"))
-        if _UNSAFE_TOKEN.search(code):
-            failures.append(f"safety_core/{rel(p, CORE_SRC)} contains `unsafe`")
+    # --- 1. the PURE crates are forbid + unsafe-free ----------------------
+    #
+    # `safety_core` was the only one checked here, and `program_core` and
+    # `ble_core` were in the same hole `test_store_persistence.py` was in:
+    # both carry `#![forbid(unsafe_code)]` and NOTHING verified it was still
+    # there. `forbid` cannot be lifted by an inner `allow`, so the line itself
+    # is the whole guarantee — deleting it is a one-character act that no
+    # other gate would notice.
+    for crate in PURE_FORBID_CRATES:
+        src = ESP32_RS / crate / "src"
+        if not src.is_dir():
+            failures.append(f"PURE_FORBID_CRATES names a missing crate: {crate}")
+            continue
+        lib = src / "lib.rs"
+        if "#![forbid(unsafe_code)]" not in lib.read_text(encoding="utf-8"):
+            failures.append(f"{crate}/src/lib.rs lost `#![forbid(unsafe_code)]`")
+        for p in rs_files(src):
+            code = strip_comments_and_strings(p.read_text(encoding="utf-8"))
+            if _UNSAFE_TOKEN.search(code):
+                failures.append(f"{crate}/{rel(p, src)} contains `unsafe`")
 
     # --- 2. module-level forbid in the unsafe-free firmware modules -------
     for m in FORBID_MODULES:
@@ -466,7 +483,8 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print(
-        "check_unsafe_budget: OK — safety_core forbid+unsafe-free; "
+        f"check_unsafe_budget: OK — {len(PURE_FORBID_CRATES)} pure crates "
+        f"({', '.join(PURE_FORBID_CRATES)}) forbid+unsafe-free; "
         f"{len(FORBID_MODULES)} firmware modules compiler-forbid; unsafe confined to "
         f"{len(PRODUCTION_UNSAFE)} production files ({PRODUCTION_UNSAFE_LINES} lines) "
         f"+ {len(QEMU_UNSAFE)} test-image files ({QEMU_UNSAFE_LINES} lines); "
