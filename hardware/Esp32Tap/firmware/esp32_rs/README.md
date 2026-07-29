@@ -517,6 +517,20 @@ one lease, one set of clamps, one auto-emulate policy. The BLE surface shares
 and a phone on Bluetooth would emergency-stop the same phone on HTTP every time
 the user touched the other control.
 
+**Stop is the exception, and it is not deniable.** Routing it like every other
+effect meant that while the interval executor held the lease it came back
+`Reject::NotOwner` — so a user running a program at 6 mph who pressed stop in
+Zwift was answered `RESULT_FAILED` with the belt still running, and a BLE-only
+peer cannot call `POST /api/program/stop`. `CpEffect::Stop` now takes the route
+the app's stop button takes: `ProgramState::stop`, then `apply_plan` with
+`release_belt = true`, so the zero is issued through `control::command` under
+the lease the executor already holds and cannot be refused. Still one path to
+the belt. (The obvious version of that fix — drive the plan, then command zero
+again as `Surface::Http` — is WRONG and the QEMU scenario caught it:
+`control::release` starts a gap-safe exit and holds the lease until it
+completes, so the follow-up hit `NotOwner` too. `net/program.rs` had already
+written that rule down for Quick Start.)
+
 **Enabling NimBLE is two Kconfig keys and nothing else** — `CONFIG_BT_ENABLED=y`
 plus `CONFIG_BT_NIMBLE_ENABLED=y`. They came from reading esp-idf-sys 0.37.2's
 own `src/include/esp-idf/bindings.h:603-688`, which gates the NimBLE headers on
