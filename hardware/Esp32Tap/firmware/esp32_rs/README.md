@@ -598,11 +598,45 @@ The whole qemu-test image is built `--features qemu-test,net,ble`, so **every**
 scenario in the tree already runs against a device whose radio failed to come
 up. That file states the property; the other twenty would go red with it.
 
+#### What QEMU ALSO proves: the whole belt edge, with no radio
+
+The test line used to be drawn one layer too low. Only `access_cb`'s mbuf copy
+needs Bluetooth; everything below it — `plan` -> `effect_of` -> `apply` ->
+`control::command`, the lease, the clamps, the auto-emulate policy and the FTMS
+result mapping — is ordinary Rust operating on the real safety controller and
+the real relay. So the qemu-test-only shim verb **`QT ble_cp <hex>`** feeds
+bytes to exactly those calls, in the same order `on_control_point` makes them,
+and `tools/qemu_scenarios/test_ble_control_point.py` (sweep gate `blecp`, 9
+cases, ~20 s) drives the belt edge end to end on a machine with no Bluetooth
+adapter in it.
+
+It is not a simulated radio and it is not a second path to the belt; it is the
+same two function calls in a build that is never flashed. It exists because two
+REAL defects were, until it, establishable only by reading:
+
+* **FTMS Stop was denied by the lease exactly when it mattered.** Every effect
+  went to `control::command(Surface::Http, ..)`, so while the interval executor
+  owned the belt a Stop came back `Reject::NotOwner` and the peer was answered
+  `RESULT_FAILED` with the belt still running at the program's speed. A
+  BLE-only peer cannot call `POST /api/program/stop`, so there was no working
+  stop at all during a program. Stop now takes the route the app's stop button
+  takes. **Both Stop cases were run RED against the pre-fix image.**
+* **A negative Set-Target-Inclination was refused** where the Pi daemon clamped
+  to 0.0% and answered SUCCESS, so a route-simulating app on a descent left the
+  belt on the previous uphill grade for the whole downhill.
+
 Not proven, and not claimed — **QEMU has no BLE radio and there is no board**:
 
 * No advertising, connection, pairing, bonding, MTU negotiation, notification
   or indication has ever run. Every line in `ble/ftms.rs` and `ble/central.rs`
-  past the identity guard is UNEXECUTED code.
+  past the identity guard — and the mbuf copy in `access_cb` above the tested
+  belt edge — is UNEXECUTED code.
+* The NimBLE host task's stack was **unsized** until 2026-07-29 (the Kconfig key
+  was absent, so the build took the IDF default of 4096 B) on the one task with
+  the deepest untrusted call chain. It is now 8192 with the arithmetic written
+  into `sdkconfig.defaults`, and `uxTaskGetStackHighWaterMark` is sampled after
+  every Control Point write — but the high-water mark has never been READ,
+  because nothing has ever written a Control Point over a radio.
 * NimBLE's runtime heap cost alongside TLS and the app tier is unmeasured (see
   above), and unmeasured is the state in which a device reboots on a real board.
 * No real client (Zwift, QZ, Kinomap, Apple Watch, Garmin, a chest strap) has

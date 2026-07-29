@@ -125,6 +125,19 @@ def assert_emulate_entry_completed(s, since: int, timeout: float = 30.0) -> None
     the mechanism, and only then look at the wire. This TIGHTENS the test — it
     can now fail for a reason it previously could only fail obliquely — and
     adds no tolerance of any kind.
+
+    IF THIS FIRES, READ BEAD precor-9_3x-9aj BEFORE CHANGING ANYTHING. There is
+    a known, diagnosed way for it to happen that is NOT a firmware defect: the
+    10 ms deadline is measured in `esp_timer_get_time()`, which esp-QEMU drives
+    from QEMU_CLOCK_VIRTUAL — and with `-icount` off, that is HOST WALL TIME —
+    while progress through the poll loop is measured by `esp_rom_delay_us`,
+    which advances with the CPU cycle counter, i.e. GUEST INSTRUCTION TIME. A
+    host that deschedules the QEMU process mid-window spends the budget without
+    advancing the loop, and the transfer fails closed. On real silicon both
+    clocks are the same silicon. The bead records the candidate fix
+    (`-icount shift=auto`) and why it was not taken unilaterally. Do NOT raise
+    the deadline, retry the entry, sleep, or lower -n: all four hide the
+    divergence and none removes it.
     """
 
     def entry_events():
