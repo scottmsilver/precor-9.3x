@@ -27,12 +27,14 @@ run logcontr   bash tools/check_log_contract.sh
 run safety     cargo test --manifest-path safety_core/Cargo.toml -q
 run reqbudget  cargo test --manifest-path reqbudget/Cargo.toml -q
 # `run recstore` was here. The crate it gated is DELETED: the persistence tier
-# is LittleFS now (net/store.rs), so the properties that suite proved — torn
-# writes never damaging a neighbour, an erased sequence not sorting as the
-# newest record, a slot never straddling a NOR sector — are the filesystem's
-# by construction rather than ours to test. What REPLACES it as evidence is
-# `storepers` and `records` below, which run against real flash in a real
-# guest and were not touched by the swap.
+# is LittleFS now (net/store.rs). Two of the properties that suite proved are
+# genuinely the filesystem's by construction — a slot never straddling a NOR
+# sector, an erased sequence never sorting as the newest record. The THIRD is
+# not, and saying it was is how this sweep briefly ran with no power-loss
+# coverage at all: "a torn write never damages a record that was already
+# committed" is a claim about THIS mount, and `storetorn` below measures it by
+# resetting the SoC inside the write. `storepers` and `records` are the rest of
+# the replacement — real flash in a real guest, untouched by the swap.
 run progcore   cargo test --manifest-path program_core/Cargo.toml -q
 # The coach tier's judgement, host-only and ~0 s. EVERY property that decides
 # what a model reply MEANS lives here: the bounded streaming extractor, the
