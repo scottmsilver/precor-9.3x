@@ -395,13 +395,42 @@ esp-idf-sys generates no symbols for a third-party component without a
 `[package.metadata.esp-idf-sys]` **table** — which is why the first attempt
 "parsed but was absent at build time". See `esp32tap/bindings/littlefs.h`.
 
-Every write stages into a temp file and is **renamed** over its destination;
-`lfs_rename` is one atomic metadata commit, so a power cut leaves a record at
-its previous content — never half-written, never missing, never duplicated.
-That is strictly safer than what it replaced, whose update path erased first
-and documented the resulting loss window as acceptable. What this tier still
-owns is a 4-byte sequence number per record, because a filesystem has no
-notion of "the third-newest record" and every list endpoint is built on one.
+Every write stages into a temp file, is **synced**, and is then **renamed** over
+its destination; `lfs_rename` is one atomic metadata commit, so a power cut
+leaves a record at its previous content — never half-written, never missing,
+never duplicated. That is strictly safer than what it replaced, whose update
+path erased first and documented the resulting loss window as acceptable. What
+this tier still owns is a 4-byte sequence number per record, because a
+filesystem has no notion of "the third-newest record" and every list endpoint is
+built on one.
+
+Two conditions that claim depends on, both of them now explicit rather than
+implied. It is ONE commit only because the temp file and every slot are entries
+in the **mount root** — a cross-directory rename in littlefs is a create plus a
+pending delete, still crash-safe but a different mechanism — so `same_dir` pins
+that as a compile-time assert on the temp name and a `debug_assert` on every
+destination. And the **sync result is not discarded**: `write_all` returning `Ok`
+only reaches littlefs's 128-byte file cache, the size and block pointers commit
+at `lfs_file_sync`, and `File`'s `Drop` throws `close`'s error away — so without
+an explicit `sync_all()` a failed commit would have renamed a short-or-empty file
+over a good record, which is the very class the swap was performed to eliminate,
+surviving on the error path.
+
+**And it is measured at the mount, not argued from littlefs's design.**
+`tools/qemu_scenarios/test_store_power_loss.py` (gate `storetorn`, 8 s) resets
+the SoC *inside* `write_slot` through a test-image-only `QT store_tear` verb —
+mid-staging at four byte offsets, after the sync and before the rename, and just
+after the rename — and asserts the slot reads as **exactly** the old record or
+**exactly** the new one, that the count never moves, that the store still mounts,
+and that the next write still lands. `esp_restart` is the right instrument
+because it is a soft reset and QEMU's flash image outlives it, so the next boot
+re-mounts the littlefs a real cut would leave. This is `recstore`'s torn-write
+test translated to the new backend: deleting that store deleted the two tests
+that had caught both of its original defects, and adopting a filesystem is a
+reason to *believe* the atomicity claim, not a reason to stop testing it. Three
+interruption points rather than N byte offsets, because the only in-place
+mutation of a slot is the single rename commit — `recstore` needed a byte sweep
+because it wrote records in place.
 
 **Memory is the design, not a consideration**, and there are three mechanisms:
 
@@ -411,7 +440,7 @@ notion of "the third-newest record" and every list endpoint is built on one.
   read cache, a program cache and a lookahead bitmap for the life of the mount
   (sized explicitly in `sdkconfig.defaults` at 128/128/32 bytes rather than
   defaulted at 512/512/128), plus `lfs_t` and the esp_littlefs wrapper. That
-  part is **measured, not estimated**: `net::store::mount_once` samples the
+  part is **measured, not estimated**: `net::store::register_fs` samples the
   free heap either side of `esp_vfs_littlefs_register` and latches the
   difference, so the figure `QT store_stat` reports is this device's.
   **Measured total: 992 bytes** — 200 of index plus **792** of mount, against
@@ -420,6 +449,16 @@ notion of "the third-newest record" and every list endpoint is built on one.
   request count (this tier opens one file at a time and closes it before it
   returns, so littlefs's per-open-file buffer is transient and its four-entry
   descriptor cache never has to grow).
+
+  Be precise about what that number proves, because it is easy to over-read.
+  Both of its terms are latched, so `Stores::mount_cost_bytes` — it was called
+  `resident_bytes`, which invited exactly this mistake — **cannot move after
+  boot**, and an assertion that it does not move is true by construction. It is
+  the mount's price tag, not a leak detector. The anti-growth property is
+  carried by the **free heap**, which `QT store_stat` reports beside it
+  (`heap=`) and which can see the two things the latched figure cannot:
+  `esp_littlefs` mallocs per open file and grows an fd-cache array it never
+  shrinks, both after the sample window.
 * A record is read into a `reqbudget` slot, decoded, used and forgotten.
   Records are a **binary** format (`program_core::record`) rather than the JSON
   they are served as, precisely so the worst case is ~936 bytes and fits one
@@ -431,10 +470,11 @@ notion of "the third-newest record" and every list endpoint is built on one.
 That is the property whose absence let ~15 unauthenticated requests exhaust the
 C++ tier's heap and reboot it mid-run, dropping the relay.
 `test_records.py::test_resident_memory_does_not_grow_with_writes_or_with_requests`
-drives 240 writes and 10 full list reads and asserts both the residency figure
-and the free heap. Both it and `test_store_persistence.py` passed the LittleFS
-swap **completely unmodified**, which is what makes the swap a proof rather
-than a claim.
+drives 240 writes and 10 full list reads and asserts the residency figure and
+the free heap — and of those two it is the **free heap** that carries the
+property, for the reason above. Both that test and `test_store_persistence.py`
+passed the LittleFS swap **completely unmodified**, which is what makes the swap
+a proof rather than a claim.
 
 Proven in QEMU by `tools/qemu_scenarios/test_records.py` (11 scenarios):
 a saved workout survives a **reboot**, read back through the same endpoint;
@@ -495,7 +535,31 @@ never counted at all. The published figure was 89 lines short of what the
 stated rule measures. The rule now measures what it says (`470` at the previous
 commit, `528` here).
 
-`tools/sweep.sh` gained `records` and `storepers`. `test_store_persistence.py`
+**Writing the power-loss gate found three more**, and the first is the same
+class as the last one above — a failed write reporting success:
+
+* **`write_slot` discarded the close result** (see the sync paragraph earlier).
+  A metadata commit that failed at close was invisible, and the rename installed
+  a short-or-empty file over a good record. `sync_all()` now gates the rename.
+* **`erase_nth` cleared the index on a *failed* unlink**, justified by a comment
+  that asserted the opposite of what happens. A failed unlink means the file is
+  still there, so the next boot read its sequence back and **resurrected the
+  deleted record** — while the client had been told NOT_FOUND for a record that
+  had already vanished from the list. It now finishes the delete by zeroing the
+  slot's sequence header through the same atomic rename, and if that fails too it
+  leaves the index alone so RAM and flash still agree.
+* **The "one atomic commit" claim was silently conditional** on the temp file and
+  the slots sharing the mount root; `same_dir` pins it. A move to per-tag
+  subdirectories would have compiled, passed every test, and quietly lost it.
+
+`CONFIG_LITTLEFS_BLOCK_CYCLES` is also stated explicitly now (512, the component
+default) with the erase budget the checkpoint cadence actually spends — ~360
+rewrites per 3-hour session, ~1.6 erases per block per session across the
+partition's 256 blocks — rather than left defaulted inside a block that claims to
+state every cost.
+
+`tools/sweep.sh` gained `records`, `storepers` and `storetorn`.
+`test_store_persistence.py`
 was committed, passing, and invoked by NOTHING — the same hole
 `verify_harness_copy.py` was in — and it is the only gate that proves a record
 reaches real flash and survives a real SoC reset.
