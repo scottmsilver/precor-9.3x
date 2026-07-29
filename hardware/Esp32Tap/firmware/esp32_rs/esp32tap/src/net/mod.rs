@@ -21,6 +21,7 @@
 //! IDF changes a default, that citation is what to re-check.
 
 pub mod api;
+pub mod store;
 pub mod tls;
 pub mod http;
 pub mod mdns;

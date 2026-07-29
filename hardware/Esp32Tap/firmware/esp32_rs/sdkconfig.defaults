@@ -162,3 +162,20 @@ CONFIG_MDNS_MAX_INTERFACES=1
 # CONFIG_MDNS_PREDEF_NETIF_STA is not set
 # CONFIG_MDNS_PREDEF_NETIF_AP is not set
 # CONFIG_MDNS_PREDEF_NETIF_ETH is not set
+
+# --- 8 MB layout with a data partition (added 2026-07-28) ---
+#
+# The note above said the 8 MB N8 table comes back "if the port ever grows a
+# data partition". It has: the persistence tier needs the `storage` partition
+# at 0x210000, which does not exist under the stock 2 MB table — the image
+# carried only `factory` and `nvs`, and esp_partition_find_first("storage")
+# returned null, so every store probe answered no_partition.
+#
+# The FILENAME MUST BE ABSOLUTE — the sharp edge documented above. idf.py
+# resolves a relative path against the project dir, but esp-idf-sys generates
+# its own CMake project under target/.../esp-idf-sys-<HASH>/out/ and resolves
+# against THAT, and <HASH> is not knowable in advance. tools/build.sh always
+# bind-mounts the worktree at /project, so this path is stable.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="/project/hardware/Esp32Tap/firmware/esp32_rs/partitions_esp32tap.csv"

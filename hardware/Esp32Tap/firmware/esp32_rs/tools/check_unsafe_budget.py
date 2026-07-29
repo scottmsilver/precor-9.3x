@@ -74,6 +74,7 @@ QEMU_UNSAFE = {
     "net/mod.rs",
     "net/http.rs",
     "net/api.rs",
+    "net/store.rs",
     "net/tls.rs",
     "net/mdns.rs",
     "net/program.rs",
@@ -135,7 +136,7 @@ PRODUCTION_UNSAFE_LINES = 69
 # "qemu-test"` is never enabled in the flashed build — and it exists so the
 # adversarial memory scenarios can plot a real heap curve instead of asserting
 # convergence from the absence of a reboot.
-QEMU_UNSAFE_LINES = 355
+QEMU_UNSAFE_LINES = 381
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

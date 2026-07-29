@@ -24,6 +24,7 @@ debug = true
 safety_core = { path = "../safety_core" }
 # Host-testable request budget (see reqbudget/src/lib.rs).
 reqbudget = { path = "../reqbudget" }
+recstore = { path = "../recstore" }
 # The interval executor's decisions: portable, allocation-free, host-tested.
 program_core = { path = "../program_core" }
 

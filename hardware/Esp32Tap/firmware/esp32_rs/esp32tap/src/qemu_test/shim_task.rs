@@ -226,6 +226,53 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
         // fragmentation, not exhaustion, is what actually kills a long-running
         // allocator: a heap with 100 KB free in 1 KB pieces cannot serve a
         // 40 KB TLS session.
+        // Store probes. The persistence tier's only claim that matters is
+        // "it survives a reboot", and that cannot be shown from the HTTP API
+        // alone — the harness must be able to write, reboot, and read back.
+        "store_put" => {
+            match crate::net::store::Stores::mount() {
+                Some(mut st) => {
+                    let payload = args.as_bytes();
+                    match st.history.append(&mut st.flash, payload) {
+                        Ok(seq) => qt!("QTOK store_put seq={} len={}", seq, payload.len()),
+                        Err(()) => qt!("QTERR store_put write_failed"),
+                    }
+                }
+                None => qt!("QTERR store_put no_partition"),
+            }
+        }
+
+        "store_get" => {
+            let n: usize = args.trim().parse().unwrap_or(0);
+            match crate::net::store::Stores::mount() {
+                Some(st) => {
+                    let mut buf = [0u8; 256];
+                    match st.history.read_nth(&st.flash, n, &mut buf) {
+                        Ok(Some(len)) => {
+                            let text = core::str::from_utf8(&buf[..len]).unwrap_or("<non-utf8>");
+                            qt!("QTOK store_get n={} len={} body={}", n, len, text);
+                        }
+                        Ok(None) => qt!("QTOK store_get n={} absent", n),
+                        Err(()) => qt!("QTERR store_get read_failed"),
+                    }
+                }
+                None => qt!("QTERR store_get no_partition"),
+            }
+        }
+
+        "store_stat" => {
+            match crate::net::store::Stores::mount() {
+                Some(st) => qt!(
+                    "QTOK store_stat history={} workouts={} runs={} resident={}",
+                    st.history.len(),
+                    st.workouts.len(),
+                    st.runs.len(),
+                    crate::net::store::Stores::resident_bytes()
+                ),
+                None => qt!("QTERR store_stat no_partition"),
+            }
+        }
+
         "heap" => {
             // SAFETY: three IDF accessors that take no arguments, return
             // integers by value, and touch no Rust memory.

@@ -494,6 +494,44 @@ All C++ code in `cpp/` must follow these rules. The environment is resource-cons
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+## Working Principles (earned the hard way — see git history)
+
+**Reuse before you build.** Check whether the platform already does it. A
+hand-rolled flash record store produced two real bugs in an hour (a 4 KB sector
+erase destroying the 15 records packed into it; an erased 0xFFFFFFFF sequence
+sorting as the newest record) — LittleFS would have had neither. If you find
+yourself reimplementing power-loss safety, a filesystem, an HTTP server or an
+mDNS responder, stop and find the component.
+
+**Read before you probe.** Signatures come from generated bindings, not C
+headers or memory. Build-system questions come from the crate's documentation
+read ONCE. Two blockers were filed as "impossible" and both turned out to be a
+single line found by reading BUILD-OPTIONS.md: TLS needed one Kconfig symbol,
+mDNS needed `extra_components` (which adds) rather than `esp_idf_components`
+(which is an exclusive whitelist and trims). Each probe costs a 60-180s
+rebuild; a doc read costs one minute.
+
+**Guard iteration speed actively.** Measure what a gate costs and cut what does
+not earn it. Do NOT run the full sweep after every edit — run the gates the
+change can actually reach. Feature-gated work needs only its feature's gates.
+The full sweep belongs at commit boundaries; the 5-minute soak belongs behind
+DEEP=1. When something gets slow, interrogate the cause rather than tolerating
+it: "CPU starvation" on a 20-core machine turned out to be a TOCTOU in port
+allocation and a shared flash image two sessions raced on.
+
+**An intermittent is worse than a hard failure.** It costs an investigation
+every time and the investigations land on wrong theories. Never add a retry, a
+sleep, or a loosened bound to make one pass — find the mechanism. Silence is
+the worst failure mode of all: a command ring that dropped silently looked
+exactly like a wedged device.
+
+**Simplify toward less code.** Deleted code has no bugs. Prefer the thin device
+over the clever one, the fixed budget over the growing pool, the single path to
+the belt over two paths that agree today.
+
+**Right-size the model.** Research, inventory and mechanical edits go to a cheap
+model; only hard design and adversarial review need the expensive one.
+
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
