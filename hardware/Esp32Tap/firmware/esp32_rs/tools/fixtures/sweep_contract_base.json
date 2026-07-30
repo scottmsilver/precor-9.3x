@@ -1,0 +1,386 @@
+{
+  "base_sha": "ad5d55a20abf210a6bf9998c697323780352c184",
+  "normal": [
+    {
+      "name": "harnesslock",
+      "argv": [
+        "python3",
+        "tools/verify_harness_copy.py"
+      ]
+    },
+    {
+      "name": "build",
+      "argv": [
+        "bash",
+        "tools/build.sh"
+      ]
+    },
+    {
+      "name": "logcontr",
+      "argv": [
+        "bash",
+        "tools/check_log_contract.sh"
+      ]
+    },
+    {
+      "name": "safety",
+      "argv": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "safety_core/Cargo.toml",
+        "-q"
+      ]
+    },
+    {
+      "name": "reqbudget",
+      "argv": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "reqbudget/Cargo.toml",
+        "-q"
+      ]
+    },
+    {
+      "name": "progcore",
+      "argv": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "program_core/Cargo.toml",
+        "-q"
+      ]
+    },
+    {
+      "name": "coachcore",
+      "argv": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "coach_core/Cargo.toml",
+        "-q"
+      ]
+    },
+    {
+      "name": "blecore",
+      "argv": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "ble_core/Cargo.toml",
+        "-q"
+      ]
+    },
+    {
+      "name": "difftest",
+      "argv": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "difftest/Cargo.toml",
+        "-q"
+      ]
+    },
+    {
+      "name": "normalexit",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_normal_exit.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "httpentry",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_http_entry.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "profiles",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_profiles.py",
+        "-q",
+        "-n",
+        "4"
+      ]
+    },
+    {
+      "name": "program",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_program.py",
+        "-q",
+        "-n",
+        "4"
+      ]
+    },
+    {
+      "name": "reviewer",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_reviewer_attacks.py",
+        "-q",
+        "-n",
+        "3"
+      ]
+    },
+    {
+      "name": "records",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_records.py",
+        "-q",
+        "-n",
+        "4"
+      ]
+    },
+    {
+      "name": "storepers",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_store_persistence.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "storetorn",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_store_power_loss.py",
+        "-q",
+        "-n",
+        "4"
+      ]
+    },
+    {
+      "name": "wspush",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_ws.py",
+        "-q",
+        "-n",
+        "3"
+      ]
+    },
+    {
+      "name": "memreview",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_mem_review.py",
+        "-q",
+        "-n",
+        "4",
+        "-k",
+        "not storm and not rejected"
+      ]
+    },
+    {
+      "name": "coach",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_coach.py",
+        "-q",
+        "-n",
+        "4"
+      ]
+    },
+    {
+      "name": "tls",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_tls.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "tlspersist",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_tls_persistence.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "mdns",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_mdns.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "bledegrade",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_ble_degraded.py",
+        "-q",
+        "-n",
+        "3"
+      ]
+    },
+    {
+      "name": "blecp",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_ble_control_point.py",
+        "-q",
+        "-n",
+        "4"
+      ]
+    },
+    {
+      "name": "smoke",
+      "argv": [
+        "bash",
+        "tools/qemu_smoke.sh"
+      ]
+    },
+    {
+      "name": "scenarios",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_harness",
+        "python3",
+        "-m",
+        "pytest",
+        "test_scenarios.py",
+        "-q",
+        "-n",
+        "4"
+      ]
+    }
+  ],
+  "deep": [
+    {
+      "name": "adversar",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_adversarial.py",
+        "-q"
+      ]
+    },
+    {
+      "name": "memheap",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_mem_review.py",
+        "-q",
+        "-n",
+        "2",
+        "-k",
+        "storm or rejected"
+      ]
+    },
+    {
+      "name": "coachrev",
+      "argv": [
+        "env",
+        "-C",
+        "tools/qemu_scenarios",
+        "python3",
+        "-m",
+        "pytest",
+        "test_coach_review.py",
+        "-q",
+        "-n",
+        "2"
+      ]
+    }
+  ],
+  "aggregates_failures": true
+}
