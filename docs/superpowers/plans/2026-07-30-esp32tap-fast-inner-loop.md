@@ -341,10 +341,15 @@ relative symlink, then `os.replace(temp_link, public_link)`. Readers resolve
 the link only while holding the shared lock. On failure, old link remains.
 `publish_generation_atomic` also owns a tested legacy migration: when the
 public path is the tracked/pre-migration real directory, it atomically renames
-that directory to a task-specific backup, installs the symlink, and restores
-the original directory on any failure. The backup is removed only after the
-new link and generation are durable. Tests cover success and every injected
-failure point.
+that directory to an exact transaction swap, records its device and inode in a
+durable marker, installs the symlink, and restores the original directory on
+any pre-commit failure. After durable publication, it atomically and durably
+retires the swap to a task-specific tombstone and removes only the transaction
+marker. Online publication and crash recovery never traverse or recursively
+delete retired content. Deferred garbage collection is allowed only under an
+exclusive maintenance workflow with stronger isolation than the online lock.
+Tests cover success, crash recovery, substitutions, and every injected failure
+point while keeping the published generation available.
 
 CLI `exec --kind ... -- COMMAND` sets the lock FD inheritable, verifies, and
 `os.execvp`s COMMAND so smoke delegation retains the lock continuously.

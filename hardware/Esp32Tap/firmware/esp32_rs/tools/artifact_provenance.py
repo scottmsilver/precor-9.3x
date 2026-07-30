@@ -765,149 +765,6 @@ def _generation_matches(generation: Path, manifest: dict) -> bool:
         return False
 
 
-def _directory_open_flags() -> int:
-    return (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-    )
-
-
-def _restore_quarantined_entry(
-    directory_fd: int,
-    quarantine: str,
-    original: str,
-) -> None:
-    try:
-        os.stat(original, dir_fd=directory_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        os.rename(
-            quarantine,
-            original,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
-        )
-
-
-def _remove_directory_entry_fd(
-    directory_fd: int,
-    name: str,
-    root_device: int,
-) -> None:
-    before = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-    if stat.S_ISDIR(before.st_mode) and before.st_dev != root_device:
-        raise InvalidError("refusing to cross a legacy cleanup mount point")
-    if not (
-        stat.S_ISDIR(before.st_mode)
-        or stat.S_ISREG(before.st_mode)
-        or stat.S_ISLNK(before.st_mode)
-    ):
-        raise InvalidError("refusing to remove a special legacy cleanup entry")
-    quarantine = f".artifact-provenance-delete-{secrets.token_hex(32)}"
-    try:
-        os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        pass
-    else:
-        raise InternalError("legacy cleanup quarantine unexpectedly exists")
-    os.rename(
-        name,
-        quarantine,
-        src_dir_fd=directory_fd,
-        dst_dir_fd=directory_fd,
-    )
-    moved = os.stat(quarantine, dir_fd=directory_fd, follow_symlinks=False)
-    if (
-        (moved.st_dev, moved.st_ino) != (before.st_dev, before.st_ino)
-        or stat.S_IFMT(moved.st_mode) != stat.S_IFMT(before.st_mode)
-        or moved.st_nlink != before.st_nlink
-    ):
-        _restore_quarantined_entry(directory_fd, quarantine, name)
-        raise InvalidError("legacy cleanup entry changed while quarantining")
-    if stat.S_ISDIR(moved.st_mode):
-        child_fd = os.open(
-            quarantine,
-            _directory_open_flags(),
-            dir_fd=directory_fd,
-        )
-        try:
-            opened = os.fstat(child_fd)
-            if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
-                moved.st_dev,
-                moved.st_ino,
-            ):
-                raise InvalidError("legacy cleanup child changed while opening")
-            _remove_directory_contents_fd(child_fd, root_device)
-            current = os.stat(
-                quarantine,
-                dir_fd=directory_fd,
-                follow_symlinks=False,
-            )
-            if (current.st_dev, current.st_ino) != (moved.st_dev, moved.st_ino):
-                raise InvalidError("legacy cleanup child changed before removal")
-            os.rmdir(quarantine, dir_fd=directory_fd)
-        except Exception:
-            _restore_quarantined_entry(directory_fd, quarantine, name)
-            raise
-        finally:
-            os.close(child_fd)
-    else:
-        os.unlink(quarantine, dir_fd=directory_fd)
-
-
-def _remove_directory_contents_fd(directory_fd: int, root_device: int) -> None:
-    with os.scandir(directory_fd) as entries:
-        names = sorted(entry.name for entry in entries)
-    for name in names:
-        _remove_directory_entry_fd(directory_fd, name, root_device)
-
-
-def _remove_tree_exact(
-    path: Path,
-    artifacts: Path,
-    prefix: str,
-    expected_identity: tuple[int, int],
-) -> None:
-    if path.parent != artifacts or not path.name.startswith(prefix):
-        raise InternalError("refusing unsafe backup removal target")
-    artifacts_info = artifacts.lstat()
-    parent_fd = os.open(artifacts, _directory_open_flags())
-    fd = -1
-    try:
-        opened_parent = os.fstat(parent_fd)
-        if not stat.S_ISDIR(opened_parent.st_mode) or (
-            opened_parent.st_dev,
-            opened_parent.st_ino,
-        ) != (artifacts_info.st_dev, artifacts_info.st_ino):
-            raise InvalidError("artifact store changed before legacy cleanup")
-        info = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(info.st_mode)
-            or (info.st_dev, info.st_ino) != expected_identity
-        ):
-            raise InvalidError("retired legacy directory identity changed")
-        fd = os.open(path.name, _directory_open_flags(), dir_fd=parent_fd)
-        opened = os.fstat(fd)
-        current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(opened.st_mode)
-            or (opened.st_dev, opened.st_ino) != expected_identity
-            or (current.st_dev, current.st_ino) != expected_identity
-        ):
-            raise InvalidError("retired legacy directory changed before cleanup")
-        _failure_point("after_retired_fd_validation")
-        _remove_directory_contents_fd(fd, opened.st_dev)
-        current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-        if (current.st_dev, current.st_ino) != expected_identity:
-            raise InvalidError("retired legacy root changed during cleanup")
-        os.rmdir(path.name, dir_fd=parent_fd)
-    finally:
-        if fd >= 0:
-            os.close(fd)
-        os.close(parent_fd)
-
-
 def _failure_point(_name: str) -> None:
     """Monkeypatch seam for deterministic crash/rollback tests."""
 
@@ -1497,20 +1354,12 @@ def _publish_locked(
                 raise InvalidError("legacy swap identity changed during retirement")
             _fsync_dir(esp32_rs)
             _fsync_dir(artifacts)
-            _failure_point("before_retired_cleanup")
-            _remove_tree_exact(
-                retired,
-                artifacts,
-                ".retired-legacy-",
-                legacy_identity,
-            )
-            _fsync_dir(artifacts)
             if marker_path is not None and marker_info is not None:
                 _unlink_exact_marker(marker_path, marker_info)
                 _fsync_dir(esp32_rs)
         except Exception:
-            # The complete retired directory remains recoverable on any
-            # failure before recursive cleanup begins.
+            # Online publication never traverses or deletes retired content.
+            # A complete swap or retired tombstone remains recoverable.
             return
 
 
