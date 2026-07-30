@@ -37,7 +37,7 @@
       ],
       "properties": {
         "manual_lease_seconds": {
-          "const": 4.0
+          "const": null
         },
         "console_fresh_seconds": {
           "const": 1.5

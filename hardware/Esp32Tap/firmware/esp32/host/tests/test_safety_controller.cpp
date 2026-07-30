@@ -95,58 +95,61 @@ TEST_CASE("lease uses transport, handle and generation") {
     }
 }
 
-// py: test_only_owner_mutates_or_renews_the_single_four_second_lease
-TEST_CASE("only owner mutates or renews the single 4 s lease") {
+// py: test_manual_owner_persists_without_a_deadline
+TEST_CASE("manual owner persists without a deadline") {
     auto owner = identity();
     auto other = identity(Transport::WSS, 101, 1);
     auto c = connected_controller(owner);
     REQUIRE(c.connect(other));
 
-    CHECK(c.command_motion(owner, 30, 4, 1 * S));
-    REQUIRE(c.lease_expires_at().has_value());
-    CHECK(*c.lease_expires_at() == 5 * S);
+    CHECK(c.command_motion(owner, 30, 0, 0));
+    CHECK_FALSE(c.lease_expires_at().has_value());
     CHECK_FALSE(c.command_motion(other, 90, 8, 2 * S));
-    CHECK_FALSE(c.heartbeat(other, 3'900 * MS));
-    CHECK(*c.lease_expires_at() == 5 * S);
-    CHECK(c.heartbeat(owner, 4 * S));
-    CHECK(*c.lease_expires_at() == 8 * S);
-
-    c.tick(7'999 * MS);
-    CHECK(c.owner().has_value());
-    c.tick(8 * S);
-    CHECK_FALSE(c.owner().has_value());
-    CHECK(c.mode() == SafeMode::PROXY);
-    CHECK(c.speed_tenths() == 0);
+    CHECK_FALSE(c.heartbeat(other, 9 * S));
+    CHECK(c.heartbeat(owner, 10 * S));
+    c.tick(10 * S);
+    REQUIRE(c.owner().has_value());
+    CHECK(*c.owner() == owner);
+    CHECK(c.speed_tenths() == 30);
     CHECK(c.incline_half_percent() == 0);
-    CHECK_FALSE(c.relay_cmd());
-}
-
-// py: test_manual_lease_cannot_be_renewed_at_or_after_its_deadline
-TEST_CASE("manual lease cannot be renewed at or after its deadline") {
-    auto owner = identity();
-    auto c = connected_controller(owner);
-
-    CHECK_FALSE(c.heartbeat(owner, 4 * S));  // exact deadline loses
-    CHECK_FALSE(c.owner().has_value());
     CHECK_FALSE(c.lease_expires_at().has_value());
     CHECK(c.mode() == SafeMode::PROXY);
-    CHECK(last_event(c) == "emergency:lease_expired");
+    CHECK_FALSE(c.relay_cmd());
+    CHECK_FALSE(has_event(c, "emergency:lease_expired"));
 }
 
-// py: test_unrelated_transport_drop_still_enforces_exact_lease_deadline
-TEST_CASE("unrelated transport drop still enforces exact lease deadline") {
+// py: test_manual_owner_persists_without_heartbeat
+TEST_CASE("manual owner persists without heartbeat") {
+    for (Transport transport : {Transport::WSS, Transport::BLE}) {
+        auto owner = identity(transport, 23, 1);
+        auto c = connected_controller(owner);
+        CHECK(c.command_motion(owner, 30, 0, 0));
+
+        c.tick(10 * S);
+
+        REQUIRE(c.owner().has_value());
+        CHECK(*c.owner() == owner);
+        CHECK(c.speed_tenths() == 30);
+        CHECK_FALSE(c.lease_expires_at().has_value());
+        CHECK_FALSE(has_event(c, "emergency:lease_expired"));
+    }
+}
+
+// py: test_unrelated_transport_drop_does_not_end_manual_owner
+TEST_CASE("unrelated transport drop does not end manual owner") {
     auto owner = identity(Transport::BLE, 23, 1);
     auto c = connected_controller(owner);
-    enter_emulate(c, owner);
-    for (int64_t now : {1'400 * MS, 2'800 * MS, 3'900 * MS}) {
-        c.observe_console_bytes(bytes("[loop:5550]"), now);
-    }
+    CHECK(c.command_motion(owner, 30, 0, 0));
 
-    CHECK_FALSE(c.disconnect_transport(Transport::WSS, 4 * S));
+    CHECK_FALSE(c.disconnect_transport(Transport::WSS, 10 * S));
+    CHECK(c.owner().has_value());
+    CHECK(*c.owner() == owner);
     CHECK(c.mode() == SafeMode::PROXY);
-    CHECK_FALSE(c.owner().has_value());
+    CHECK(c.speed_tenths() == 30);
+    CHECK(c.incline_half_percent() == 0);
+    CHECK_FALSE(c.lease_expires_at().has_value());
     CHECK_FALSE(c.relay_cmd());
-    CHECK(has_event(c, "emergency:lease_expired"));
+    CHECK_FALSE(has_event(c, "emergency:lease_expired"));
 }
 
 // py: test_owner_disconnect_is_immediate_but_non_owner_disconnect_is_ignored
@@ -226,10 +229,10 @@ TEST_CASE("network failure matrix") {
         bool must_proxy;
     };
     const Row rows[] = {
-        {Transport::WSS, "silence", true},
+        {Transport::WSS, "silence", false},
         {Transport::WSS, "wss_drop", true},
         {Transport::WSS, "ble_drop", false},
-        {Transport::BLE, "silence", true},
+        {Transport::BLE, "silence", false},
         {Transport::BLE, "wss_drop", false},
         {Transport::BLE, "ble_drop", true},
         {Transport::EXECUTOR, "silence", false},
@@ -399,9 +402,7 @@ TEST_CASE("late console frame cannot overwrite missed freshness deadline") {
 // py: test_stale_console_forces_immediate_zero_and_bypass
 TEST_CASE("stale console forces immediate zero and bypass") {
     for (int64_t age : {int64_t{1'500'001}, 20 * S}) {
-        auto owner = age < MANUAL_LEASE_US
-                         ? identity()
-                         : identity(Transport::EXECUTOR, 55, 1);
+        auto owner = identity();
         auto c = connected_controller(owner);
         enter_emulate(c, owner, 0);
 
@@ -934,8 +935,8 @@ TEST_CASE("console bridge failure matrix remains hardware proxy") {
 // py: test_emergency_paths_never_wait_for_a_gap
 TEST_CASE("emergency paths never wait for a gap") {
     const char* reasons[] = {
-        "tread_not_ok", "console_stale", "lease_expired",
-        "explicit_emergency_stop", "brownout", "reset", "watchdog",
+        "tread_not_ok", "console_stale", "explicit_emergency_stop",
+        "brownout", "reset", "watchdog",
     };
     for (const char* reason : reasons) {
         auto owner = identity();
@@ -1020,7 +1021,6 @@ TEST_CASE("reset requires an actual bypass feedback sample before entry") {
 
 // py: test_model_constants_are_the_normative_deadlines
 TEST_CASE("model constants are the normative deadlines") {
-    CHECK(MANUAL_LEASE_US == 4'000'000);
     CHECK(CONSOLE_FRESH_US == 1'500'000);
     CHECK(TRANSFER_GAP_DEADLINE_US == 1'000'000);
     CHECK(RELAY_FEEDBACK_DEADLINE_US == 10'000);

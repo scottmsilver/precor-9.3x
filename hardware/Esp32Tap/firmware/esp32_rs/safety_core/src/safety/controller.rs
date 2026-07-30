@@ -23,19 +23,16 @@
 //! and typestate would force type erasure at every call site for no verified
 //! property.
 //!
-//! **`Option<Lease>` replaces a four-field invariant.** The C++ carries
-//! `lease_valid_ / lease_owner_ / lease_expires_valid_ / lease_expires_at_`,
-//! maintained by convention. `lease_expires_at()` returning `None` for an
-//! EXECUTOR owner falls out of `LeaseExpiry::NoDeadline` rather than being
-//! remembered.
+//! **`Option<Lease>` replaces a validity flag plus owner field.** Ownership
+//! has no command deadline; explicit disconnect and safety events release it.
 //!
 //! # What the type system does NOT do here — carried by the tests and harness
 //!
 //! Relay entry/exit ORDERING, the 10 ms feedback qualification window,
 //! fail-closed on unknown feedback, `BOTH_CLOSED` as a latched fault in every
 //! mode, `BOTH_OPEN` as transit-only, the exact-deadline-loses rule, the 1.5 s
-//! console freshness, the 4 s lease and the clamps are all SEMANTIC invariants
-//! no compiler checks.
+//! console freshness, persistent ownership and the clamps are all SEMANTIC
+//! invariants no compiler checks.
 
 use crate::fixed_str::FixedStr;
 use crate::safety::constants::*;
@@ -157,17 +154,8 @@ impl ConnectionIdentity {
 // --- lease ----------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum LeaseExpiry {
-    /// WSS/BLE: one 4 s total-silence deadline. No second timer, no grace.
-    Manual(Micros),
-    /// EXECUTOR: owns locally, no deadline.
-    NoDeadline,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Lease {
     owner: ConnectionIdentity,
-    expiry: LeaseExpiry,
 }
 
 // --- transfer phase -------------------------------------------------------
@@ -458,15 +446,9 @@ impl SafetyController {
     pub fn owner(&self) -> Option<ConnectionIdentity> {
         self.lease.map(|l| l.owner)
     }
-    /// `None` for an EXECUTOR lease — it has no deadline.
+    /// Compatibility projection: ownership has no command deadline.
     pub fn lease_expires_at(&self) -> Option<Micros> {
-        match self.lease {
-            Some(Lease {
-                expiry: LeaseExpiry::Manual(t),
-                ..
-            }) => Some(t),
-            _ => None,
-        }
+        None
     }
 
     /// The commanded output state, as one value. See [`OutputIntent`].
@@ -699,37 +681,13 @@ impl SafetyController {
             self.push_event("lease_rejected:not_connected");
             return false;
         }
-        let expiry = if connection.transport == Transport::Executor {
-            LeaseExpiry::NoDeadline
-        } else {
-            LeaseExpiry::Manual(now + MANUAL_LEASE_US)
-        };
-        self.lease = Some(Lease {
-            owner: *connection,
-            expiry,
-        });
+        self.lease = Some(Lease { owner: *connection });
         self.push_connection_event("lease_acquired", connection);
         true
     }
 
     fn is_owner(&self, connection: &ConnectionIdentity) -> bool {
         matches!(self.lease, Some(l) if l.owner == *connection)
-    }
-
-    /// Expire when `now >= expires_at` — the EXACT deadline expires.
-    fn expire_manual_lease(&mut self, now: Micros) -> bool {
-        let expires_at = match self.lease {
-            Some(Lease {
-                expiry: LeaseExpiry::Manual(t),
-                ..
-            }) => t,
-            _ => return false,
-        };
-        if now < expires_at {
-            return false;
-        }
-        self.emergency_stop("lease_expired", now);
-        true
     }
 
     fn authorize_owner(
@@ -748,19 +706,10 @@ impl SafetyController {
         true
     }
 
-    fn renew(&mut self, now: Micros) {
-        if let Some(l) = self.lease.as_mut() {
-            if l.owner.transport != Transport::Executor {
-                l.expiry = LeaseExpiry::Manual(now + MANUAL_LEASE_US);
-            }
-        }
-    }
-
     pub fn heartbeat(&mut self, connection: &ConnectionIdentity, now: Micros) -> bool {
         if !self.authorize_owner(connection, now, "ignored_non_owner_heartbeat") {
             return false;
         }
-        self.renew(now);
         self.push_event("owner_heartbeat");
         true
     }
@@ -789,7 +738,6 @@ impl SafetyController {
         }
         self.speed_tenths = speed_tenths;
         self.incline_half_percent = incline_half_percent;
-        self.renew(now);
         self.push_event("owner_motion");
         true
     }
@@ -963,7 +911,6 @@ impl SafetyController {
         self.phase = Phase::Entry(TransferPhase::WaitGap {
             deadline: now + TRANSFER_GAP_DEADLINE_US,
         });
-        self.renew(now);
         true
     }
 
@@ -1141,7 +1088,7 @@ impl SafetyController {
     /// The serial engine must NOT qualify the exit gap while this is true —
     /// that is step 2, and step 1 has to finish first. This gates only the
     /// engine's VOLUNTARY gap observation: every fail-closed path
-    /// (`enforce_due_safety`, TREAD_OK loss, console staleness, lease expiry,
+    /// (`enforce_due_safety`, TREAD_OK loss, console staleness,
     /// emergency stop, the 1 s exit-gap deadline itself) is untouched and
     /// still releases the relay immediately, exactly as PLAN N19 requires.
     /// A stuck writer therefore costs at most the 1 s gap deadline, after
@@ -1230,9 +1177,6 @@ impl SafetyController {
     /// Returns true if the call was "handled" (i.e. the caller must not
     /// consume or mutate anything).
     fn enforce_due_safety(&mut self, now: Micros) -> bool {
-        if self.expire_manual_lease(now) {
-            return true;
-        }
         if self.phase.mode() != SafeMode::Proxy {
             if !self.tread_ok.get() {
                 self.emergency_stop("tread_not_ok", now);

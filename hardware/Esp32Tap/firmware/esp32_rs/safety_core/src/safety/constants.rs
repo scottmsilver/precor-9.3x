@@ -10,9 +10,6 @@
 
 use crate::units::{InclineHalfPct, Micros, SpeedTenths};
 
-/// `manual_lease_seconds = 4.0` — `Controller.MANUAL_LEASE_SECONDS`.
-pub const MANUAL_LEASE_US: Micros = Micros::new(4_000_000);
-
 /// `console_fresh_seconds = 1.5` — `Controller.CONSOLE_FRESH_SECONDS`.
 pub const CONSOLE_FRESH_US: Micros = Micros::new(1_500_000);
 

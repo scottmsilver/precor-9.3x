@@ -1,9 +1,11 @@
 //! D3 — controller and mode-machine op-sequence differential.
 //!
 //! Random sequences over the FULL public op alphabet, with timestamps
-//! deliberately CLUSTERED ON THE EXACT DEADLINES (4 s lease, 1.5 s console
-//! freshness, 1 s transfer gap, 10 ms feedback, 1 ms stable) and at ±1 µs of
-//! each. After every single op the complete observable tuple is compared:
+//! deliberately CLUSTERED ON THE EXACT DEADLINES (1.5 s console freshness,
+//! 1 s transfer gap, 10 ms feedback, 1 ms stable, 3-hour emulation timeout)
+//! and at ±1 µs of each. Four seconds remains an ordinary timestamp with no
+//! special branch. After every single op the complete observable tuple is
+//! compared:
 //! mode, speed, incline, tread_ok, feedback, fault, relay, tx, usb pull-up,
 //! last-frame timestamp, owner, lease expiry, event count, and the last five
 //! event strings.
@@ -100,7 +102,6 @@ const CONSOLE_PAYLOADS: &[&[u8]] = &[
 const EMERGENCY_REASONS: &[&str] = &[
     "tread_not_ok",
     "console_stale",
-    "lease_expired",
     "explicit_emergency_stop",
     "brownout",
     "reset",
@@ -112,13 +113,14 @@ const RESET_REASONS: &[&str] = &["reset", "brownout", "power_glitch"];
 /// Timestamps clustered on every normative deadline and ±1 µs of each.
 fn interesting_time(rng: &mut Rng, base: i64) -> i64 {
     const DEADLINES: &[i64] = &[
-        4_000_000, // MANUAL_LEASE_US
-        1_500_000, // CONSOLE_FRESH_US
-        1_000_000, // TRANSFER_GAP_DEADLINE_US
-        10_000,    // RELAY_FEEDBACK_DEADLINE_US
-        1_000,     // RELAY_FEEDBACK_STABLE_US
-        20_000,    // GAP_QUALIFY_US
-        200,       // FEEDBACK_POLL_US
+        1_500_000,      // CONSOLE_FRESH_US
+        1_000_000,      // TRANSFER_GAP_DEADLINE_US
+        10_000,         // RELAY_FEEDBACK_DEADLINE_US
+        1_000,          // RELAY_FEEDBACK_STABLE_US
+        20_000,         // GAP_QUALIFY_US
+        200,            // FEEDBACK_POLL_US
+        4_000_000,      // ordinary former manual-lease boundary
+        10_800_000_000, // three-hour emulation timeout boundary
         0,
     ];
     match rng.below(10) {

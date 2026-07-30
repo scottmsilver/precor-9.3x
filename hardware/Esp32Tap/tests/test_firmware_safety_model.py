@@ -96,7 +96,7 @@ def test_lease_uses_transport_handle_and_generation(
     assert controller.incline_half_percent == 0
 
 
-def test_only_owner_mutates_or_renews_the_single_four_second_lease() -> None:
+def test_manual_owner_persists_without_a_deadline() -> None:
     owner = identity()
     other = identity(handle="socket-b")
     controller = connected_controller(owner)
@@ -105,54 +105,64 @@ def test_only_owner_mutates_or_renews_the_single_four_second_lease() -> None:
     assert controller.command_motion(
         owner,
         speed_tenths=30,
-        incline_half_percent=4,
-        now=1.0,
+        incline_half_percent=0,
+        now=0.0,
     )
-    assert controller.lease_expires_at == pytest.approx(5.0)
+    assert controller.lease_expires_at is None
     assert not controller.command_motion(
         other,
         speed_tenths=90,
         incline_half_percent=8,
         now=2.0,
     )
-    assert not controller.heartbeat(other, now=3.9)
-    assert controller.lease_expires_at == pytest.approx(5.0)
-    assert controller.heartbeat(owner, now=4.0)
-    assert controller.lease_expires_at == pytest.approx(8.0)
-
-    controller.tick(now=7.999)
+    assert not controller.heartbeat(other, now=9.0)
+    assert controller.heartbeat(owner, now=10.0)
+    controller.tick(now=10.0)
     assert controller.owner == owner
-    controller.tick(now=8.0)
-    assert controller.owner is None
-    assert controller.mode is Mode.PROXY
-    assert controller.speed_tenths == 0
+    assert controller.speed_tenths == 30
     assert controller.incline_half_percent == 0
-    assert not controller.relay_cmd
-
-
-def test_manual_lease_cannot_be_renewed_at_or_after_its_deadline() -> None:
-    owner = identity()
-    controller = connected_controller(owner)
-
-    assert not controller.heartbeat(owner, now=4.0)
-    assert controller.owner is None
     assert controller.lease_expires_at is None
     assert controller.mode is Mode.PROXY
-    assert controller.events[-1] == "emergency:lease_expired"
+    assert not controller.relay_cmd
+    assert "emergency:lease_expired" not in controller.events
 
 
-def test_unrelated_transport_drop_still_enforces_exact_lease_deadline() -> None:
+@pytest.mark.parametrize("transport", (Transport.WSS, Transport.BLE))
+def test_manual_owner_persists_without_heartbeat(transport: Transport) -> None:
+    owner = identity(transport, 23 if transport is Transport.BLE else "socket-a")
+    controller = connected_controller(owner)
+    assert controller.command_motion(
+        owner,
+        speed_tenths=30,
+        incline_half_percent=0,
+        now=0.0,
+    )
+
+    controller.tick(now=10.0)
+
+    assert controller.owner == owner
+    assert controller.speed_tenths == 30
+    assert controller.lease_expires_at is None
+    assert "emergency:lease_expired" not in controller.events
+
+
+def test_unrelated_transport_drop_does_not_end_manual_owner() -> None:
     owner = identity(Transport.BLE, 23, 1)
     controller = connected_controller(owner)
-    enter_emulate(controller, owner)
-    for now in (1.4, 2.8, 3.9):
-        controller.observe_console_bytes(b"[loop:5550]", now=now)
+    assert controller.command_motion(
+        owner,
+        speed_tenths=30,
+        incline_half_percent=0,
+        now=0.0,
+    )
 
-    assert not controller.disconnect_transport(Transport.WSS, now=4.0)
+    assert not controller.disconnect_transport(Transport.WSS, now=10.0)
     assert controller.mode is Mode.PROXY
-    assert controller.owner is None
+    assert controller.owner == owner
+    assert controller.speed_tenths == 30
+    assert controller.lease_expires_at is None
     assert not controller.relay_cmd
-    assert "emergency:lease_expired" in controller.events
+    assert "emergency:lease_expired" not in controller.events
 
 
 def test_wss_owner_requires_the_same_concrete_handle_object() -> None:
@@ -249,10 +259,10 @@ def test_executor_owns_locally_and_network_loss_does_not_renew_or_end_it() -> No
 @pytest.mark.parametrize(
     ("source", "failure", "must_proxy"),
     (
-        (Transport.WSS, "silence", True),
+        (Transport.WSS, "silence", False),
         (Transport.WSS, "wss_drop", True),
         (Transport.WSS, "ble_drop", False),
-        (Transport.BLE, "silence", True),
+        (Transport.BLE, "silence", False),
         (Transport.BLE, "wss_drop", False),
         (Transport.BLE, "ble_drop", True),
         (Transport.EXECUTOR, "silence", False),
@@ -363,11 +373,7 @@ def test_late_console_frame_cannot_overwrite_missed_freshness_deadline() -> None
 
 @pytest.mark.parametrize("age", (1.500001, 20.0))
 def test_stale_console_forces_immediate_zero_and_bypass(age: float) -> None:
-    owner = (
-        identity()
-        if age < Controller.MANUAL_LEASE_SECONDS
-        else identity(Transport.EXECUTOR, "program-stale", 1)
-    )
+    owner = identity()
     controller = connected_controller(owner)
     enter_emulate(controller, owner, now=0.0)
 
@@ -899,7 +905,6 @@ def test_console_bridge_failure_matrix_remains_hardware_proxy(
     (
         "tread_not_ok",
         "console_stale",
-        "lease_expired",
         "explicit_emergency_stop",
         "brownout",
         "reset",
@@ -1012,7 +1017,6 @@ def test_reset_requires_an_actual_bypass_feedback_sample_before_entry() -> None:
 
 
 def test_model_constants_are_the_normative_deadlines() -> None:
-    assert Controller.MANUAL_LEASE_SECONDS == 4.0
     assert Controller.CONSOLE_FRESH_SECONDS == 1.5
     assert Controller.TRANSFER_GAP_DEADLINE_SECONDS == 1.0
     assert Controller.RELAY_FEEDBACK_DEADLINE_SECONDS == 0.010
@@ -1124,7 +1128,7 @@ def test_safety_manifest_is_deterministic_and_hashes_every_artifact(
     assert manifest["schema_version"] == 1
     assert manifest["safety_contract"] == {
         "console_fresh_seconds": 1.5,
-        "manual_lease_seconds": 4.0,
+        "manual_lease_seconds": None,
         "normal_transition_acceptance_cycles": 1000,
         "relay_feedback_seconds": 0.01,
         "relay_feedback_stable_seconds": 0.001,

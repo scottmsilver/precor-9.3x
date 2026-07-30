@@ -101,13 +101,11 @@ class ConnectionIdentity:
 @dataclass(slots=True)
 class Lease:
     owner: ConnectionIdentity
-    expires_at: float | None
 
 
 class Controller:
     """Deterministic safety state machine driven by monotonic timestamps."""
 
-    MANUAL_LEASE_SECONDS = 4.0
     CONSOLE_FRESH_SECONDS = 1.5
     TRANSFER_GAP_DEADLINE_SECONDS = 1.0
     RELAY_FEEDBACK_DEADLINE_SECONDS = 0.010
@@ -149,7 +147,9 @@ class Controller:
 
     @property
     def lease_expires_at(self) -> float | None:
-        return None if self._lease is None else self._lease.expires_at
+        """Compatibility projection: ownership has no command deadline."""
+
+        return None
 
     def connect(self, connection: ConnectionIdentity) -> bool:
         key = connection.connection_key
@@ -185,12 +185,7 @@ class Controller:
         if connection not in self._active_connections:
             self.events.append("lease_rejected:not_connected")
             return False
-        expires = (
-            None
-            if connection.transport is Transport.EXECUTOR
-            else now + self.MANUAL_LEASE_SECONDS
-        )
-        self._lease = Lease(connection, expires)
+        self._lease = Lease(connection)
         self.events.append(
             f"lease_acquired:{connection.transport.value}:"
             f"{connection.handle}:{connection.generation}"
@@ -199,16 +194,6 @@ class Controller:
 
     def _is_owner(self, connection: ConnectionIdentity) -> bool:
         return self._lease is not None and self._lease.owner == connection
-
-    def _expire_manual_lease(self, *, now: float) -> bool:
-        if (
-            self._lease is None
-            or self._lease.expires_at is None
-            or now < self._lease.expires_at
-        ):
-            return False
-        self.emergency_stop(reason="lease_expired", now=now)
-        return True
 
     def _authorize_owner(
         self,
@@ -224,12 +209,6 @@ class Controller:
             return False
         return True
 
-    def _renew(self, *, now: float) -> None:
-        if self._lease is None:
-            return
-        if self._lease.owner.transport is not Transport.EXECUTOR:
-            self._lease.expires_at = now + self.MANUAL_LEASE_SECONDS
-
     def heartbeat(self, connection: ConnectionIdentity, *, now: float) -> bool:
         if not self._authorize_owner(
             connection,
@@ -237,7 +216,6 @@ class Controller:
             ignored_event="ignored_non_owner_heartbeat",
         ):
             return False
-        self._renew(now=now)
         self.events.append("owner_heartbeat")
         return True
 
@@ -263,7 +241,6 @@ class Controller:
             return False
         self.speed_tenths = speed_tenths
         self.incline_half_percent = incline_half_percent
-        self._renew(now=now)
         self.events.append("owner_motion")
         return True
 
@@ -384,7 +361,6 @@ class Controller:
         self.mode = Mode.ENTRY_WAIT_GAP
         self._phase_deadline = now + self.TRANSFER_GAP_DEADLINE_SECONDS
         self._feedback_candidate_since = None
-        self._renew(now=now)
         return True
 
     def observe_interframe_gap(self, *, now: float) -> bool:
@@ -571,8 +547,6 @@ class Controller:
     def _enforce_due_safety(self, *, now: float) -> bool:
         """Advance every due safety deadline before accepting timed input."""
 
-        if self._expire_manual_lease(now=now):
-            return True
         if self.mode is not Mode.PROXY:
             if not self.tread_ok:
                 self.emergency_stop(reason="tread_not_ok", now=now)

@@ -216,28 +216,12 @@ bool SafetyController::acquire(const ConnectionIdentity& connection,
     }
     lease_valid_ = true;
     lease_owner_ = connection;
-    if (connection.transport == Transport::EXECUTOR) {
-        lease_expires_valid_ = false;
-        lease_expires_at_ = 0;
-    } else {
-        lease_expires_valid_ = true;
-        lease_expires_at_ = now + MANUAL_LEASE_US;
-    }
     push_connection_event("lease_acquired", connection);
     return true;
 }
 
 bool SafetyController::is_owner(const ConnectionIdentity& connection) const {
     return lease_valid_ && lease_owner_ == connection;
-}
-
-bool SafetyController::expire_manual_lease(int64_t now) {
-    // Model: expire when now >= expires_at (exact deadline expires).
-    if (!lease_valid_ || !lease_expires_valid_ || now < lease_expires_at_) {
-        return false;
-    }
-    emergency_stop("lease_expired", now);
-    return true;
 }
 
 bool SafetyController::authorize_owner(const ConnectionIdentity& connection,
@@ -251,20 +235,11 @@ bool SafetyController::authorize_owner(const ConnectionIdentity& connection,
     return true;
 }
 
-void SafetyController::renew(int64_t now) {
-    if (!lease_valid_) return;
-    if (lease_owner_.transport != Transport::EXECUTOR) {
-        lease_expires_valid_ = true;
-        lease_expires_at_ = now + MANUAL_LEASE_US;
-    }
-}
-
 bool SafetyController::heartbeat(const ConnectionIdentity& connection,
                                  int64_t now) {
     if (!authorize_owner(connection, now, "ignored_non_owner_heartbeat")) {
         return false;
     }
-    renew(now);
     push_event("owner_heartbeat");
     return true;
 }
@@ -285,7 +260,6 @@ bool SafetyController::command_motion(const ConnectionIdentity& connection,
     }
     speed_tenths_ = speed_tenths;
     incline_half_percent_ = incline_half_percent;
-    renew(now);
     push_event("owner_motion");
     return true;
 }
@@ -444,7 +418,6 @@ bool SafetyController::request_emulate(const ConnectionIdentity& connection,
     mode_ = SafeMode::ENTRY_WAIT_GAP;
     phase_deadline_ = now + TRANSFER_GAP_DEADLINE_US;
     feedback_candidate_since_.reset();
-    renew(now);
     return true;
 }
 
@@ -602,7 +575,6 @@ void SafetyController::tick(int64_t now) { enforce_due_safety(now); }
 
 bool SafetyController::enforce_due_safety(int64_t now) {
     // Model: advance every due safety deadline before accepting timed input.
-    if (expire_manual_lease(now)) return true;
     if (mode_ != SafeMode::PROXY) {
         if (!tread_ok_) {
             emergency_stop("tread_not_ok", now);
@@ -645,7 +617,6 @@ bool SafetyController::enforce_due_safety(int64_t now) {
 
 void SafetyController::release_lease(bool log) {
     lease_valid_ = false;
-    lease_expires_valid_ = false;
     if (log) push_event("lease_released");
 }
 

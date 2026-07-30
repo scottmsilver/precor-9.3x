@@ -100,8 +100,7 @@ public:
         return lease_owner_;
     }
     std::optional<int64_t> lease_expires_at() const {
-        if (!lease_valid_ || !lease_expires_valid_) return std::nullopt;
-        return lease_expires_at_;
+        return std::nullopt;
     }
 
     // --- event ring (cold path, for tests and audit) ---
@@ -149,10 +148,8 @@ public:
 private:
     bool console_is_fresh(int64_t now) const;
     bool is_owner(const ConnectionIdentity& connection) const;
-    bool expire_manual_lease(int64_t now);
     bool authorize_owner(const ConnectionIdentity& connection, int64_t now,
                          std::string_view ignored_event);
-    void renew(int64_t now);
     std::optional<Feedback> feedback_expected() const;
     void finish_feedback_transfer();
     bool qualify_feedback(int64_t now);
@@ -184,8 +181,6 @@ private:
 
     bool lease_valid_ = false;
     ConnectionIdentity lease_owner_{};
-    bool lease_expires_valid_ = false;  // false for EXECUTOR (no deadline)
-    int64_t lease_expires_at_ = 0;
 
     std::array<ConnectionIdentity, MAX_ACTIVE_CONNECTIONS> active_{};
     int active_count_ = 0;

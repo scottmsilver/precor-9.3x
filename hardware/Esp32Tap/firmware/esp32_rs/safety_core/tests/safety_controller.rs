@@ -36,60 +36,60 @@ fn lease_uses_transport_handle_and_generation() {
     }
 }
 
-// py: test_only_owner_mutates_or_renews_the_single_four_second_lease
+// py: test_manual_owner_persists_without_a_deadline
 #[test]
-fn only_owner_mutates_or_renews_the_single_4_s_lease() {
+fn manual_owner_persists_without_a_deadline() {
     let owner = default_identity();
     let other = identity(Transport::Wss, 101, 1);
     let mut c = connected_controller(&owner);
     assert!(c.connect(&other));
 
-    assert!(c.command_motion(&owner, tenths(30), half(4), us(S)));
-    assert_eq!(c.lease_expires_at(), Some(us(5 * S)));
+    assert!(c.command_motion(&owner, tenths(30), half(0), Micros::ZERO));
+    assert!(c.lease_expires_at().is_none());
     assert!(!c.command_motion(&other, tenths(90), half(8), us(2 * S)));
-    assert!(!c.heartbeat(&other, ms(3_900)));
-    assert_eq!(c.lease_expires_at(), Some(us(5 * S)));
-    assert!(c.heartbeat(&owner, us(4 * S)));
-    assert_eq!(c.lease_expires_at(), Some(us(8 * S)));
-
-    c.tick(ms(7_999));
-    assert!(c.owner().is_some());
-    c.tick(us(8 * S));
-    assert!(c.owner().is_none());
-    assert_eq!(c.mode(), SafeMode::Proxy);
-    assert_eq!(c.speed_tenths(), tenths(0));
+    assert!(!c.heartbeat(&other, us(9 * S)));
+    assert!(c.heartbeat(&owner, us(10 * S)));
+    c.tick(us(10 * S));
+    assert_eq!(c.owner(), Some(owner));
+    assert_eq!(c.speed_tenths(), tenths(30));
     assert_eq!(c.incline_half_percent(), half(0));
-    assert!(!c.relay_cmd().get());
-}
-
-// py: test_manual_lease_cannot_be_renewed_at_or_after_its_deadline
-#[test]
-fn manual_lease_cannot_be_renewed_at_or_after_its_deadline() {
-    let owner = default_identity();
-    let mut c = connected_controller(&owner);
-
-    assert!(!c.heartbeat(&owner, us(4 * S))); // exact deadline loses
-    assert!(c.owner().is_none());
     assert!(c.lease_expires_at().is_none());
     assert_eq!(c.mode(), SafeMode::Proxy);
-    assert_eq!(last_event(&c), "emergency:lease_expired");
+    assert!(!c.relay_cmd().get());
+    assert!(!has_event(&c, "emergency:lease_expired", 0));
 }
 
-// py: test_unrelated_transport_drop_still_enforces_exact_lease_deadline
+// py: test_manual_owner_persists_without_heartbeat
 #[test]
-fn unrelated_transport_drop_still_enforces_exact_lease_deadline() {
+fn manual_owner_persists_without_heartbeat() {
+    for transport in [Transport::Wss, Transport::Ble] {
+        let owner = identity(transport, 23, 1);
+        let mut c = connected_controller(&owner);
+        assert!(c.command_motion(&owner, tenths(30), half(0), Micros::ZERO));
+
+        c.tick(us(10 * S));
+
+        assert_eq!(c.owner(), Some(owner));
+        assert_eq!(c.speed_tenths(), tenths(30));
+        assert!(c.lease_expires_at().is_none());
+        assert!(!has_event(&c, "emergency:lease_expired", 0));
+    }
+}
+
+// py: test_unrelated_transport_drop_does_not_end_manual_owner
+#[test]
+fn unrelated_transport_drop_does_not_end_manual_owner() {
     let owner = identity(Transport::Ble, 23, 1);
     let mut c = connected_controller(&owner);
-    enter_emulate(&mut c, &owner, Micros::ZERO);
-    for now in [ms(1_400), ms(2_800), ms(3_900)] {
-        c.observe_console_bytes(b"[loop:5550]", now);
-    }
+    assert!(c.command_motion(&owner, tenths(30), half(0), Micros::ZERO));
 
-    assert!(!c.disconnect_transport(Transport::Wss, us(4 * S)));
+    assert!(!c.disconnect_transport(Transport::Wss, us(10 * S)));
     assert_eq!(c.mode(), SafeMode::Proxy);
-    assert!(c.owner().is_none());
+    assert_eq!(c.owner(), Some(owner));
+    assert_eq!(c.speed_tenths(), tenths(30));
+    assert!(c.lease_expires_at().is_none());
     assert!(!c.relay_cmd().get());
-    assert!(has_event(&c, "emergency:lease_expired", 0));
+    assert!(!has_event(&c, "emergency:lease_expired", 0));
 }
 
 // py: test_owner_disconnect_is_immediate_but_non_owner_disconnect_is_ignored
@@ -167,10 +167,10 @@ fn executor_owns_locally_network_loss_does_not_renew_or_end_it() {
 #[test]
 fn network_failure_matrix() {
     let rows: &[(Transport, &str, bool)] = &[
-        (Transport::Wss, "silence", true),
+        (Transport::Wss, "silence", false),
         (Transport::Wss, "wss_drop", true),
         (Transport::Wss, "ble_drop", false),
-        (Transport::Ble, "silence", true),
+        (Transport::Ble, "silence", false),
         (Transport::Ble, "wss_drop", false),
         (Transport::Ble, "ble_drop", true),
         (Transport::Executor, "silence", false),
@@ -345,12 +345,7 @@ fn late_console_frame_cannot_overwrite_missed_freshness_deadline() {
 #[test]
 fn stale_console_forces_immediate_zero_and_bypass() {
     for age in [us(1_500_001), us(20 * S)] {
-        // A WSS lease would have expired first at 20 s, so use an EXECUTOR.
-        let owner = if age < MANUAL_LEASE_US {
-            default_identity()
-        } else {
-            identity(Transport::Executor, 55, 1)
-        };
+        let owner = default_identity();
         let mut c = connected_controller(&owner);
         enter_emulate(&mut c, &owner, Micros::ZERO);
 
@@ -914,7 +909,6 @@ fn emergency_paths_never_wait_for_a_gap() {
     let reasons = [
         "tread_not_ok",
         "console_stale",
-        "lease_expired",
         "explicit_emergency_stop",
         "brownout",
         "reset",
@@ -1023,7 +1017,6 @@ fn reset_requires_an_actual_bypass_feedback_sample_before_entry() {
 // py: test_model_constants_are_the_normative_deadlines
 #[test]
 fn model_constants_are_the_normative_deadlines() {
-    assert_eq!(MANUAL_LEASE_US.get(), 4_000_000);
     assert_eq!(CONSOLE_FRESH_US.get(), 1_500_000);
     assert_eq!(TRANSFER_GAP_DEADLINE_US.get(), 1_000_000);
     assert_eq!(RELAY_FEEDBACK_DEADLINE_US.get(), 10_000);

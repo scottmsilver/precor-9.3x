@@ -13,10 +13,6 @@
 
 namespace esp32tap::safety {
 
-// safety_manifest.schema.json: manual_lease_seconds = 4.0
-// safety_model.py: Controller.MANUAL_LEASE_SECONDS
-inline constexpr int64_t MANUAL_LEASE_US = 4'000'000;
-
 // safety_manifest.schema.json: console_fresh_seconds = 1.5
 // safety_model.py: Controller.CONSOLE_FRESH_SECONDS
 inline constexpr int64_t CONSOLE_FRESH_US = 1'500'000;

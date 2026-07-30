@@ -485,7 +485,7 @@ def build_manifest(
         "schema_version": 1,
         "generated_by": GENERATED_BY,
         "safety_contract": {
-            "manual_lease_seconds": Controller.MANUAL_LEASE_SECONDS,
+            "manual_lease_seconds": None,
             "console_fresh_seconds": Controller.CONSOLE_FRESH_SECONDS,
             "transfer_gap_seconds": (
                 Controller.TRANSFER_GAP_DEADLINE_SECONDS
