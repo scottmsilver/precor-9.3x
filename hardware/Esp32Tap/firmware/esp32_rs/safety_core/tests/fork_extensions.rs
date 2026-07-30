@@ -3,7 +3,7 @@
 //! Deliberately a SEPARATE file from the seven 1:1 ported suites: nothing here
 //! has a C++ or `safety_model.py` twin, so putting these cases in
 //! `safety_controller.rs` would make `check_case_parity.py` count extras it
-//! has to be told to ignore. Keeping them out means the 148/148 parity number
+//! has to be told to ignore. Keeping them out means the 149/149 parity number
 //! keeps meaning exactly what it says.
 //!
 //! Covered:

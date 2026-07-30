@@ -394,6 +394,7 @@ enum Op {
     DisconnectTransport { t: i32, now: i64 },
     Console { which: usize, now: i64 },
     RequestEmulate { t: i32, h: i32, g: i64, now: i64, idle: bool },
+    RequestEmulateRecovering { t: i32, h: i32, g: i64, now: i64, idle: bool },
     Gap { now: i64 },
     Fb { nc: bool, no: bool, now: i64 },
     NormalExit { t: i32, h: i32, g: i64, now: i64 },
@@ -470,7 +471,7 @@ fn gen_ops(rng: &mut Rng, n: usize) -> Vec<Op> {
         let t = *rng.pick(&transports);
         let h = *rng.pick(&handles);
         let g = *rng.pick(&gens);
-        let op = match rng.below(20) {
+        let op = match rng.below(21) {
             0 => Op::Connect { t, h, g },
             1 => Op::Acquire { t, h, g, now },
             2 => Op::Heartbeat { t, h, g, now },
@@ -520,6 +521,13 @@ fn gen_ops(rng: &mut Rng, n: usize) -> Vec<Op> {
                     now,
                 },
                 _ => Op::Tick { now },
+            },
+            18 => Op::RequestEmulateRecovering {
+                t,
+                h,
+                g,
+                now,
+                idle: rng.below(8) != 0,
             },
             _ => Op::Tick { now },
         };
@@ -592,6 +600,18 @@ fn step(r: &mut SafetyController, c: &mut CppController, op: &Op) -> Result<(), 
                 r.request_emulate(&id, Micros::new(now), idle) as i64
             }),
             c.request_emulate(t, h, g, now, idle) as i64,
+        ),
+        Op::RequestEmulateRecovering {
+            t,
+            h,
+            g,
+            now,
+            idle,
+        } => (
+            ident(t, h, g).map_or(0, |id| {
+                r.request_emulate_recovering(&id, Micros::new(now), idle) as i64
+            }),
+            c.request_emulate_recovering(t, h, g, now, idle) as i64,
         ),
         Op::Gap { now } => (
             r.observe_interframe_gap(Micros::new(now)) as i64,

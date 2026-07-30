@@ -306,6 +306,7 @@ pub struct SafetyController {
     tx_enable: TxEnable,
     usb_pullup_enabled: bool,
     last_frame_at: Option<Micros>,
+    bypass_since: Option<Micros>,
 
     lease: Option<Lease>,
 
@@ -383,6 +384,7 @@ impl SafetyController {
             tx_enable: TxEnable(false),
             usb_pullup_enabled: false,
             last_frame_at: None,
+            bypass_since: None,
             lease: None,
             active: [None; MAX_ACTIVE_CONNECTIONS],
             active_count: 0,
@@ -893,6 +895,56 @@ impl SafetyController {
             return false;
         }
 
+        self.begin_emulate_entry(now);
+        true
+    }
+
+    /// Explicit, health-gated fault acknowledgement and Emulate entry.
+    ///
+    /// Every predicate is checked before the latch changes. On success the
+    /// latch clear and ordinary entry sequence happen in this same call.
+    pub fn request_emulate_recovering(
+        &mut self,
+        connection: &ConnectionIdentity,
+        now: Micros,
+        uart_idle_low: bool,
+    ) -> bool {
+        if !self.authorize_owner(connection, now, "entry_rejected:not_owner") {
+            return false;
+        }
+        if self.phase.mode() != SafeMode::Proxy || self.relay_cmd.get() || self.tx_enable.get() {
+            self.push_event("recovery_rejected:not_proxy");
+            return false;
+        }
+        if !self.tread_ok.get() {
+            self.push_event("recovery_rejected:tread_not_ok");
+            return false;
+        }
+        if self.feedback != Feedback::Bypass
+            || !matches!(
+                self.bypass_since,
+                Some(since) if since + RELAY_FEEDBACK_STABLE_US <= now
+            )
+        {
+            self.push_event("recovery_rejected:feedback_not_qualified_bypass");
+            return false;
+        }
+        if !self.console_is_fresh(now) {
+            self.push_event("recovery_rejected:console_not_fresh");
+            return false;
+        }
+        if !uart_idle_low {
+            self.push_event("recovery_rejected:uart_not_idle_low");
+            return false;
+        }
+
+        self.fault_latched = false;
+        self.push_event("fault_recovery_accepted");
+        self.begin_emulate_entry(now);
+        true
+    }
+
+    fn begin_emulate_entry(&mut self, now: Micros) {
         self.speed_tenths = SpeedTenths::ZERO;
         self.incline_half_percent = InclineHalfPct::ZERO;
         // These five are BATCH-EMITTED INTENT MARKERS, not evidence: they are
@@ -911,7 +963,6 @@ impl SafetyController {
         self.phase = Phase::Entry(TransferPhase::WaitGap {
             deadline: now + TRANSFER_GAP_DEADLINE_US,
         });
-        true
     }
 
     pub fn observe_interframe_gap(&mut self, now: Micros) -> bool {
@@ -1012,6 +1063,13 @@ impl SafetyController {
         self.enforce_due_safety(now);
         let feedback = feedback_from_gpio(nc_high, no_high);
         self.feedback = feedback;
+        if feedback == Feedback::Bypass {
+            if self.bypass_since.is_none() {
+                self.bypass_since = Some(now);
+            }
+        } else {
+            self.bypass_since = None;
+        }
         if feedback == Feedback::BothClosed {
             // BOTH_CLOSED is an immediate latched fault in EVERY mode (N21).
             self.fault_latched = true;
@@ -1297,6 +1355,7 @@ impl SafetyController {
         self.candidate_len = 0;
         self.last_frame_at = None;
         self.feedback = Feedback::Unknown;
+        self.bypass_since = None;
         self.usb_pullup_enabled = false;
     }
 }

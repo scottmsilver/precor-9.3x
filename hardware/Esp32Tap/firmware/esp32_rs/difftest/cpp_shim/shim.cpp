@@ -204,6 +204,14 @@ int cpp_ctl_request_emulate(void* h, int t, int32_t handle, int64_t gen,
                ? 1
                : 0;
 }
+int cpp_ctl_request_emulate_recovering(void* h, int t, int32_t handle,
+                                       int64_t gen, int64_t now,
+                                       int uart_idle_low) {
+    return static_cast<SafetyController*>(h)->request_emulate_recovering(
+               ident(t, handle, gen), now, uart_idle_low != 0)
+               ? 1
+               : 0;
+}
 int cpp_ctl_observe_interframe_gap(void* h, int64_t now) {
     return static_cast<SafetyController*>(h)->observe_interframe_gap(now) ? 1
                                                                           : 0;

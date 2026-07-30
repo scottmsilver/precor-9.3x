@@ -478,6 +478,128 @@ TEST_CASE("entry order and first zero frame follow settled transfer") {
                                });
 }
 
+// py: test_health_gated_fault_recovery_entry
+TEST_CASE("health gated fault recovery entry") {
+    auto owner = identity();
+
+    auto faulted = [&](Feedback feedback, bool restore_bypass) {
+        auto c = connected_controller(owner);
+        if (feedback == Feedback::BOTH_OPEN) {
+            c.observe_relay_feedback(true, true, 100);
+        } else if (feedback == Feedback::BOTH_CLOSED) {
+            c.observe_relay_feedback(false, false, 100);
+            REQUIRE(c.acquire(owner, 150));
+        } else {
+            REQUIRE(feedback == Feedback::EMULATE);
+            c.observe_relay_feedback(true, false, 100);
+        }
+        REQUIRE(c.fault_latched());
+        if (restore_bypass) {
+            c.observe_relay_feedback(false, true, 200);
+        }
+        return c;
+    };
+
+    auto check_safe_rejection = [&](SafetyController& c,
+                                    std::string_view event, int64_t now,
+                                    bool uart_idle_low = true) {
+        CHECK_FALSE(c.request_emulate_recovering(owner, now, uart_idle_low));
+        CHECK(last_event(c) == event);
+        CHECK(c.fault_latched());
+        CHECK(c.speed_tenths() == 0);
+        CHECK(c.incline_half_percent() == 0);
+        CHECK(c.mode() == SafeMode::PROXY);
+        CHECK_FALSE(c.relay_cmd());
+        CHECK_FALSE(c.tx_enable());
+    };
+
+    auto ordinary = faulted(Feedback::BOTH_OPEN, true);
+    ordinary.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    CHECK_FALSE(ordinary.request_emulate(owner, 1'200, true));
+    CHECK(last_event(ordinary) == "entry_rejected:fault_latched");
+    CHECK(ordinary.fault_latched());
+
+    auto early = faulted(Feedback::BOTH_OPEN, true);
+    early.observe_console_bytes(bytes("[hmph:0000]"), 1'199);
+    check_safe_rejection(
+        early, "recovery_rejected:feedback_not_qualified_bypass", 1'199);
+
+    auto interrupted = faulted(Feedback::BOTH_OPEN, true);
+    interrupted.observe_relay_feedback(true, true, 900);
+    interrupted.observe_relay_feedback(false, true, 1'000);
+    interrupted.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    check_safe_rejection(
+        interrupted, "recovery_rejected:feedback_not_qualified_bypass", 1'200);
+
+    for (Feedback feedback :
+         {Feedback::BOTH_OPEN, Feedback::BOTH_CLOSED, Feedback::EMULATE}) {
+        auto unhealthy = faulted(feedback, false);
+        unhealthy.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+        check_safe_rejection(
+            unhealthy, "recovery_rejected:feedback_not_qualified_bypass",
+            1'200);
+    }
+
+    auto tread = faulted(Feedback::BOTH_OPEN, true);
+    tread.set_tread_ok(false, 1'100);
+    tread.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    check_safe_rejection(tread, "recovery_rejected:tread_not_ok", 1'200);
+
+    auto stale = faulted(Feedback::BOTH_OPEN, true);
+    stale.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    check_safe_rejection(
+        stale, "recovery_rejected:console_not_fresh", 2 * S);
+
+    auto busy = faulted(Feedback::BOTH_OPEN, true);
+    busy.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    check_safe_rejection(
+        busy, "recovery_rejected:uart_not_idle_low", 1'200, false);
+
+    auto reset = faulted(Feedback::BOTH_OPEN, true);
+    reset.reset(1'100);
+    auto fresh_owner = identity(Transport::WSS, 100, 2);
+    REQUIRE(reset.connect(fresh_owner));
+    REQUIRE(reset.acquire(fresh_owner, 1'150));
+    reset.observe_relay_feedback(false, true, 1'200);
+    reset.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    CHECK_FALSE(
+        reset.request_emulate_recovering(fresh_owner, 1'200, true));
+    CHECK(last_event(reset) ==
+          "recovery_rejected:feedback_not_qualified_bypass");
+    CHECK(reset.fault_latched());
+
+    // Fault paths make non-Proxy + latched unreachable by construction.
+    // Exercise non-Proxy, TX-on, then relay-on validation while healthy.
+    auto active = connected_controller(owner);
+    active.observe_console_bytes(bytes("[hmph:0000]"), 1'000);
+    REQUIRE(active.request_emulate(owner, 1'000, true));
+    REQUIRE(active.tx_enable());
+    REQUIRE_FALSE(active.relay_cmd());
+    CHECK_FALSE(active.request_emulate_recovering(owner, 1'100, true));
+    CHECK(last_event(active) == "recovery_rejected:not_proxy");
+    REQUIRE(active.observe_interframe_gap(1'200));
+    REQUIRE(active.relay_cmd());
+    REQUIRE(active.tx_enable());
+    CHECK_FALSE(active.request_emulate_recovering(owner, 1'300, true));
+    CHECK(last_event(active) == "recovery_rejected:not_proxy");
+
+    auto recovered = faulted(Feedback::BOTH_OPEN, true);
+    recovered.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    REQUIRE(recovered.request_emulate_recovering(owner, 1'200, true));
+    CHECK_FALSE(recovered.fault_latched());
+    CHECK(recovered.mode() == SafeMode::ENTRY_WAIT_GAP);
+    CHECK_FALSE(recovered.relay_cmd());
+    CHECK(recovered.tx_enable());
+    CHECK(last_events(recovered, 6) == std::vector<std::string>{
+                                           "fault_recovery_accepted",
+                                           "command_zero",
+                                           "configure_inverted_uart",
+                                           "verify_physical_idle_low",
+                                           "tx_enable_on",
+                                           "wait_entry_gap",
+                                       });
+}
+
 // py: test_entry_preconditions (adapted: state reached through the public
 // API instead of attribute pokes)
 TEST_CASE("entry rejected when not owner") {

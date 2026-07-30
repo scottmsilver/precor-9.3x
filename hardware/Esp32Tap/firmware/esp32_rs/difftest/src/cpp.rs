@@ -89,6 +89,14 @@ extern "C" {
         now: i64,
         uart_idle_low: i32,
     ) -> i32;
+    fn cpp_ctl_request_emulate_recovering(
+        h: *mut core::ffi::c_void,
+        t: i32,
+        handle: i32,
+        gen: i64,
+        now: i64,
+        uart_idle_low: i32,
+    ) -> i32;
     fn cpp_ctl_observe_interframe_gap(h: *mut core::ffi::c_void, now: i64) -> i32;
     fn cpp_ctl_observe_relay_feedback(
         h: *mut core::ffi::c_void,
@@ -398,6 +406,26 @@ impl CppController {
     ) -> bool {
         // SAFETY: as above.
         unsafe { cpp_ctl_request_emulate(self.0, t, handle, gen, now, uart_idle_low as i32) != 0 }
+    }
+    pub fn request_emulate_recovering(
+        &mut self,
+        t: i32,
+        handle: i32,
+        gen: i64,
+        now: i64,
+        uart_idle_low: bool,
+    ) -> bool {
+        // SAFETY: as above.
+        unsafe {
+            cpp_ctl_request_emulate_recovering(
+                self.0,
+                t,
+                handle,
+                gen,
+                now,
+                uart_idle_low as i32,
+            ) != 0
+        }
     }
     pub fn observe_interframe_gap(&mut self, now: i64) -> bool {
         // SAFETY: as above.

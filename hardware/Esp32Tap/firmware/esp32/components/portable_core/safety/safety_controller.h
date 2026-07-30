@@ -126,6 +126,8 @@ public:
     int observe_console_bytes(std::span<const uint8_t> data, int64_t now);
     bool request_emulate(const ConnectionIdentity& connection, int64_t now,
                          bool uart_idle_low);
+    bool request_emulate_recovering(const ConnectionIdentity& connection,
+                                    int64_t now, bool uart_idle_low);
     bool observe_interframe_gap(int64_t now);
     Feedback observe_relay_feedback(bool nc_high, bool no_high, int64_t now);
     bool request_normal_exit(const ConnectionIdentity& connection, int64_t now);
@@ -150,6 +152,7 @@ private:
     bool is_owner(const ConnectionIdentity& connection) const;
     bool authorize_owner(const ConnectionIdentity& connection, int64_t now,
                          std::string_view ignored_event);
+    void begin_emulate_entry(int64_t now);
     std::optional<Feedback> feedback_expected() const;
     void finish_feedback_transfer();
     bool qualify_feedback(int64_t now);
@@ -199,6 +202,7 @@ private:
 
     std::optional<int64_t> phase_deadline_{};
     std::optional<int64_t> feedback_candidate_since_{};
+    std::optional<int64_t> bypass_since_{};
 
     std::array<std::array<char, EVENT_MAX_LEN + 1>, EVENT_CAPACITY> events_{};
     uint64_t event_total_ = 0;

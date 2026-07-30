@@ -52,7 +52,7 @@ esp32_rs/
     ├── qemu_smoke.sh          -> ../../esp32/tools/qemu_smoke.sh    (symlink)
     ├── check_pins.py          -> ../../esp32/tools/check_pins.py    (symlink)
     ├── run_harness.sh            runs the COMMITTED harness against this image
-    ├── check_case_parity.py      GATE: 148 cases, 1:1 names, 3-way chain
+    ├── check_case_parity.py      GATE: 149 cases, 1:1 names, 3-way chain
     ├── check_log_contract.sh     GATE: exact harness log strings
     ├── check_sdkconfig.py        GATE: build_safety_manifest.py's own rules
     └── dump_capture_fixtures.py  real capture data -> difftest/fixtures/
@@ -94,7 +94,7 @@ cd difftest && cargo test
 # Language-agnostic gates. All four are REQUIRED and run automatically at the
 # top of tools/build.sh, before the container starts.
 python3 tools/check_pins.py            # GPIO map vs design.py
-python3 tools/check_case_parity.py     # 148/148 + the 3-way model chain
+python3 tools/check_case_parity.py     # 149/149 + the 3-way model chain
 python3 tools/check_unsafe_budget.py   # the REAL unsafe containment (see below)
 python3 tools/check_wdt_chain.py       # every checkable link of the WDT chain
 
@@ -202,7 +202,7 @@ reference/fallback and is not modified by this port); filed as a defect against
 it. Note what this says about the honest-limits table: Rust did not PREVENT
 this class — a test and a newtype did.
 
-Uncheckable by any compiler and carried entirely by the model, the 148 cases and
+Uncheckable by any compiler and carried entirely by the model, the 149 cases and
 the harness: relay entry/exit ordering, fail-closed on unknown feedback,
 `BOTH_CLOSED` as a latched fault in every mode, `BOTH_OPEN` as transit-only, the
 exact-deadline-loses rule, the 1.5 s console freshness, the 4 s lease, the

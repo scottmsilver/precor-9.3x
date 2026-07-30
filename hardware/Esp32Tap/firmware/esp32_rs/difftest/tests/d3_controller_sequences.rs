@@ -73,6 +73,7 @@ enum Op {
     DisconnectTransport { t: i32, now: i64 },
     ObserveConsole { which: usize, now: i64 },
     RequestEmulate { t: i32, h: i32, g: i64, now: i64, idle_low: bool },
+    RequestEmulateRecovering { t: i32, h: i32, g: i64, now: i64, idle_low: bool },
     ObserveGap { now: i64 },
     ObserveFeedback { nc: bool, no: bool, now: i64 },
     RequestNormalExit { t: i32, h: i32, g: i64, now: i64 },
@@ -253,7 +254,7 @@ fn gen_guided_ops(rng: &mut Rng, n: usize) -> Vec<Op> {
             ops.push(Op::Heartbeat { t, h, g, now });
         }
 
-        match rng.below(16) {
+        match rng.below(17) {
             0 | 1 => {
                 let speed = *rng.pick(&[50i32, 50, 120, 0, 121, -1]);
                 let incline = *rng.pick(&[10i32, 10, 30, 0, 31, -1]);
@@ -299,16 +300,23 @@ fn gen_guided_ops(rng: &mut Rng, n: usize) -> Vec<Op> {
                 now,
                 idle_low: rng.below(8) != 0,
             }),
-            10 => ops.push(Op::SafetyTimeoutZeroMotion { now }),
-            11 => ops.push(Op::SetVbusPresentN {
+            10 => ops.push(Op::RequestEmulateRecovering {
+                t,
+                h,
+                g,
+                now,
+                idle_low: rng.below(8) != 0,
+            }),
+            11 => ops.push(Op::SafetyTimeoutZeroMotion { now }),
+            12 => ops.push(Op::SetVbusPresentN {
                 level_high: rng.bool(),
             }),
-            12 => ops.push(Op::Disconnect { t, h, g, now }),
-            13 => ops.push(Op::DisconnectTransport {
+            13 => ops.push(Op::Disconnect { t, h, g, now }),
+            14 => ops.push(Op::DisconnectTransport {
                 t: *rng.pick(&[0i32, 1, 2]),
                 now,
             }),
-            14 => match rng.below(12) {
+            15 => match rng.below(12) {
                 0 => ops.push(Op::EmergencyStop {
                     which: rng.below(EMERGENCY_REASONS.len()),
                     now,
@@ -359,7 +367,7 @@ fn gen_ops(rng: &mut Rng, n: usize) -> Vec<Op> {
         let t = *rng.pick(&transports);
         let h = *rng.pick(&handles);
         let g = *rng.pick(&gens);
-        let op = match rng.below(18) {
+        let op = match rng.below(19) {
             0 => Op::Connect { t, h, g },
             1 => Op::Acquire { t, h, g, now },
             2 => Op::Heartbeat { t, h, g, now },
@@ -412,6 +420,13 @@ fn gen_ops(rng: &mut Rng, n: usize) -> Vec<Op> {
                     now,
                 },
                 _ => Op::Tick { now },
+            },
+            17 => Op::RequestEmulateRecovering {
+                t,
+                h,
+                g,
+                now,
+                idle_low: rng.below(8) != 0,
             },
             _ => Op::Tick { now },
         };
@@ -541,6 +556,20 @@ fn step(r: &mut SafetyController, c: &mut CppController, op: &Op) -> Result<(), 
         } => (
             r.request_emulate(&ident(t, h, g), Micros::new(now), idle_low) as i64,
             c.request_emulate(t, h, g, now, idle_low) as i64,
+        ),
+        Op::RequestEmulateRecovering {
+            t,
+            h,
+            g,
+            now,
+            idle_low,
+        } => (
+            r.request_emulate_recovering(
+                &ident(t, h, g),
+                Micros::new(now),
+                idle_low,
+            ) as i64,
+            c.request_emulate_recovering(t, h, g, now, idle_low) as i64,
         ),
         Op::ObserveGap { now } => (
             r.observe_interframe_gap(Micros::new(now)) as i64,
@@ -872,6 +901,63 @@ fn d3_guided_safety_transfer_sequences_match_cpp() {
          differential is its only cross-check and a no-op call is not coverage",
         cov.timeout_zero_with_motion
     );
+}
+
+#[test]
+fn d3_directed_fault_recovery_matches_cpp_at_stable_boundary() {
+    let mut r = SafetyController::new();
+    let mut c = CppController::new();
+    let sequence = [
+        Op::ObserveFeedback {
+            nc: false,
+            no: true,
+            now: 0,
+        },
+        Op::Connect { t: 2, h: 17, g: 1 },
+        Op::Acquire {
+            t: 2,
+            h: 17,
+            g: 1,
+            now: 0,
+        },
+        Op::ObserveFeedback {
+            nc: true,
+            no: true,
+            now: 100,
+        },
+        Op::ObserveFeedback {
+            nc: false,
+            no: true,
+            now: 200,
+        },
+        Op::ObserveConsole {
+            which: 0,
+            now: 1_100,
+        },
+        Op::RequestEmulateRecovering {
+            t: 2,
+            h: 17,
+            g: 1,
+            now: 1_199,
+            idle_low: true,
+        },
+        Op::RequestEmulateRecovering {
+            t: 2,
+            h: 17,
+            g: 1,
+            now: 1_200,
+            idle_low: true,
+        },
+    ];
+
+    for op in &sequence {
+        step(&mut r, &mut c, op).unwrap_or_else(|msg| {
+            panic!("directed recovery divergence after {op:?}: {msg}")
+        });
+    }
+    assert_eq!(r.mode(), SafeMode::EntryWaitGap);
+    assert!(!r.fault_latched());
+    assert!(r.tx_enable().get());
 }
 
 /// Documents — as an executable measurement, not a claim — that the ORIGINAL

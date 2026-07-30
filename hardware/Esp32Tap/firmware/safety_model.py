@@ -140,6 +140,7 @@ class Controller:
         self._console_candidate = bytearray()
         self._phase_deadline: float | None = None
         self._feedback_candidate_since: float | None = None
+        self._bypass_since: float | None = None
 
     @property
     def owner(self) -> ConnectionIdentity | None:
@@ -346,6 +347,58 @@ class Controller:
             self.events.append("entry_rejected:uart_not_idle_low")
             return False
 
+        self._begin_emulate_entry(now=now)
+        return True
+
+    def request_emulate_recovering(
+        self,
+        connection: ConnectionIdentity,
+        *,
+        now: float,
+        uart_idle_low: bool,
+    ) -> bool:
+        """Acknowledge a fault and enter only when released hardware is healthy."""
+
+        if not self._authorize_owner(
+            connection,
+            now=now,
+            ignored_event="entry_rejected:not_owner",
+        ):
+            return False
+        if (
+            self.mode is not Mode.PROXY
+            or self.relay_cmd
+            or self.tx_enable
+        ):
+            self.events.append("recovery_rejected:not_proxy")
+            return False
+        if not self.tread_ok:
+            self.events.append("recovery_rejected:tread_not_ok")
+            return False
+        bypass_since = self._bypass_since
+        if (
+            self.feedback is not Feedback.BYPASS
+            or bypass_since is None
+            or bypass_since + self.RELAY_FEEDBACK_STABLE_SECONDS
+            > now + self._TIME_EPSILON
+        ):
+            self.events.append(
+                "recovery_rejected:feedback_not_qualified_bypass"
+            )
+            return False
+        if not self._console_is_fresh(now):
+            self.events.append("recovery_rejected:console_not_fresh")
+            return False
+        if not uart_idle_low:
+            self.events.append("recovery_rejected:uart_not_idle_low")
+            return False
+
+        self.fault_latched = False
+        self.events.append("fault_recovery_accepted")
+        self._begin_emulate_entry(now=now)
+        return True
+
+    def _begin_emulate_entry(self, *, now: float) -> None:
         self.speed_tenths = 0
         self.incline_half_percent = 0
         self.events.extend(
@@ -361,7 +414,6 @@ class Controller:
         self.mode = Mode.ENTRY_WAIT_GAP
         self._phase_deadline = now + self.TRANSFER_GAP_DEADLINE_SECONDS
         self._feedback_candidate_since = None
-        return True
 
     def observe_interframe_gap(self, *, now: float) -> bool:
         if self._enforce_due_safety(now=now):
@@ -455,6 +507,11 @@ class Controller:
         self._enforce_due_safety(now=now)
         feedback = Feedback.from_gpio(nc_high, no_high)
         self.feedback = feedback
+        if feedback is Feedback.BYPASS:
+            if self._bypass_since is None:
+                self._bypass_since = now
+        else:
+            self._bypass_since = None
         if feedback is Feedback.BOTH_CLOSED:
             self.fault_latched = True
             self.emergency_stop(
@@ -616,6 +673,7 @@ class Controller:
         self._console_candidate.clear()
         self.last_complete_console_frame_at = None
         self.feedback = Feedback.UNKNOWN
+        self._bypass_since = None
         self.usb_pullup_enabled = False
 
 

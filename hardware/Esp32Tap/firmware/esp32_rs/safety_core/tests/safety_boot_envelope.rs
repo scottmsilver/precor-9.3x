@@ -732,7 +732,7 @@ fn three_hour_timeout_zeros_motion_via_the_emulate_cycle() {
 // codecs directly, so the zero-frame byte sequence is asserted against the
 // builder rather than a literal alone.
 #[test]
-#[ignore = "documentation helper, not one of the 148 cases"]
+#[ignore = "documentation helper, not one of the 149 cases"]
 fn _zero_frame_builder_shape() {
     assert_eq!(kv_build("inc", "0").expect("fits").as_bytes(), b"[inc:0]\xff");
 }

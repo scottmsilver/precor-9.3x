@@ -150,6 +150,29 @@ impl Pair {
         );
         self.ret(rb, cb, format!("request_emulate({t},{h},{g},{now},{idle})"));
     }
+    fn request_emulate_recovering(
+        &mut self,
+        id: &ConnectionIdentity,
+        now: i64,
+        idle: bool,
+    ) {
+        let (t, h, g) = (
+            transport_ord(id.transport) as i32,
+            id.handle.0,
+            id.generation.get(),
+        );
+        let (rb, cb) = (
+            self.r
+                .request_emulate_recovering(id, Micros::new(now), idle)
+                as i64,
+            self.c.request_emulate_recovering(t, h, g, now, idle) as i64,
+        );
+        self.ret(
+            rb,
+            cb,
+            format!("request_emulate_recovering({t},{h},{g},{now},{idle})"),
+        );
+    }
     fn gap(&mut self, now: i64) {
         let (rb, cb) = (
             self.r.observe_interframe_gap(Micros::new(now)) as i64,
@@ -344,7 +367,7 @@ fn r2_guided_entry_exit_transfer_differential() {
                 p.heartbeat(&owner, now);
             }
 
-            match rng.below(14) {
+            match rng.below(15) {
                 0 => p.console(b"[loop:5550]", now),
                 1 => p.console(b"[hmph:0000]", now),
                 2 => p.tick(now),
@@ -365,8 +388,13 @@ fn r2_guided_entry_exit_transfer_differential() {
                 }
                 9 => p.tread(rng.below(6) != 0, now),
                 10 => p.request_emulate(&owner, now, rng.below(10) != 0),
-                11 => p.disconnect_transport(TRANSPORTS[rng.below(3)], now),
-                12 => {
+                11 => p.request_emulate_recovering(
+                    &owner,
+                    now,
+                    rng.below(10) != 0,
+                ),
+                12 => p.disconnect_transport(TRANSPORTS[rng.below(3)], now),
+                13 => {
                     if rng.below(6) == 0 {
                         p.disconnect(&owner, now)
                     } else {
@@ -407,4 +435,23 @@ fn r2_guided_entry_exit_transfer_differential() {
     }
     assert!(relay_on_samples > 0, "relay was never commanded on");
     assert!(tx_on_samples > 0, "tx_enable was never asserted");
+}
+
+#[test]
+fn r2_directed_fault_recovery_differential() {
+    let owner = ConnectionIdentity::new(Transport::Executor, 17, 1).unwrap();
+    let mut p = Pair::new();
+
+    p.fb(false, true, 0);
+    p.connect(&owner);
+    p.acquire(&owner, 0);
+    p.fb(true, true, 100);
+    p.fb(false, true, 200);
+    p.console(b"[hmph:0000]", 1_100);
+    p.request_emulate_recovering(&owner, 1_199, true);
+    p.request_emulate_recovering(&owner, 1_200, true);
+
+    assert_eq!(p.r.mode(), SafeMode::EntryWaitGap);
+    assert!(!p.r.fault_latched());
+    assert!(p.r.tx_enable().get());
 }

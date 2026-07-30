@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""check_case_parity.py — turn "we ported 148 cases" into a build failure.
+"""check_case_parity.py — turn "we ported 149 cases" into a build failure.
 
 Asserts, at CASE granularity:
 
   1. the set of doctest ``TEST_CASE`` names in the SEVEN COMMITTED C++ host
      test files equals the set of ``#[test] fn`` names in the seven Rust test
      files, after normalisation;
-  2. the 56 controller vectors still name their 1:1 counterparts in
+  2. the 57 controller vectors still name their 1:1 counterparts in
      ``hardware/Esp32Tap/tests/test_firmware_safety_model.py``, allowing only
      the documented C++-only rows;
   3. ``ALLOWED_DIVERGENCES`` is EMPTY at case granularity.
@@ -42,7 +42,7 @@ FILE_MAP = {
     "test_key_cache.cpp": "key_cache.rs",
 }
 
-EXPECTED_TOTAL = 148
+EXPECTED_TOTAL = 149
 
 # Rust tests with no C++ twin. Each needs a reason. They are NOT counted
 # toward the 148.
@@ -100,7 +100,7 @@ PY_OUT_OF_SCOPE_PREFIXES = ("test_safety_manifest_", "test_manifest_", "test_bun
 # have model twins (`test_entry_preconditions` and the identically named
 # `test_console_bridge_failure_matrix_remains_hardware_proxy`). Because
 # membership here SKIPS the forward leg of the 3-way chain, those eight of the
-# 56 controller vectors were never actually checked against the model. They are
+# 57 controller vectors were never actually checked against the model. They are
 # now checked like every other case.
 #
 # `_assert_cpp_only_is_not_overclaiming` below makes the over-claim impossible
@@ -233,7 +233,7 @@ def main() -> int:
     if total_rust_ported != EXPECTED_TOTAL:
         failures.append(f"Ported case total is {total_rust_ported}, expected {EXPECTED_TOTAL}.")
 
-    # --- 3-way chain: the 56 controller vectors vs the Python model ---------
+    # --- 3-way chain: the 57 controller vectors vs the Python model ---------
     py_names = py_test_names(PY_MODEL_TESTS)
     if not py_names:
         failures.append(f"could not read Python model tests at {PY_MODEL_TESTS}")

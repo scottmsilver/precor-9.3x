@@ -407,6 +407,45 @@ bool SafetyController::request_emulate(const ConnectionIdentity& connection,
         return false;
     }
 
+    begin_emulate_entry(now);
+    return true;
+}
+
+bool SafetyController::request_emulate_recovering(
+        const ConnectionIdentity& connection, int64_t now,
+        bool uart_idle_low) {
+    if (!authorize_owner(connection, now, "entry_rejected:not_owner")) {
+        return false;
+    }
+    if (mode_ != SafeMode::PROXY || relay_cmd_ || tx_enable_) {
+        push_event("recovery_rejected:not_proxy");
+        return false;
+    }
+    if (!tread_ok_) {
+        push_event("recovery_rejected:tread_not_ok");
+        return false;
+    }
+    if (feedback_ != Feedback::BYPASS || !bypass_since_.has_value() ||
+        *bypass_since_ + RELAY_FEEDBACK_STABLE_US > now) {
+        push_event("recovery_rejected:feedback_not_qualified_bypass");
+        return false;
+    }
+    if (!console_is_fresh(now)) {
+        push_event("recovery_rejected:console_not_fresh");
+        return false;
+    }
+    if (!uart_idle_low) {
+        push_event("recovery_rejected:uart_not_idle_low");
+        return false;
+    }
+
+    fault_latched_ = false;
+    push_event("fault_recovery_accepted");
+    begin_emulate_entry(now);
+    return true;
+}
+
+void SafetyController::begin_emulate_entry(int64_t now) {
     speed_tenths_ = 0;
     incline_half_percent_ = 0;
     push_event("command_zero");
@@ -418,7 +457,6 @@ bool SafetyController::request_emulate(const ConnectionIdentity& connection,
     mode_ = SafeMode::ENTRY_WAIT_GAP;
     phase_deadline_ = now + TRANSFER_GAP_DEADLINE_US;
     feedback_candidate_since_.reset();
-    return true;
 }
 
 bool SafetyController::observe_interframe_gap(int64_t now) {
@@ -501,6 +539,11 @@ Feedback SafetyController::observe_relay_feedback(bool nc_high, bool no_high,
     enforce_due_safety(now);
     Feedback feedback = feedback_from_gpio(nc_high, no_high);
     feedback_ = feedback;
+    if (feedback == Feedback::BYPASS) {
+        if (!bypass_since_.has_value()) bypass_since_ = now;
+    } else {
+        bypass_since_.reset();
+    }
     if (feedback == Feedback::BOTH_CLOSED) {
         fault_latched_ = true;
         emergency_stop("relay_feedback_both_closed", now);
@@ -657,6 +700,7 @@ void SafetyController::reset_class_stop(std::string_view reason, int64_t now) {
     candidate_len_ = 0;
     last_frame_at_.reset();
     feedback_ = Feedback::UNKNOWN;
+    bypass_since_.reset();
     usb_pullup_enabled_ = false;
 }
 

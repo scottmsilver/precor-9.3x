@@ -465,6 +465,196 @@ def test_entry_order_and_first_zero_frame_follow_settled_transfer() -> None:
     ]
 
 
+def test_health_gated_fault_recovery_entry() -> None:
+    owner = identity()
+
+    def faulted(feedback: Feedback, *, restore_bypass: bool) -> Controller:
+        controller = connected_controller(owner)
+        pins = {
+            Feedback.BOTH_OPEN: (True, True),
+            Feedback.BOTH_CLOSED: (False, False),
+            Feedback.EMULATE: (True, False),
+        }
+        nc_high, no_high = pins[feedback]
+        controller.observe_relay_feedback(
+            nc_high=nc_high,
+            no_high=no_high,
+            now=0.000_100,
+        )
+        assert controller.fault_latched
+        if feedback is Feedback.BOTH_CLOSED:
+            assert controller.acquire(owner, now=0.000_150)
+        if restore_bypass:
+            controller.observe_relay_feedback(
+                nc_high=False,
+                no_high=True,
+                now=0.000_200,
+            )
+        return controller
+
+    def assert_safe_rejection(
+        controller: Controller,
+        event: str,
+        *,
+        now: float,
+        uart_idle_low: bool = True,
+    ) -> None:
+        assert not controller.request_emulate_recovering(
+            owner,
+            now=now,
+            uart_idle_low=uart_idle_low,
+        )
+        assert controller.events[-1] == event
+        assert controller.fault_latched
+        assert controller.speed_tenths == 0
+        assert controller.incline_half_percent == 0
+        assert controller.mode is Mode.PROXY
+        assert not controller.relay_cmd
+        assert not controller.tx_enable
+
+    # Ordinary/background entry must remain unable to clear a recoverable
+    # latch even after every health input has qualified.
+    ordinary = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    ordinary.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert not ordinary.request_emulate(
+        owner,
+        now=0.001_200,
+        uart_idle_low=True,
+    )
+    assert ordinary.events[-1] == "entry_rejected:fault_latched"
+    assert ordinary.fault_latched
+
+    # The first Bypass sample starts qualification. One microsecond before
+    # the full interval is insufficient.
+    early = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    early.observe_console_bytes(b"[hmph:0000]", now=0.001_199)
+    assert_safe_rejection(
+        early,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        now=0.001_199,
+    )
+
+    # A non-Bypass sample restarts the continuous qualification interval.
+    interrupted = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    interrupted.observe_relay_feedback(
+        nc_high=True,
+        no_high=True,
+        now=0.000_900,
+    )
+    interrupted.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.001_000,
+    )
+    interrupted.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert_safe_rejection(
+        interrupted,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        now=0.001_200,
+    )
+
+    # Every unhealthy feedback encoding fails closed.
+    for feedback in (Feedback.BOTH_OPEN, Feedback.BOTH_CLOSED, Feedback.EMULATE):
+        unhealthy = faulted(feedback, restore_bypass=False)
+        unhealthy.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+        assert_safe_rejection(
+            unhealthy,
+            "recovery_rejected:feedback_not_qualified_bypass",
+            now=0.001_200,
+        )
+
+    tread = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    tread.set_tread_ok(False, now=0.001_100)
+    tread.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert_safe_rejection(
+        tread,
+        "recovery_rejected:tread_not_ok",
+        now=0.001_200,
+    )
+
+    stale = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    stale.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert_safe_rejection(
+        stale,
+        "recovery_rejected:console_not_fresh",
+        now=2.0,
+    )
+
+    busy = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    busy.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert_safe_rejection(
+        busy,
+        "recovery_rejected:uart_not_idle_low",
+        now=0.001_200,
+        uart_idle_low=False,
+    )
+
+    # A latched reset-class stop must discard pre-reset Bypass history.
+    reset = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    reset.reset(now=0.001_100)
+    fresh_owner = identity(generation=2)
+    assert reset.connect(fresh_owner)
+    assert reset.acquire(fresh_owner, now=0.001_150)
+    reset.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.001_200,
+    )
+    reset.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert not reset.request_emulate_recovering(
+        fresh_owner,
+        now=0.001_200,
+        uart_idle_low=True,
+    )
+    assert reset.events[-1] == (
+        "recovery_rejected:feedback_not_qualified_bypass"
+    )
+    assert reset.fault_latched
+
+    # The not-Proxy/relay-on/TX-on states are reachable only while no fault is
+    # latched: every fault path releases both outputs and returns to Proxy.
+    active = connected_controller(owner)
+    active.observe_console_bytes(b"[hmph:0000]", now=0.001)
+    assert active.request_emulate(owner, now=0.001, uart_idle_low=True)
+    assert active.tx_enable and not active.relay_cmd
+    assert not active.request_emulate_recovering(
+        owner,
+        now=0.001_100,
+        uart_idle_low=True,
+    )
+    assert active.events[-1] == "recovery_rejected:not_proxy"
+    assert active.observe_interframe_gap(now=0.001_200)
+    assert active.relay_cmd and active.tx_enable
+    assert not active.request_emulate_recovering(
+        owner,
+        now=0.001_300,
+        uart_idle_low=True,
+    )
+    assert active.events[-1] == "recovery_rejected:not_proxy"
+
+    # Exact qualification deadline is accepted atomically. The acceptance
+    # marker precedes the ordinary entry sequence in the same call.
+    recovered = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    recovered.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert recovered.request_emulate_recovering(
+        owner,
+        now=0.001_200,
+        uart_idle_low=True,
+    )
+    assert not recovered.fault_latched
+    assert recovered.mode is Mode.ENTRY_WAIT_GAP
+    assert not recovered.relay_cmd
+    assert recovered.tx_enable
+    assert recovered.events[-6:] == [
+        "fault_recovery_accepted",
+        "command_zero",
+        "configure_inverted_uart",
+        "verify_physical_idle_low",
+        "tx_enable_on",
+        "wait_entry_gap",
+    ]
+
+
 @pytest.mark.parametrize(
     ("setup", "event"),
     (

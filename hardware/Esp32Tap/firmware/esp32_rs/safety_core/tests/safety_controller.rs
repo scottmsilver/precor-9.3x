@@ -1,4 +1,4 @@
-//! Port of `host/tests/test_safety_controller.cpp` — 56 cases, 1:1 by name.
+//! Port of `host/tests/test_safety_controller.cpp` — 57 cases, 1:1 by name.
 //!
 //! Each case also names its counterpart in
 //! `hardware/Esp32Tap/tests/test_firmware_safety_model.py`; the numeric
@@ -423,6 +423,171 @@ fn entry_order_and_first_zero_frame_follow_settled_transfer() {
     assert_eq!(
         last_events(&c, 2),
         vec!["feedback_emulate_stable", "send_first_complete_zero_frame"]
+    );
+}
+
+// py: test_health_gated_fault_recovery_entry
+#[test]
+fn health_gated_fault_recovery_entry() {
+    let owner = default_identity();
+
+    let faulted = |feedback: Feedback, restore_bypass: bool| {
+        let mut c = connected_controller(&owner);
+        match feedback {
+            Feedback::BothOpen => {
+                fb(&mut c, true, true, us(100));
+            }
+            Feedback::BothClosed => {
+                fb(&mut c, false, false, us(100));
+                assert!(c.acquire(&owner, us(150)));
+            }
+            Feedback::Emulate => {
+                fb(&mut c, true, false, us(100));
+            }
+            _ => panic!("test only creates fault feedback"),
+        }
+        assert!(c.fault_latched());
+        if restore_bypass {
+            fb(&mut c, false, true, us(200));
+        }
+        c
+    };
+
+    let check_safe_rejection =
+        |c: &mut SafetyController, event: &str, now: Micros, uart_idle_low: bool| {
+            assert!(!c.request_emulate_recovering(&owner, now, uart_idle_low));
+            assert_eq!(last_event(c), event);
+            assert!(c.fault_latched());
+            assert_eq!(c.speed_tenths(), tenths(0));
+            assert_eq!(c.incline_half_percent(), half(0));
+            assert_eq!(c.mode(), SafeMode::Proxy);
+            assert!(!c.relay_cmd().get());
+            assert!(!c.tx_enable().get());
+        };
+
+    let mut ordinary = faulted(Feedback::BothOpen, true);
+    ordinary.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    assert!(!ordinary.request_emulate(&owner, us(1_200), true));
+    assert_eq!(last_event(&ordinary), "entry_rejected:fault_latched");
+    assert!(ordinary.fault_latched());
+
+    let mut early = faulted(Feedback::BothOpen, true);
+    early.observe_console_bytes(b"[hmph:0000]", us(1_199));
+    check_safe_rejection(
+        &mut early,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        us(1_199),
+        true,
+    );
+
+    let mut interrupted = faulted(Feedback::BothOpen, true);
+    fb(&mut interrupted, true, true, us(900));
+    fb(&mut interrupted, false, true, us(1_000));
+    interrupted.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    check_safe_rejection(
+        &mut interrupted,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        us(1_200),
+        true,
+    );
+
+    for feedback in [
+        Feedback::BothOpen,
+        Feedback::BothClosed,
+        Feedback::Emulate,
+    ] {
+        let mut unhealthy = faulted(feedback, false);
+        unhealthy.observe_console_bytes(b"[hmph:0000]", us(1_200));
+        check_safe_rejection(
+            &mut unhealthy,
+            "recovery_rejected:feedback_not_qualified_bypass",
+            us(1_200),
+            true,
+        );
+    }
+
+    let mut tread = faulted(Feedback::BothOpen, true);
+    tread.set_tread_ok(TreadOk(false), us(1_100));
+    tread.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    check_safe_rejection(
+        &mut tread,
+        "recovery_rejected:tread_not_ok",
+        us(1_200),
+        true,
+    );
+
+    let mut stale = faulted(Feedback::BothOpen, true);
+    stale.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    check_safe_rejection(
+        &mut stale,
+        "recovery_rejected:console_not_fresh",
+        us(2 * S),
+        true,
+    );
+
+    let mut busy = faulted(Feedback::BothOpen, true);
+    busy.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    check_safe_rejection(
+        &mut busy,
+        "recovery_rejected:uart_not_idle_low",
+        us(1_200),
+        false,
+    );
+
+    let mut reset = faulted(Feedback::BothOpen, true);
+    reset.reset(us(1_100), "reset");
+    let fresh_owner = identity(Transport::Wss, 100, 2);
+    assert!(reset.connect(&fresh_owner));
+    assert!(reset.acquire(&fresh_owner, us(1_150)));
+    fb(&mut reset, false, true, us(1_200));
+    reset.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    assert!(!reset.request_emulate_recovering(
+        &fresh_owner,
+        us(1_200),
+        true
+    ));
+    assert_eq!(
+        last_event(&reset),
+        "recovery_rejected:feedback_not_qualified_bypass"
+    );
+    assert!(reset.fault_latched());
+
+    // Fault paths make non-Proxy + latched unreachable by construction.
+    // Exercise non-Proxy, TX-on, then relay-on validation while healthy.
+    let mut active = connected_controller(&owner);
+    active.observe_console_bytes(b"[hmph:0000]", us(1_000));
+    assert!(active.request_emulate(&owner, us(1_000), true));
+    assert!(active.tx_enable().get());
+    assert!(!active.relay_cmd().get());
+    assert!(!active.request_emulate_recovering(&owner, us(1_100), true));
+    assert_eq!(last_event(&active), "recovery_rejected:not_proxy");
+    assert!(active.observe_interframe_gap(us(1_200)));
+    assert!(active.relay_cmd().get());
+    assert!(active.tx_enable().get());
+    assert!(!active.request_emulate_recovering(&owner, us(1_300), true));
+    assert_eq!(last_event(&active), "recovery_rejected:not_proxy");
+
+    let mut recovered = faulted(Feedback::BothOpen, true);
+    recovered.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    assert!(recovered.request_emulate_recovering(
+        &owner,
+        us(1_200),
+        true
+    ));
+    assert!(!recovered.fault_latched());
+    assert_eq!(recovered.mode(), SafeMode::EntryWaitGap);
+    assert!(!recovered.relay_cmd().get());
+    assert!(recovered.tx_enable().get());
+    assert_eq!(
+        last_events(&recovered, 6),
+        vec![
+            "fault_recovery_accepted",
+            "command_zero",
+            "configure_inverted_uart",
+            "verify_physical_idle_low",
+            "tx_enable_on",
+            "wait_entry_gap",
+        ]
     );
 }
 
