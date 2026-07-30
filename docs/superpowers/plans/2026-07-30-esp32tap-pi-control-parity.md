@@ -750,7 +750,178 @@ git add hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios/test_reviewer_a
 git commit -m "test(Esp32Tap): gate Pi-parity control attacks"
 ```
 
-### Task 8: Reconcile documentation and add the hardware evidence runbook
+### Task 8: Add validation-only cycle-time and device-load instrumentation
+
+**Files:**
+
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/Cargo.toml`
+- Create: `hardware/Esp32Tap/firmware/esp32_rs/perf_core/Cargo.toml`
+- Create: `hardware/Esp32Tap/firmware/esp32_rs/perf_core/src/lib.rs`
+- Create: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/perf.rs`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/main.rs`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/tasks/mod.rs`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/tasks/serial_engine.rs`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/tasks/emulate_cycle.rs`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/tasks/interval_executor.rs`
+- Modify when enabled: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/net/session.rs`
+- Modify when enabled: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/ble/mod.rs`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/qemu_test/shim_task.rs`
+- Create: `hardware/Esp32Tap/firmware/esp32_rs/sdkconfig.perf.defaults`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/tools/check_unsafe_budget.py`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/tools/check_wdt_chain.py`
+- Create: `hardware/Esp32Tap/firmware/esp32_rs/tools/check_perf_audit.py`
+- Modify: `hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios/conftest.py`
+- Create: `hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios/test_perf_audit.py`
+
+- [ ] **Step 1: Write the failing structural gate**
+
+Add `check_perf_audit.py` assertions that initially fail because:
+
+- `perf-audit` is not a declared firmware feature;
+- production source does not yet prove that all probes are cfg-gated;
+- the serial, emulate, executor, and enabled session/BLE tasks do not publish
+  fixed-slot timing and stack-water data;
+- heap free/minimum/largest-block, task-wide CPU share, and per-core idle share
+  are absent; and
+- the implementation has no fixed-size snapshot format or production-artifact
+  string-absence check.
+
+The gate must reject heap allocation, formatting, or logging inside a hot-loop
+sample. Add failing `perf_core` host tests for saturating maxima/counters,
+runtime-counter wraparound, delta CPU percentages, dual-core normalization,
+idle-handle classification, and fixed task-capacity overflow. Run both failures
+and preserve their output.
+
+- [ ] **Step 2: Add bounded instrumentation behind one feature**
+
+Declare `perf-audit = ["dep:perf_core"]`. Implement fixed-size atomic slots for
+iteration count, maximum/p99-bucket steady-state work, loop-start service gap,
+relay transfer duration/outcome, and minimum observed stack headroom. Use the
+existing monotonic `hal::clock::Clock`; do not add a second timer abstraction.
+The serial task's 5 ms constant is a post-work sleep and must not be asserted
+as a whole-loop execution deadline. Measure the controller's 10 ms feedback
+deadline directly at relay transfer completion.
+
+Each periodic task records only integer samples. Stack high-water is sampled
+at most once per second by the task that owns that stack. Add a priority-2,
+6144-byte `perf_audit` task that takes a snapshot no more than once per 60
+seconds and reads:
+
+- current/minimum free heap and largest free block;
+- fixed-slot task timing and stack values; and
+- `uxTaskGetSystemState` runtime counters from a fixed-capacity buffer;
+- the two `xTaskGetIdleTaskHandleForCore` handles to calculate per-core idle
+  share; and
+- task-wide CPU share, with core attribution only for pinned tasks.
+
+Use a fixed 48-entry task-status buffer and report overflow as an invalid
+snapshot, never a truncated success. From successive snapshots, compute a
+pinned task's whole-device share as
+`task_delta / (elapsed_runtime_delta * 2)` and core N's idle share as
+`idle_N_delta / elapsed_runtime_delta`; handle counter wrap explicitly.
+
+Enable the required FreeRTOS trace/runtime-stat sdkconfig keys only in
+`sdkconfig.perf.defaults`, including
+`CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y`. Add the task to the checked task
+matrix as validation-only and WDT-exempt: it owns no safety state, and a
+60-second sleep cannot subscribe to the two-second task WDT. Build the
+validation artifact with `ESP_IDF_SDKCONFIG_DEFAULTS` naming both the normal
+defaults and that overlay; the production sdkconfig and artifact must not
+enable runtime statistics.
+Call the snapshot APIs only under `#[cfg(feature = "perf-audit")]`. Document
+every unsafe FFI boundary. Update the closed unsafe-file/module lists and line
+budget for exactly the validation-only FFI sites. Do not log per iteration and
+do not allocate while sampling or formatting the snapshot.
+
+- [ ] **Step 3: Make the snapshot machine-readable and measure probe cost**
+
+Emit a single bounded `PERF` record at the 60-second validation interval. Add
+`QT perf` to the never-flashed QEMU shim for an immediate snapshot, so focused
+tests do not wait a minute. Include firmware commit/binary identity fields in
+the hardware capture metadata, not in every hot-loop sample.
+
+Use the external UART/logic capture to record at least 1,000 serial frames from
+otherwise identical production and `perf-audit` hardware builds under the
+same fixture. More than 5% increase in either median or p99 frame interval
+fails the probe design. Any new 10 ms relay-feedback violation also fails.
+
+- [ ] **Step 4: Prove plumbing in QEMU without treating it as timing evidence**
+
+Add a QEMU scenario that verifies counters advance, all required task slots
+appear, heap fields are sane, the snapshot is bounded, and no per-iteration
+log flood occurs. State in the test that guest wall time, CPU share, stack
+water, and maxima are structural observations only.
+
+Run:
+
+```bash
+cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/perf_core/Cargo.toml -q
+python3 hardware/Esp32Tap/firmware/esp32_rs/tools/check_perf_audit.py
+ONLY=qemu-perf bash hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
+ESP32TAP_TEST_BUILD=build_qemu_perf \
+  env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios \
+  python3 -m pytest test_perf_audit.py -q
+```
+
+- [ ] **Step 5: Isolate production and performance artifacts**
+
+Extend `tools/build.sh` with explicit `perf` and `qemu-perf` targets.
+
+- `perf` uses `target_perf/`, `build_perf/`, feature `perf-audit` only, and the
+  normal defaults plus `sdkconfig.perf.defaults`. This baseline artifact is
+  buildable and flashable before `precor-9_3x-p0q`, but cannot run the
+  representative network/BLE load.
+- `qemu-perf` uses `target_qemu_perf/`, `build_qemu_perf/`, features
+  `qemu-test,net,ble,perf-audit`, the normal defaults, QEMU defaults, and the
+  perf overlay.
+- existing `prod`/`qemu` target and output directories remain unchanged.
+
+After each build, assert the generated perf sdkconfig enables runtime stats and
+core IDs; assert the generated production sdkconfig disables them. Never reuse
+a Cargo target directory between these variants. Make `conftest.py` accept only
+the explicit `ESP32TAP_TEST_BUILD=build_qemu_perf` override for this scenario;
+retain `build_qemu_test` as the default for every existing test.
+
+The exact build invocations are:
+
+```bash
+ONLY=prod bash hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
+ONLY=perf bash hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
+ONLY=qemu-perf bash hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
+```
+
+Verify the production ELF has no `perf_audit`, `perf_core`, or `PERF` symbols
+or strings. After `precor-9_3x-p0q` supplies the hardware network path, add
+`net,ble` to a separately named full-load perf variant using its own target and
+output directories; do not pretend the baseline `perf` artifact exercises that
+load.
+
+- [ ] **Step 6: Add the focused gate without slowing every edit**
+
+Add the structural check to the normal sweep. Put the QEMU perf scenario in
+the release reviewer group so an unchanged built image can be reused with the
+other focused QEMU tests. Record elapsed build and test times in the bead
+notes. Do not add the ten-minute hardware run to an automated host sweep.
+
+- [ ] **Step 7: Commit instrumentation**
+
+```bash
+git add hardware/Esp32Tap/firmware/esp32_rs/esp32tap/Cargo.toml \
+  hardware/Esp32Tap/firmware/esp32_rs/perf_core \
+  hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src \
+  hardware/Esp32Tap/firmware/esp32_rs/sdkconfig.perf.defaults \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/check_unsafe_budget.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/check_wdt_chain.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/check_perf_audit.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios/conftest.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios/test_perf_audit.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/sweep.sh
+git commit -m "feat(Esp32Tap): instrument validation load headroom"
+```
+
+### Task 9: Reconcile documentation and add the hardware evidence runbook
 
 **Files:**
 
@@ -803,9 +974,28 @@ original audit verdict.
   within 2.25 seconds;
 - a results table with measured timing, pass/fail, capture filename, and
   operator.
+- production and `perf-audit` binary hashes plus the measured probe overhead;
+- a representative-load recipe covering console/motor traffic, interval
+  execution, HTTPS/WebSocket traffic, session recording, and BLE when
+  available;
+- a two-minute warm-up followed by ten minutes looping a 60-second two-interval
+  2.0 mph/0% and 4.0 mph/5% program, one WebSocket subscriber, two TLS clients
+  polling `/api/status` at 2 Hz total, a one-second session-task tick with
+  normal 30-second flash checkpoints, one FTMS control peer, and one HRM peer;
+- same-phase `PERF` samples once per minute with steady-state work/service gap,
+  transfer duration/outcome, stack headroom, task-wide CPU, per-core idle, and
+  free/minimum/largest heap values; and
+- explicit optimization triggers: p99 non-transfer work above half the
+  configured post-work delay, below 20% per-core idle headroom (below 10%
+  fails release), below 1 KiB or 20% stack headroom, final-three median free
+  heap more than 2 KiB below the first-three post-warm-up median, or largest
+  free block below 64 KiB.
 
 State plainly that QEMU cannot validate the watchdog panic/reset path, relay
-mechanics, or contact timing.
+mechanics, contact timing, or hardware performance/load thresholds.
+State that the representative-load result is blocked—not passed with a reduced
+fixture—until `precor-9_3x-p0q` provides a flashable production network/BLE
+artifact and both BLE peers are available.
 
 - [ ] **Step 5: Run documentation consistency checks**
 
@@ -832,7 +1022,7 @@ git add hardware/Esp32Tap/firmware/PLAN.md \
 git commit -m "docs(Esp32Tap): document Pi-parity hardware acceptance"
 ```
 
-### Task 9: Run full release verification and hand off hardware work
+### Task 10: Run full release verification and hand off hardware work
 
 **Files:**
 
@@ -920,7 +1110,7 @@ configured, record that exact result; do not claim beads were remotely synced.
 
 ## Hardware execution gate
 
-After Task 9 and after a flashable hardware build exists, execute
+After Task 10 and after a flashable hardware build exists, execute
 `HARDWARE_CONTROL_PARITY.md` on the bench before treadmill contact. A passing
 host/QEMU sweep is code-complete evidence only. It is not evidence that the
 physical relay releases, that NC closes within 2.25 seconds after a task stall,

@@ -331,6 +331,60 @@ Extend them to cover:
 Run the complete host, differential, QEMU, memory, and log-contract gates, not
 only the three regression tests.
 
+### Cycle-time and device-load gate
+
+Safety parity is not sufficient if the port only works by exhausting the
+ESP32-S3. Add a flashable, validation-only `perf-audit` build that measures
+the real device under representative simultaneous load: console and motor
+traffic, HTTPS/WebSocket traffic, a running interval program, session
+recording, and BLE when the radio is available.
+
+Instrumentation must be bounded and cheap:
+
+- compile every probe out unless `perf-audit` is enabled;
+- use fixed-size counters/atomics and no allocation in a control-loop sample;
+- never log per iteration;
+- aggregate steady-state loop work, loop-start service gaps, intentional relay
+  transfer-window duration, stack high-water marks, heap
+  free/minimum/largest-block values, task-wide CPU share, and per-core idle
+  share;
+- emit one snapshot at an explicitly requested point or a slow validation-only
+  interval; and
+- measure and report the instrumentation build's own overhead.
+
+QEMU may verify probe plumbing and counter behavior, but its wall-clock and CPU
+figures are not hardware evidence. The serial task's 5 ms constant is its
+post-work sleep, not a whole-iteration deadline: a valid relay transfer can
+intentionally occupy the controller's 10 ms qualification window. Report
+steady-state work, service gap, and transfer duration separately. On the board,
+run the representative load for ten minutes after a two-minute warm-up. The
+physical relay feedback must qualify within 10 ms on every transfer. The WDT
+and relay-release limits remain unchanged.
+
+For the first board, record a baseline before tuning. Optimize and remeasure
+when any of these triggers is observed:
+
+- a periodic task's non-transfer work spends more than half of its configured
+  post-work delay in its measured p99 iteration;
+- per-core idle headroom is below 20% (below 10% is a release failure);
+- a task has less than 1 KiB or 20% of its configured stack remaining;
+- the median free heap of the final three same-phase samples is more than 2 KiB
+  below the first three post-warm-up samples, or the largest free block is less
+  than 64 KiB (the documented 40–50 KiB TLS-session estimate plus margin); or
+- enabling the probe raises the externally measured median or p99 serial-frame
+  interval by more than 5% over at least 1,000 frames.
+
+Optimization may remove work, move bounded non-safety work out of a critical
+loop, reduce copies, or right-size a proven-overallocated stack. It must not
+lower task-WDT coverage, relax transfer timing, weaken tests, or change the
+approved control behavior.
+
+Development cycle time is a separate concern. Each implementation task runs
+its narrow host/model/QEMU red-green gate and records elapsed time. Reuse an
+unchanged QEMU image across test-only runs. Run the normal full sweep once
+after integration and the deep sweep once at the final release gate; do not
+pay those costs after every local edit unless a focused failure requires it.
+
 ### Hardware gate
 
 Before treadmill contact, verify on the bench:
@@ -351,6 +405,16 @@ Before treadmill contact, verify on the bench:
 7. Capture relay command, NC/NO feedback, `TREAD_OK`, console UART, and motor
    UART timing so the result is based on physical signals rather than API
    state alone.
+8. Run the validation-only load test above and retain its timing, CPU, stack,
+   and heap snapshot together with the signal capture.
+
+The repeatable load is a 60-second two-interval fixture looping between
+2.0 mph/0% and 4.0 mph/5%, one WebSocket subscriber, two TLS clients polling
+`/api/status` at 2 Hz total, the normal one-second session-task tick with
+30-second flash checkpoints, one connected FTMS control peer, and one connected
+HRM peer. Take same-phase snapshots once per minute after warm-up. If production
+networking or either required BLE peer is unavailable, the representative-load
+gate is blocked, not silently downgraded.
 
 ## Non-Goals
 
@@ -361,7 +425,8 @@ Before treadmill contact, verify on the bench:
 - Adding or completing `/api/reset`; when separately implemented it must remain
   stopped in Proxy.
 - Resolving the clean-build, production WiFi, BLE-radio, authentication, or
-  memory-budget issues identified by the independent audit.
+  broader capacity issues identified by the independent audit beyond measuring
+  and correcting regressions introduced by this control slice.
 - Allowing background program execution to recover from takeover or a fault
   without explicit operator action.
 
@@ -372,6 +437,7 @@ This slice is complete only when:
 - the normative behavior and all reference implementations agree;
 - the full regression and adversarial gates pass;
 - API/FTMS responses accurately report rejection;
+- the hardware load gate meets its hard deadlines and headroom thresholds;
 - the hardware bench checks pass with captured evidence; and
 - the external production-build/WiFi prerequisite (`precor-9_3x-p0q`) is
   resolved sufficiently to run those checks on the actual ESP32-S3 artifact.
