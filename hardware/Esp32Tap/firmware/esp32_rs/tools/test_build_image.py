@@ -331,6 +331,21 @@ def wait_for(path: Path, timeout: float = 5.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
+def wait_for_state(log: Path, predicate, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = docker_state(log)
+        if predicate(state):
+            return state
+        time.sleep(0.01)
+    raise AssertionError("timed out waiting for fake Docker state")
+
+
+def second_context(context: Path, destination: Path) -> Path:
+    shutil.copytree(context, destination)
+    return destination
+
+
 def test_recipe_frames_allowed_path_mode_and_content(context: Path) -> None:
     original = recipe(context)
     (context / "Dockerfile").write_text("FROM scratch\n# changed\n", encoding="utf-8")
@@ -724,18 +739,21 @@ def test_ambiguous_first_promotion_removes_final_when_no_prior_tag(
 def test_publication_refuses_preplaced_symlink_lock(
     context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    key = hashlib.sha256(
-        (str(context.resolve()) + "\0" + IMAGE_TAG).encode("utf-8")
-    ).hexdigest()[:24]
+    image_tag = f"example/esp32tap:symlink-{tmp_path.name}"
+    key = hashlib.sha256(image_tag.encode("utf-8")).hexdigest()[:24]
     lock = Path("/tmp") / f"esp32tap-image-publish-{key}.lock"
     target = tmp_path / "attacker-target"
     target.write_text("", encoding="utf-8")
     lock.symlink_to(target)
     try:
-        completed = run(context, fake_docker)
+        completed = run(
+            context,
+            fake_docker,
+            extra_env={"RUST_IMAGE": image_tag},
+        )
         assert completed.returncode != 0
         assert not any(
-            call[0] == "tag" and call[-1] == IMAGE_TAG
+            call[0] == "tag" and call[-1] == image_tag
             for call in docker_calls(fake_docker[1])
         )
     finally:
@@ -821,29 +839,74 @@ def test_older_concurrent_snapshot_cannot_overwrite_new_recipe(
         old.wait()
 
 
-def test_publication_lock_serializes_same_image_promotions(
-    context: Path, fake_docker: tuple[Path, Path]
+def test_publication_lock_serializes_same_image_across_worktrees(
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    env = run_environment(
-        context,
-        fake_docker,
-        extra_env={"FAKE_DOCKER_TAG_DELAY": "0.3"},
-    )
+    other = second_context(context, tmp_path / "other-worktree")
+    environments = [
+        run_environment(
+            item,
+            fake_docker,
+            extra_env={"FAKE_DOCKER_TAG_DELAY": "0.3"},
+        )
+        for item in (context, other)
+    ]
     processes = [
         subprocess.Popen(
-            [str(context / "tools" / "build_image.sh")],
-            cwd=context,
-            env=env,
+            [str(item / "tools" / "build_image.sh")],
+            cwd=item,
+            env=environment,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        for _ in range(2)
+        for item, environment in zip((context, other), environments, strict=True)
     ]
     results = [process.communicate(timeout=10) for process in processes]
     assert [process.returncode for process in processes] == [0, 0], results
     state = docker_state(fake_docker[1])
     assert not state["events"].get("tag_overlap", False)
+
+
+def test_ambiguous_older_rollback_cannot_clobber_newer_worktree_publication(
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
+) -> None:
+    newer = second_context(context, tmp_path / "newer-worktree")
+    (newer / "Dockerfile").write_text(
+        "FROM scratch\n# newer cross-worktree recipe\n", encoding="utf-8"
+    )
+    old_env = run_environment(
+        context,
+        fake_docker,
+        extra_env={
+            "FAKE_DOCKER_TAG_TIMEOUT": "1",
+            "BUILD_IMAGE_DOCKER_TIMEOUT": "1",
+        },
+    )
+    old = subprocess.Popen(
+        [str(context / "tools" / "build_image.sh")],
+        cwd=context,
+        env=old_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        wait_for_state(
+            fake_docker[1],
+            lambda state: state["events"].get("tagged", False),
+        )
+        new_result = run(newer, fake_docker)
+        assert new_result.returncode == 0, new_result.stderr
+        old.communicate(timeout=8)
+        assert old.returncode != 0
+        final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+        assert final["Config"]["Labels"][
+            "org.treddy.esp32tap.recipe-sha256"
+        ] == recipe(newer)
+    finally:
+        old.kill()
+        old.wait()
 
 
 def test_script_is_executable_and_tracked_as_100755() -> None:

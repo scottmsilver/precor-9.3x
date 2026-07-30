@@ -719,9 +719,10 @@ def validate_candidate(image: dict, recipe: str, attestation: str) -> str:
 
 @contextlib.contextmanager
 def publication_lock():
-    key = hashlib.sha256(
-        (str(root) + "\0" + image_tag).encode("utf-8")
-    ).hexdigest()[:24]
+    # Docker tags are daemon-global. Keying this lock by a worktree would let
+    # two checkouts race on the same mutable final tag, including rollback.
+    # Conservatively serialize the exact validated image tag across the host.
+    key = hashlib.sha256(image_tag.encode("utf-8")).hexdigest()[:24]
     path = Path("/tmp") / f"esp32tap-image-publish-{key}.lock"
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     previous_umask = os.umask(0o077)
