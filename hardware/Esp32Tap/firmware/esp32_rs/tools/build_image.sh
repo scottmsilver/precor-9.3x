@@ -365,12 +365,10 @@ cancellation_deferred = False
 
 def cancel_build(signum: int, _frame: object) -> None:
     global cancellation_signum
-    if cancellation_signum is not None:
-        return
-    cancellation_signum = signum
-    # Keep the recording handlers installed. Mutating dispositions from inside
-    # a handler can race with an interrupted selector; later invocations simply
-    # return, preserving the first signal without interrupting cleanup.
+    if cancellation_signum is None:
+        cancellation_signum = signum
+    if not cancellation_deferred:
+        raise BuildCancelled(cancellation_signum)
 
 
 def deliver_cancellation(*, force: bool = False) -> None:
@@ -802,25 +800,32 @@ def publication_lock():
 
 @contextlib.contextmanager
 def publication_lifecycle():
+    global cancellation_deferred
     # Deliver cancellation only after the daemon-global publication lock has
     # been released. This preserves cleanup/rollback ordering across worktrees.
     try:
         with publication_lock():
             yield
     finally:
+        cancellation_deferred = False
         deliver_cancellation(force=True)
 
 
 @contextlib.contextmanager
 def defer_cancellation_during_promotion():
+    global cancellation_deferred
     # A final-tag update plus ID verification/rollback is one tiny critical
     # transaction. Deliver a pending cancellation only after it is known to be
     # fully published or fully restored.
     previous = signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
+    previous_deferred = cancellation_deferred
+    cancellation_deferred = True
     try:
         yield
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        cancellation_deferred = previous_deferred
+        deliver_cancellation()
 
 
 def verify_reference(reference: str, expected_id: str) -> None:

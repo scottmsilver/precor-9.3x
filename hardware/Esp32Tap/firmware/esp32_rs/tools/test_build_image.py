@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -1214,6 +1215,87 @@ def test_termination_during_cleanup_finishes_cleanup_then_releases_lock(
         process.wait()
         if child_pid > 0:
             wait_process_gone(child_pid)
+
+
+def test_termination_after_cleanup_and_lock_release_interrupts_final_output(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(write_fd, False)
+    filled = 0
+    try:
+        while True:
+            try:
+                filled += os.write(write_fd, b"x" * 64 * 1024)
+            except BlockingIOError:
+                break
+        assert filled > 0
+        os.set_blocking(write_fd, True)
+
+        process = subprocess.Popen(
+            [str(context / "tools" / "build_image.sh")],
+            cwd=context,
+            env=run_environment(
+                context,
+                fake_docker,
+                extra_env={"PYTHONUNBUFFERED": "1"},
+            ),
+            text=True,
+            stdout=write_fd,
+            stderr=subprocess.PIPE,
+        )
+    finally:
+        os.close(write_fd)
+
+    lock_fd = -1
+    try:
+        wait_for_state(
+            fake_docker[1],
+            lambda state: (
+                IMAGE_TAG in state["refs"]
+                and not any("candidate" in ref for ref in state["refs"])
+            ),
+        )
+        lock_key = hashlib.sha256(IMAGE_TAG.encode("utf-8")).hexdigest()[:24]
+        lock_path = Path("/tmp") / f"esp32tap-image-publish-{lock_key}.lock"
+        lock_fd = os.open(lock_path, os.O_RDWR)
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise AssertionError("publication lock remained held after cleanup")
+                time.sleep(0.01)
+
+        os.kill(process.pid, signal.SIGTERM)
+        remaining = filled
+        while remaining:
+            block = os.read(read_fd, min(remaining, 64 * 1024))
+            assert block
+            remaining -= len(block)
+        result = process.communicate(timeout=8)
+        assert process.returncode == 128 + signal.SIGTERM, result
+
+        calls = docker_calls(fake_docker[1])
+        build_call = next(call for call in calls if call[0] == "build")
+        assert not Path(build_call[-1]).exists()
+        assert any(call[:2] == ["rm", "-f"] for call in calls)
+        state = docker_state(fake_docker[1])
+        assert not any(
+            "candidate" in ref or "stage" in ref for ref in state["refs"]
+        )
+        assert state["refs"][IMAGE_TAG]["Config"]["Labels"][
+            "org.treddy.esp32tap.recipe-sha256"
+        ] == recipe(context)
+    finally:
+        if lock_fd >= 0:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            os.close(lock_fd)
+        process.kill()
+        process.wait()
+        os.close(read_fd)
 
 
 def test_script_is_executable_and_tracked_as_100755() -> None:
