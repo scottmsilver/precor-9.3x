@@ -1,7 +1,7 @@
 # Esp32Tap Provenance-Safe Fast Inner Loop
 
 Date: 2026-07-30
-Status: Owner-approved design under review; implementation not started
+Status: Owner-approved; independent spec review approved; implementation not started
 Tracking: `precor-9_3x-40g`, `precor-9_3x-344`
 
 ## Decision
