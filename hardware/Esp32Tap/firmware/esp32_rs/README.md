@@ -68,7 +68,7 @@ Split, each crate gets its own `.cargo/config.toml` and its own `Cargo.lock`.
 ## Commands
 
 ```bash
-# Host — no Docker, no espup, plain stable rustc. The 148 ported cases.
+# Host — no Docker, no espup, plain stable rustc. The 149 ported cases.
 cd safety_core && cargo test
 
 # Host — the interval executor (86 cases) and the request budget. Sub-second;
@@ -205,7 +205,7 @@ this class — a test and a newtype did.
 Uncheckable by any compiler and carried entirely by the model, the 149 cases and
 the harness: relay entry/exit ordering, fail-closed on unknown feedback,
 `BOTH_CLOSED` as a latched fault in every mode, `BOTH_OPEN` as transit-only, the
-exact-deadline-loses rule, the 1.5 s console freshness, the 4 s lease, the
+exact-deadline-loses rule, the 1.5 s console freshness, persistent ownership, the
 0–120 / 0–30 / 0–198 clamps, and the 3-hour timeout.
 
 **The AI coach's live endpoint is not a gate, on purpose.** `net/coach.rs` +

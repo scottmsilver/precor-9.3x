@@ -955,6 +955,26 @@ fn d3_directed_fault_recovery_matches_cpp_at_stable_boundary() {
             panic!("directed recovery divergence after {op:?}: {msg}")
         });
     }
+    assert!(r.fault_latched());
+    assert_eq!(r.mode(), SafeMode::Proxy);
+    for op in [
+        Op::ObserveFeedback {
+            nc: false,
+            no: true,
+            now: 1_200,
+        },
+        Op::RequestEmulateRecovering {
+            t: 2,
+            h: 17,
+            g: 1,
+            now: 1_200,
+            idle_low: true,
+        },
+    ] {
+        step(&mut r, &mut c, &op).unwrap_or_else(|msg| {
+            panic!("directed recovery divergence after {op:?}: {msg}")
+        });
+    }
     assert_eq!(r.mode(), SafeMode::EntryWaitGap);
     assert!(!r.fault_latched());
     assert!(r.tx_enable().get());

@@ -114,7 +114,7 @@ impl InclineHalfPct {
 /// Monotonic microseconds. The ONLY time type in the controller.
 ///
 /// `Sub` yields another `Micros` (a delta) rather than a separate `Duration`
-/// newtype: the C++/model arithmetic is plain int64 µs and the 56 vectors read
+/// newtype: the C++/model arithmetic is plain int64 µs and the 57 vectors read
 /// far more clearly this way. Deliberate, and it buys no safety to split.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default, Hash)]

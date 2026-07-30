@@ -3,7 +3,7 @@
 //! executable contract).
 //!
 //! Every method mirrors its Python namesake and every event string is
-//! byte-identical, so the 56 vectors assert the same sequences in all three
+//! byte-identical, so the 57 vectors assert the same sequences in all three
 //! implementations.
 //!
 //! # What the type system does here that C++ could not
@@ -307,6 +307,7 @@ pub struct SafetyController {
     usb_pullup_enabled: bool,
     last_frame_at: Option<Micros>,
     bypass_since: Option<Micros>,
+    bypass_qualified: bool,
 
     lease: Option<Lease>,
 
@@ -385,6 +386,7 @@ impl SafetyController {
             usb_pullup_enabled: false,
             last_frame_at: None,
             bypass_since: None,
+            bypass_qualified: false,
             lease: None,
             active: [None; MAX_ACTIVE_CONNECTIONS],
             active_count: 0,
@@ -921,10 +923,8 @@ impl SafetyController {
             return false;
         }
         if self.feedback != Feedback::Bypass
-            || !matches!(
-                self.bypass_since,
-                Some(since) if since + RELAY_FEEDBACK_STABLE_US <= now
-            )
+            || self.bypass_since.is_none()
+            || !self.bypass_qualified
         {
             self.push_event("recovery_rejected:feedback_not_qualified_bypass");
             return false;
@@ -1066,9 +1066,23 @@ impl SafetyController {
         if feedback == Feedback::Bypass {
             if self.bypass_since.is_none() {
                 self.bypass_since = Some(now);
+                self.bypass_qualified = false;
+            } else if !self.bypass_qualified {
+                if let Some(since) = self.bypass_since {
+                    if now >= since {
+                        // Signed ordering proves a non-negative mathematical
+                        // delta; bit-equivalent unsigned subtraction represents
+                        // its entire i64 input domain without overflow.
+                        let elapsed =
+                            (now.get() as u64).wrapping_sub(since.get() as u64);
+                        self.bypass_qualified =
+                            elapsed >= RELAY_FEEDBACK_STABLE_US.get() as u64;
+                    }
+                }
             }
         } else {
             self.bypass_since = None;
+            self.bypass_qualified = false;
         }
         if feedback == Feedback::BothClosed {
             // BOTH_CLOSED is an immediate latched fault in EVERY mode (N21).
@@ -1356,6 +1370,7 @@ impl SafetyController {
         self.last_frame_at = None;
         self.feedback = Feedback::Unknown;
         self.bypass_since = None;
+        self.bypass_qualified = false;
         self.usb_pullup_enabled = false;
     }
 }

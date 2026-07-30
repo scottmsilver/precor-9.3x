@@ -203,6 +203,7 @@ private:
     std::optional<int64_t> phase_deadline_{};
     std::optional<int64_t> feedback_candidate_since_{};
     std::optional<int64_t> bypass_since_{};
+    bool bypass_qualified_ = false;
 
     std::array<std::array<char, EVENT_MAX_LEN + 1>, EVENT_CAPACITY> events_{};
     uint64_t event_total_ = 0;

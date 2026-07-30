@@ -10,6 +10,7 @@
 #define DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS
 #include <doctest.h>
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -514,6 +515,7 @@ TEST_CASE("health gated fault recovery entry") {
     };
 
     auto ordinary = faulted(Feedback::BOTH_OPEN, true);
+    ordinary.observe_relay_feedback(false, true, 1'200);
     ordinary.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
     CHECK_FALSE(ordinary.request_emulate(owner, 1'200, true));
     CHECK(last_event(ordinary) == "entry_rejected:fault_latched");
@@ -542,15 +544,18 @@ TEST_CASE("health gated fault recovery entry") {
 
     auto tread = faulted(Feedback::BOTH_OPEN, true);
     tread.set_tread_ok(false, 1'100);
+    tread.observe_relay_feedback(false, true, 1'200);
     tread.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
     check_safe_rejection(tread, "recovery_rejected:tread_not_ok", 1'200);
 
     auto stale = faulted(Feedback::BOTH_OPEN, true);
+    stale.observe_relay_feedback(false, true, 1'200);
     stale.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
     check_safe_rejection(
         stale, "recovery_rejected:console_not_fresh", 2 * S);
 
     auto busy = faulted(Feedback::BOTH_OPEN, true);
+    busy.observe_relay_feedback(false, true, 1'200);
     busy.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
     check_safe_rejection(
         busy, "recovery_rejected:uart_not_idle_low", 1'200, false);
@@ -585,6 +590,9 @@ TEST_CASE("health gated fault recovery entry") {
 
     auto recovered = faulted(Feedback::BOTH_OPEN, true);
     recovered.observe_console_bytes(bytes("[hmph:0000]"), 1'200);
+    check_safe_rejection(
+        recovered, "recovery_rejected:feedback_not_qualified_bypass", 1'200);
+    recovered.observe_relay_feedback(false, true, 1'200);
     REQUIRE(recovered.request_emulate_recovering(owner, 1'200, true));
     CHECK_FALSE(recovered.fault_latched());
     CHECK(recovered.mode() == SafeMode::ENTRY_WAIT_GAP);
@@ -598,6 +606,31 @@ TEST_CASE("health gated fault recovery entry") {
                                            "tx_enable_on",
                                            "wait_entry_gap",
                                        });
+
+    auto boundary = faulted(Feedback::BOTH_OPEN, false);
+    boundary.observe_relay_feedback(
+        false, true, std::numeric_limits<int64_t>::max() - 999);
+    boundary.observe_relay_feedback(
+        false, true, std::numeric_limits<int64_t>::max());
+    boundary.observe_console_bytes(
+        bytes("[hmph:0000]"), std::numeric_limits<int64_t>::max());
+    check_safe_rejection(
+        boundary, "recovery_rejected:feedback_not_qualified_bypass",
+        std::numeric_limits<int64_t>::max());
+    boundary.observe_relay_feedback(
+        true, true, std::numeric_limits<int64_t>::min());
+    boundary.observe_relay_feedback(
+        false, true, std::numeric_limits<int64_t>::min());
+    boundary.observe_relay_feedback(
+        false, true,
+        std::numeric_limits<int64_t>::max() - TRANSFER_GAP_DEADLINE_US);
+    boundary.observe_console_bytes(
+        bytes("[hmph:0000]"),
+        std::numeric_limits<int64_t>::max() - TRANSFER_GAP_DEADLINE_US);
+    CHECK(boundary.request_emulate_recovering(
+        owner,
+        std::numeric_limits<int64_t>::max() - TRANSFER_GAP_DEADLINE_US,
+        true));
 }
 
 // py: test_entry_preconditions (adapted: state reached through the public

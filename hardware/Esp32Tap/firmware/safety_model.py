@@ -141,6 +141,7 @@ class Controller:
         self._phase_deadline: float | None = None
         self._feedback_candidate_since: float | None = None
         self._bypass_since: float | None = None
+        self._bypass_qualified = False
 
     @property
     def owner(self) -> ConnectionIdentity | None:
@@ -379,8 +380,7 @@ class Controller:
         if (
             self.feedback is not Feedback.BYPASS
             or bypass_since is None
-            or bypass_since + self.RELAY_FEEDBACK_STABLE_SECONDS
-            > now + self._TIME_EPSILON
+            or not self._bypass_qualified
         ):
             self.events.append(
                 "recovery_rejected:feedback_not_qualified_bypass"
@@ -510,8 +510,17 @@ class Controller:
         if feedback is Feedback.BYPASS:
             if self._bypass_since is None:
                 self._bypass_since = now
+                self._bypass_qualified = False
+            elif (
+                not self._bypass_qualified
+                and now >= self._bypass_since
+                and now - self._bypass_since + self._TIME_EPSILON
+                >= self.RELAY_FEEDBACK_STABLE_SECONDS
+            ):
+                self._bypass_qualified = True
         else:
             self._bypass_since = None
+            self._bypass_qualified = False
         if feedback is Feedback.BOTH_CLOSED:
             self.fault_latched = True
             self.emergency_stop(
@@ -674,6 +683,7 @@ class Controller:
         self.last_complete_console_frame_at = None
         self.feedback = Feedback.UNKNOWN
         self._bypass_since = None
+        self._bypass_qualified = False
         self.usb_pullup_enabled = False
 
 

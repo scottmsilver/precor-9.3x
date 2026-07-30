@@ -515,6 +515,11 @@ def test_health_gated_fault_recovery_entry() -> None:
     # Ordinary/background entry must remain unable to clear a recoverable
     # latch even after every health input has qualified.
     ordinary = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    ordinary.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.001_200,
+    )
     ordinary.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
     assert not ordinary.request_emulate(
         owner,
@@ -565,6 +570,11 @@ def test_health_gated_fault_recovery_entry() -> None:
 
     tread = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
     tread.set_tread_ok(False, now=0.001_100)
+    tread.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.001_200,
+    )
     tread.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
     assert_safe_rejection(
         tread,
@@ -573,6 +583,11 @@ def test_health_gated_fault_recovery_entry() -> None:
     )
 
     stale = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    stale.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.001_200,
+    )
     stale.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
     assert_safe_rejection(
         stale,
@@ -581,6 +596,11 @@ def test_health_gated_fault_recovery_entry() -> None:
     )
 
     busy = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
+    busy.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.001_200,
+    )
     busy.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
     assert_safe_rejection(
         busy,
@@ -632,10 +652,21 @@ def test_health_gated_fault_recovery_entry() -> None:
     )
     assert active.events[-1] == "recovery_rejected:not_proxy"
 
-    # Exact qualification deadline is accepted atomically. The acceptance
-    # marker precedes the ordinary entry sequence in the same call.
+    # Elapsed time alone cannot qualify the first Bypass sample. A later
+    # observation at the exact boundary qualifies, after which recovery is
+    # accepted atomically.
     recovered = faulted(Feedback.BOTH_OPEN, restore_bypass=True)
     recovered.observe_console_bytes(b"[hmph:0000]", now=0.001_200)
+    assert_safe_rejection(
+        recovered,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        now=0.001_200,
+    )
+    recovered.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=0.001_200,
+    )
     assert recovered.request_emulate_recovering(
         owner,
         now=0.001_200,
@@ -653,6 +684,52 @@ def test_health_gated_fault_recovery_entry() -> None:
         "tx_enable_on",
         "wait_entry_gap",
     ]
+
+    # Ordered elapsed-time qualification remains fail-closed at a large
+    # timestamp where float resolution still distinguishes sub-millisecond
+    # samples, then accepts a very large non-overflowing elapsed interval.
+    boundary = faulted(Feedback.BOTH_OPEN, restore_bypass=False)
+    near_limit = float(2**40)
+    boundary.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=near_limit - 0.000_976_562_5,
+    )
+    boundary.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=near_limit,
+    )
+    boundary.observe_console_bytes(b"[hmph:0000]", now=near_limit)
+    assert_safe_rejection(
+        boundary,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        now=near_limit,
+    )
+    boundary.observe_relay_feedback(
+        nc_high=True,
+        no_high=True,
+        now=-near_limit,
+    )
+    boundary.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=-near_limit,
+    )
+    boundary.observe_relay_feedback(
+        nc_high=False,
+        no_high=True,
+        now=near_limit - Controller.TRANSFER_GAP_DEADLINE_SECONDS,
+    )
+    boundary.observe_console_bytes(
+        b"[hmph:0000]",
+        now=near_limit - Controller.TRANSFER_GAP_DEADLINE_SECONDS,
+    )
+    assert boundary.request_emulate_recovering(
+        owner,
+        now=near_limit - Controller.TRANSFER_GAP_DEADLINE_SECONDS,
+        uart_idle_low=True,
+    )
 
 
 @pytest.mark.parametrize(

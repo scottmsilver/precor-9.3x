@@ -466,6 +466,7 @@ fn health_gated_fault_recovery_entry() {
         };
 
     let mut ordinary = faulted(Feedback::BothOpen, true);
+    fb(&mut ordinary, false, true, us(1_200));
     ordinary.observe_console_bytes(b"[hmph:0000]", us(1_200));
     assert!(!ordinary.request_emulate(&owner, us(1_200), true));
     assert_eq!(last_event(&ordinary), "entry_rejected:fault_latched");
@@ -508,6 +509,7 @@ fn health_gated_fault_recovery_entry() {
 
     let mut tread = faulted(Feedback::BothOpen, true);
     tread.set_tread_ok(TreadOk(false), us(1_100));
+    fb(&mut tread, false, true, us(1_200));
     tread.observe_console_bytes(b"[hmph:0000]", us(1_200));
     check_safe_rejection(
         &mut tread,
@@ -517,6 +519,7 @@ fn health_gated_fault_recovery_entry() {
     );
 
     let mut stale = faulted(Feedback::BothOpen, true);
+    fb(&mut stale, false, true, us(1_200));
     stale.observe_console_bytes(b"[hmph:0000]", us(1_200));
     check_safe_rejection(
         &mut stale,
@@ -526,6 +529,7 @@ fn health_gated_fault_recovery_entry() {
     );
 
     let mut busy = faulted(Feedback::BothOpen, true);
+    fb(&mut busy, false, true, us(1_200));
     busy.observe_console_bytes(b"[hmph:0000]", us(1_200));
     check_safe_rejection(
         &mut busy,
@@ -569,6 +573,13 @@ fn health_gated_fault_recovery_entry() {
 
     let mut recovered = faulted(Feedback::BothOpen, true);
     recovered.observe_console_bytes(b"[hmph:0000]", us(1_200));
+    check_safe_rejection(
+        &mut recovered,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        us(1_200),
+        true,
+    );
+    fb(&mut recovered, false, true, us(1_200));
     assert!(recovered.request_emulate_recovering(
         &owner,
         us(1_200),
@@ -589,6 +600,32 @@ fn health_gated_fault_recovery_entry() {
             "wait_entry_gap",
         ]
     );
+
+    let mut boundary = faulted(Feedback::BothOpen, false);
+    fb(
+        &mut boundary,
+        false,
+        true,
+        us(i64::MAX - 999),
+    );
+    fb(&mut boundary, false, true, us(i64::MAX));
+    boundary.observe_console_bytes(b"[hmph:0000]", us(i64::MAX));
+    check_safe_rejection(
+        &mut boundary,
+        "recovery_rejected:feedback_not_qualified_bypass",
+        us(i64::MAX),
+        true,
+    );
+    fb(&mut boundary, true, true, us(i64::MIN));
+    fb(&mut boundary, false, true, us(i64::MIN));
+    let safe_entry_time = us(i64::MAX) - TRANSFER_GAP_DEADLINE_US;
+    fb(&mut boundary, false, true, safe_entry_time);
+    boundary.observe_console_bytes(b"[hmph:0000]", safe_entry_time);
+    assert!(boundary.request_emulate_recovering(
+        &owner,
+        safe_entry_time,
+        true
+    ));
 }
 
 // py: test_entry_preconditions (adapted: state reached through the public API)

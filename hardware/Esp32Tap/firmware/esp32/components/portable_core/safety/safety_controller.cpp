@@ -426,7 +426,7 @@ bool SafetyController::request_emulate_recovering(
         return false;
     }
     if (feedback_ != Feedback::BYPASS || !bypass_since_.has_value() ||
-        *bypass_since_ + RELAY_FEEDBACK_STABLE_US > now) {
+        !bypass_qualified_) {
         push_event("recovery_rejected:feedback_not_qualified_bypass");
         return false;
     }
@@ -540,9 +540,22 @@ Feedback SafetyController::observe_relay_feedback(bool nc_high, bool no_high,
     Feedback feedback = feedback_from_gpio(nc_high, no_high);
     feedback_ = feedback;
     if (feedback == Feedback::BYPASS) {
-        if (!bypass_since_.has_value()) bypass_since_ = now;
+        if (!bypass_since_.has_value()) {
+            bypass_since_ = now;
+            bypass_qualified_ = false;
+        } else if (!bypass_qualified_ && now >= *bypass_since_) {
+            // The signed ordering check proves the mathematical elapsed time
+            // is non-negative. Unsigned subtraction then represents the full
+            // [0, 2^64-1] delta without signed-overflow UB.
+            uint64_t elapsed =
+                static_cast<uint64_t>(now) -
+                static_cast<uint64_t>(*bypass_since_);
+            bypass_qualified_ =
+                elapsed >= static_cast<uint64_t>(RELAY_FEEDBACK_STABLE_US);
+        }
     } else {
         bypass_since_.reset();
+        bypass_qualified_ = false;
     }
     if (feedback == Feedback::BOTH_CLOSED) {
         fault_latched_ = true;
@@ -701,6 +714,7 @@ void SafetyController::reset_class_stop(std::string_view reason, int64_t now) {
     last_frame_at_.reset();
     feedback_ = Feedback::UNKNOWN;
     bypass_since_.reset();
+    bypass_qualified_ = false;
     usb_pullup_enabled_ = false;
 }
 

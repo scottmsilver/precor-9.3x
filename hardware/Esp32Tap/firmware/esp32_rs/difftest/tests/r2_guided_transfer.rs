@@ -450,6 +450,10 @@ fn r2_directed_fault_recovery_differential() {
     p.console(b"[hmph:0000]", 1_100);
     p.request_emulate_recovering(&owner, 1_199, true);
     p.request_emulate_recovering(&owner, 1_200, true);
+    assert!(p.r.fault_latched());
+    assert_eq!(p.r.mode(), SafeMode::Proxy);
+    p.fb(false, true, 1_200);
+    p.request_emulate_recovering(&owner, 1_200, true);
 
     assert_eq!(p.r.mode(), SafeMode::EntryWaitGap);
     assert!(!p.r.fault_latched());
