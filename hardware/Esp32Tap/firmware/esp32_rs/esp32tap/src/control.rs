@@ -67,6 +67,19 @@ pub enum Surface {
     Executor,
 }
 
+/// Whether this command is allowed to acknowledge a latched fault.
+///
+/// The distinction is explicit at the application boundary so a background
+/// retry can never accidentally become a fault reset merely because it carries
+/// a positive speed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EntryIntent {
+    /// Ordinary motion, incline, zero/Stop, executor tick, or reassertion.
+    Ordinary,
+    /// A fresh user Start/Resume or positive manual target.
+    ExplicitRecovery,
+}
+
 impl Surface {
     const fn base(self) -> (Transport, i32) {
         match self {
@@ -179,12 +192,13 @@ fn hold_lease(
 pub fn command(
     g: &mut Guarded,
     surface: Surface,
+    intent: EntryIntent,
     speed: SpeedTenths,
     incline: InclineHalfPct,
     now: Micros,
 ) -> Result<(), Reject> {
     let id = hold_lease(g, surface, now)?;
-    command_as(g, surface, &id, speed, incline, now)
+    command_as(g, surface, intent, &id, speed, incline, now)
 }
 
 /// The motion + auto-emulate choreography for an identity that ALREADY owns
@@ -196,6 +210,7 @@ pub fn command(
 fn command_as(
     g: &mut Guarded,
     surface: Surface,
+    intent: EntryIntent,
     id: &ConnectionIdentity,
     speed: SpeedTenths,
     incline: InclineHalfPct,
@@ -218,7 +233,13 @@ fn command_as(
     // records why, and we stay in Proxy — the safe state.
     if g.controller.mode() == SafeMode::Proxy {
         let idle_low = g.console_uart.tx_idle_low();
-        if g.controller.request_emulate(&id, now, idle_low) {
+        let entered = match intent {
+            EntryIntent::Ordinary => g.controller.request_emulate(&id, now, idle_low),
+            EntryIntent::ExplicitRecovery => {
+                g.controller.request_emulate_recovering(&id, now, idle_low)
+            }
+        };
+        if entered {
             // RE-ASSERT THE INTENT. `request_emulate` sets commanded motion to
             // ZERO — PLAN "enter at zero", correct and non-negotiable — which
             // discards the motion accepted three lines above. Nothing else
@@ -242,6 +263,16 @@ fn command_as(
             // nonzero speed commanded, which is exactly this case.
             let _ = g.controller.command_motion(&id, speed, incline, now);
             logi!("control: {} auto-entered emulate", surface_name(surface));
+        } else {
+            // `command_motion` accepted an application value, but Proxy means
+            // it cannot reach the motor. Keep the advertised command as
+            // truthful as the result: roll it back through the same owner and
+            // report the rejected entry to the caller.
+            let _ = g
+                .controller
+                .command_motion(&id, SpeedTenths::ZERO, InclineHalfPct::ZERO, now);
+            g.apply_outputs();
+            return Err(Reject::Refused);
         }
     }
 
@@ -332,7 +363,7 @@ pub fn reassert(
     if g.controller.mode() != SafeMode::Proxy {
         return false;
     }
-    command_as(g, surface, &id, speed, incline, now).is_ok()
+    command_as(g, surface, EntryIntent::Ordinary, &id, speed, incline, now).is_ok()
 }
 
 /// STOP MEANS STOP — for whichever surface actually holds the belt.
@@ -373,7 +404,15 @@ pub fn stop_belt(g: &mut Guarded, now: Micros) -> bool {
         // post-condition holds either way.
         if g.controller.mode() == SafeMode::Emulating {
             let inc = g.controller.incline_half_percent();
-            let _ = command_as(g, surface, &id, SpeedTenths::ZERO, inc, now);
+            let _ = command_as(
+                g,
+                surface,
+                EntryIntent::Ordinary,
+                &id,
+                SpeedTenths::ZERO,
+                inc,
+                now,
+            );
         }
         release(g, surface, now);
     }

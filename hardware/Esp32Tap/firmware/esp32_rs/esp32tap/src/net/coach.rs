@@ -566,7 +566,12 @@ fn apply(action: &Action) -> Option<&'static str> {
         Action::SetSpeed(s) => {
             let mut g = lock(&crate::CTX.guarded);
             let inc = g.controller.incline_half_percent();
-            match control::command(&mut g, Surface::Http, *s, inc, now) {
+            let intent = if s.get() > 0 {
+                control::EntryIntent::ExplicitRecovery
+            } else {
+                control::EntryIntent::Ordinary
+            };
+            match control::command(&mut g, Surface::Http, intent, *s, inc, now) {
                 Ok(()) => None,
                 Err(control::Reject::NotOwner) => {
                     Some("a workout is running, so I left the belt alone")
@@ -577,7 +582,14 @@ fn apply(action: &Action) -> Option<&'static str> {
         Action::SetIncline(i) => {
             let mut g = lock(&crate::CTX.guarded);
             let sp = g.controller.speed_tenths();
-            match control::command(&mut g, Surface::Http, sp, *i, now) {
+            match control::command(
+                &mut g,
+                Surface::Http,
+                control::EntryIntent::Ordinary,
+                sp,
+                *i,
+                now,
+            ) {
                 Ok(()) => None,
                 Err(control::Reject::NotOwner) => {
                     Some("a workout is running, so I left the belt alone")

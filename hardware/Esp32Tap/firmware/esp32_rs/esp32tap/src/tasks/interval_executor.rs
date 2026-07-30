@@ -34,7 +34,7 @@
 //! and the smoke gate was tuned against the current memory envelope.
 
 use crate::context::{lock, FirmwareContext, Guarded};
-use crate::control::{self, Surface};
+use crate::control::{self, EntryIntent, Surface};
 use crate::hal::wdt;
 use crate::logi;
 use crate::tasks::{delay_ms, EXECUTOR_TICK_MS};
@@ -61,7 +61,16 @@ use safety_core::units::Micros;
 pub fn apply_plan(g: &mut Guarded, plan: Plan, release_belt: bool, now: Micros) -> usize {
     let mut accepted = 0usize;
     for (speed, incline) in plan.commands() {
-        if control::command(g, Surface::Executor, *speed, *incline, now).is_ok() {
+        if control::command(
+            g,
+            Surface::Executor,
+            EntryIntent::Ordinary,
+            *speed,
+            *incline,
+            now,
+        )
+        .is_ok()
+        {
             accepted += 1;
         }
     }

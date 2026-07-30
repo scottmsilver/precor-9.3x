@@ -367,6 +367,25 @@ def test_kmh_to_mph_conversion_happens_at_the_edge(qemu):
     s.stop_pacer()
 
 
+def test_positive_speed_reports_failed_recovery_while_feedback_is_invalid(qemu):
+    """A positive FTMS target speed is an explicit, health-gated recovery."""
+    s = armed(qemu)
+    s.cmd_ok("QT k1 closed")
+    s.wait_audit("emergency:relay_feedback_both_closed", timeout=30)
+
+    op, result = ble_cp(s, OP_SET_TARGET_SPEED, *KMH[2.0])
+    assert op == OP_SET_TARGET_SPEED
+    # `control::Reject::Refused` deliberately uses the existing FTMS mapping:
+    # the write was accepted syntactically, but the controller rejected it.
+    assert result == RESULT_INVALID_PARAM, result
+
+    after = status(s)
+    assert after["mode"] == "proxy", after
+    assert after["relay"] is False, after
+    assert after["speed"] == 0.0, after
+    s.stop_pacer()
+
+
 # ---------------------------------------------------------------------------
 # Untrusted input
 # ---------------------------------------------------------------------------

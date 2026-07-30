@@ -27,7 +27,7 @@
 //! opinion about safety, which is exactly one opinion too many.
 
 use crate::context::lock;
-use crate::control::{self, Surface};
+use crate::control::{self, EntryIntent, Surface};
 use esp_idf_sys as sys;
 use safety_core::safety::constants::CONSOLE_FRESH_US;
 use safety_core::units::{InclineHalfPct, Micros, SpeedTenths};
@@ -555,6 +555,14 @@ impl core::fmt::Write for BufWriter<'_> {
     }
 }
 
+fn motion_intent(is_incline: bool, speed: SpeedTenths) -> EntryIntent {
+    if !is_incline && speed.get() > 0 {
+        EntryIntent::ExplicitRecovery
+    } else {
+        EntryIntent::Ordinary
+    }
+}
+
 /// POST /api/speed and /api/incline share everything but which unit they set.
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
@@ -600,7 +608,7 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
         // makes. Lease, clamps, auto-emulate and apply_outputs all live there,
         // so an HTTP request is just another owner and this handler contains
         // no opinion about safety at all.
-        control::command(&mut g, Surface::Http, sp, inc, now)
+        control::command(&mut g, Surface::Http, motion_intent(is_incline, sp), sp, inc, now)
     };
 
     match outcome {

@@ -608,8 +608,15 @@ pub(crate) fn apply(effect: proto::CpEffect) -> u8 {
             return proto::RESULT_SUCCESS;
         };
         let now = crate::CTX.clock.now();
+        let intent = match effect {
+            proto::CpEffect::SetSpeed(s) if s.get() > 0 => {
+                control::EntryIntent::ExplicitRecovery
+            }
+            proto::CpEffect::Start => control::EntryIntent::ExplicitRecovery,
+            _ => control::EntryIntent::Ordinary,
+        };
         (
-            control::command(&mut g, Surface::Http, speed, incline, now),
+            control::command(&mut g, Surface::Http, intent, speed, incline, now),
             speed,
             incline,
         )
@@ -730,6 +737,7 @@ fn stop_the_belt() -> u8 {
         control::command(
             &mut g,
             Surface::Http,
+            control::EntryIntent::Ordinary,
             SpeedTenths::ZERO,
             safety_core::units::InclineHalfPct::ZERO,
             now,

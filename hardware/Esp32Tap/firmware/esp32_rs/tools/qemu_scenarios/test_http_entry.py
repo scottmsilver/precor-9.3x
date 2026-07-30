@@ -6,7 +6,9 @@ exactly as it does for the QT-driven scenarios. The COMMAND, though, arrives
 over HTTP — that is the thing under test.
 """
 
+import json
 import sys
+import urllib.error
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -22,6 +24,14 @@ PACER_INTERVAL = 0.10
 # fall back to — so this scenario now drives the same endpoints over TLS. What
 # it proves is unchanged: a request from the network causes a real transfer.
 http = httpc.request
+
+
+def http_result(s, method, path, body=None, timeout=20):
+    """Treat an application-level HTTP refusal as a result."""
+    try:
+        return http(s, method, path, body, timeout)
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode())
 
 
 # The Android app's `StatusMessage` (kotlin/.../data/remote/models/
@@ -97,4 +107,30 @@ def test_http_speed_causes_a_real_relay_transfer(qemu):
     # ...and the first frame after entry carries ZERO motion (PLAN entry step 6).
     s.wait_tx_contains(b"[hmph:0]", timeout=20)
     s.wait_tx_contains(b"[inc:0]", timeout=20)
+    s.stop_pacer()
+
+
+def test_positive_speed_reports_rejected_recovery_truthfully(qemu):
+    """A fresh positive command may recover a latch only while health is good.
+
+    BOTH_CLOSED is deliberately held active here, so recovery must fail.  The
+    accepted motion value cannot be advertised as reachable while the relay
+    remains in Proxy.
+    """
+    s = qemu(net=True)
+    s.wait_log(r"https server up on :8000", timeout=180)
+    s.cmd_ok("QT tread 1")
+    s.start_pacer(synth.console_cycle_bytes(0, 0), PACER_INTERVAL)
+    s.wait_audit("complete_console_frame", timeout=30)
+    s.cmd_ok("QT k1 closed")
+    s.wait_audit("emergency:relay_feedback_both_closed", timeout=30)
+
+    st, body = http_result(s, "POST", "/api/speed", {"value": 2.0})
+    assert st == 409 and body["ok"] is False, (st, body)
+
+    st, after = http(s, "GET", "/api/status")
+    assert st == 200, after
+    assert after["mode"] == "proxy", after
+    assert after["relay"] is False, after
+    assert after["speed"] == 0.0, after
     s.stop_pacer()

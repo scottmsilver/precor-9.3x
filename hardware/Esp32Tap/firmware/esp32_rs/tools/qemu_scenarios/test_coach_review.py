@@ -151,6 +151,12 @@ class Stub:
             return self.send(h, 200, candidate([fn_call("set\nspeed", {"mph": 3})]))
         if path == "/stop":
             return self.send(h, 200, candidate([{"text": "Stopping."}, fn_call("stop_treadmill", {})]))
+        if path == "/set-speed":
+            return self.send(
+                h,
+                200,
+                candidate([{"text": "Speeding up."}, fn_call("set_speed", {"mph": 2})]),
+            )
         if path == "/many-actions":
             # Four calls, each with a fat-but-legal args object, so the rendered
             # `actions` array runs past ACTIONS_BYTES and saturates mid-entry.
@@ -431,4 +437,26 @@ def test_the_coach_stop_actually_stops_a_manually_commanded_belt(qemu, stub):
             "the coach told the user 'treadmill stopped' and the belt is still "
             f"commanded at {status['speed']} mph: {status}"
         )
+    s.stop_pacer()
+
+
+def test_coach_reports_failed_positive_speed_recovery_truthfully(qemu, stub):
+    """The transcript must report what reached the belt, not model intent."""
+    s = armed(qemu)
+    point_at(s, stub, "/set-speed")
+    s.cmd_ok("QT k1 closed")
+    s.wait_audit("emergency:relay_feedback_both_closed", timeout=30)
+
+    st, chat = ask(s, "set the speed to two")
+    assert st == 202, chat
+    got = json.loads(await_turn(s, chat["turn"]))
+    matching = [a for a in got["actions"] if a["name"] == "set_speed"]
+    assert len(matching) == 1, got
+    assert matching[0]["result"] == "the treadmill refused that change", matching[0]
+
+    st, after = http(s, "GET", "/api/status")
+    assert st == 200, after
+    assert after["mode"] == "proxy", after
+    assert after["relay"] is False, after
+    assert after["speed"] == 0.0, after
     s.stop_pacer()
