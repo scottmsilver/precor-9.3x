@@ -32,7 +32,8 @@ Match these Raspberry Pi behaviors:
    active program until an explicit program resume or start.
 3. A fresh Start or positive-speed command is an explicit recovery request.
    It may clear a fault only after the device observes a healthy bypass state.
-4. Stop and Pause command zero immediately.
+4. Stop and Pause command zero immediately. Pause keeps the paused program's
+   ownership; Stop completes a guarded exit and releases ownership.
 5. An API or BLE success response means the requested control operation was
    accepted. A rejected or blocked operation is reported as such.
 
@@ -73,9 +74,13 @@ internal liveness signal.
 - Elapsed wall time alone does not revoke the manual owner or zero motion.
 - A later speed/incline command updates the same ownership session without
   cycling the relay.
-- Stop, Pause, physical-console takeover, `TREAD_OK` loss, watchdog failure,
-  invalid relay feedback, bounded-emulation timeout, and a real owner
-  disconnect where the transport supplies one may still end control.
+- Pause commands zero while retaining the paused program's executor ownership
+  and emulation session. Resume therefore does not needlessly relay-cycle.
+- Stop (including a zero-speed action that means user Stop) commands zero,
+  completes the guarded normal-exit sequence, and releases ownership.
+- Physical-console takeover, `TREAD_OK` loss, watchdog failure, invalid relay
+  feedback, bounded-emulation timeout, and a real owner disconnect where the
+  transport supplies one still end control.
 - Loss of a transient REST connection after its response is not an owner
   disconnect. REST is stateless.
 
@@ -102,7 +107,8 @@ When a valid physical-console change is detected while Esp32Tap is emulating:
    program paused without trying to command the belt.
 4. Program ticks, interval boundaries, and delayed executor work cannot
    reacquire control while the inhibit is set.
-5. WebSocket/program state reports the paused state and the takeover reason.
+5. WebSocket/program state reports the paused state, and the protected audit
+   log records the takeover reason.
 6. An explicit program Resume or Start may clear the executor inhibit and
    request control again through the normal safety-entry sequence.
 
@@ -110,14 +116,20 @@ An HTTP/coach/BLE manual command is a separate explicit operator action. It may
 request manual control while the program remains paused; it must not silently
 resume the scheduled program.
 
+The required Android-facing wire result is the existing program payload with
+`paused: true`; no new program JSON field is introduced in this slice. The
+existing protected audit event `emergency:console_takeover` carries the
+machine-readable reason. Adding the Pi's transient encouragement string
+(`Console took over — paused`) requires the separately omitted encouragement
+surface and is not required to close the reacquisition defect.
+
 ### Fault recovery
 
 A latched fault continues to inhibit automatic re-entry. It is not cleared by
 time, a background tick, a retry loop, or an interval boundary.
 
-A fresh program Start, program Resume, positive-speed command, or explicit
-Reset is a recovery request. The request may clear the latch only when all of
-these are true:
+A fresh program Start, program Resume, or positive-speed command is a recovery
+request. The request may clear the latch only when all of these are true:
 
 - commanded motor TX is disabled;
 - the relay command is released;
@@ -136,6 +148,31 @@ or energize the relay directly.
 This makes a fault a user-acknowledged, health-gated stop rather than a
 power-cycle-only brick. A persistent `BOTH_CLOSED`, `BOTH_OPEN`, stale-console,
 `TREAD_OK` failure, or transfer failure remains fail-safe.
+
+`/api/reset` parity is not part of this control slice. When implemented, Reset
+must finish stopped in Proxy; it must not feed itself into
+`request_emulate`. Its fault-clear policy can reuse the same health-gated
+acknowledgement, but Reset never energizes the relay.
+
+### Transactional program Start and Resume
+
+Program state must not claim success before control succeeds:
+
+1. Start/Resume prepares the first/current motion plan without marking the
+   program running or unpaused.
+2. The guarded control path attempts takeover-inhibit release, fault recovery,
+   lease acquisition, and normal entry as one logical operation.
+3. Only an accepted operation commits the program to running/unpaused with the
+   current timestamp.
+4. If any immediate step fails, Start leaves the program loaded but stopped;
+   Resume leaves it paused; the takeover inhibit and fault latch retain their
+   prior state; and no background executor retry is scheduled.
+5. If the asynchronous entry sequence later fails, loss of the executor lease
+   sets the inhibit and pauses the program before it can advance or reacquire.
+
+This requires prepare/commit behavior in `ProgramState` (or an equivalent
+bounded transaction), rather than mutating state with `start`/`toggle_pause`
+and hoping to undo it after a controller rejection.
 
 ### Command outcomes
 
@@ -165,9 +202,10 @@ inhibit:
   program plan, then pauses `ProgramState` under the program lock.
 - Every executor lease acquisition checks the inhibit. This closes the window
   between immediate relay release and program-state synchronization.
-- Program Resume/Start clears the inhibit only as part of its explicit
-  control attempt. Pause synchronization is idempotent, so repeated
-  observations cannot resume or otherwise advance a program.
+- Program Resume/Start clears the inhibit only if its transactional control
+  attempt is accepted. A failed attempt leaves the inhibit set. Pause
+  synchronization is idempotent, so repeated observations cannot resume or
+  otherwise advance a program.
 
 Manual control and executor control retain distinct ownership identities.
 This design does not make an HTTP request impersonate `Transport::Executor`
@@ -202,8 +240,8 @@ Add one controller-owned recovery operation. It must:
 - feed the successful request into ordinary `request_emulate`, never directly
   manipulate relay/TX outputs.
 
-Call it from positive manual speed, program Start/Resume, and `/api/reset`.
-BLE and coach commands must use the same control function as HTTP.
+Call it from positive manual speed and program Start/Resume. BLE and coach
+commands must use the same control function as HTTP.
 
 ### 3. Console-takeover propagation
 
@@ -214,8 +252,10 @@ executor, and program/session publication:
 - pause the active `ProgramState` before its next tick or interval plan;
 - suppress every executor acquisition while inhibited;
 - preserve the current program position and session elapsed state;
-- publish a paused/takeover state to WebSocket clients; and
-- clear the inhibit only on explicit program Resume/Start.
+- publish the existing program payload with `paused: true` to WebSocket
+  clients; and
+- clear the inhibit only when an explicit program Resume/Start transaction is
+  accepted.
 
 ### 4. Truthful command boundary
 
@@ -228,16 +268,18 @@ In `esp32tap/src/control.rs`, HTTP API handlers, coach, and BLE mappings:
   API/FTMS results; and
 - keep all surfaces on the same controller path.
 
-### 5. Reset parity
+### 5. Stop and Pause choreography
 
-Add or complete `/api/reset` parity with the Pi:
+Keep the two actions distinct:
 
-- stop and release the belt;
-- clear program/session state as currently defined by the Pi endpoint;
-- treat reset as an explicit health-gated recovery acknowledgement; and
-- return failure if physical feedback is still unsafe.
-
-Reset is not a back door around relay or `TREAD_OK` checks.
+- Pause atomically marks the program paused and commands zero through the
+  existing executor lease. It keeps the relay in Emulate and retains the
+  executor lease.
+- Resume uses the transactional Start/Resume operation above.
+- Stop atomically marks the program stopped, commands a complete zero frame,
+  performs the gap/feedback-qualified normal exit, and releases the lease.
+- Manual zero-speed Stop follows the same zero/normal-exit/release behavior.
+- A failed Pause must not report `paused: true` while nonzero motion remains.
 
 ### 6. Documentation and release gates
 
@@ -256,10 +298,14 @@ Add tests proving:
 - Stop and Pause command zero and release as specified;
 - a console takeover sets the executor inhibit and no executor acquisition can
   clear it;
-- Start/Resume explicitly clears that inhibit through the guarded path;
+- accepted Start/Resume clears that inhibit through the guarded path;
+- rejected Start/Resume leaves the program stopped/paused and the inhibit set;
+- asynchronous entry failure pauses the program and restores the inhibit;
 - a fresh Start/speed clears a latch only after qualified healthy Bypass;
 - the same request is rejected while feedback or `TREAD_OK` remains unhealthy;
 - a rejected request leaves zero advertised motion in Proxy;
+- Pause retains executor ownership at zero, while Stop performs normal exit
+  and releases it;
 - task-watchdog and maximum-emulation exits still release the relay; and
 - Rust, Python-model, and C++-reference sequences remain equivalent after the
   contract update.
@@ -298,8 +344,9 @@ Before treadmill contact, verify on the bench:
    Start/speed request recovers through the normal entry sequence.
 5. Hold invalid feedback or `TREAD_OK` unhealthy and confirm the same request
    is rejected with the relay released.
-6. Verify Stop, Pause, controller-task watchdog, and maximum-emulation timeout
-   all release control.
+6. Verify Pause holds the program owner in Emulate at zero; Stop performs the
+   guarded exit and releases control; controller-task watchdog and
+   maximum-emulation timeout release control.
 7. Capture relay command, NC/NO feedback, `TREAD_OK`, console UART, and motor
    UART timing so the result is based on physical signals rather than API
    state alone.
@@ -310,6 +357,8 @@ Before treadmill contact, verify on the bench:
 - Requiring Android to maintain motion.
 - Removing ESP-specific physical safety checks.
 - Claiming full Pi API parity beyond this control slice.
+- Adding or completing `/api/reset`; when separately implemented it must remain
+  stopped in Proxy.
 - Resolving the clean-build, production WiFi, BLE-radio, authentication, or
   memory-budget issues identified by the independent audit.
 - Allowing background program execution to recover from takeover or a fault
@@ -323,5 +372,5 @@ This slice is complete only when:
 - the full regression and adversarial gates pass;
 - API/FTMS responses accurately report rejection;
 - the hardware bench checks pass with captured evidence; and
-- the separate production-build/WiFi blocker is resolved sufficiently to run
-  those checks on the actual ESP32-S3 artifact.
+- the external production-build/WiFi prerequisite (`precor-9_3x-p0q`) is
+  resolved sufficiently to run those checks on the actual ESP32-S3 artifact.
