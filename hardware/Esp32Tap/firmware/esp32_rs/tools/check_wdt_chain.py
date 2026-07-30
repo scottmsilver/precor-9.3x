@@ -37,6 +37,14 @@ actually resetting the SoC promptly):
      `esp32tap/src/tasks/mod.rs`, in BOTH directions — a new supervised task
      that nobody wrote into the matrix fails here, and a matrix row with no
      task behind it fails too.
+  2c. Every `spawn_pinned` site in `main.rs` matches its row's PRIORITY and
+     STACK, resolving `STACK_BYTES`/`PRIORITY` constants, and a value this gate
+     cannot read is a failure rather than a skip. Until this existed the ladder
+     was a comment: FreeRTOS enforces the priorities it is GIVEN and cannot know
+     the table said something else, so a one-character edit to a spawn priority
+     left every gate green. The `Core` column is held by construction instead —
+     `spawn_pinned` is asserted to be the only spawn path and to hard-code
+     Core0.
   3. No task feeds the WDT from inside an unbounded wait (specifically: the
      feedback window, which spins with the relay closed, must not feed it).
   4. The generated sdkconfig enables the WDT, initialises it, sets the 2 s
@@ -123,11 +131,16 @@ def discover_supervised() -> list[Path]:
     ]
 
 
-def matrix_rows() -> set[str]:
-    """Task names from the markdown table in tasks/mod.rs."""
+def matrix_table() -> dict[str, dict[str, str]]:
+    """The whole markdown table in tasks/mod.rs, by task name.
+
+    Columns: Task | Core | Prio | Stack | WDT | Cadence | Source. The `WDT`
+    cell decides whether a row claims supervision (`subscribe`) or exemption,
+    and `check_tasks` holds that claim against what the code actually does.
+    """
     if not MATRIX.exists():
-        return set()
-    rows: set[str] = set()
+        return {}
+    rows: dict[str, dict[str, str]] = {}
     for line in MATRIX.read_text(encoding="utf-8").splitlines():
         if not line.startswith("//! |"):
             continue
@@ -137,8 +150,29 @@ def matrix_rows() -> set[str]:
         head = cells[0]
         if head in ("Task",) or set(head) <= set("-: "):
             continue
-        rows.add(head)
+        rows[head] = {
+            "core": cells[1] if len(cells) > 1 else "",
+            "prio": cells[2] if len(cells) > 2 else "",
+            "stack": cells[3] if len(cells) > 3 else "",
+            "wdt": cells[4] if len(cells) > 4 else "",
+            "source": cells[6] if len(cells) > 6 else "",
+        }
     return rows
+
+
+def matrix_rows() -> set[str]:
+    """Names of rows that CLAIM WDT supervision.
+
+    Exempt rows (the coach and the radio) are in the table too — their numbers
+    have to be checkable like everyone else's — but they are deliberately not
+    part of the supervised set that `check_tasks` matches both ways.
+    """
+    return {n for n, r in matrix_table().items() if "subscribe" in r["wdt"].lower()}
+
+
+def matrix_exempt() -> set[str]:
+    """Names of rows that claim EXEMPTION from the watchdog."""
+    return {n for n, r in matrix_table().items() if "exempt" in r["wdt"].lower()}
 
 
 def check_tasks() -> list[str]:
@@ -178,6 +212,145 @@ def check_tasks() -> list[str]:
                 f"the WDT matrix in tasks/mod.rs names {d!r}, but no file in esp32tap/src "
                 "subscribes a task by that name"
             )
+
+    # An EXEMPT row is a CLAIM, and a claim that contradicts the code is worse
+    # than no row: somebody deciding whether a task is safe unsupervised would
+    # read the exemption and its argument, when in fact the task is supervised.
+    for e in matrix_exempt():
+        if any(s.startswith(e) or e.startswith(s) for s in stems):
+            failures.append(
+                f"the WDT matrix in tasks/mod.rs marks {e!r} EXEMPT from the watchdog, but a "
+                "file of that name calls wdt::subscribe_current_task() — the row and the code "
+                "disagree about whether a stall reboots the device"
+            )
+    return failures
+
+
+MAIN_RS = FW_SRC / "main.rs"
+
+# `spawn_pinned(c"name", <stack>, <prio>, <body>)`, across line breaks.
+SPAWN_RE = re.compile(
+    r"spawn_pinned\(\s*c\"(?P<name>[A-Za-z0-9_]+)\"\s*,"
+    r"\s*(?P<stack>[A-Za-z0-9_:]+)\s*,"
+    r"\s*(?P<prio>[A-Za-z0-9_:]+)\s*,",
+    re.S,
+)
+
+
+def resolve_const(expr: str) -> int | None:
+    """An integer literal, or a `path::to::CONST` resolved from its module.
+
+    Returns None when it cannot be resolved, and the caller FAILS on None
+    rather than skipping: a spawn whose priority this gate cannot read is a
+    spawn whose priority nothing is checking.
+    """
+    lit = expr.replace("_", "")
+    if lit.isdigit():
+        return int(lit)
+    parts = expr.split("::")
+    if len(parts) < 2:
+        return None
+    const = parts[-1]
+    mod_path = parts[:-1]
+    candidates = [
+        FW_SRC.joinpath(*mod_path).with_suffix(".rs"),
+        FW_SRC.joinpath(*mod_path, "mod.rs"),
+    ]
+    pat = re.compile(rf"pub const {re.escape(const)}\s*:\s*\w+\s*=\s*([0-9_]+)")
+    for c in candidates:
+        if not c.exists():
+            continue
+        m = pat.search(strip_comments(c.read_text(encoding="utf-8")))
+        if m:
+            return int(m.group(1).replace("_", ""))
+    return None
+
+
+def row_for(spawn_name: str, table: dict[str, dict[str, str]]) -> str | None:
+    """Match a spawn's task name to a matrix row.
+
+    Exact first, then the loose prefix rule the rest of this file uses (the
+    table abbreviates `interval_executor`), then the Source column — the shim
+    is spawned as `qemu_test` but its row is headed `shim_task`, and the Source
+    cell `qemu_test/shim_task` is what ties the two together.
+    """
+    if spawn_name in table:
+        return spawn_name
+    for head in table:
+        if head.startswith(spawn_name) or spawn_name.startswith(head):
+            return head
+    for head, row in table.items():
+        segments = re.split(r"[/\s(]+", row["source"])
+        if spawn_name in segments:
+            return head
+    return None
+
+
+def check_spawn_matrix() -> list[str]:
+    """Every spawned task's PRIORITY and STACK must equal its matrix row.
+
+    WHY: the matrix is the document somebody consults to reason about what
+    preempts what, and until this check existed nothing tied its numbers to the
+    code. FreeRTOS enforces the ladder it is GIVEN — it cannot know the ladder
+    was written down differently. A one-character edit to a spawn priority
+    would have left every gate green.
+    """
+    failures: list[str] = []
+    if not MAIN_RS.exists():
+        return [f"{rel(MAIN_RS, FW_SRC)} is missing — the spawn sites cannot be read"]
+    src = strip_comments(MAIN_RS.read_text(encoding="utf-8"))
+
+    # The Core column is true by construction, not by table lookup: one spawn
+    # helper, one hard-coded core. Assert both halves of that.
+    if "pin_to_core: Some(Core::Core0)" not in src:
+        failures.append(
+            "main.rs no longer pins spawned tasks to Core0 in spawn_pinned — the matrix's "
+            "Core column would become a claim nothing supports"
+        )
+    stray = [
+        rel(p, FW_SRC)
+        for p in FW_SRC.rglob("*.rs")
+        if p != MAIN_RS and "ThreadSpawnConfiguration" in strip_comments(p.read_text(encoding="utf-8"))
+    ]
+    if stray:
+        failures.append(
+            "spawn_pinned in main.rs is supposed to be the ONLY spawn path, but "
+            f"{', '.join(stray)} also configures thread spawning — a task created there "
+            "would carry neither a checked priority nor a pinned core"
+        )
+
+    table = matrix_table()
+    if not table:
+        return failures + [f"no matrix table found in {rel(MATRIX, FW_SRC)}"]
+
+    spawns = list(SPAWN_RE.finditer(src))
+    if not spawns:
+        return failures + ["no spawn_pinned call sites found in main.rs — this gate would be vacuous"]
+
+    for m in spawns:
+        name, stack_x, prio_x = m.group("name"), m.group("stack"), m.group("prio")
+        head = row_for(name, table)
+        if head is None:
+            failures.append(
+                f"main.rs spawns task {name!r} but the matrix in tasks/mod.rs has no row for it "
+                f"(rows: {sorted(table)})"
+            )
+            continue
+        row = table[head]
+        for label, expr, want in (("priority", prio_x, row["prio"]), ("stack", stack_x, row["stack"])):
+            got = resolve_const(expr)
+            if got is None:
+                failures.append(
+                    f"main.rs spawns {name!r} with {label} `{expr}`, which this gate cannot "
+                    "resolve to a number — an unreadable value is an unchecked value"
+                )
+                continue
+            if str(got) != want.replace("_", ""):
+                failures.append(
+                    f"{name!r} is spawned with {label} {got} but the normative matrix row "
+                    f"{head!r} says {want} — the table and the code disagree about what "
+                    "preempts what"
+                )
     return failures
 
 
@@ -226,16 +399,19 @@ def check_pulldown() -> list[str]:
 
 
 def main() -> int:
-    failures = check_tasks() + check_window_does_not_feed() + check_pulldown()
+    failures = check_tasks() + check_spawn_matrix() + check_window_does_not_feed() + check_pulldown()
     if failures:
         print("check_wdt_chain: FAIL")
         for f in failures:
             print(f"  - {f}")
         return 1
     n = len(discover_supervised())
+    nspawn = len(list(SPAWN_RE.finditer(strip_comments(MAIN_RS.read_text(encoding="utf-8")))))
     print(
         f"check_wdt_chain: OK — {n} discovered supervised tasks subscribe+abort+feed "
-        "and each has a row in the normative matrix; the "
+        "and each has a row in the normative matrix; "
+        f"all {nspawn} spawn_pinned sites match their row's priority and stack and are "
+        "pinned to Core0 by the sole spawn path; the "
         "bounded feedback window does not feed the WDT; RELAY_CMD has a "
         "pull-down to GND in the netlist. "
         "NOT PROVEN HERE (bench gate, esp-QEMU cannot execute it): that the "

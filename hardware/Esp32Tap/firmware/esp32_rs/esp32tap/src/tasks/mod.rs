@@ -1,4 +1,4 @@
-//! The supervised core-0 tasks (PLAN's normative WDT matrix).
+//! EVERY core-0 task this firmware spawns (PLAN's normative WDT matrix).
 //!
 //! | Task           | Core | Prio | Stack | WDT                       | Cadence | Source              |
 //! |----------------|------|------|-------|---------------------------|---------|---------------------|
@@ -7,8 +7,22 @@
 //! | interval_exec  | 0    | 5    | 16384 | subscribe, ABORT on fail  | 1 s     | tasks/interval_executor |
 //! | session        | 0    | 4    | 12288 | subscribe, ABORT on fail  | 1 s     | net/session (feature `net`) |
 //! | shim_task      | 0    | 4    | 6144  | subscribe, ABORT on fail  | 100 ms  | qemu_test/shim_task (feature `qemu-test`, NEVER flashed) |
+//! | coach          | 0    | 3    | 12288 | EXEMPT, argued below      | idle    | net/coach (feature `net`) |
+//! | ble            | 0    | 3    | 4096  | EXEMPT, argued below      | 1 s     | ble (feature `ble`) |
 //!
-//! THE COACH TIER IS NOT IN THE MATRIX EITHER, for a reason that is one step
+//! THE TABLE IS THE ONLY SOURCE OF THESE NUMBERS, and it is CHECKED.
+//! `tools/check_wdt_chain.py` reads every `spawn_pinned` call site in `main.rs`
+//! — resolving `STACK_BYTES`/`PRIORITY` constants where they are used — and
+//! fails the build if a priority or stack disagrees with its row, if a spawned
+//! task has no row, or if a row claims `subscribe` while the task does not (or
+//! claims EXEMPT while it does). The last two rows used to live only in prose,
+//! where nothing could contradict them. The `Core` column is true by
+//! construction rather than by lookup: `spawn_pinned` is the sole spawn path in
+//! the firmware and hard-codes `pin_to_core: Core0`, and the gate asserts both
+//! of those facts — FreeRTOS enforces the ladder it is GIVEN, and cannot know
+//! the ladder was written down differently.
+//!
+//! THE COACH TIER IS EXEMPT FROM THE WATCHDOG, for a reason that is one step
 //! stronger than the radio's. `net::coach::run` (core 0, prio 3, stack 12288,
 //! feature `net`) BLOCKS ON A NETWORK CALL — a Gemini round trip takes seconds
 //! and its duration is a remote server's choice — and a 2 s task watchdog whose
@@ -33,15 +47,16 @@
 //! deciding whether a task is safe unsupervised, and it must not assert
 //! something the implementation file denies in the same repository.
 //!
-//! THE BLE TIER IS NOT IN THE MATRIX, AND THAT IS A DECISION RATHER THAN A
-//! HOLE. `ble::run` (core 0, prio 3 — the lowest in the system, stack 4096,
-//! 1 s cadence, feature `ble`) deliberately does NOT subscribe to the task
-//! watchdog. The watchdog's action here is `panic -> silent reboot`, and a
-//! reboot DROPS THE RELAY MID-RUN. Trading a working treadmill for a stalled
-//! radio is the wrong trade every time: Bluetooth is a convenience, the belt
-//! is the point. `tools/check_wdt_chain.py` discovers supervised tasks by
-//! their `wdt::subscribe_current_task()` call, so a task that does not
-//! subscribe needs no row — it is named here anyway so the absence is
+//! THE BLE TIER IS EXEMPT TOO, AND THAT IS A DECISION RATHER THAN A
+//! HOLE. `ble::run` (prio 3 — the lowest in the system) deliberately does NOT
+//! subscribe to the task watchdog. The watchdog's action here is
+//! `panic -> silent reboot`, and a reboot DROPS THE RELAY MID-RUN. Trading a
+//! working treadmill for a stalled radio is the wrong trade every time:
+//! Bluetooth is a convenience, the belt is the point.
+//! `tools/check_wdt_chain.py` discovers supervised tasks by their
+//! `wdt::subscribe_current_task()` call and holds that set against the `WDT`
+//! column above, so an exempt task still carries a row and its exemption is
+//! asserted rather than assumed. The argument lives here so the reasoning is
 //! findable, and so the next person does not "fix" it.
 //!
 //! What that costs, stated plainly: a wedged NimBLE host is NOT detected or
