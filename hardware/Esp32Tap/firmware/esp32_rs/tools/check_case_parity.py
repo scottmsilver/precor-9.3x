@@ -45,7 +45,7 @@ FILE_MAP = {
 EXPECTED_TOTAL = 149
 
 # Rust tests with no C++ twin. Each needs a reason. They are NOT counted
-# toward the 148.
+# toward the 149.
 RUST_ONLY_EXTRA = {
     "key_cache_prev_value_survives_auto_proxy": (
         "Replacement property for the one deliberately non-ported ASSERTION "
@@ -56,7 +56,7 @@ RUST_ONLY_EXTRA = {
     ),
     "_zero_frame_builder_shape": (
         "Ignored documentation helper (asserts the zero-frame builder shape); "
-        "marked #[ignore] and not part of the 148."
+        "marked #[ignore] and not part of the 149."
     ),
     "connect_raw_rejects_a_negative_generation": (
         "The C++ validates generation < 0 INSIDE connect(), so there is no C++ "
