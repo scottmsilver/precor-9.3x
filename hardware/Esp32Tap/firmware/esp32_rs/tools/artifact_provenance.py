@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import uuid
 from collections.abc import Iterator
@@ -436,24 +437,35 @@ def _verify_or_raise(
     except FileNotFoundError as exc:
         raise MissingError("public artifact bundle is missing") from exc
     expected_kind = _bundle_kind_from_name(bundle)
-    if stat.S_ISLNK(lexical.st_mode):
-        target = os.readlink(bundle)
-        if os.path.isabs(target):
-            raise InvalidError("public artifact link must be relative")
-        if expected_kind is None:
-            raise InvalidError("public artifact link has an unknown name")
-        _, artifact_name = _kind(expected_kind)
-        target_parts = Path(target).parts
-        if (
-            len(target_parts) != 3
-            or target_parts[:2] != (".artifacts", artifact_name)
-            or not _HEX64.fullmatch(target_parts[2])
-        ):
-            raise InvalidError("public artifact link is not canonical")
-        resolved = (bundle.parent / target).resolve(strict=False)
-        artifacts = (bundle.parent / ".artifacts").resolve(strict=False)
-        if not resolved.is_relative_to(artifacts):
-            raise InvalidError("public artifact link escapes .artifacts")
+    if not stat.S_ISLNK(lexical.st_mode):
+        raise InvalidError("public artifact bundle must be a relative symlink")
+    target = os.readlink(bundle)
+    if os.path.isabs(target):
+        raise InvalidError("public artifact link must be relative")
+    if expected_kind is None:
+        raise InvalidError("public artifact link has an unknown name")
+    _, artifact_name = _kind(expected_kind)
+    target_parts = Path(target).parts
+    if (
+        len(target_parts) != 3
+        or target_parts[:2] != (".artifacts", artifact_name)
+        or not _HEX64.fullmatch(target_parts[2])
+    ):
+        raise InvalidError("public artifact link is not canonical")
+    artifacts = bundle.parent / ".artifacts"
+    kind_root = artifacts / artifact_name
+    generation = kind_root / target_parts[2]
+    for path, label in (
+        (artifacts, "artifact store"),
+        (kind_root, "artifact kind store"),
+        (generation, "artifact generation"),
+    ):
+        try:
+            info = path.lstat()
+        except FileNotFoundError as exc:
+            raise MissingError(f"{label} is missing") from exc
+        if not stat.S_ISDIR(info.st_mode):
+            raise InvalidError(f"{label} must be a real directory")
     try:
         directory_info = bundle.stat()
     except FileNotFoundError as exc:
@@ -470,9 +482,10 @@ def _verify_or_raise(
     if names != required:
         raise InvalidError("artifact bundle has missing or extra members")
     manifest, actual_toolchain = _load_manifest(bundle, expected_kind)
-    if stat.S_ISLNK(lexical.st_mode):
-        if Path(os.readlink(bundle)).name != manifest["manifest_sha256"]:
-            raise InvalidError("public artifact link digest does not match manifest")
+    if Path(os.readlink(bundle)).name != manifest["manifest_sha256"]:
+        raise InvalidError("public artifact link digest does not match manifest")
+    if generation != bundle.parent / Path(os.readlink(bundle)):
+        raise InvalidError("public artifact link does not name its exact generation")
     actual_records = _member_records(bundle)
     if actual_records != manifest["members"]:
         raise InvalidError("artifact member size or digest changed")
@@ -660,14 +673,78 @@ def _expected_rs_from_public(public_link: Path) -> tuple[Path, str, str]:
     raise InvalidError("public link name is not a known bundle")
 
 
+def _ancestor_pids() -> set[int]:
+    result = set()
+    pid = os.getpid()
+    while pid > 0 and pid not in result:
+        result.add(pid)
+        try:
+            text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+            fields = text.rpartition(") ")[2].split()
+            pid = int(fields[1])
+        except (OSError, ValueError, IndexError) as exc:
+            raise InternalError(f"cannot validate lock ownership: {exc}") from exc
+    return result
+
+
+def _validate_exclusive_lock_fd(lock_fd: int, expected_path: Path) -> None:
+    if type(lock_fd) is not int or lock_fd < 0:
+        raise InvalidError("lock_fd must be an open integer descriptor")
+    try:
+        supplied = os.fstat(lock_fd)
+        expected = expected_path.lstat()
+        inheritable = os.get_inheritable(lock_fd)
+    except OSError as exc:
+        raise InvalidError(f"lock_fd is not valid: {exc}") from exc
+    if not inheritable:
+        raise InvalidError("lock_fd must be explicitly inheritable")
+    if not stat.S_ISREG(supplied.st_mode) or (
+        supplied.st_dev,
+        supplied.st_ino,
+    ) != (expected.st_dev, expected.st_ino):
+        raise InvalidError("lock_fd does not refer to the physical build lock")
+    owners = _ancestor_pids()
+    device = (os.major(supplied.st_dev), os.minor(supplied.st_dev))
+    try:
+        locks = Path("/proc/locks").read_text(encoding="ascii").splitlines()
+    except OSError as exc:
+        raise InternalError(f"cannot inspect caller lock ownership: {exc}") from exc
+    for line in locks:
+        fields = line.split()
+        if len(fields) < 6 or fields[1] != "FLOCK":
+            continue
+        try:
+            owner = int(fields[4])
+            lock_device, inode = fields[5].rsplit(":", 1)
+            major, minor = (int(part, 16) for part in lock_device.split(":", 1))
+        except (ValueError, IndexError):
+            continue
+        if (
+            owner in owners
+            and (major, minor) == device
+            and int(inode) == supplied.st_ino
+        ):
+            if fields[3] != "WRITE":
+                raise InvalidError("lock_fd holds a shared lock, not exclusive")
+            return
+    raise InvalidError("lock_fd has no owned exclusive flock")
+
+
 def publish_generation_atomic(
     staging: Path,
     public_link: Path,
     manifest: dict,
+    *,
+    lock_fd: int | None = None,
 ) -> None:
     """Durably publish a complete generation under one exclusive build lock."""
     esp32_rs, kind, artifact_name = _expected_rs_from_public(public_link)
-    lock_fd = _open_locked(_lock_for_esp32_rs(esp32_rs), fcntl.LOCK_EX, False)
+    lock = _lock_for_esp32_rs(esp32_rs)
+    owned_fd: int | None = None
+    if lock_fd is None:
+        owned_fd = _open_locked(lock, fcntl.LOCK_EX, False)
+    else:
+        _validate_exclusive_lock_fd(lock_fd, lock)
     try:
         _publish_locked(
             staging, public_link.absolute(), manifest, esp32_rs, kind, artifact_name
@@ -677,7 +754,8 @@ def publish_generation_atomic(
     except Exception as exc:
         raise InternalError(f"artifact publication failed: {exc}") from exc
     finally:
-        os.close(lock_fd)
+        if owned_fd is not None:
+            os.close(owned_fd)
 
 
 def _publish_locked(
@@ -742,25 +820,30 @@ def _publish_locked(
 
     token = uuid.uuid4().hex
     temp_link = esp32_rs / f".{public_link.name}.tmp-{token}"
-    backup: Path | None = None
-    backup_prefix = ""
-    moved_old = False
+    rollback_link = esp32_rs / f".{public_link.name}.rollback-{token}"
+    legacy_backup: Path | None = None
+    old_target: str | None = None
+    legacy_moved = False
     swapped = False
     os.symlink(str(relative_target), temp_link)
+    if os.path.lexists(public_link):
+        old_info = public_link.lstat()
+        if stat.S_ISLNK(old_info.st_mode):
+            old_target = os.readlink(public_link)
+            os.symlink(old_target, rollback_link)
+        elif stat.S_ISDIR(old_info.st_mode):
+            legacy_backup = artifacts / f".legacy-{public_link.name}-{token}"
+        else:
+            temp_link.unlink()
+            raise InvalidError(
+                "public path is neither a legacy directory nor a symlink"
+            )
     try:
-        if os.path.lexists(public_link):
-            old_info = public_link.lstat()
-            if stat.S_ISDIR(old_info.st_mode):
-                backup_prefix = f".legacy-{public_link.name}-"
-            elif stat.S_ISLNK(old_info.st_mode):
-                backup_prefix = f".previous-{public_link.name}-"
-            else:
-                raise InvalidError(
-                    "public path is neither a legacy directory nor a symlink"
-                )
-            backup = artifacts / f"{backup_prefix}{token}"
-            os.replace(public_link, backup)
-            moved_old = True
+        # Make both the new and rollback symlinks durable before mutation.
+        _fsync_dir(esp32_rs)
+        if legacy_backup is not None:
+            os.replace(public_link, legacy_backup)
+            legacy_moved = True
             _fsync_dir(esp32_rs)
             _fsync_dir(artifacts)
             _failure_point("after_legacy_backup")
@@ -768,11 +851,13 @@ def _publish_locked(
         os.replace(temp_link, public_link)
         swapped = True
         _failure_point("after_link_swap")
+        _failure_point("before_commit")
         _fsync_dir(esp32_rs)
-        _failure_point("after_link_fsync")
     except Exception:
         try:
-            if swapped and os.path.lexists(public_link):
+            if swapped and old_target is not None:
+                os.replace(rollback_link, public_link)
+            elif swapped and os.path.lexists(public_link):
                 current = public_link.lstat()
                 if not stat.S_ISLNK(current.st_mode) or os.readlink(public_link) != str(
                     relative_target
@@ -781,10 +866,16 @@ def _publish_locked(
                         "refusing to overwrite changed public path during rollback"
                     )
                 public_link.unlink()
-            if moved_old and backup is not None and os.path.lexists(backup):
-                os.replace(backup, public_link)
+            if (
+                legacy_moved
+                and legacy_backup is not None
+                and os.path.lexists(legacy_backup)
+            ):
+                os.replace(legacy_backup, public_link)
             if os.path.lexists(temp_link):
                 temp_link.unlink()
+            if os.path.lexists(rollback_link):
+                rollback_link.unlink()
             _fsync_dir(esp32_rs)
             _fsync_dir(artifacts)
         except Exception as rollback_error:
@@ -793,18 +884,34 @@ def _publish_locked(
             ) from rollback_error
         raise
 
-    if backup is not None:
-        _remove_tree_exact(backup, artifacts, backup_prefix)
-        _fsync_dir(artifacts)
-    _fsync_dir(kind_root)
-    _fsync_dir(artifacts)
-    _fsync_dir(esp32_rs)
+    # The successful esp32_rs fsync above is the commit point. From here on,
+    # cleanup is best effort and must not report failure with new public state.
+    try:
+        _failure_point("after_link_fsync")
+        _failure_point("after_commit")
+    except Exception:
+        pass
+    if os.path.lexists(rollback_link):
+        try:
+            rollback_link.unlink()
+            _fsync_dir(esp32_rs)
+        except Exception:
+            pass
+    if legacy_backup is not None and os.path.lexists(legacy_backup):
+        retired = artifacts / f".retired-legacy-{public_link.name}-{token}"
+        try:
+            os.replace(legacy_backup, retired)
+            _fsync_dir(artifacts)
+            _failure_point("before_retired_cleanup")
+            _remove_tree_exact(retired, artifacts, ".retired-legacy-")
+            _fsync_dir(artifacts)
+        except Exception:
+            # The complete retired directory remains recoverable on any
+            # failure before recursive cleanup begins.
+            return
 
 
 def _current_input_digest(repo_root: Path) -> str:
-    override = os.environ.get("ESP32TAP_INPUT_DIGEST")
-    if override is not None:
-        return _validate_digest(override, "ESP32TAP_INPUT_DIGEST")
     try:
         from artifact_inputs import working_digest
 
@@ -813,6 +920,85 @@ def _current_input_digest(repo_root: Path) -> str:
         raise
     except Exception as exc:
         raise InternalError(f"cannot compute live input digest: {exc}") from exc
+
+
+def _current_toolchain(
+    repo_root: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> Toolchain:
+    esp32_rs = _physical_esp32_rs(repo_root)
+    checker = esp32_rs / "tools" / "build_image.sh"
+    try:
+        info = checker.lstat()
+    except FileNotFoundError as exc:
+        raise MissingError("tools/build_image.sh is missing") from exc
+    except OSError as exc:
+        raise InternalError(f"cannot inspect tools/build_image.sh: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
+        raise InvalidError("tools/build_image.sh must be an executable regular file")
+    argv = [str(checker), "--check"]
+    try:
+        completed = runner(
+            argv,
+            cwd=repo_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise InternalError(
+            f"cannot execute tools/build_image.sh --check: {exc}"
+        ) from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.strip()
+        suffix = f": {detail}" if detail else ""
+        raise InternalError(f"tools/build_image.sh --check failed{suffix}")
+    try:
+        value = json.loads(completed.stdout)
+    except (json.JSONDecodeError, UnicodeError, TypeError) as exc:
+        raise InvalidError(f"toolchain check emitted malformed JSON: {exc}") from exc
+    toolchain = _toolchain_from_dict(value)
+    canonical = (
+        json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        + "\n"
+    )
+    if completed.stdout != canonical:
+        raise InvalidError("toolchain check output is not canonical JSON")
+    return toolchain
+
+
+def _verify_current(repo_root: Path, kind: str, bundle: Path) -> Result:
+    public_name, _ = _kind(kind)
+    esp32_rs = _physical_esp32_rs(repo_root)
+    if not isinstance(bundle, Path) or ".." in bundle.parts:
+        return Result(EXIT_INVALID, "bundle path is not canonical")
+    expected_bundle = esp32_rs / public_name
+    try:
+        if bundle.absolute().parent.resolve(strict=True) != esp32_rs:
+            return Result(EXIT_INVALID, "bundle is outside esp32_rs")
+    except OSError as exc:
+        return Result(EXIT_INTERNAL, f"cannot resolve bundle parent: {exc}")
+    if bundle.name != public_name:
+        return Result(EXIT_INVALID, "bundle does not match requested kind")
+    fd = _open_locked(_lock_for_esp32_rs(esp32_rs), fcntl.LOCK_SH, False)
+    try:
+        expected = _current_toolchain(repo_root)
+        input_digest = _current_input_digest(repo_root)
+        return verify_locked(expected_bundle, expected, input_digest)
+    except ArtifactError as exc:
+        return Result(exc.code, str(exc))
+    except Exception as exc:
+        return Result(EXIT_INTERNAL, f"unexpected current verification failure: {exc}")
+    finally:
+        os.close(fd)
 
 
 def _raise_result(result: Result) -> None:
@@ -856,12 +1042,10 @@ def _locked_exec_many(
     _, held = _acquire_exec_locks(repo_root, kinds)
     try:
         live_digest = _current_input_digest(repo_root)
+        expected = _current_toolchain(repo_root)
         for _, _, bundle in held:
-            manifest, expected = _load_manifest(bundle, _bundle_kind_from_name(bundle))
             result = verify_locked(bundle, expected, live_digest)
             _raise_result(result)
-            if result.manifest != manifest:
-                raise InternalError("manifest changed during locked verification")
         os.execvp(argv[0], argv)
         raise InternalError("execvp returned unexpectedly")
     finally:
@@ -906,6 +1090,9 @@ def _parser() -> argparse.ArgumentParser:
         "--kind", action="append", required=True, choices=tuple(_KIND_LAYOUT)
     )
     many.add_argument("command", nargs=argparse.REMAINDER)
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("--kind", required=True, choices=tuple(_KIND_LAYOUT))
+    verify.add_argument("bundle", type=Path)
     return parser
 
 
@@ -928,6 +1115,11 @@ def main(
 ) -> int:
     try:
         args = _parser().parse_args(argv)
+        if args.operation == "verify":
+            result = _verify_current(args.repo_root, args.kind, args.bundle)
+            if not result.ok:
+                _raise_result(result)
+            return 0
         command = _command(args.command)
         if args.operation == "exec":
             exec_one(args.repo_root, args.kind, command)
