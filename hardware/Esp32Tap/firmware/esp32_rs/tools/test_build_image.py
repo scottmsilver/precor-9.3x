@@ -24,6 +24,7 @@ DOCKERIGNORE = ESP32_RS / ".dockerignore"
 README = ESP32_RS / "README.md"
 IMAGE_ID = "sha256:" + "a" * 64
 IMAGE_TAG = "example/esp32tap:test"
+PUBLICATION_LOCK = Path("/tmp") / "esp32tap-image-publication.lock"
 COMMON = {
     "schema_version": 1,
     "idf_commit": "b" * 40,
@@ -132,6 +133,12 @@ if argv and argv[0] == "build" and os.environ.get("FAKE_TERM_RESISTANT_BARRIER")
 
 state_path = os.environ["FAKE_DOCKER_STATE"]
 
+def daemon_reference(reference):
+    aliases = os.environ.get("FAKE_DOCKER_EQUIVALENT_ALIASES", "").split(",")
+    if aliases != [""] and reference in aliases:
+        return aliases[0]
+    return reference
+
 def mutate(callback):
     with open(state_path + ".lock", "a+", encoding="utf-8") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -148,6 +155,7 @@ def mutate(callback):
         return result
 
 def image_for(state, reference):
+    reference = daemon_reference(reference)
     if reference in state["refs"]:
         return state["refs"][reference]
     for image in state["refs"].values():
@@ -155,11 +163,14 @@ def image_for(state, reference):
             return image
     default = json.loads(os.environ["FAKE_DOCKER_INSPECT"])[0]
     if (
-        reference == os.environ["RUST_IMAGE"]
+        reference == daemon_reference(os.environ["RUST_IMAGE"])
         and os.environ.get("FAKE_DOCKER_FINAL_MISSING")
     ):
         return None
-    if reference == os.environ["RUST_IMAGE"] or reference == default["Id"]:
+    if (
+        reference == daemon_reference(os.environ["RUST_IMAGE"])
+        or reference == default["Id"]
+    ):
         return default
     return None
 
@@ -211,6 +222,7 @@ elif argv and argv[0] == "commit":
     print(candidate_id)
 elif argv and argv[0] == "tag":
     source, destination = argv[1:]
+    destination = daemon_reference(destination)
     def promote(state):
         image = image_for(state, source)
         if image is None:
@@ -255,7 +267,9 @@ elif argv[:2] == ["image", "rm"]:
         if "stage" in reference and os.environ.get("FAKE_DOCKER_FAIL_STAGE_RM"):
             print("forced stage removal failure", file=sys.stderr)
             raise SystemExit(20)
-        mutate(lambda state, ref=reference: state["refs"].pop(ref, None))
+        mutate(
+            lambda state, ref=daemon_reference(reference): state["refs"].pop(ref, None)
+        )
 """,
         encoding="utf-8",
     )
@@ -870,11 +884,10 @@ def test_publication_refuses_preplaced_symlink_lock(
     context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
 ) -> None:
     image_tag = f"example/esp32tap:symlink-{tmp_path.name}"
-    key = hashlib.sha256(image_tag.encode("utf-8")).hexdigest()[:24]
-    lock = Path("/tmp") / f"esp32tap-image-publish-{key}.lock"
     target = tmp_path / "attacker-target"
     target.write_text("", encoding="utf-8")
-    lock.symlink_to(target)
+    PUBLICATION_LOCK.unlink(missing_ok=True)
+    PUBLICATION_LOCK.symlink_to(target)
     try:
         completed = run(
             context,
@@ -887,7 +900,7 @@ def test_publication_refuses_preplaced_symlink_lock(
             for call in docker_calls(fake_docker[1])
         )
     finally:
-        lock.unlink()
+        PUBLICATION_LOCK.unlink()
 
 
 def test_boolean_probe_schema_version_never_reaches_final_tag(
@@ -1058,6 +1071,77 @@ def test_ambiguous_older_rollback_cannot_clobber_newer_worktree_publication(
     finally:
         old.kill()
         old.wait()
+
+
+def test_equivalent_aliases_share_lifecycle_lock_and_cannot_clobber_publication(
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
+) -> None:
+    short = "esp32tap-rust:build"
+    qualified = "docker.io/library/esp32tap-rust:build"
+    aliases = f"{short},{qualified}"
+    newer = second_context(context, tmp_path / "newer-alias-worktree")
+    (newer / "Dockerfile").write_text(
+        "FROM scratch\n# newer alias recipe\n", encoding="utf-8"
+    )
+    newer_started = tmp_path / "newer-alias-build.started"
+    old = subprocess.Popen(
+        [str(context / "tools" / "build_image.sh")],
+        cwd=context,
+        env=run_environment(
+            context,
+            fake_docker,
+            extra_env={
+                "RUST_IMAGE": short,
+                "FAKE_DOCKER_EQUIVALENT_ALIASES": aliases,
+                "FAKE_DOCKER_TAG_TIMEOUT": "1",
+                "BUILD_IMAGE_DOCKER_TIMEOUT": "1",
+            },
+        ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    new_process: subprocess.Popen[str] | None = None
+    try:
+        wait_for_state(
+            fake_docker[1],
+            lambda state: state["events"].get("tagged", False),
+        )
+        new_process = subprocess.Popen(
+            [str(newer / "tools" / "build_image.sh")],
+            cwd=newer,
+            env=run_environment(
+                newer,
+                fake_docker,
+                extra_env={
+                    "RUST_IMAGE": qualified,
+                    "FAKE_DOCKER_EQUIVALENT_ALIASES": aliases,
+                    "FAKE_BUILD_STARTED_MARKER": str(newer_started),
+                },
+            ),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        wait_for(newer_started)
+        lifecycle_overlap = old.poll() is None
+        old_result = old.communicate(timeout=8)
+        new_result = new_process.communicate(timeout=8)
+        assert old.returncode != 0, old_result
+        assert new_process.returncode == 0, new_result
+        assert not lifecycle_overlap
+
+        state = docker_state(fake_docker[1])
+        final = state["refs"][short]
+        assert final["Config"]["Labels"][
+            "org.treddy.esp32tap.recipe-sha256"
+        ] == recipe(newer)
+    finally:
+        old.kill()
+        old.wait()
+        if new_process is not None:
+            new_process.kill()
+            new_process.wait()
 
 
 @pytest.mark.parametrize(
@@ -1311,9 +1395,7 @@ def test_termination_after_cleanup_and_lock_release_interrupts_final_output(
                 and not any("candidate" in ref for ref in state["refs"])
             ),
         )
-        lock_key = hashlib.sha256(IMAGE_TAG.encode("utf-8")).hexdigest()[:24]
-        lock_path = Path("/tmp") / f"esp32tap-image-publish-{lock_key}.lock"
-        lock_fd = os.open(lock_path, os.O_RDWR)
+        lock_fd = os.open(PUBLICATION_LOCK, os.O_RDWR)
         deadline = time.monotonic() + 5
         while True:
             try:

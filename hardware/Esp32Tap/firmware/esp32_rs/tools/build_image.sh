@@ -346,6 +346,7 @@ probe_timeout = float(probe_timeout_text)
 max_docker_output = 1024 * 1024
 recipe_limits = {"Dockerfile": 1024 * 1024, ".dockerignore": 64 * 1024}
 component_limit = 4 * 1024 * 1024
+publication_lock_path = Path("/tmp/esp32tap-image-publication.lock")
 
 
 class BuildImageError(Exception):
@@ -751,11 +752,10 @@ def validate_candidate(image: dict, recipe: str, attestation: str) -> str:
 
 @contextlib.contextmanager
 def publication_lock():
-    # Docker tags are daemon-global. Keying this lock by a worktree would let
-    # two checkouts race on the same mutable final tag, including rollback.
-    # Conservatively serialize the exact validated image tag across the host.
-    key = hashlib.sha256(image_tag.encode("utf-8")).hexdigest()[:24]
-    path = Path("/tmp") / f"esp32tap-image-publish-{key}.lock"
+    # Docker references can alias the same daemon-global tag. Serialize every
+    # Esp32Tap image lifecycle across the host rather than trying to duplicate
+    # Docker's reference canonicalization rules.
+    path = publication_lock_path
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     previous_umask = os.umask(0o077)
     try:
