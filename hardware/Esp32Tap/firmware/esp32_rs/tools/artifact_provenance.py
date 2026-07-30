@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import dataclasses
 import errno
 import fcntl
@@ -17,10 +18,14 @@ import hashlib
 import json
 import os
 import re
+import selectors
+import signal
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -42,6 +47,21 @@ EXIT_MISSING = 20
 EXIT_STALE = 21
 EXIT_INVALID = 22
 EXIT_INTERNAL = 23
+
+MAX_MANIFEST_BYTES = 1024 * 1024
+MEMBER_MAX_BYTES = {
+    "esp32tap.bin": 8 * 1024 * 1024,
+    "bootloader.bin": 1024 * 1024,
+    "partition-table.bin": 128 * 1024,
+    "flash_args": 64 * 1024,
+    "sdkconfig": 2 * 1024 * 1024,
+}
+MAX_TOOLCHAIN_SCALAR_LENGTH = 16 * 1024
+MAX_FEATURE_COUNT = 128
+MAX_FEATURE_NAME_LENGTH = 128
+CHECK_TIMEOUT_SECONDS = 10.0
+MAX_CHECK_OUTPUT_BYTES = 1024 * 1024
+CHECK_TERMINATE_GRACE_SECONDS = 1.0
 
 _KIND_LAYOUT = {
     "production": ("build", "prod"),
@@ -121,6 +141,8 @@ class Toolchain:
             value = getattr(self, name)
             if not isinstance(value, str) or not value or value != value.strip():
                 raise ValueError(f"{name} must be a non-empty canonical string")
+            if len(value) > MAX_TOOLCHAIN_SCALAR_LENGTH:
+                raise ValueError(f"{name} exceeds the maximum length")
             if "\x00" in value:
                 raise ValueError(f"{name} contains NUL")
         if not _HEX64.fullmatch(self.recipe_sha256):
@@ -137,8 +159,12 @@ class Toolchain:
             isinstance(feature, str) for feature in self.features
         ):
             raise ValueError("features must be a tuple of strings")
+        if len(self.features) > MAX_FEATURE_COUNT:
+            raise ValueError("too many features")
         if len(set(self.features)) != len(self.features):
             raise ValueError("duplicate feature")
+        if any(len(feature) > MAX_FEATURE_NAME_LENGTH for feature in self.features):
+            raise ValueError("feature name exceeds the maximum length")
         if any(not _FEATURE.fullmatch(feature) for feature in self.features):
             raise ValueError("features must use unambiguous ASCII names")
         object.__setattr__(self, "features", tuple(sorted(self.features)))
@@ -182,7 +208,10 @@ def manifest_bytes(manifest: dict) -> bytes:
         ).encode("ascii")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise InvalidError(f"manifest is not canonical JSON: {exc}") from exc
-    return encoded + b"\n"
+    result = encoded + b"\n"
+    if len(result) > MAX_MANIFEST_BYTES:
+        raise InvalidError("manifest exceeds the 1 MiB limit")
+    return result
 
 
 def _toolchain_dict(toolchain: Toolchain) -> dict:
@@ -224,6 +253,9 @@ def _safe_file(path: Path, label: str) -> os.stat_result:
 
 def _hash_file(path: Path) -> tuple[int, str]:
     info = _safe_file(path, path.name)
+    limit = MEMBER_MAX_BYTES.get(path.name)
+    if limit is not None and info.st_size > limit:
+        raise InvalidError(f"{path.name} exceeds its size limit")
     digest = hashlib.sha256()
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -235,6 +267,8 @@ def _hash_file(path: Path) -> tuple[int, str]:
             raise InvalidError(f"{path.name} changed type while opening")
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
             raise InvalidError(f"{path.name} changed while opening")
+        if limit is not None and opened.st_size > limit:
+            raise InvalidError(f"{path.name} exceeds its size limit")
         while block := os.read(fd, 1024 * 1024):
             digest.update(block)
         after = os.fstat(fd)
@@ -249,8 +283,10 @@ def _hash_file(path: Path) -> tuple[int, str]:
         os.close(fd)
 
 
-def _read_safe_bytes(path: Path, label: str) -> bytes:
+def _read_safe_bytes(path: Path, label: str, limit: int = MAX_MANIFEST_BYTES) -> bytes:
     before = _safe_file(path, label)
+    if before.st_size > limit:
+        raise InvalidError(f"{label} exceeds its size limit")
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags)
@@ -266,6 +302,8 @@ def _read_safe_bytes(path: Path, label: str) -> bytes:
             or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
         ):
             raise InvalidError(f"{label} changed while opening")
+        if opened.st_size > limit:
+            raise InvalidError(f"{label} exceeds its size limit")
         chunks = []
         while block := os.read(fd, 1024 * 1024):
             chunks.append(block)
@@ -378,6 +416,8 @@ def _validate_manifest_object(
             or entry["size"] < 0
         ):
             raise InvalidError("manifest member schema/order is invalid")
+        if entry["size"] > MEMBER_MAX_BYTES[expected_name]:
+            raise InvalidError(f"{expected_name} exceeds its size limit")
         _validate_digest(entry.get("sha256"), f"{expected_name} digest")
         normalized.append(entry)
     unsigned = dict(value)
@@ -481,6 +521,8 @@ def _verify_or_raise(
     required = {*BUNDLE_MEMBERS, MANIFEST_NAME}
     if names != required:
         raise InvalidError("artifact bundle has missing or extra members")
+    if not _generation_is_sealed(generation):
+        raise InvalidError("artifact generation must be immutable mode 0555/0444")
     manifest, actual_toolchain = _load_manifest(bundle, expected_kind)
     if Path(os.readlink(bundle)).name != manifest["manifest_sha256"]:
         raise InvalidError("public artifact link digest does not match manifest")
@@ -530,14 +572,48 @@ def lock_path(repo_root: Path, kind: str) -> Path:
 
 
 def _open_locked(path: Path, operation: int, inheritable: bool) -> int:
+    """Open the exact owned, single-link, regular 0600 lock and flock it."""
+    fd = -1
     try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        fd = os.open(path, flags, 0o600)
         os.set_inheritable(fd, inheritable)
+        opened = os.fstat(fd)
+        lexical = path.lstat()
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or (opened.st_dev, opened.st_ino) != (lexical.st_dev, lexical.st_ino)
+        ):
+            raise InvalidError(
+                "artifact lock must be one owned 0600 regular file at its exact path"
+            )
         fcntl.flock(fd, operation)
+        locked_path = path.lstat()
+        if (opened.st_dev, opened.st_ino) != (
+            locked_path.st_dev,
+            locked_path.st_ino,
+        ):
+            raise InvalidError("artifact lock path changed while acquiring its flock")
         return fd
-    except OSError as exc:
-        if "fd" in locals():
+    except InvalidError:
+        if fd >= 0:
             os.close(fd)
+        raise
+    except OSError as exc:
+        if fd >= 0:
+            os.close(fd)
+        if exc.errno in (errno.ELOOP, errno.EMLINK):
+            raise InvalidError(
+                "artifact lock must be a non-symlink regular file"
+            ) from exc
         raise InternalError(f"cannot acquire artifact lock {path}: {exc}") from exc
 
 
@@ -574,6 +650,9 @@ def _fsync_dir(path: Path) -> None:
 
 def _copy_member(source: Path, destination: Path, expected: dict) -> None:
     before = _safe_file(source, source.name)
+    limit = MEMBER_MAX_BYTES[source.name]
+    if before.st_size > limit or expected["size"] > limit:
+        raise InvalidError(f"{source.name} exceeds its size limit")
     source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     source_fd = os.open(source, source_flags)
     destination_fd = -1
@@ -585,10 +664,12 @@ def _copy_member(source: Path, destination: Path, expected: dict) -> None:
             or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
         ):
             raise InvalidError(f"{source.name} changed while publishing")
+        if opened.st_size > limit:
+            raise InvalidError(f"{source.name} exceeds its size limit")
         destination_fd = os.open(
             destination,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            stat.S_IMODE(opened.st_mode) & 0o777,
+            0o600,
         )
         digest = hashlib.sha256()
         size = 0
@@ -608,6 +689,7 @@ def _copy_member(source: Path, destination: Path, expected: dict) -> None:
             raise InvalidError(f"{source.name} changed while publishing")
         if size != expected["size"] or digest.hexdigest() != expected["sha256"]:
             raise InvalidError(f"{source.name} does not match manifest")
+        os.fchmod(destination_fd, 0o444)
         os.fsync(destination_fd)
     finally:
         os.close(source_fd)
@@ -623,7 +705,9 @@ def _generation_matches(generation: Path, manifest: dict) -> bool:
         raw = _read_safe_bytes(generation / MANIFEST_NAME, "generation manifest")
         if raw != manifest_bytes(manifest):
             return False
-        return _member_records(generation) == manifest["members"]
+        return _generation_is_sealed(generation) and (
+            _member_records(generation) == manifest["members"]
+        )
     except (OSError, ArtifactError):
         return False
 
@@ -640,6 +724,77 @@ def _remove_tree_exact(path: Path, artifacts: Path, prefix: str) -> None:
 
 def _failure_point(_name: str) -> None:
     """Monkeypatch seam for deterministic crash/rollback tests."""
+
+
+def _rename_exchange(left: Path, right: Path) -> None:
+    """Atomically exchange two Linux directory entries or fail closed."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise InternalError("renameat2(RENAME_EXCHANGE) is unavailable")
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_exchange = 2
+    if (
+        renameat2(
+            at_fdcwd,
+            os.fsencode(left),
+            at_fdcwd,
+            os.fsencode(right),
+            rename_exchange,
+        )
+        != 0
+    ):
+        error = ctypes.get_errno()
+        if error in (errno.ENOSYS, errno.EINVAL, errno.ENOTSUP):
+            raise InternalError(
+                "renameat2(RENAME_EXCHANGE) is unavailable on this filesystem"
+            )
+        raise OSError(error, os.strerror(error), f"{left} <-> {right}")
+
+
+def _generation_is_sealed(generation: Path) -> bool:
+    info = generation.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o555:
+        return False
+    for name in (*BUNDLE_MEMBERS, MANIFEST_NAME):
+        member = (generation / name).lstat()
+        if (
+            not stat.S_ISREG(member.st_mode)
+            or member.st_nlink != 1
+            or stat.S_IMODE(member.st_mode) != 0o444
+        ):
+            return False
+    return True
+
+
+def _recover_legacy_exchange_leftovers(
+    esp32_rs: Path, artifacts: Path, public_name: str
+) -> None:
+    for leftover in esp32_rs.glob(f".{public_name}.tmp-*"):
+        info = leftover.lstat()
+        if stat.S_ISLNK(info.st_mode):
+            leftover.unlink()
+            continue
+        if not stat.S_ISDIR(info.st_mode):
+            raise InvalidError("unsafe publication temporary path remains")
+        retired = artifacts / f".retired-legacy-{public_name}-{uuid.uuid4().hex}"
+        os.replace(leftover, retired)
+        _fsync_dir(esp32_rs)
+        _fsync_dir(artifacts)
+        try:
+            _remove_tree_exact(retired, artifacts, ".retired-legacy-")
+            _fsync_dir(artifacts)
+        except OSError:
+            # Recovery remains correct with the complete old directory retired.
+            pass
 
 
 def _ensure_real_directory(path: Path, label: str) -> None:
@@ -698,20 +853,30 @@ def _validate_exclusive_lock_fd(lock_fd: int, expected_path: Path) -> None:
         raise InvalidError(f"lock_fd is not valid: {exc}") from exc
     if not inheritable:
         raise InvalidError("lock_fd must be explicitly inheritable")
-    if not stat.S_ISREG(supplied.st_mode) or (
-        supplied.st_dev,
-        supplied.st_ino,
-    ) != (expected.st_dev, expected.st_ino):
+    if (
+        not stat.S_ISREG(supplied.st_mode)
+        or not stat.S_ISREG(expected.st_mode)
+        or supplied.st_nlink != 1
+        or supplied.st_uid != os.geteuid()
+        or stat.S_IMODE(supplied.st_mode) != 0o600
+        or (supplied.st_dev, supplied.st_ino) != (expected.st_dev, expected.st_ino)
+    ):
         raise InvalidError("lock_fd does not refer to the physical build lock")
-    owners = _ancestor_pids()
-    device = (os.major(supplied.st_dev), os.minor(supplied.st_dev))
     try:
-        locks = Path("/proc/locks").read_text(encoding="ascii").splitlines()
+        lines = (
+            Path(f"/proc/self/fdinfo/{lock_fd}")
+            .read_text(encoding="ascii")
+            .splitlines()
+        )
     except OSError as exc:
         raise InternalError(f"cannot inspect caller lock ownership: {exc}") from exc
-    for line in locks:
-        fields = line.split()
-        if len(fields) < 6 or fields[1] != "FLOCK":
+    owners = _ancestor_pids()
+    expected_device = (os.major(supplied.st_dev), os.minor(supplied.st_dev))
+    for line in lines:
+        if not line.startswith("lock:"):
+            continue
+        fields = line.removeprefix("lock:").split()
+        if len(fields) < 8 or fields[1] != "FLOCK":
             continue
         try:
             owner = int(fields[4])
@@ -721,13 +886,19 @@ def _validate_exclusive_lock_fd(lock_fd: int, expected_path: Path) -> None:
             continue
         if (
             owner in owners
-            and (major, minor) == device
+            and (major, minor) == expected_device
             and int(inode) == supplied.st_ino
         ):
             if fields[3] != "WRITE":
                 raise InvalidError("lock_fd holds a shared lock, not exclusive")
+            try:
+                # This is a no-op only after fdinfo proves this exact open file
+                # description already owns WRITE; it never upgrades READ/unlocked.
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise InvalidError("lock_fd lost its exclusive flock") from exc
             return
-    raise InvalidError("lock_fd has no owned exclusive flock")
+    raise InvalidError("lock_fd has no exclusive flock on its open file description")
 
 
 def publish_generation_atomic(
@@ -778,6 +949,7 @@ def _publish_locked(
     _ensure_real_directory(kind_root, "artifact kind store")
     _fsync_dir(artifacts)
     _fsync_dir(esp32_rs)
+    _recover_legacy_exchange_leftovers(esp32_rs, artifacts, public_link.name)
 
     identity = normalized["manifest_sha256"]
     generation = kind_root / identity
@@ -799,8 +971,20 @@ def _publish_locked(
                     expected,
                 )
             manifest_path = temp_generation / MANIFEST_NAME
-            manifest_path.write_bytes(manifest_bytes(normalized))
-            _fsync_file(manifest_path)
+            manifest_fd = os.open(
+                manifest_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+            )
+            try:
+                encoded_manifest = manifest_bytes(normalized)
+                view = memoryview(encoded_manifest)
+                while view:
+                    written = os.write(manifest_fd, view)
+                    view = view[written:]
+                os.fchmod(manifest_fd, 0o444)
+                os.fsync(manifest_fd)
+            finally:
+                os.close(manifest_fd)
+            os.chmod(temp_generation, 0o555)
             _fsync_dir(temp_generation)
             os.rename(temp_generation, generation)
             temp_generation = None
@@ -808,6 +992,7 @@ def _publish_locked(
             _fsync_dir(artifacts)
         finally:
             if temp_generation is not None and os.path.lexists(temp_generation):
+                os.chmod(temp_generation, 0o755)
                 shutil.rmtree(temp_generation)
     _failure_point("after_generation")
 
@@ -821,9 +1006,9 @@ def _publish_locked(
     token = uuid.uuid4().hex
     temp_link = esp32_rs / f".{public_link.name}.tmp-{token}"
     rollback_link = esp32_rs / f".{public_link.name}.rollback-{token}"
-    legacy_backup: Path | None = None
+    legacy_public = False
     old_target: str | None = None
-    legacy_moved = False
+    legacy_exchanged = False
     swapped = False
     os.symlink(str(relative_target), temp_link)
     if os.path.lexists(public_link):
@@ -832,7 +1017,7 @@ def _publish_locked(
             old_target = os.readlink(public_link)
             os.symlink(old_target, rollback_link)
         elif stat.S_ISDIR(old_info.st_mode):
-            legacy_backup = artifacts / f".legacy-{public_link.name}-{token}"
+            legacy_public = True
         else:
             temp_link.unlink()
             raise InvalidError(
@@ -841,21 +1026,25 @@ def _publish_locked(
     try:
         # Make both the new and rollback symlinks durable before mutation.
         _fsync_dir(esp32_rs)
-        if legacy_backup is not None:
-            os.replace(public_link, legacy_backup)
-            legacy_moved = True
-            _fsync_dir(esp32_rs)
-            _fsync_dir(artifacts)
-            _failure_point("after_legacy_backup")
         _failure_point("before_link_swap")
-        os.replace(temp_link, public_link)
-        swapped = True
+        if legacy_public:
+            _rename_exchange(public_link, temp_link)
+            legacy_exchanged = True
+            swapped = True
+            _failure_point("after_legacy_exchange")
+            _failure_point("after_legacy_backup")
+        else:
+            os.replace(temp_link, public_link)
+            swapped = True
         _failure_point("after_link_swap")
         _failure_point("before_commit")
         _fsync_dir(esp32_rs)
     except Exception:
         try:
-            if swapped and old_target is not None:
+            if legacy_exchanged:
+                _rename_exchange(public_link, temp_link)
+                legacy_exchanged = False
+            elif swapped and old_target is not None:
                 os.replace(rollback_link, public_link)
             elif swapped and os.path.lexists(public_link):
                 current = public_link.lstat()
@@ -866,12 +1055,6 @@ def _publish_locked(
                         "refusing to overwrite changed public path during rollback"
                     )
                 public_link.unlink()
-            if (
-                legacy_moved
-                and legacy_backup is not None
-                and os.path.lexists(legacy_backup)
-            ):
-                os.replace(legacy_backup, public_link)
             if os.path.lexists(temp_link):
                 temp_link.unlink()
             if os.path.lexists(rollback_link):
@@ -897,10 +1080,11 @@ def _publish_locked(
             _fsync_dir(esp32_rs)
         except Exception:
             pass
-    if legacy_backup is not None and os.path.lexists(legacy_backup):
+    if legacy_public and os.path.lexists(temp_link):
         retired = artifacts / f".retired-legacy-{public_link.name}-{token}"
         try:
-            os.replace(legacy_backup, retired)
+            os.replace(temp_link, retired)
+            _fsync_dir(esp32_rs)
             _fsync_dir(artifacts)
             _failure_point("before_retired_cleanup")
             _remove_tree_exact(retired, artifacts, ".retired-legacy-")
@@ -922,11 +1106,98 @@ def _current_input_digest(repo_root: Path) -> str:
         raise InternalError(f"cannot compute live input digest: {exc}") from exc
 
 
+def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=CHECK_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+
+def _run_bounded_checker(
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout: float,
+    max_output: int,
+) -> subprocess.CompletedProcess[str]:
+    with (
+        tempfile.SpooledTemporaryFile(max_size=max_output + 1, mode="w+b") as stdout,
+        tempfile.SpooledTemporaryFile(max_size=max_output + 1, mode="w+b") as stderr,
+    ):
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise InternalError(
+                f"cannot execute tools/build_image.sh --check: {exc}"
+            ) from exc
+        assert process.stdout is not None
+        assert process.stderr is not None
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, stdout)
+        selector.register(process.stderr, selectors.EVENT_READ, stderr)
+        sizes = {stdout: 0, stderr: 0}
+        deadline = time.monotonic() + timeout
+        try:
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _stop_process_group(process)
+                    raise InternalError(
+                        f"tools/build_image.sh --check timed out after {timeout:g}s"
+                    )
+                for key, _ in selector.select(min(remaining, 0.1)):
+                    block = os.read(key.fd, 64 * 1024)
+                    if not block:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+                    destination = key.data
+                    sizes[destination] += len(block)
+                    if sizes[destination] > max_output:
+                        _stop_process_group(process)
+                        raise InvalidError(
+                            "toolchain check output exceeds its size limit"
+                        )
+                    destination.write(block)
+            process.wait()
+        finally:
+            selector.close()
+            process.stdout.close()
+            process.stderr.close()
+            if process.poll() is None:
+                _stop_process_group(process)
+        stdout.seek(0)
+        stderr.seek(0)
+        try:
+            stdout_text = stdout.read(max_output + 1).decode("utf-8")
+            stderr_text = stderr.read(max_output + 1).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise InvalidError("toolchain check output is not UTF-8") from exc
+        return subprocess.CompletedProcess(
+            argv, process.returncode, stdout_text, stderr_text
+        )
+
+
 def _current_toolchain(
     repo_root: Path,
     kind: str,
     *,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> Toolchain:
     _kind(kind)
     esp32_rs = _physical_esp32_rs(repo_root)
@@ -941,18 +1212,23 @@ def _current_toolchain(
         raise InvalidError("tools/build_image.sh must be an executable regular file")
     argv = [str(checker), "--check", "--kind", kind]
     try:
-        completed = runner(
+        completed = (runner or _run_bounded_checker)(
             argv,
             cwd=repo_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
+            timeout=CHECK_TIMEOUT_SECONDS,
+            max_output=MAX_CHECK_OUTPUT_BYTES,
         )
     except OSError as exc:
         raise InternalError(
             f"cannot execute tools/build_image.sh --check: {exc}"
         ) from exc
+    if (
+        not isinstance(completed.stdout, str)
+        or not isinstance(completed.stderr, str)
+        or len(completed.stdout.encode("utf-8")) > MAX_CHECK_OUTPUT_BYTES
+        or len(completed.stderr.encode("utf-8")) > MAX_CHECK_OUTPUT_BYTES
+    ):
+        raise InvalidError("toolchain check output exceeds its size limit")
     if completed.returncode != 0:
         detail = completed.stderr.strip()
         suffix = f": {detail}" if detail else ""

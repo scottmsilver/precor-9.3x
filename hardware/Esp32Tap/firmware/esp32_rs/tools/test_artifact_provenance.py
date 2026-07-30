@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 
@@ -55,7 +56,7 @@ def toolchain() -> Toolchain:
 
 
 @pytest.fixture
-def layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+def layout(tmp_path: Path) -> Iterator[tuple[Path, Path, Path]]:
     root = tmp_path / "repo"
     rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
     rs.mkdir(parents=True)
@@ -63,7 +64,27 @@ def layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     staging.mkdir()
     for index, member in enumerate(BUNDLE_MEMBERS):
         (staging / member).write_bytes(f"{index}:{member}\n".encode())
-    return root, rs, staging
+    lock = provenance._lock_for_esp32_rs(rs)
+    yield root, rs, staging
+    fd = -1
+    try:
+        fd = os.open(lock, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+        opened = os.fstat(fd)
+        lexical = lock.lstat()
+        if (
+            stat.S_ISREG(opened.st_mode)
+            and opened.st_nlink == 1
+            and opened.st_uid == os.geteuid()
+            and stat.S_IMODE(opened.st_mode) == 0o600
+            and (opened.st_dev, opened.st_ino) == (lexical.st_dev, lexical.st_ino)
+        ):
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock.unlink()
+    except (FileNotFoundError, BlockingIOError, OSError):
+        pass
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def manifest_for(
@@ -98,6 +119,19 @@ def publish(
     manifest = manifest_for(staging, toolchain, kind=kind)
     publish_generation_atomic(staging, public, manifest)
     return public, manifest
+
+
+def writable_generation(public: Path) -> Path:
+    generation = public.resolve()
+    generation.chmod(0o755)
+    return generation
+
+
+def reseal_generation(generation: Path) -> None:
+    for member in generation.iterdir():
+        if member.is_file() and not member.is_symlink():
+            member.chmod(0o444)
+    generation.chmod(0o555)
 
 
 def wait_for_path(path: Path, timeout: float = 5.0) -> None:
@@ -161,15 +195,27 @@ def test_verification_exit_classification(
     if mutation == "missing_bundle":
         public.unlink()
     elif mutation == "missing_manifest":
+        generation = writable_generation(public)
         (bundle / MANIFEST_NAME).unlink()
+        reseal_generation(generation)
     elif mutation == "malformed":
-        (bundle / MANIFEST_NAME).write_text("{", encoding="utf-8")
+        manifest_path = bundle / MANIFEST_NAME
+        manifest_path.chmod(0o644)
+        manifest_path.write_text("{", encoding="utf-8")
+        manifest_path.chmod(0o444)
     elif mutation == "missing_member":
+        generation = writable_generation(public)
         (bundle / BUNDLE_MEMBERS[0]).unlink()
+        reseal_generation(generation)
     elif mutation == "extra_member":
+        generation = writable_generation(public)
         (bundle / "extra.bin").write_bytes(b"extra")
+        reseal_generation(generation)
     elif mutation == "changed_member":
-        (bundle / BUNDLE_MEMBERS[0]).write_bytes(b"changed")
+        member = bundle / BUNDLE_MEMBERS[0]
+        member.chmod(0o644)
+        member.write_bytes(b"changed")
+        member.chmod(0o444)
 
     result = verify_locked(
         bundle,
@@ -184,6 +230,7 @@ def test_bundle_members_must_be_regular_non_symlink_single_link_files(
     layout: tuple[Path, Path, Path], toolchain: Toolchain, unsafe: str
 ) -> None:
     public, _ = publish(layout, toolchain)
+    generation = writable_generation(public)
     member = public / BUNDLE_MEMBERS[0]
     member.unlink()
     if unsafe == "symlink":
@@ -194,6 +241,7 @@ def test_bundle_members_must_be_regular_non_symlink_single_link_files(
         member.mkdir()
     else:
         os.mkfifo(member)
+    reseal_generation(generation)
 
     assert (
         verify_locked(public, replace(toolchain, features=()), "a" * 64).code
@@ -205,12 +253,14 @@ def test_manifest_must_be_safe_regular_single_link_file(
     layout: tuple[Path, Path, Path], toolchain: Toolchain
 ) -> None:
     public, _ = publish(layout, toolchain)
+    generation = writable_generation(public)
     manifest = public / MANIFEST_NAME
     contents = manifest.read_bytes()
     manifest.unlink()
     target = public / "manifest-target"
     target.write_bytes(contents)
     manifest.symlink_to(target.name)
+    reseal_generation(generation)
 
     assert (
         verify_locked(public, replace(toolchain, features=()), "a" * 64).code
@@ -265,7 +315,10 @@ def test_manifest_schema_kind_and_digest_are_strictly_validated(
     unsigned = dict(manifest)
     unsigned.pop("manifest_sha256")
     manifest["manifest_sha256"] = hashlib.sha256(manifest_bytes(unsigned)).hexdigest()
-    (public / MANIFEST_NAME).write_bytes(manifest_bytes(manifest))
+    manifest_path = public / MANIFEST_NAME
+    manifest_path.chmod(0o644)
+    manifest_path.write_bytes(manifest_bytes(manifest))
+    manifest_path.chmod(0o444)
 
     assert (
         verify_locked(public, replace(toolchain, features=()), "a" * 64).code
@@ -359,6 +412,45 @@ def test_publish_with_caller_owned_exclusive_fd_does_not_self_deadlock(
     assert (rs / "build").is_symlink()
 
 
+def test_publish_accepts_exact_ofd_inherited_from_parent_owner(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+) -> None:
+    root, rs, staging = layout
+    manifest = manifest_for(staging, toolchain)
+    fd = os.open(
+        provenance.lock_path(root, "production"),
+        os.O_RDWR | os.O_CREAT,
+        0o600,
+    )
+    try:
+        os.set_inheritable(fd, True)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        source = (
+            "import json;"
+            "from pathlib import Path;"
+            "from artifact_provenance import publish_generation_atomic;"
+            f"publish_generation_atomic(Path({str(staging)!r}),"
+            f"Path({str(rs / 'build')!r}),json.loads({json.dumps(manifest)!r}),"
+            f"lock_fd={fd})"
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(TOOLS)
+        completed = subprocess.run(
+            [sys.executable, "-c", source],
+            env=environment,
+            pass_fds=(fd,),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+    finally:
+        os.close(fd)
+    assert completed.returncode == 0, completed.stderr
+    assert (rs / "build").is_symlink()
+
+
 @pytest.mark.parametrize("mode", ["wrong", "shared", "noninheritable"])
 def test_publish_rejects_incorrect_caller_lock_fd(
     layout: tuple[Path, Path, Path],
@@ -385,6 +477,97 @@ def test_publish_rejects_incorrect_caller_lock_fd(
             )
     finally:
         os.close(fd)
+
+
+def test_publish_rejects_unlocked_fd_even_when_other_fd_owns_same_lock(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+) -> None:
+    root, rs, staging = layout
+    path = provenance.lock_path(root, "production")
+    owner = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    unlocked = os.open(path, os.O_RDWR)
+    try:
+        os.set_inheritable(owner, True)
+        os.set_inheritable(unlocked, True)
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        with pytest.raises(provenance.InvalidError, match="exclusive"):
+            publish_generation_atomic(
+                staging,
+                rs / "build",
+                manifest_for(staging, toolchain),
+                lock_fd=unlocked,
+            )
+    finally:
+        os.close(unlocked)
+        os.close(owner)
+
+
+def test_open_locked_creates_exact_private_regular_lock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "artifact.lock"
+    fd = provenance._open_locked(path, fcntl.LOCK_EX, True)
+    try:
+        info = os.fstat(fd)
+        lexical = path.lstat()
+        assert stat.S_ISREG(info.st_mode)
+        assert stat.S_IMODE(info.st_mode) == 0o600
+        assert info.st_uid == os.geteuid()
+        assert info.st_nlink == 1
+        assert (info.st_dev, info.st_ino) == (lexical.st_dev, lexical.st_ino)
+        assert os.get_inheritable(fd)
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "mode", "hardlink", "owner"])
+def test_open_locked_rejects_unsafe_lock_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unsafe: str,
+) -> None:
+    path = tmp_path / "artifact.lock"
+    target = tmp_path / "target"
+    target.write_bytes(b"unchanged")
+    if unsafe == "symlink":
+        path.symlink_to(target)
+    else:
+        path.write_bytes(b"")
+        path.chmod(0o600 if unsafe != "mode" else 0o644)
+        if unsafe == "hardlink":
+            os.link(path, tmp_path / "second-link")
+        elif unsafe == "owner":
+            monkeypatch.setattr(os, "geteuid", lambda: path.stat().st_uid + 1)
+
+    with pytest.raises(provenance.InvalidError, match="lock"):
+        provenance._open_locked(path, fcntl.LOCK_EX, False)
+    assert target.read_bytes() == b"unchanged"
+
+
+def test_open_locked_rejects_path_replacement_between_open_and_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "artifact.lock"
+    path.write_bytes(b"")
+    path.chmod(0o600)
+    real_open = os.open
+    replaced = False
+
+    def replace_after_open(target: os.PathLike[str] | str, *args: object) -> int:
+        nonlocal replaced
+        fd = real_open(target, *args)
+        if Path(target) == path and not replaced:
+            replaced = True
+            path.unlink()
+            path.write_bytes(b"replacement")
+            path.chmod(0o600)
+        return fd
+
+    monkeypatch.setattr(os, "open", replace_after_open)
+    with pytest.raises(provenance.InvalidError, match="lock"):
+        provenance._open_locked(path, fcntl.LOCK_EX, False)
 
 
 def test_locked_exec_child_inherits_lock_until_it_exits(
@@ -456,25 +639,43 @@ def test_exec_many_sorts_unique_kinds_and_preserves_two_fds(
         rs / "build_qemu_test",
         make_manifest(qemu_staging, "qemu-test", "a" * 64, qemu_expected),
     )
-    seen: list[tuple[str, ...]] = []
+    seen: list[tuple[int, ...]] = []
+    current_order: list[str] = []
+    lock_info = provenance.lock_path(root, "production").stat()
 
     def fake_exec(_file: str, argv: list[str]) -> None:
         inheritable = tuple(
-            str(fd)
+            fd
             for fd in range(3, 256)
             if provenance._fd_is_open_and_inheritable(fd)
+            and (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
+            == (lock_info.st_dev, lock_info.st_ino)
         )
+        assert len(inheritable) == 2
+        for fd in inheritable:
+            fdinfo = Path(f"/proc/self/fdinfo/{fd}").read_text(encoding="ascii")
+            assert "FLOCK  ADVISORY  READ" in fdinfo
         seen.append(inheritable)
+        probe = os.open(provenance.lock_path(root, "production"), os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(probe)
         raise provenance._ExecIntercept
+
+    def current(_root: Path, kind: str) -> Toolchain:
+        current_order.append(kind)
+        return (
+            replace(toolchain, features=()) if kind == "production" else qemu_expected
+        )
 
     monkeypatch.setattr(os, "execvp", fake_exec)
     monkeypatch.setattr(provenance, "_current_input_digest", lambda _root: "a" * 64)
     monkeypatch.setattr(
         provenance,
         "_current_toolchain",
-        lambda _root, kind: (
-            replace(toolchain, features=()) if kind == "production" else qemu_expected
-        ),
+        current,
     )
     with pytest.raises(provenance._ExecIntercept):
         locked_exec_many(
@@ -482,7 +683,8 @@ def test_exec_many_sorts_unique_kinds_and_preserves_two_fds(
             ("qemu-test", "production"),
             [sys.executable, "-c", "pass"],
         )
-    assert len(seen[0]) >= 2
+    assert len(seen[0]) == 2
+    assert current_order == ["production", "qemu-test"]
 
 
 @pytest.mark.parametrize("mismatched_kind", ["production", "qemu-test"])
@@ -570,6 +772,82 @@ def test_publication_uses_digest_generation_and_relative_symlink(
         MANIFEST_NAME,
     }
     assert (generation / MANIFEST_NAME).read_bytes() == manifest_bytes(manifest)
+    assert stat.S_IMODE(generation.stat().st_mode) == 0o555
+    assert all(
+        stat.S_IMODE((generation / name).stat().st_mode) == 0o444
+        for name in (*BUNDLE_MEMBERS, MANIFEST_NAME)
+    )
+
+
+@pytest.mark.parametrize("target", ["generation", "manifest", "member"])
+def test_verification_rejects_writable_generation_content(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    target: str,
+) -> None:
+    public, _ = publish(layout, toolchain)
+    generation = public.resolve()
+    selected = {
+        "generation": generation,
+        "manifest": generation / MANIFEST_NAME,
+        "member": generation / BUNDLE_MEMBERS[0],
+    }[target]
+    selected.chmod(selected.stat().st_mode | stat.S_IWUSR)
+
+    assert (
+        verify_locked(public, replace(toolchain, features=()), "a" * 64).code
+        == EXIT_INVALID
+    )
+
+
+def test_verification_rejects_oversize_manifest_before_reading_contents(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+) -> None:
+    public, _ = publish(layout, toolchain)
+    manifest = public.resolve() / MANIFEST_NAME
+    manifest.chmod(0o644)
+    with manifest.open("r+b") as output:
+        output.truncate(provenance.MAX_MANIFEST_BYTES + 1)
+    manifest.chmod(0o444)
+
+    result = verify_locked(public, replace(toolchain, features=()), "a" * 64)
+    assert result.code == EXIT_INVALID
+    assert "size limit" in result.message
+
+
+@pytest.mark.parametrize("member", BUNDLE_MEMBERS)
+def test_manifest_rejects_member_above_kind_specific_limit_before_hashing(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    member: str,
+) -> None:
+    staging = layout[2]
+    with (staging / member).open("r+b") as output:
+        output.truncate(provenance.MEMBER_MAX_BYTES[member] + 1)
+
+    with pytest.raises(provenance.InvalidError, match="size limit"):
+        manifest_for(staging, toolchain)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"image_tag": "x" * (provenance.MAX_TOOLCHAIN_SCALAR_LENGTH + 1)},
+        {
+            "features": tuple(
+                f"f{index}" for index in range(provenance.MAX_FEATURE_COUNT + 1)
+            )
+        },
+        {"features": ("f" * (provenance.MAX_FEATURE_NAME_LENGTH + 1),)},
+    ],
+)
+def test_toolchain_rejects_bounded_field_overflow(
+    toolchain: Toolchain,
+    mutation: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="maximum|many"):
+        replace(toolchain, **mutation)
 
 
 def test_publication_failure_before_swap_preserves_old_generation(
@@ -639,6 +917,102 @@ def test_successful_legacy_migration_removes_task_specific_backup(
     publish(layout, toolchain)
     assert public.is_symlink()
     assert not list((rs / ".artifacts").glob(".legacy-build-*"))
+
+
+def test_legacy_migration_is_never_lexically_absent(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    (public / "tracked-old").write_text("old", encoding="utf-8")
+    absent: list[bool] = []
+    stop = threading.Event()
+
+    def watch() -> None:
+        while not stop.is_set():
+            if not os.path.lexists(public):
+                absent.append(True)
+
+    original = provenance._failure_point
+
+    def widen(point: str) -> None:
+        if point in {"after_legacy_exchange", "after_link_swap"}:
+            time.sleep(0.04)
+        original(point)
+
+    monkeypatch.setattr(provenance, "_failure_point", widen)
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
+    finally:
+        stop.set()
+        watcher.join(timeout=2)
+    assert not absent
+    assert public.is_symlink()
+
+
+def test_legacy_exchange_crash_keeps_public_and_recovers_old_directory(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    (public / "tracked-old").write_text("recover me", encoding="utf-8")
+    manifest = manifest_for(staging, toolchain)
+    source = (
+        "import json,os;"
+        "from pathlib import Path;"
+        "import artifact_provenance as p;"
+        "p._failure_point=lambda point: os._exit(77) "
+        "if point=='after_legacy_exchange' else None;"
+        f"p.publish_generation_atomic(Path({str(staging)!r}),"
+        f"Path({str(public)!r}),json.loads({json.dumps(manifest)!r}))"
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(TOOLS)
+    completed = subprocess.run(
+        [sys.executable, "-c", source],
+        env=environment,
+        timeout=5,
+    )
+
+    assert completed.returncode == 77
+    assert os.path.lexists(public)
+    assert public.is_symlink()
+    assert verify_locked(public, replace(toolchain, features=()), "a" * 64).ok
+    leftovers = list(rs.glob(".build.tmp-*"))
+    assert len(leftovers) == 1
+    assert (leftovers[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
+
+    publish_generation_atomic(staging, public, manifest)
+    assert not list(rs.glob(".build.tmp-*"))
+    assert public.is_symlink()
+
+
+def test_legacy_migration_fails_closed_without_rename_exchange(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    marker = public / "tracked-old"
+    marker.write_text("old", encoding="utf-8")
+
+    def unavailable(_left: Path, _right: Path) -> None:
+        raise provenance.InternalError("RENAME_EXCHANGE unavailable")
+
+    monkeypatch.setattr(provenance, "_rename_exchange", unavailable)
+    with pytest.raises(provenance.InternalError, match="unavailable"):
+        publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
+    assert public.is_dir() and not public.is_symlink()
+    assert marker.read_text(encoding="utf-8") == "old"
 
 
 def test_existing_symlink_update_is_never_lexically_absent(
@@ -951,6 +1325,8 @@ def test_verification_rejects_symlinked_generation_ancestry(
         "kind": kind_root,
         "generation": generation,
     }[level]
+    if level == "generation":
+        generation.chmod(0o755)
     outside = rs / f".outside-{level}"
     selected.rename(outside)
     selected.symlink_to(outside, target_is_directory=True)
@@ -986,8 +1362,10 @@ def test_existing_generation_with_symlink_manifest_is_a_collision(
     manifest_path = generation / MANIFEST_NAME
     outside = tmp_path / "outside-manifest"
     outside.write_bytes(manifest_path.read_bytes())
+    generation.chmod(0o755)
     manifest_path.unlink()
     manifest_path.symlink_to(outside)
+    generation.chmod(0o555)
 
     with pytest.raises(provenance.InvalidError, match="collid"):
         publish_generation_atomic(layout[2], public, manifest)
@@ -1024,6 +1402,7 @@ def test_publication_fsyncs_files_and_generation_parents(
 def test_concurrent_publishers_serialize_complete_generations(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
+    tmp_path: Path,
 ) -> None:
     _, rs, staging_a = layout
     staging_b = rs / "staging-b"
@@ -1034,13 +1413,31 @@ def test_concurrent_publishers_serialize_complete_generations(
         manifest_for(staging_a, toolchain, digest="a" * 64),
         manifest_for(staging_b, toolchain, digest="b" * 64),
     )
+    start = tmp_path / "publisher-start"
+    ready_paths = [tmp_path / f"publisher-{index}-ready" for index in range(2)]
+    entered_paths = [tmp_path / f"publisher-{index}-entered" for index in range(2)]
     commands = []
-    for staging, manifest in zip((staging_a, staging_b), manifests, strict=True):
+    for staging, manifest, ready, entered in zip(
+        (staging_a, staging_b),
+        manifests,
+        ready_paths,
+        entered_paths,
+        strict=True,
+    ):
         source = (
-            "import json;"
+            "import json,time;"
             "from pathlib import Path;"
-            "from artifact_provenance import publish_generation_atomic;"
-            f"publish_generation_atomic(Path({str(staging)!r}),"
+            "import artifact_provenance as p;"
+            f"ready=Path({str(ready)!r});start=Path({str(start)!r});"
+            f"entered=Path({str(entered)!r});"
+            "ready.write_text('ready');"
+            "\nwhile not start.exists(): time.sleep(.005)\n"
+            "def pause(point):\n"
+            "    if point=='after_generation':\n"
+            "        entered.write_text('entered')\n"
+            "        time.sleep(.25)\n"
+            "p._failure_point=pause\n"
+            f"p.publish_generation_atomic(Path({str(staging)!r}),"
             f"Path({str(rs / 'build')!r}),json.loads({json.dumps(manifest)!r}))"
         )
         commands.append([sys.executable, "-c", source])
@@ -1056,6 +1453,15 @@ def test_concurrent_publishers_serialize_complete_generations(
         )
         for command in commands
     ]
+    for ready in ready_paths:
+        wait_for_path(ready)
+    start.write_text("start", encoding="ascii")
+    deadline = time.monotonic() + 5
+    while not any(path.exists() for path in entered_paths):
+        if time.monotonic() >= deadline:
+            raise AssertionError("neither publisher reached the locked overlap seam")
+        time.sleep(0.005)
+    assert all(process.poll() is None for process in processes)
     for process in processes:
         stdout, stderr = process.communicate(timeout=10)
         assert process.returncode == 0, (stdout, stderr)
@@ -1229,7 +1635,9 @@ def test_cli_classifies_missing_manifest_as_missing(
 ) -> None:
     root, _, _ = layout
     public, _ = publish(layout, toolchain)
+    generation = writable_generation(public)
     (public / MANIFEST_NAME).unlink()
+    reseal_generation(generation)
     monkeypatch.setattr(provenance, "_current_input_digest", lambda _root: "a" * 64)
     monkeypatch.setattr(
         provenance,
@@ -1285,13 +1693,74 @@ def test_current_toolchain_runs_kind_specific_snapshot_check(
             [str(checker), "--check", "--kind", kind],
             {
                 "cwd": root,
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "check": False,
+                "timeout": provenance.CHECK_TIMEOUT_SECONDS,
+                "max_output": provenance.MAX_CHECK_OUTPUT_BYTES,
             },
         )
     ]
+
+
+def test_current_toolchain_rejects_oversize_checker_output(
+    layout: tuple[Path, Path, Path],
+) -> None:
+    root, rs, _ = layout
+    checker = rs / "tools/build_image.sh"
+    checker.parent.mkdir()
+    checker.write_text("#!/bin/sh\n", encoding="utf-8")
+    checker.chmod(0o755)
+
+    def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="x" * (provenance.MAX_CHECK_OUTPUT_BYTES + 1),
+            stderr="",
+        )
+
+    with pytest.raises(provenance.InvalidError, match="size limit"):
+        provenance._current_toolchain(root, "production", runner=runner)
+
+
+def test_bounded_checker_stops_real_process_at_output_limit(
+    layout: tuple[Path, Path, Path],
+) -> None:
+    root, rs, _ = layout
+    checker = rs / "tools/build_image.sh"
+    checker.parent.mkdir()
+    checker.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"sys.stdout.write('x' * {provenance.MAX_CHECK_OUTPUT_BYTES + 1})\n",
+        encoding="utf-8",
+    )
+    checker.chmod(0o755)
+
+    with pytest.raises(provenance.InvalidError, match="size limit"):
+        provenance._current_toolchain(root, "production")
+
+
+def test_current_toolchain_timeout_terminates_and_reaps_checker_group(
+    layout: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root, rs, _ = layout
+    pid_path = tmp_path / "checker.pid"
+    checker = rs / "tools/build_image.sh"
+    checker.parent.mkdir()
+    checker.write_text(
+        f"#!/bin/sh\necho $$ > {str(pid_path)!r}\nsleep 30\n",
+        encoding="utf-8",
+    )
+    checker.chmod(0o755)
+    monkeypatch.setattr(provenance, "CHECK_TIMEOUT_SECONDS", 0.05)
+
+    with pytest.raises(provenance.InternalError, match="timed out"):
+        provenance._current_toolchain(root, "production")
+    wait_for_path(pid_path)
+    pid = int(pid_path.read_text(encoding="ascii"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
 
 
 @pytest.mark.parametrize(
