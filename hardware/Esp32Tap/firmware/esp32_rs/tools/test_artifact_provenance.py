@@ -1037,7 +1037,7 @@ def test_publication_failure_before_swap_preserves_old_generation(
         "before_commit",
     ],
 )
-def test_legacy_directory_migration_rolls_back_on_every_failure(
+def test_legacy_directory_migration_failure_keeps_available_state_and_evidence(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
     monkeypatch: pytest.MonkeyPatch,
@@ -1057,9 +1057,17 @@ def test_legacy_directory_migration_rolls_back_on_every_failure(
     monkeypatch.setattr(provenance, "_failure_point", fail)
     with pytest.raises(provenance.InternalError):
         publish_generation_atomic(staging, public, manifest)
-    assert public.is_dir() and not public.is_symlink()
-    assert marker.read_text(encoding="utf-8") == "old"
-    assert not list((rs / ".artifacts").glob(".legacy-build-*"))
+    assert os.path.lexists(public)
+    if public.is_symlink():
+        assert (public / MANIFEST_NAME).is_file()
+    else:
+        assert public.is_dir()
+        assert marker.read_text(encoding="utf-8") == "old"
+    evidence = list(rs.glob(".artifact-provenance-legacy-build-*"))
+    if point == "after_generation":
+        assert not evidence
+    else:
+        assert len(evidence) == 2
 
 
 def test_successful_legacy_migration_retires_backup_without_deleting_contents(
@@ -1080,7 +1088,9 @@ def test_successful_legacy_migration_retires_backup_without_deleting_contents(
     assert len(retired) == 1
     assert (retired[0] / "tracked-old").read_text(encoding="utf-8") == "old"
     assert (retired[0] / "nested" / "keep").read_text(encoding="utf-8") == "nested"
-    assert not list(rs.glob(".artifact-provenance-legacy-build-*.json"))
+    markers = list(rs.glob(".artifact-provenance-legacy-build-*.json"))
+    assert len(markers) == 1
+    assert stat.S_IMODE(markers[0].lstat().st_mode) == 0o400
     assert not list(rs.glob(".artifact-provenance-legacy-build-*.swap"))
 
 
@@ -1120,9 +1130,23 @@ def test_legacy_migration_is_never_lexically_absent(
     assert public.is_symlink()
 
 
-def test_legacy_exchange_crash_keeps_public_and_recovers_old_directory(
+@pytest.mark.parametrize(
+    "point",
+    [
+        "after_generation",
+        "before_link_swap",
+        "after_legacy_exchange",
+        "after_legacy_backup",
+        "after_link_swap",
+        "before_commit",
+        "after_link_fsync",
+        "after_commit",
+    ],
+)
+def test_legacy_crash_evidence_is_ignored_by_subsequent_publish(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
+    point: str,
 ) -> None:
     _, rs, staging = layout
     public = rs / "build"
@@ -1134,7 +1158,7 @@ def test_legacy_exchange_crash_keeps_public_and_recovers_old_directory(
         "from pathlib import Path;"
         "import artifact_provenance as p;"
         "p._failure_point=lambda point: os._exit(77) "
-        "if point=='after_legacy_exchange' else None;"
+        f"if point=={point!r} else None;"
         f"p.publish_generation_atomic(Path({str(staging)!r}),"
         f"Path({str(public)!r}),json.loads({json.dumps(manifest)!r}))"
     )
@@ -1148,24 +1172,30 @@ def test_legacy_exchange_crash_keeps_public_and_recovers_old_directory(
 
     assert completed.returncode == 77
     assert os.path.lexists(public)
-    assert public.is_symlink()
-    assert verify_locked(public, replace(toolchain, features=()), "a" * 64).ok
-    leftovers = list(rs.glob(".artifact-provenance-legacy-build-*.swap"))
-    markers = list(rs.glob(".artifact-provenance-legacy-build-*.json"))
-    assert len(leftovers) == 1
-    assert len(markers) == 1
-    assert leftovers[0].stem == markers[0].stem
-    assert (leftovers[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
+    if public.is_symlink():
+        assert (public / MANIFEST_NAME).is_file()
+    else:
+        assert public.is_dir()
+        assert (public / "tracked-old").read_text(encoding="utf-8") == "recover me"
+
+    evidence = [
+        *rs.glob(".artifact-provenance-legacy-build-*"),
+        *(rs / ".artifacts").glob(".retired-legacy-build-*"),
+    ]
+    identities = {
+        path: (path.lstat().st_dev, path.lstat().st_ino, path.lstat().st_mode)
+        for path in evidence
+    }
 
     publish_generation_atomic(staging, public, manifest)
-    assert not list(rs.glob(".artifact-provenance-legacy-build-*"))
-    retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
-    assert len(retired) == 1
-    assert (retired[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
     assert public.is_symlink()
+    assert (public / MANIFEST_NAME).is_file()
+    for path, identity in identities.items():
+        current = path.lstat()
+        assert (current.st_dev, current.st_ino, current.st_mode) == identity
 
 
-def test_recovery_never_consumes_unrelated_broad_prefix_directory(
+def test_publish_never_consumes_unrelated_broad_prefix_directory(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
 ) -> None:
@@ -1181,7 +1211,7 @@ def test_recovery_never_consumes_unrelated_broad_prefix_directory(
 
 
 @pytest.mark.parametrize("marker_kind", ["malformed", "symlink"])
-def test_recovery_rejects_forged_exact_marker_without_consuming_directory(
+def test_publish_ignores_forged_exact_marker_and_path_substitution(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
     tmp_path: Path,
@@ -1203,13 +1233,15 @@ def test_recovery_rejects_forged_exact_marker_without_consuming_directory(
         outside.write_text("{}\n", encoding="ascii")
         marker.symlink_to(outside)
 
-    with pytest.raises(provenance.InvalidError, match="marker|recovery"):
-        publish(layout, toolchain)
+    marker_info = marker.lstat()
+    publish(layout, toolchain)
 
     assert keep.read_text(encoding="utf-8") == "do not consume"
+    current = marker.lstat()
+    assert (current.st_dev, current.st_ino) == (marker_info.st_dev, marker_info.st_ino)
 
 
-def test_recovery_rejects_forged_valid_marker_without_public_commit_state(
+def test_publish_ignores_forged_valid_marker_without_public_commit_state(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
 ) -> None:
@@ -1240,16 +1272,24 @@ def test_recovery_rejects_forged_valid_marker_without_public_commit_state(
     )
     marker.chmod(0o400)
 
-    with pytest.raises(provenance.InvalidError, match="commit state"):
-        publish(layout, toolchain)
+    marker_info = marker.lstat()
+    leftover_info = leftover.lstat()
+    publish(layout, toolchain)
 
     assert keep.read_text(encoding="utf-8") == "do not consume"
+    assert (marker.lstat().st_dev, marker.lstat().st_ino) == (
+        marker_info.st_dev,
+        marker_info.st_ino,
+    )
+    assert (leftover.lstat().st_dev, leftover.lstat().st_ino) == (
+        leftover_info.st_dev,
+        leftover_info.st_ino,
+    )
 
 
-def test_recovery_restores_racing_replacement_instead_of_consuming_it(
+def test_forged_valid_public_marker_cannot_move_unrelated_swap(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, rs, _ = layout
     public, _ = publish(layout, toolchain)
@@ -1277,27 +1317,64 @@ def test_recovery_restores_racing_replacement_instead_of_consuming_it(
         encoding="ascii",
     )
     marker.chmod(0o400)
-    saved = rs / ".saved-valid-old-directory"
-    real_rename = os.rename
-    raced = False
+    marker_info = marker.lstat()
+    leftover_info = leftover.lstat()
+    publish_generation_atomic(layout[2], public, manifest_for(layout[2], toolchain))
 
-    def replace_at_rename(
-        source: os.PathLike[str], destination: os.PathLike[str]
-    ) -> None:
-        nonlocal raced
-        if Path(source) == leftover and not raced:
-            raced = True
-            real_rename(leftover, saved)
-            leftover.mkdir()
-            (leftover / "keep").write_text("replacement", encoding="utf-8")
-        real_rename(source, destination)
+    assert public.is_symlink()
+    assert (public / MANIFEST_NAME).is_file()
+    assert (leftover / "tracked-old").read_text(encoding="utf-8") == "old"
+    assert (marker.lstat().st_dev, marker.lstat().st_ino) == (
+        marker_info.st_dev,
+        marker_info.st_ino,
+    )
+    assert (leftover.lstat().st_dev, leftover.lstat().st_ino) == (
+        leftover_info.st_dev,
+        leftover_info.st_ino,
+    )
+    assert not os.path.lexists(rs / ".artifacts" / f".retired-legacy-build-{token}")
 
-    monkeypatch.setattr(provenance.os, "rename", replace_at_rename)
-    with pytest.raises(provenance.InvalidError, match="changed"):
-        publish_generation_atomic(layout[2], public, manifest_for(layout[2], toolchain))
 
-    assert (leftover / "keep").read_text(encoding="utf-8") == "replacement"
-    assert (saved / "tracked-old").read_text(encoding="utf-8") == "old"
+@pytest.mark.parametrize("collision_kind", ["swap", "marker", "retired"])
+def test_fresh_legacy_token_collision_fails_without_overwrite(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+    collision_kind: str,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    (public / "tracked-old").write_text("old", encoding="utf-8")
+    artifacts = rs / ".artifacts"
+    artifacts.mkdir(exist_ok=True)
+    token = "f" * 64
+    swap, marker, retired = provenance._legacy_transaction_paths(
+        rs, artifacts, "build", token
+    )
+    collision = {"swap": swap, "marker": marker, "retired": retired}[collision_kind]
+    if collision_kind == "marker":
+        collision.write_text("unrelated", encoding="utf-8")
+    else:
+        collision.mkdir()
+        (collision / "keep").write_text("unrelated", encoding="utf-8")
+    collision_info = collision.lstat()
+    monkeypatch.setattr(provenance.secrets, "token_hex", lambda _size: token)
+
+    with pytest.raises(provenance.ArtifactError):
+        publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
+
+    current = collision.lstat()
+    assert (current.st_dev, current.st_ino) == (
+        collision_info.st_dev,
+        collision_info.st_ino,
+    )
+    if collision_kind == "marker":
+        assert collision.read_text(encoding="utf-8") == "unrelated"
+    else:
+        assert (collision / "keep").read_text(encoding="utf-8") == "unrelated"
+    assert public.is_dir() and not public.is_symlink()
+    assert (public / "tracked-old").read_text(encoding="utf-8") == "old"
 
 
 def test_legacy_migration_fails_closed_without_rename_exchange(
@@ -1482,12 +1559,12 @@ def test_postcommit_legacy_retire_fsync_failure_returns_success(
     public.mkdir()
     (public / "tracked-old").write_text("recover me", encoding="utf-8")
     retired = False
-    real_replace = provenance.os.replace
+    real_rename = provenance._rename_noreplace
     real_fsync_dir = provenance._fsync_dir
 
-    def track_replace(source: Path, destination: Path) -> None:
+    def track_rename(source: Path, destination: Path) -> None:
         nonlocal retired
-        real_replace(source, destination)
+        real_rename(source, destination)
         if Path(destination).name.startswith(".retired-legacy-"):
             retired = True
 
@@ -1496,13 +1573,46 @@ def test_postcommit_legacy_retire_fsync_failure_returns_success(
             raise OSError("retire fsync")
         real_fsync_dir(path)
 
-    monkeypatch.setattr(provenance.os, "replace", track_replace)
+    monkeypatch.setattr(provenance, "_rename_noreplace", track_rename)
     monkeypatch.setattr(provenance, "_fsync_dir", fail_retire_fsync)
     publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
     backups = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
     assert public.is_symlink()
     assert len(backups) == 1
     assert (backups[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
+
+
+def test_retirement_destination_race_is_never_overwritten(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    (public / "tracked-old").write_text("genuine", encoding="utf-8")
+    real_rename = provenance._rename_noreplace
+    raced = False
+
+    def collide_at_retirement(source: Path, destination: Path) -> None:
+        nonlocal raced
+        raced = True
+        destination.mkdir()
+        (destination / "keep").write_text("unrelated", encoding="utf-8")
+        real_rename(source, destination)
+
+    monkeypatch.setattr(provenance, "_rename_noreplace", collide_at_retirement)
+    publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
+
+    retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
+    swaps = list(rs.glob(".artifact-provenance-legacy-build-*.swap"))
+    assert raced
+    assert public.is_symlink()
+    assert (public / MANIFEST_NAME).is_file()
+    assert len(retired) == 1
+    assert (retired[0] / "keep").read_text(encoding="utf-8") == "unrelated"
+    assert len(swaps) == 1
+    assert (swaps[0] / "tracked-old").read_text(encoding="utf-8") == "genuine"
 
 
 def test_postcommit_child_substitution_is_retired_without_deletion(
@@ -1517,7 +1627,7 @@ def test_postcommit_child_substitution_is_retired_without_deletion(
     child.mkdir()
     (child / "tracked-old").write_text("genuine", encoding="utf-8")
     saved = rs / ".saved-genuine-child"
-    real_replace = provenance.os.replace
+    real_rename = provenance._rename_noreplace
     substituted = False
 
     def replace_at_retirement(source: Path, destination: Path) -> None:
@@ -1534,9 +1644,9 @@ def test_postcommit_child_substitution_is_retired_without_deletion(
             replacement = source / "child"
             replacement.mkdir()
             (replacement / "keep").write_text("unrelated", encoding="utf-8")
-        real_replace(source, destination)
+        real_rename(source, destination)
 
-    monkeypatch.setattr(provenance.os, "replace", replace_at_retirement)
+    monkeypatch.setattr(provenance, "_rename_noreplace", replace_at_retirement)
     publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
 
     retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
@@ -1558,12 +1668,11 @@ def test_postcommit_retirement_race_never_deletes_unrelated_substitute(
     public.mkdir()
     (public / "tracked-old").write_text("genuine", encoding="utf-8")
     saved = rs / ".saved-genuine-legacy"
-    real_replace = provenance.os.replace
+    real_rename = provenance._rename_noreplace
     raced = False
-    substitute: Path | None = None
 
     def replace_at_retirement(source: Path, destination: Path) -> None:
-        nonlocal raced, substitute
+        nonlocal raced
         source = Path(source)
         destination = Path(destination)
         if (
@@ -1572,18 +1681,18 @@ def test_postcommit_retirement_race_never_deletes_unrelated_substitute(
             and destination.name.startswith(".retired-legacy-build-")
         ):
             raced = True
-            real_replace(source, saved)
+            real_rename(source, saved)
             source.mkdir()
             (source / "keep").write_text("unrelated", encoding="utf-8")
-            substitute = source
-        real_replace(source, destination)
+        real_rename(source, destination)
 
-    monkeypatch.setattr(provenance.os, "replace", replace_at_retirement)
+    monkeypatch.setattr(provenance, "_rename_noreplace", replace_at_retirement)
     publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
 
+    retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
     assert raced
-    assert substitute is not None
-    assert (substitute / "keep").read_text(encoding="utf-8") == "unrelated"
+    assert len(retired) == 1
+    assert (retired[0] / "keep").read_text(encoding="utf-8") == "unrelated"
     assert (saved / "tracked-old").read_text(encoding="utf-8") == "genuine"
     assert public.is_symlink()
     assert (public / MANIFEST_NAME).is_file()
