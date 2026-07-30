@@ -143,8 +143,10 @@ fn manual_owner_does_not_expire_from_elapsed_time() {
 }
 ```
 
-Also retain tests proving explicit disconnect, emergency stop, watchdog reset,
-and the three-hour emulation timeout still remove ownership and zero motion.
+Also retain tests proving explicit disconnect, emergency stop, and watchdog
+reset remove ownership and zero motion. Preserve the Pi's distinct three-hour
+no-change behavior: it zeros authoritative motion but retains Emulate mode and
+ownership until an explicit exit.
 
 - [ ] **Step 2: Run the contract tests and confirm the new tests fail**
 

@@ -220,8 +220,9 @@ In `safety_core/src/safety/controller.rs` and the normative/reference models:
 - decouple lease lifetime from `Transport`;
 - make normal HTTP/coach/BLE manual ownership persistent;
 - remove `MANUAL_LEASE_US` expiry from ordinary command processing;
-- preserve explicit disconnect, Stop, emergency, and maximum-emulation exit
-  paths;
+- preserve explicit disconnect, Stop, and emergency exit paths;
+- preserve the Pi's separate three-hour no-change behavior: zero commanded
+  motion while retaining Emulate mode and ownership until an explicit exit;
 - retain heartbeat parsing only where it represents a real liveness source,
   rather than pretending the firmware has a caller that does not exist.
 
@@ -307,7 +308,8 @@ Add tests proving:
 - a rejected request leaves zero advertised motion in Proxy;
 - Pause retains executor ownership at zero, while Stop performs normal exit
   and releases it;
-- task-watchdog and maximum-emulation exits still release the relay; and
+- task-watchdog exits still release the relay, while the three-hour no-change
+  timeout zeros motion without changing mode/ownership; and
 - Rust, Python-model, and C++-reference sequences remain equivalent after the
   contract update.
 
@@ -400,8 +402,9 @@ Before treadmill contact, verify on the bench:
 5. Hold invalid feedback or `TREAD_OK` unhealthy and confirm the same request
    is rejected with the relay released.
 6. Verify Pause holds the program owner in Emulate at zero; Stop performs the
-   guarded exit and releases control; controller-task watchdog and
-   maximum-emulation timeout release control.
+   guarded exit and releases control; controller-task watchdog releases
+   control; and the three-hour no-change timeout zeros motion while retaining
+   Emulate mode/ownership, matching the Pi.
 7. Capture relay command, NC/NO feedback, `TREAD_OK`, console UART, and motor
    UART timing so the result is based on physical signals rather than API
    state alone.
