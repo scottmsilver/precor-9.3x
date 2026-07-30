@@ -9,7 +9,9 @@ import fcntl
 import os
 import shutil
 import signal
+import stat
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -79,7 +81,7 @@ def test_release_kinds_and_exact_members_are_fixed() -> None:
 
 def test_physical_worktree_keys_lock_targets_and_cache() -> None:
     text = source()
-    assert "lock_path(repo_root, \"production\")" in text
+    assert 'lock_path(repo_root, "production")' in text
     assert "target_cache(repo_root, cache_kind)" in text
     assert 'f"esp32tap-cargo-{snapshot.worktree_key}"' in text
     assert "os.dup2(lock_fd, 9, inheritable=True)" in text
@@ -112,6 +114,29 @@ def fake_worktree(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     shutil.copy2(SCRIPT, tools / "build.sh")
     for name in ("artifact_inputs.py", "artifact_provenance.py"):
         shutil.copy2(TOOLS / name, tools / name)
+    provenance = tools / "artifact_provenance.py"
+    _write(
+        provenance,
+        provenance.read_text(encoding="utf-8")
+        + """
+
+_real_publish_generation_atomic = publish_generation_atomic
+
+
+def publish_generation_atomic(*args, **kwargs):
+    barrier_text = os.environ.get("FAKE_PUBLISH_SIGNAL_BARRIER")
+    if barrier_text:
+        import signal as _signal
+        import time as _time
+
+        barrier = Path(barrier_text)
+        os.kill(os.getpid(), _signal.SIGTERM)
+        barrier.with_suffix(".term-handled").write_text("term", encoding="utf-8")
+        while not barrier.with_suffix(".release").exists():
+            _time.sleep(0.01)
+    return _real_publish_generation_atomic(*args, **kwargs)
+""",
+    )
     event_log = tmp_path / "events.jsonl"
     gate_failure = tmp_path / "gate-failure"
     for gate in (
@@ -173,10 +198,16 @@ def fake_worktree(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
     subprocess.run(
         [
-            "git", "-C", str(root),
-            "-c", "user.name=Test",
-            "-c", "user.email=test@example.invalid",
-            "commit", "-qm", "fixture",
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
         ],
         check=True,
     )
@@ -195,7 +226,10 @@ with Path(os.environ["FAKE_DOCKER_LOG"]).open("a", encoding="utf-8") as stream:
 if os.environ.get("FAKE_DOCKER_BARRIER"):
     barrier = Path(os.environ["FAKE_DOCKER_BARRIER"])
     if os.environ.get("FAKE_DOCKER_RESIST_TERM"):
-        signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
+        def record_term(_signum, _frame):
+            barrier.with_suffix(".term").write_text("term", encoding="utf-8")
+        signal.signal(signal.SIGTERM, record_term)
+    barrier.with_suffix(".pid").write_text(str(os.getpid()), encoding="utf-8")
     barrier.with_suffix(".ready").write_text("ready", encoding="utf-8")
     while not barrier.with_suffix(".release").exists():
         time.sleep(0.01)
@@ -283,8 +317,7 @@ def test_fake_build_uses_snapshot_order_mounts_uid_and_manifest(
     assert docker[image_index + 1] == "-lc"
     assert (
         "CARGO_WORKSPACE_DIR=/project/hardware/Esp32Tap/firmware/"
-        "esp32_rs/esp32tap"
-        in docker
+        "esp32_rs/esp32tap" in docker
     )
     mounts = [docker[index + 1] for index, value in enumerate(docker) if value == "-v"]
     assert any(
@@ -425,8 +458,7 @@ def test_independent_physical_worktrees_use_distinct_targets_and_locks(
             )
         assert len(set(targets)) == 2
         rs_paths = [
-            item / "hardware/Esp32Tap/firmware/esp32_rs"
-            for item in (root, second)
+            item / "hardware/Esp32Tap/firmware/esp32_rs" for item in (root, second)
         ]
         locks = [
             Path("/tmp")
@@ -467,9 +499,9 @@ def test_predictable_lock_and_cache_symlinks_are_rejected(
     rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
     lock = Path("/tmp") / (
         "esp32tap-build-"
-        + hashlib.md5(
-            str(rs.resolve()).encode(), usedforsecurity=False
-        ).hexdigest()[:12]
+        + hashlib.md5(str(rs.resolve()).encode(), usedforsecurity=False).hexdigest()[
+            :12
+        ]
         + ".lock"
     )
     lock.unlink(missing_ok=True)
@@ -512,9 +544,18 @@ def test_term_cancels_child_cleans_resources_then_releases_lock(
         time.sleep(0.01)
     assert ready.exists()
     process.send_signal(signal.SIGTERM)
-    process.send_signal(signal.SIGTERM)
+    term_seen = barrier.with_suffix(".term")
+    deadline = time.monotonic() + 10
+    while not term_seen.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert term_seen.exists()
+    child_pid = int(barrier.with_suffix(".pid").read_text(encoding="utf-8"))
+    for duplicate in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        process.send_signal(duplicate)
     stdout, stderr = process.communicate(timeout=15)
     assert process.returncode == 128 + signal.SIGTERM, (stdout, stderr)
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
     assert not list(rs.glob(".snapshot-build-*"))
     snapshot_path = Path(_events(root.parent / "events.jsonl")[0]["path"])
     task_root = next(
@@ -528,9 +569,9 @@ def test_term_cancels_child_cleans_resources_then_releases_lock(
 
     lock = Path("/tmp") / (
         "esp32tap-build-"
-        + hashlib.md5(
-            str(rs.resolve()).encode(), usedforsecurity=False
-        ).hexdigest()[:12]
+        + hashlib.md5(str(rs.resolve()).encode(), usedforsecurity=False).hexdigest()[
+            :12
+        ]
         + ".lock"
     )
     descriptor = os.open(lock, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
@@ -538,3 +579,434 @@ def test_term_cancels_child_cleans_resources_then_releases_lock(
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     finally:
         os.close(descriptor)
+
+
+def test_first_signal_during_publish_is_latched_in_arrival_order(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, docker_log, _ = fake_worktree
+    rs = root / "hardware" / "Esp32Tap" / "firmware" / "esp32_rs"
+    barrier = root.parent / "publish-signal-barrier"
+    env = os.environ.copy()
+    env.update(
+        PATH=f"{root.parent / 'fake-bin'}:{env['PATH']}",
+        FAKE_DOCKER_LOG=str(docker_log),
+        FAKE_PUBLISH_SIGNAL_BARRIER=str(barrier),
+        ONLY="prod",
+    )
+    env.pop("PROFILE", None)
+    process = subprocess.Popen(
+        ["bash", str(rs / "tools/build.sh")],
+        cwd=root,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    handled = barrier.with_suffix(".term-handled")
+    deadline = time.monotonic() + 10
+    while not handled.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert handled.exists()
+    process.send_signal(signal.SIGHUP)
+    barrier.with_suffix(".release").touch()
+    stdout, stderr = process.communicate(timeout=20)
+
+    assert process.returncode == 128 + signal.SIGTERM, (stdout, stderr)
+
+
+def test_signal_latch_is_deferred_before_docker_spawn_has_a_process_handle() -> None:
+    run_docker = (
+        source().split("def run_docker(", 1)[1].split("\n\nimport contextlib", 1)[0]
+    )
+    defer = run_docker.index("cancellation_deferred = True")
+    guarded_try = run_docker.index("try:", defer)
+    spawn = run_docker.index("subprocess.Popen(", guarded_try)
+    assigned = run_docker.index("cancellation_deferred = False", spawn)
+    pending_check = run_docker.index("if pending_signal is not None:", assigned)
+
+    assert defer < guarded_try < spawn < assigned < pending_check
+
+
+def _embedded_sdkconfig_selector() -> str:
+    text = source()
+    marker = "<<'PYSDK'\n"
+    assert marker in text
+    body = text.split(marker, 1)[1]
+    assert "\nPYSDK\n" in body
+    return body.split("\nPYSDK\n", 1)[0]
+
+
+def _select_sdkconfig(
+    tmp_path: Path,
+    messages: list[dict],
+    expected_package: str = "esp-idf-sys-package-id",
+    build_status: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    target = tmp_path / "target"
+    target.mkdir(exist_ok=True)
+    message_file = tmp_path / "cargo-messages.jsonl"
+    message_file.write_text(
+        "".join(json.dumps(message) + "\n" for message in messages),
+        encoding="utf-8",
+    )
+    return subprocess.run(
+        [
+            "python3",
+            "-c",
+            _embedded_sdkconfig_selector(),
+            str(message_file),
+            expected_package,
+            str(target),
+            str(build_status),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def _idf_out(tmp_path: Path, fingerprint: str) -> Path:
+    return (
+        tmp_path
+        / "target"
+        / "xtensa-esp32s3-espidf"
+        / "release"
+        / "build"
+        / f"esp-idf-sys-{fingerprint}"
+        / "out"
+    )
+
+
+def test_sdkconfig_selector_uses_only_current_cargo_build_script_message(
+    tmp_path: Path,
+) -> None:
+    stale = _idf_out(tmp_path, "1" * 16)
+    active = _idf_out(tmp_path, "2" * 16)
+    stale.mkdir(parents=True)
+    active.mkdir(parents=True)
+    (stale / "sdkconfig").write_text("STALE\n", encoding="utf-8")
+    (active / "sdkconfig").write_text("CURRENT\n", encoding="utf-8")
+
+    completed = _select_sdkconfig(
+        tmp_path,
+        [
+            {
+                "reason": "compiler-artifact",
+                "package_id": "unrelated",
+                "target": {},
+            },
+            {
+                "reason": "build-script-executed",
+                "package_id": "esp-idf-sys-package-id",
+                "out_dir": str(active),
+            },
+        ],
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert Path(completed.stdout.strip()) == active / "sdkconfig"
+    assert "find " not in source()
+
+
+def test_sdkconfig_selector_accepts_duplicate_cached_message_for_same_out_dir(
+    tmp_path: Path,
+) -> None:
+    active = _idf_out(tmp_path, "3" * 16)
+    active.mkdir(parents=True)
+    (active / "sdkconfig").write_text("CURRENT\n", encoding="utf-8")
+    message = {
+        "reason": "build-script-executed",
+        "package_id": "esp-idf-sys-package-id",
+        "out_dir": str(active),
+    }
+
+    completed = _select_sdkconfig(tmp_path, [message, message])
+
+    assert completed.returncode == 0, completed.stderr
+    assert Path(completed.stdout.strip()) == active / "sdkconfig"
+
+
+def test_sdkconfig_selector_renders_diagnostics_then_propagates_cargo_failure(
+    tmp_path: Path,
+) -> None:
+    active = _idf_out(tmp_path, "6" * 16)
+    active.mkdir(parents=True)
+    (active / "sdkconfig").write_text("CURRENT\n", encoding="utf-8")
+    completed = _select_sdkconfig(
+        tmp_path,
+        [
+            {
+                "reason": "compiler-message",
+                "message": {"rendered": "error: intentional compile failure\n"},
+            },
+            {
+                "reason": "build-script-executed",
+                "package_id": "esp-idf-sys-package-id",
+                "out_dir": str(active),
+            },
+        ],
+        build_status=7,
+    )
+
+    assert completed.returncode == 7
+    assert completed.stdout == ""
+    assert "error: intentional compile failure" in completed.stderr
+    assert "cargo_status=$?" in source()
+
+
+@pytest.mark.parametrize("case", ["absent", "ambiguous", "outside", "symlink"])
+def test_sdkconfig_selector_fails_closed_without_one_safe_current_result(
+    tmp_path: Path, case: str
+) -> None:
+    first = _idf_out(tmp_path, "4" * 16)
+    second = _idf_out(tmp_path, "5" * 16)
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    (first / "sdkconfig").write_text("FIRST\n", encoding="utf-8")
+    (second / "sdkconfig").write_text("SECOND\n", encoding="utf-8")
+    outputs: list[Path] = []
+    if case == "ambiguous":
+        outputs = [first, second]
+    elif case == "outside":
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "sdkconfig").write_text("OUTSIDE\n", encoding="utf-8")
+        outputs = [outside]
+    elif case == "symlink":
+        (first / "sdkconfig").unlink()
+        (first / "sdkconfig").symlink_to(second / "sdkconfig")
+        outputs = [first]
+    messages = [
+        {
+            "reason": "build-script-executed",
+            "package_id": "esp-idf-sys-package-id",
+            "out_dir": str(output),
+        }
+        for output in outputs
+    ]
+
+    completed = _select_sdkconfig(tmp_path, messages)
+
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+
+
+def _plan_cleanup_helper() -> str:
+    plan = (
+        TOOLS.parents[4]
+        / "docs"
+        / "superpowers"
+        / "plans"
+        / "2026-07-30-esp32tap-fast-inner-loop.md"
+    ).read_text(encoding="utf-8")
+    marker = "<<'PYCLEAN'\n"
+    assert marker in plan
+    body = plan.split(marker, 1)[1]
+    assert "\nPYCLEAN\n" in body
+    return body.split("\nPYCLEAN\n", 1)[0]
+
+
+def _plan_cleanup_shell_functions() -> str:
+    plan = (
+        TOOLS.parents[4]
+        / "docs"
+        / "superpowers"
+        / "plans"
+        / "2026-07-30-esp32tap-fast-inner-loop.md"
+    ).read_text(encoding="utf-8")
+    start = plan.index("make_disposable_artifacts_owner_writable() {")
+    end = plan.index("\ntrap cleanup_proof EXIT", start)
+    return plan[start:end]
+
+
+def test_plan_cleanup_helper_makes_only_owned_sealed_artifacts_removable() -> None:
+    root = Path(tempfile.mkdtemp(prefix="esp32tap-publish-proof.", dir="/tmp"))
+    artifacts = root / "hardware" / "Esp32Tap" / "firmware" / "esp32_rs" / ".artifacts"
+    generation = artifacts / "prod" / ("a" * 64)
+    generation.mkdir(parents=True)
+    member = generation / "esp32tap.bin"
+    member.write_bytes(b"image")
+    member.chmod(0o444)
+    generation.chmod(0o555)
+    (artifacts / "prod").chmod(0o555)
+    artifacts.chmod(0o555)
+    try:
+        completed = subprocess.run(
+            ["python3", "-c", _plan_cleanup_helper(), str(root)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert stat.S_IMODE(member.stat().st_mode) & stat.S_IWUSR
+        assert stat.S_IMODE(generation.stat().st_mode) & stat.S_IWUSR
+    finally:
+        shutil.rmtree(root)
+
+
+def test_plan_cleanup_helper_rejects_artifact_symlink_without_following() -> None:
+    root = Path(tempfile.mkdtemp(prefix="esp32tap-publish-proof.", dir="/tmp"))
+    artifacts = root / "hardware" / "Esp32Tap" / "firmware" / "esp32_rs" / ".artifacts"
+    artifacts.mkdir(parents=True)
+    victim = root.parent / f"{root.name}.victim"
+    victim.write_text("protected", encoding="utf-8")
+    (artifacts / "escape").symlink_to(victim)
+    try:
+        completed = subprocess.run(
+            ["python3", "-c", _plan_cleanup_helper(), str(root)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert victim.read_text(encoding="utf-8") == "protected"
+    finally:
+        (artifacts / "escape").unlink(missing_ok=True)
+        shutil.rmtree(root)
+        victim.unlink(missing_ok=True)
+
+
+def test_plan_cleanup_helper_fails_closed_on_unsearchable_directory() -> None:
+    root = Path(tempfile.mkdtemp(prefix="esp32tap-publish-proof.", dir="/tmp"))
+    artifacts = root / "hardware" / "Esp32Tap" / "firmware" / "esp32_rs" / ".artifacts"
+    hidden = artifacts / "hidden"
+    hidden.mkdir(parents=True)
+    victim = root.parent / f"{root.name}.victim"
+    victim.write_text("protected", encoding="utf-8")
+    (hidden / "escape").symlink_to(victim)
+    hidden.chmod(0)
+    try:
+        completed = subprocess.run(
+            ["python3", "-c", _plan_cleanup_helper(), str(root)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert victim.read_text(encoding="utf-8") == "protected"
+    finally:
+        hidden.chmod(0o700)
+        (hidden / "escape").unlink(missing_ok=True)
+        shutil.rmtree(root)
+        victim.unlink(missing_ok=True)
+
+
+def test_plan_cleanup_helper_pins_nodes_across_validate_mutate_boundary() -> None:
+    root = Path(tempfile.mkdtemp(prefix="esp32tap-publish-proof.", dir="/tmp"))
+    artifacts = root / "hardware" / "Esp32Tap" / "firmware" / "esp32_rs" / ".artifacts"
+    artifacts.mkdir(parents=True)
+    member = artifacts / "esp32tap.bin"
+    member.write_bytes(b"original")
+    member.chmod(0o444)
+    victim = root.parent / f"{root.name}.victim"
+    victim.write_bytes(b"victim")
+    victim.chmod(0o400)
+    barrier = root.parent / f"{root.name}.race"
+    boundary = "# Validation complete; retained descriptors pin exact nodes."
+    helper = _plan_cleanup_helper()
+    assert boundary in helper
+    instrumented = helper.replace(
+        boundary,
+        boundary
+        + """
+    barrier = Path(sys.argv[2])
+    barrier.with_suffix(".ready").write_text("ready", encoding="utf-8")
+    while not barrier.with_suffix(".release").exists():
+        import time
+        time.sleep(0.01)
+""",
+        1,
+    )
+    process = subprocess.Popen(
+        ["python3", "-c", instrumented, str(root), str(barrier)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    ready = barrier.with_suffix(".ready")
+    deadline = time.monotonic() + 10
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ready.exists()
+    member.unlink()
+    os.link(victim, member)
+    barrier.with_suffix(".release").touch()
+    stdout, stderr = process.communicate(timeout=10)
+    try:
+        assert process.returncode != 0, (stdout, stderr)
+        assert stat.S_IMODE(victim.stat().st_mode) == 0o400
+    finally:
+        member.unlink(missing_ok=True)
+        shutil.rmtree(root)
+        victim.chmod(0o600)
+        victim.unlink(missing_ok=True)
+        ready.unlink(missing_ok=True)
+        barrier.with_suffix(".release").unlink(missing_ok=True)
+
+
+def test_plan_cleanup_does_not_remove_worktree_after_validation_failure(
+    tmp_path: Path,
+) -> None:
+    root = Path(tempfile.mkdtemp(prefix="esp32tap-publish-proof.", dir="/tmp"))
+    artifacts = root / "hardware" / "Esp32Tap" / "firmware" / "esp32_rs" / ".artifacts"
+    artifacts.mkdir(parents=True)
+    victim = root.parent / f"{root.name}.victim"
+    victim.write_text("protected", encoding="utf-8")
+    (artifacts / "escape").symlink_to(victim)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    git_called = tmp_path / "git-called"
+    _write(
+        fake_bin / "git",
+        '#!/bin/sh\n: > "$FAKE_GIT_CALLED"\nexit 0\n',
+        executable=True,
+    )
+    env = os.environ.copy()
+    env.update(
+        PATH=f"{fake_bin}:{env['PATH']}",
+        FAKE_GIT_CALLED=str(git_called),
+    )
+    try:
+        completed = subprocess.run(
+            [
+                "bash",
+                "-c",
+                _plan_cleanup_shell_functions() + '\nPROOF_WT="$1"\ncleanup_proof',
+                "bash",
+                str(root),
+            ],
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert not git_called.exists()
+        assert victim.read_text(encoding="utf-8") == "protected"
+    finally:
+        (artifacts / "escape").unlink(missing_ok=True)
+        shutil.rmtree(root)
+        victim.unlink(missing_ok=True)
+
+
+def test_plan_verifies_disposable_bundles_against_disposable_repo() -> None:
+    plan = (
+        TOOLS.parents[4]
+        / "docs"
+        / "superpowers"
+        / "plans"
+        / "2026-07-30-esp32tap-fast-inner-loop.md"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        plan.count(
+            'artifact_provenance.py" \\\n  --repo-root "$PROOF_WT" verify --kind '
+        )
+        == 2
+    )

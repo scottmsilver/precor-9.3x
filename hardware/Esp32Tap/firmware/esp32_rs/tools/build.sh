@@ -85,13 +85,15 @@ class BuildCancelled(SystemExit):
 
 pending_signal: int | None = None
 cleanup_in_progress = False
+cancellation_deferred = False
 
 
 def request_cancellation(signum: int, _frame: object) -> None:
     global pending_signal
-    if pending_signal is None:
-        pending_signal = signum
-    if not cleanup_in_progress:
+    if pending_signal is not None:
+        return
+    pending_signal = signum
+    if not cleanup_in_progress and not cancellation_deferred:
         raise BuildCancelled(pending_signal)
 
 
@@ -266,6 +268,7 @@ def run_docker(
     cache_kind: str,
     toolchain: Toolchain,
 ) -> None:
+    global cancellation_deferred
     features = () if kind == "production" else ("qemu-test", "net", "ble")
     feature_text = ",".join(features)
     command = r'''
@@ -286,13 +289,139 @@ if [ -n "$BUILD_FEATURES" ]; then
     args=(--features "$BUILD_FEATURES")
 fi
 echo "== cargo release build: $ARTIFACT_KIND =="
+metadata="$(mktemp /tmp/esp32tap-cargo-metadata.XXXXXX)"
+messages="$(mktemp /tmp/esp32tap-cargo-messages.XXXXXX)"
+cargo +esp metadata --format-version=1 --locked \
+    --filter-platform xtensa-esp32s3-espidf >"$metadata"
+esp_idf_sys_package="$(
+python3 - "$metadata" <<'PYMETA'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if path.stat().st_size > 16 * 1024 * 1024:
+    raise SystemExit("FATAL: cargo metadata exceeds 16 MiB")
+value = json.loads(path.read_text(encoding="utf-8"))
+packages = [
+    package.get("id")
+    for package in value.get("packages", [])
+    if isinstance(package, dict) and package.get("name") == "esp-idf-sys"
+]
+if len(packages) != 1 or not isinstance(packages[0], str):
+    raise SystemExit("FATAL: cargo metadata does not identify exactly one esp-idf-sys")
+print(packages[0])
+PYMETA
+)"
+set +e
 ESP_IDF_SDKCONFIG_DEFAULTS="$SDK" \
-    cargo +esp build --manifest-path "$CRATE/Cargo.toml" --release "${args[@]}" 2>&1 \
-    | grep -vE "^[[:space:]]+(Compiling|Downloaded|Checking) " | tail -80
+    cargo +esp build --manifest-path "$CRATE/Cargo.toml" --release \
+    --message-format=json-render-diagnostics "${args[@]}" >"$messages"
+cargo_status=$?
+set -e
 
 T="$CARGO_TARGET_DIR/xtensa-esp32s3-espidf/release"
-sdk="$(find "$CARGO_TARGET_DIR" -type f -name sdkconfig -path "*esp-idf-sys*" -print -quit)"
-[ -n "$sdk" ] || { echo "FATAL: generated sdkconfig not found" >&2; exit 1; }
+sdk="$(
+python3 - "$messages" "$esp_idf_sys_package" "$CARGO_TARGET_DIR" \
+    "$cargo_status" <<'PYSDK'
+import json
+import os
+import re
+import stat
+import sys
+from pathlib import Path
+
+messages_path = Path(sys.argv[1])
+expected_package = sys.argv[2]
+target = Path(sys.argv[3]).absolute()
+try:
+    cargo_status = int(sys.argv[4])
+except (IndexError, ValueError) as exc:
+    raise SystemExit("FATAL: Cargo build status is invalid") from exc
+if cargo_status < 0 or cargo_status > 255:
+    raise SystemExit("FATAL: Cargo build status is invalid")
+try:
+    target = target.resolve(strict=True)
+except OSError as exc:
+    raise SystemExit(f"FATAL: Cargo target is unavailable: {exc}")
+info = messages_path.lstat()
+if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+    raise SystemExit("FATAL: Cargo message stream is not one regular file")
+if info.st_size > 64 * 1024 * 1024:
+    raise SystemExit("FATAL: Cargo message stream exceeds 64 MiB")
+
+out_dirs = set()
+with messages_path.open(encoding="utf-8") as stream:
+    for line_number, line in enumerate(stream, 1):
+        try:
+            message = json.loads(line)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(
+                f"FATAL: malformed Cargo JSON message at line {line_number}: {exc}"
+            )
+        if not isinstance(message, dict):
+            raise SystemExit("FATAL: Cargo JSON message is not an object")
+        if message.get("reason") == "compiler-message":
+            compiler_message = message.get("message")
+            rendered = (
+                compiler_message.get("rendered")
+                if isinstance(compiler_message, dict)
+                else None
+            )
+            if isinstance(rendered, str):
+                print(rendered, end="", file=sys.stderr)
+        if (
+            message.get("reason") == "build-script-executed"
+            and message.get("package_id") == expected_package
+        ):
+            out_dir = message.get("out_dir")
+            if not isinstance(out_dir, str) or not out_dir:
+                raise SystemExit(
+                    "FATAL: esp-idf-sys build message has no canonical out_dir"
+                )
+            out_dirs.add(out_dir)
+
+if cargo_status != 0:
+    print(f"FATAL: Cargo build failed with status {cargo_status}", file=sys.stderr)
+    raise SystemExit(cargo_status)
+if len(out_dirs) != 1:
+    raise SystemExit(
+        "FATAL: current Cargo build did not identify exactly one esp-idf-sys out_dir"
+    )
+out_dir = Path(out_dirs.pop()).absolute()
+try:
+    resolved_out = out_dir.resolve(strict=True)
+    relative = resolved_out.relative_to(target)
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"FATAL: esp-idf-sys out_dir escapes Cargo target: {exc}")
+if resolved_out != out_dir:
+    raise SystemExit("FATAL: esp-idf-sys out_dir contains a symlink")
+parts = relative.parts
+if (
+    len(parts) != 5
+    or parts[0] != "xtensa-esp32s3-espidf"
+    or parts[1] != "release"
+    or parts[2] != "build"
+    or re.fullmatch(r"esp-idf-sys-[0-9a-f]{16}", parts[3]) is None
+    or parts[4] != "out"
+):
+    raise SystemExit("FATAL: esp-idf-sys out_dir has an unexpected target layout")
+sdkconfig = resolved_out / "sdkconfig"
+try:
+    sdk_info = sdkconfig.lstat()
+except OSError as exc:
+    raise SystemExit(f"FATAL: current generated sdkconfig is missing: {exc}")
+if (
+    not stat.S_ISREG(sdk_info.st_mode)
+    or sdk_info.st_nlink != 1
+    or sdk_info.st_uid != os.geteuid()
+):
+    raise SystemExit(
+        "FATAL: current generated sdkconfig is not one owned regular file"
+    )
+print(sdkconfig)
+PYSDK
+)"
 FLASH_SIZE="$(grep -E '^CONFIG_ESPTOOLPY_FLASHSIZE=' "$sdk" | head -1 | cut -d\" -f2)"
 [ -n "$FLASH_SIZE" ] || { echo "FATAL: flash size missing from sdkconfig" >&2; exit 1; }
 
@@ -368,19 +497,28 @@ PYFIT
         raise BuildError("ESP32TAP_BUILD_TIMEOUT must be a positive number") from exc
     if timeout <= 0:
         raise BuildError("ESP32TAP_BUILD_TIMEOUT must be a positive number")
-    process = subprocess.Popen(arguments, start_new_session=True)
+    process: subprocess.Popen[bytes] | None = None
+    cancellation_deferred = True
     try:
+        process = subprocess.Popen(arguments, start_new_session=True)
+        cancellation_deferred = False
+        if pending_signal is not None:
+            raise BuildCancelled(pending_signal)
         returncode = process.wait(timeout=timeout)
     except BaseException:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
+        cancellation_deferred = False
+        if process is not None:
             with contextlib.suppress(ProcessLookupError):
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+                os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
         raise
+    finally:
+        cancellation_deferred = False
     if returncode != 0:
         raise BuildError(f"Docker {kind} build failed with status {returncode}")
 
@@ -389,7 +527,7 @@ import contextlib  # kept after the embedded container script for readability
 
 
 def main() -> None:
-    global cleanup_in_progress
+    global cancellation_deferred, cleanup_in_progress
     acquire_worktree_lock()
     kinds = requested_kinds()
     cache_root = target_cache(repo_root, "prod").parent
@@ -458,8 +596,7 @@ def main() -> None:
         # Each public link is an independent atomic commit. If the process
         # crashes between kinds, readers can see a valid old/new mix; neither
         # link is ever absent or partial, and current verification detects it.
-        watched = {signal.SIGHUP, signal.SIGINT, signal.SIGTERM}
-        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+        cancellation_deferred = True
         try:
             for (kind, _), staging in zip(kinds, stagings, strict=True):
                 public_name = (
@@ -474,7 +611,9 @@ def main() -> None:
                 identity = manifests[kind]["manifest_sha256"]
                 print(f"published {kind}: {identity}")
         finally:
-            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+            cancellation_deferred = False
+        if pending_signal is not None:
+            raise BuildCancelled(pending_signal)
         if only == "both":
             print("ONLY=both published both manifests")
     finally:

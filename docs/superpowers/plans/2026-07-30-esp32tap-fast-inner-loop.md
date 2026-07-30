@@ -505,7 +505,8 @@ Stage the Task 5 files and create a commit object without moving the branch:
 
 ```bash
 git add hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh \
-  hardware/Esp32Tap/firmware/esp32_rs/tools/test_snapshot_build.py
+  hardware/Esp32Tap/firmware/esp32_rs/tools/test_snapshot_build.py \
+  docs/superpowers/plans/2026-07-30-esp32tap-fast-inner-loop.md
 PROOF_TREE="$(git write-tree)"
 PROOF_COMMIT="$(
   printf '%s\n' 'temporary Task 5 publication proof' |
@@ -523,7 +524,169 @@ disposable detached worktree:
 ```bash
 PROOF_WT="$(mktemp -d /tmp/esp32tap-publish-proof.XXXXXX)"
 git worktree add --detach "$PROOF_WT" "$PROOF_COMMIT"
-cleanup_proof() { git worktree remove --force "$PROOF_WT"; }
+make_disposable_artifacts_owner_writable() {
+  python3 - "$1" <<'PYCLEAN'
+import os
+import re
+import stat
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).absolute()
+if (
+    root.parent != Path("/tmp")
+    or re.fullmatch(r"esp32tap-publish-proof\.[-A-Za-z0-9_]+", root.name) is None
+):
+    raise SystemExit(f"refusing non-disposable proof path: {root}")
+root_info = root.lstat()
+if (
+    not stat.S_ISDIR(root_info.st_mode)
+    or root_info.st_uid != os.geteuid()
+    or root.resolve(strict=True) != root
+):
+    raise SystemExit(f"proof root is not one owned physical directory: {root}")
+
+no_follow = getattr(os, "O_NOFOLLOW", None)
+directory_flag = getattr(os, "O_DIRECTORY", None)
+if no_follow is None or directory_flag is None:
+    raise SystemExit("platform cannot safely open the disposable artifact tree")
+common_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | no_follow
+directory_flags = common_flags | directory_flag
+fixed_parts = (
+    "hardware",
+    "Esp32Tap",
+    "firmware",
+    "esp32_rs",
+    ".artifacts",
+)
+opened_fds = []
+records = []
+chmod_nodes = []
+directory_entries = []
+
+
+def same_inode(left, right):
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def validate_opened(fd, lexical, *, directory, label):
+    opened = os.fstat(fd)
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if (
+        not expected_type(opened.st_mode)
+        or not expected_type(lexical.st_mode)
+        or opened.st_uid != os.geteuid()
+        or lexical.st_uid != os.geteuid()
+        or (not directory and (opened.st_nlink != 1 or lexical.st_nlink != 1))
+        or not same_inode(opened, lexical)
+    ):
+        raise SystemExit(f"artifact node is not one owned physical node: {label}")
+    return opened
+
+
+def open_child(parent_fd, name, *, directory, label):
+    flags = directory_flags if directory else common_flags
+    fd = os.open(name, flags, dir_fd=parent_fd)
+    opened_fds.append(fd)
+    lexical = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    opened = validate_opened(
+        fd, lexical, directory=directory, label=label
+    )
+    records.append((fd, parent_fd, name, directory, label))
+    return fd, opened
+
+
+def open_artifact_tree(directory_fd, relative):
+    try:
+        entries = sorted(os.scandir(directory_fd), key=lambda entry: entry.name)
+    except OSError as exc:
+        raise SystemExit(
+            f"cannot enumerate sealed artifact directory {relative}: {exc}"
+        ) from exc
+    directory_entries.append(
+        (directory_fd, frozenset(entry.name for entry in entries), relative)
+    )
+    for entry in entries:
+        label = f"{relative}/{entry.name}"
+        lexical = entry.stat(follow_symlinks=False)
+        if stat.S_ISDIR(lexical.st_mode):
+            child_fd, opened = open_child(
+                directory_fd, entry.name, directory=True, label=label
+            )
+            chmod_nodes.append((child_fd, opened.st_mode, True))
+            open_artifact_tree(child_fd, label)
+        elif stat.S_ISREG(lexical.st_mode):
+            child_fd, opened = open_child(
+                directory_fd, entry.name, directory=False, label=label
+            )
+            chmod_nodes.append((child_fd, opened.st_mode, False))
+        else:
+            raise SystemExit(f"artifact member is not a safe physical node: {label}")
+        if len(records) > 4096:
+            raise SystemExit("artifact tree exceeds the safe cleanup node limit")
+
+
+def validate_lexical_tree():
+    current_root = root.lstat()
+    if not same_inode(root_info, current_root):
+        raise SystemExit("proof root changed during cleanup validation")
+    for fd, parent_fd, name, directory, label in records:
+        try:
+            lexical = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise SystemExit(f"artifact path changed during cleanup: {label}") from exc
+        validate_opened(
+            fd, lexical, directory=directory, label=label
+        )
+    for fd, expected_names, label in directory_entries:
+        try:
+            current_names = frozenset(entry.name for entry in os.scandir(fd))
+        except OSError as exc:
+            raise SystemExit(
+                f"artifact directory changed during cleanup: {label}"
+            ) from exc
+        if current_names != expected_names:
+            raise SystemExit(f"artifact directory changed during cleanup: {label}")
+
+
+try:
+    root_fd = os.open(root, directory_flags)
+    opened_fds.append(root_fd)
+    validate_opened(
+        root_fd, root_info, directory=True, label=str(root)
+    )
+    parent_fd = root_fd
+    relative = "."
+    for index, part in enumerate(fixed_parts):
+        relative = f"{relative}/{part}"
+        try:
+            child_fd, opened = open_child(
+                parent_fd, part, directory=True, label=relative
+            )
+        except FileNotFoundError:
+            if index == len(fixed_parts) - 1:
+                raise SystemExit(0)
+            raise
+        parent_fd = child_fd
+    artifacts_fd = parent_fd
+    chmod_nodes.append((artifacts_fd, opened.st_mode, True))
+    open_artifact_tree(artifacts_fd, relative)
+
+    # Validation complete; retained descriptors pin exact nodes.
+    validate_lexical_tree()
+    for fd, mode, directory in chmod_nodes:
+        additions = stat.S_IWUSR | (stat.S_IXUSR if directory else 0)
+        os.fchmod(fd, stat.S_IMODE(mode) | additions)
+    validate_lexical_tree()
+finally:
+    for fd in reversed(opened_fds):
+        os.close(fd)
+PYCLEAN
+}
+cleanup_proof() {
+  make_disposable_artifacts_owner_writable "$PROOF_WT" &&
+    git worktree remove --force "$PROOF_WT"
+}
 trap cleanup_proof EXIT
 "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/build_image.sh"
 /usr/bin/time -v env ONLY=both \
@@ -531,10 +694,10 @@ trap cleanup_proof EXIT
 test -L "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build"
 test -L "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test"
 python3 "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py" \
-  verify --kind production \
+  --repo-root "$PROOF_WT" verify --kind production \
   "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build"
 python3 "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py" \
-  verify --kind qemu-test \
+  --repo-root "$PROOF_WT" verify --kind qemu-test \
   "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test"
 cleanup_proof
 trap - EXIT
