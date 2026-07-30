@@ -97,12 +97,14 @@ pub const HTTPD_STACK_BYTES: u32 = 20_480;
 /// helpers only read it and the byte slices outlive the call (both are
 /// `'static`). Returning ESP_OK tells IDF the response is complete.
 unsafe extern "C" fn banner_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
-    sys::httpd_resp_set_type(req, c"application/json".as_ptr());
-    sys::httpd_resp_send(
-        req,
-        BANNER.as_ptr() as *const core::ffi::c_char,
-        BANNER.len() as isize,
-    )
+    banner_impl(req)
+}
+
+fn banner_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
+    crate::net::api::respond(req, c"200 OK", BANNER)
 }
 
 
@@ -114,6 +116,22 @@ unsafe extern "C" fn banner_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
 /// either a mistake or an attack.
 const MAX_WS_FRAME: usize = 512;
 
+fn ws_handshake(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
+    // Greet the client so a connection that opens but never receives anything
+    // is distinguishable from a healthy idle one.
+    let hello = br#"{"type":"connection","connected":true}"#;
+    let mut frame: sys::httpd_ws_frame_t = zeroed();
+    frame.type_ = sys::httpd_ws_type_t_HTTPD_WS_TYPE_TEXT;
+    frame.payload = hello.as_ptr() as *mut u8;
+    frame.len = hello.len();
+    // SAFETY: `req` is live for the callback and `frame` borrows the static
+    // `hello` payload for this synchronous send only.
+    unsafe { sys::httpd_ws_send_frame(req, &mut frame) }
+}
+
 /// GET /ws — the live status stream.
 ///
 /// IDF calls this once with `method == HTTP_GET` to complete the handshake
@@ -124,16 +142,7 @@ const MAX_WS_FRAME: usize = 512;
 /// each call that borrows it. No pointer derived from `req` is retained.
 unsafe extern "C" fn ws_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
     if (*req).method == sys::http_method_HTTP_GET as i32 {
-        // Handshake completed by IDF. Greet the client so a connection that
-        // opens but never receives anything is distinguishable from a healthy
-        // idle one — the C++ attempt had a saturation path where the socket
-        // opened and then silently delivered nothing forever.
-        let hello = br#"{"type":"connection","connected":true}"#;
-        let mut frame: sys::httpd_ws_frame_t = core::mem::zeroed();
-        frame.type_ = sys::httpd_ws_type_t_HTTPD_WS_TYPE_TEXT;
-        frame.payload = hello.as_ptr() as *mut u8;
-        frame.len = hello.len();
-        return sys::httpd_ws_send_frame(req, &mut frame);
+        return ws_handshake(req);
     }
 
     // Inbound frame: read the header first (max_len = 0 reports the true

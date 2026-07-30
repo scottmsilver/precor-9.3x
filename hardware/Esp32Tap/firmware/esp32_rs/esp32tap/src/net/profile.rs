@@ -293,6 +293,13 @@ fn render(lead: &str, tail: &str) -> Buf {
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
 unsafe extern "C" fn list_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    list_impl(req)
+}
+
+fn list_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let b = render("[", "]");
     respond(req, c"200 OK", &b.b[..b.n])
 }
@@ -301,6 +308,13 @@ unsafe extern "C" fn list_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t 
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
 unsafe extern "C" fn active_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    active_impl(req)
+}
+
+fn active_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let b = render(r#"{"guest_mode":false,"profile":"#, "}");
     respond(req, c"200 OK", &b.b[..b.n])
 }
@@ -430,6 +444,13 @@ fn render_user() -> Buf {
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
 unsafe extern "C" fn user_get_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    user_get_impl(req)
+}
+
+fn user_get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let b = render_user();
     respond(req, c"200 OK", &b.b[..b.n])
 }

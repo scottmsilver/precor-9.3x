@@ -119,6 +119,13 @@ pub fn render(buf: &mut [u8], lead: &str) -> usize {
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
 unsafe extern "C" fn get_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    get_impl(req)
+}
+
+fn get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let mut buf = [0u8; HRM_BUF];
     let n = render(&mut buf, "");
     respond(req, c"200 OK", &buf[..n])
@@ -188,7 +195,13 @@ unsafe extern "C" fn select_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
 unsafe extern "C" fn action_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
-    let scan = (*req).user_ctx as usize == 1;
+    action_impl(req, (*req).user_ctx as usize == 1)
+}
+
+fn action_impl(req: *mut sys::httpd_req_t, scan: bool) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     hr::post(if scan {
         hr::Command::Scan
     } else {

@@ -319,7 +319,13 @@ PRODUCTION_UNSAFE_LINES = 69
 #                            line beside the LATCHED mount cost is a number that
 #                            can actually move. An assertion against a constant
 #                            is not a leak detector.
-QEMU_UNSAFE_LINES = 1182
+#
+# 1182 -> 1154, -28: bodyless-route admission moved the banner, WebSocket
+# handshake, status, profile and HRM logic behind safe helpers. Their IDF
+# callbacks now do only the raw scalar reads a callback must; the WebSocket
+# send remains one explicit, documented unsafe block and the banner reuses
+# `net::api::respond`'s already-budgeted C boundary.
+QEMU_UNSAFE_LINES = 1154
 
 _UNSAFE_TOKEN = re.compile(r"(?<![A-Za-z0-9_])unsafe(?![A-Za-z0-9_])")
 _ALLOW_UNSAFE = re.compile(r"#!?\[allow\(([^)]*)\)\]")

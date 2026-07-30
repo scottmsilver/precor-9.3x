@@ -54,6 +54,92 @@ EXIT_SEQUENCE = [
     "lease_released",
 ]
 
+ROUTE_SOURCE_FILES = ("http.rs", "api.rs", "program.rs", "profile.rs", "records.rs", "hrm.rs", "coach.rs")
+BODY_READER_ROUTES = {
+    ("POST", "/api/speed"),
+    ("POST", "/api/incline"),
+    ("POST", "/api/program/load"),
+    ("POST", "/api/program/start"),
+    ("POST", "/api/program/extend"),
+    ("POST", "/api/program/adjust-duration"),
+    ("POST", "/api/program/quick-start"),
+    ("POST", "/api/profile/select"),
+    ("PUT", "/api/user"),
+    ("PUT", "/api/profiles/*"),
+    ("POST", "/api/workouts"),
+    ("PUT", "/api/workouts/*"),
+    ("POST", "/api/hrm/select"),
+    ("POST", "/api/chat"),
+    ("POST", "/api/coach/key"),
+    ("POST", "/api/coach/url"),
+}
+IMMEDIATE_DECLINE_ROUTES = {
+    # App compatibility endpoints intentionally return their existing payload
+    # while shutting the read side without consuming unsupported input.
+    ("POST", "/api/profiles"),
+    ("POST", "/api/profile/guest"),
+    ("POST", "/api/profile/guest/convert"),
+    ("POST", "/api/profiles/*"),
+    ("DELETE", "/api/profiles/*"),
+}
+BODYLESS_ROUTES = {
+    ("GET", "/"),
+    ("GET", "/ws"),
+    ("GET", "/api/status"),
+    ("GET", "/api/program"),
+    ("POST", "/api/program/stop"),
+    ("POST", "/api/program/pause"),
+    ("POST", "/api/program/skip"),
+    ("POST", "/api/program/prev"),
+    ("GET", "/api/profiles"),
+    ("GET", "/api/profile/active"),
+    ("GET", "/api/user"),
+    ("GET", "/api/programs/history"),
+    ("GET", "/api/workouts"),
+    ("GET", "/api/runs"),
+    ("POST", "/api/programs/history/*"),
+    ("POST", "/api/workouts/*"),
+    ("DELETE", "/api/workouts/*"),
+    ("GET", "/api/hrm"),
+    ("POST", "/api/hrm/forget"),
+    ("POST", "/api/hrm/scan"),
+    ("GET", "/api/chat"),
+    ("GET", "/api/coach"),
+}
+
+
+def assert_http_route_body_policy_is_complete():
+    """Every registered route must opt into exactly one request-body policy."""
+    net = HERE.parents[1] / "esp32tap" / "src" / "net"
+    tuple_route = re.compile(
+        r'\(\s*c"([^"]+)",\s*sys::http_method_HTTP_(GET|POST|PUT|DELETE),'
+        r"\s*[A-Za-z_][A-Za-z0-9_]*",
+        re.S,
+    )
+    struct_route = re.compile(
+        r'uri:\s*c"([^"]+)"\.as_ptr\(\),\s*'
+        r"method:\s*sys::http_method_HTTP_(GET|POST|PUT|DELETE),\s*"
+        r"handler:\s*Some\(",
+        re.S,
+    )
+    registered = set()
+    for name in ROUTE_SOURCE_FILES:
+        source = (net / name).read_text()
+        registered.update((m.group(2), m.group(1)) for m in tuple_route.finditer(source))
+        registered.update((m.group(2), m.group(1)) for m in struct_route.finditer(source))
+
+    policies = (BODY_READER_ROUTES, IMMEDIATE_DECLINE_ROUTES, BODYLESS_ROUTES)
+    assert all(a.isdisjoint(b) for i, a in enumerate(policies) for b in policies[i + 1 :])
+    inventoried = set().union(*policies)
+    assert registered == inventoried, {
+        "registered_without_policy": sorted(registered - inventoried),
+        "stale_policy": sorted(inventoried - registered),
+    }
+
+
+def test_http_route_body_policy_is_complete():
+    assert_http_route_body_policy_is_complete()
+
 
 def http(s, method, path, body=None, timeout=20):
     try:
@@ -249,6 +335,7 @@ def test_b_program_stop_zeroes_a_manually_commanded_belt(qemu):
 
 
 def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
+    assert_http_route_body_policy_is_complete()
     s = armed(qemu)
 
     def probe_stop(timeout=8):
@@ -264,29 +351,36 @@ def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
     assert http(s, "POST", "/api/speed", {"value": 3.0})[0] == 200
     s.wait_tx_contains(WIRE_3, timeout=60)
 
-    bodyless_or_ignored_body_posts = (
-        "/api/profile/select",
-        "/api/program/stop",
-        "/api/program/pause",
-        "/api/program/skip",
-        "/api/program/prev",
-        "/api/programs/history/missing/load",
-        "/api/programs/history/missing/resume",
-        "/api/workouts/missing/load",
+    periodic_body_cases = (
+        ("POST", "/api/profile/select", 1_000_000, 0.4, "profile select oversized"),
+        ("POST", "/api/program/stop", 1_000_000, 0.4, "program stop"),
+        ("POST", "/api/program/pause", 1_000_000, 0.4, "program pause"),
+        ("POST", "/api/program/skip", 1_000_000, 0.4, "program skip"),
+        ("POST", "/api/program/prev", 1_000_000, 0.4, "program prev"),
+        ("POST", "/api/programs/history/missing/load", 1_000_000, 0.4, "history load"),
+        ("POST", "/api/programs/history/missing/resume", 1_000_000, 0.4, "history resume"),
+        ("POST", "/api/workouts/missing/load", 1_000_000, 0.4, "workout load"),
+        ("GET", "/api/status", 1_000_000, 0.4, "representative GET"),
+        ("DELETE", "/api/workouts/missing", 1_000_000, 0.4, "workout delete"),
+        ("POST", "/api/workouts", 1_000_000, 0.4, "workout oversized rejection"),
+        # Let the first records receive time out, then refresh IDF's unread
+        # body purge. This reaches read_slot_body's short-read exit rather than
+        # its size refusal.
+        ("POST", "/api/workouts", 128, 1.3, "workout short delivery"),
         # Already uses respond_and_close; kept in the inventory so that working
         # reference cannot silently regress while the other routes converge.
-        "/api/hrm/forget",
-        "/api/hrm/scan",
+        ("POST", "/api/hrm/forget", 1_000_000, 0.4, "HRM forget"),
+        ("POST", "/api/hrm/scan", 1_000_000, 0.4, "HRM scan"),
     )
     outcomes = []
-    for path in bodyless_or_ignored_body_posts:
+    for method, path, declared, first_periodic, label in periodic_body_cases:
         raw = socket.create_connection(("127.0.0.1", s.http_port), timeout=10)
         tls = httpc.tls_context().wrap_socket(raw, server_hostname="esp32tap")
         stopped = threading.Event()
         sender_errors = []
 
         def keep_each_receive_alive():
-            next_send = time.monotonic() + 0.4
+            next_send = time.monotonic() + first_periodic
             while not stopped.wait(max(0.0, next_send - time.monotonic())):
                 try:
                     tls.sendall(b"X")
@@ -297,13 +391,13 @@ def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
 
         try:
             tls.sendall(
-                f"POST {path} HTTP/1.1\r\nHost: x\r\n"
-                "Content-Length: 1000000\r\n\r\nX".encode()
+                f"{method} {path} HTTP/1.1\r\nHost: x\r\n"
+                f"Content-Length: {declared}\r\n\r\nX".encode()
             )
             sender = threading.Thread(target=keep_each_receive_alive, daemon=True)
             sender.start()
             held, result = probe_stop()
-            outcomes.append((path, held, result, list(sender_errors)))
+            outcomes.append((label, held, result, list(sender_errors)))
         finally:
             stopped.set()
             try:
@@ -315,11 +409,11 @@ def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
                 del sender
 
         assert result == "ok", (
-            f"{path} let an unread declared body make Stop unreachable: {result}; "
+            f"{label} let an unread declared body make Stop unreachable: {result}; "
             f"sender={sender_errors}"
         )
         assert held < base + 3.0, (
-            f"{path} let a 400ms-byte dribbler park the sole HTTP worker for "
+            f"{label} let a periodic-body peer park the sole HTTP worker for "
             f"{held:.1f}s (Stop baseline {base:.1f}s)"
         )
 

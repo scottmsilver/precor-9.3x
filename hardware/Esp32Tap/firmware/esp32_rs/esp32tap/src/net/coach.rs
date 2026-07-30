@@ -1175,6 +1175,9 @@ fn render_reply(out: &mut FixedStr<{ REPLY_BODY_BYTES }>, lead: &str) {
 }
 
 fn chat_get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let mut body: FixedStr<{ REPLY_BODY_BYTES }> = FixedStr::new();
     render_reply(&mut body, "");
     respond(req, c"200 OK", body.as_bytes())
@@ -1201,6 +1204,9 @@ pub fn published_turn() -> u32 {
 }
 
 fn coach_get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let cfg = lock(&CONFIG);
     let mut s: FixedStr<192> = FixedStr::new();
     // WHETHER, NEVER WHAT. No prefix, no length, no fingerprint of the key.

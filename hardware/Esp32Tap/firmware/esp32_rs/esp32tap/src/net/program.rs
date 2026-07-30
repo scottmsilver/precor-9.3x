@@ -428,6 +428,9 @@ unsafe extern "C" fn post_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t 
 }
 
 fn get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let mut buf = [0u8; STATE_BUF];
     let n = {
         let p = lock(&crate::CTX.program);

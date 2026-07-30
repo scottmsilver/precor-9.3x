@@ -416,6 +416,13 @@ pub(crate) fn parse_key_str(body: &[u8], key: &[u8], out: &mut [u8]) -> Option<u
 ///
 /// SAFETY: `req` is live for the call; nothing derived from it is retained.
 unsafe extern "C" fn status_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    status_impl(req)
+}
+
+fn status_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    if reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let mut buf = [0u8; STATUS_BUF];
     let n = render_status(&mut buf, "");
     respond(req, c"200 OK", &buf[..n])

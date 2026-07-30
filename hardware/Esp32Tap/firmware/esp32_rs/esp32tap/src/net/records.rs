@@ -297,18 +297,31 @@ pub(crate) fn extract_str<const N: usize>(body: &[u8], key: &str, out: &mut Fixe
     i < body.len()
 }
 
-/// Read a body of up to one request slot, admitted before anything is read.
+/// Admit and read a body of up to one request slot before anything is parsed.
 ///
-/// Returns the length read into `lease`, or `None` when the request has
-/// already been answered.
-fn read_slot_body(req: *mut sys::httpd_req_t, lease: &mut reqbudget::Lease) -> Option<usize> {
+/// Ownership of the lease stays here until a complete body exists. Every
+/// refusal therefore drops the slot before answering and closing the read
+/// side; no failure can strand either the fixed pool or IDF's sole worker.
+fn read_slot_body(req: *mut sys::httpd_req_t) -> Option<(reqbudget::Lease, usize)> {
+    let mut lease = match reqbudget::admit(reqbudget::SLOT_BYTES) {
+        Ok(lease) => lease,
+        Err(_) => {
+            crate::net::api::respond_and_close(
+                req,
+                c"503 Service Unavailable",
+                br#"{"ok":false,"error":"server busy"}"#,
+            );
+            return None;
+        }
+    };
     // SAFETY: reading a scalar field of a live request.
     let declared = unsafe { (*req).content_len };
     if declared == 0 {
-        return Some(0);
+        return Some((lease, 0));
     }
     if declared > lease.capacity() {
-        respond(
+        drop(lease);
+        crate::net::api::respond_and_close(
             req,
             c"413 Payload Too Large",
             br#"{"ok":false,"error":"body too large"}"#,
@@ -320,6 +333,7 @@ fn read_slot_body(req: *mut sys::httpd_req_t, lease: &mut reqbudget::Lease) -> O
     let mut got = 0usize;
     while got < declared {
         if deadline.expired() {
+            drop(lease);
             crate::net::api::abandon_body(req);
             return None;
         }
@@ -335,7 +349,8 @@ fn read_slot_body(req: *mut sys::httpd_req_t, lease: &mut reqbudget::Lease) -> O
             )
         };
         if n <= 0 {
-            respond(
+            drop(lease);
+            crate::net::api::respond_and_close(
                 req,
                 c"400 Bad Request",
                 br#"{"ok":false,"error":"short body"}"#,
@@ -344,7 +359,7 @@ fn read_slot_body(req: *mut sys::httpd_req_t, lease: &mut reqbudget::Lease) -> O
         }
         got += n as usize;
     }
-    Some(got)
+    Some((lease, got))
 }
 
 /// Lease a slot to read records into, or answer 503.
@@ -531,6 +546,9 @@ unsafe extern "C" fn list_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t 
 /// the alternative is a watchdog reboot.
 fn list_impl(req: *mut sys::httpd_req_t, kind: usize) -> sys::esp_err_t {
     use core::fmt::Write;
+    if crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
     let Some(mut lease) = scratch(req) else {
         return sys::ESP_OK;
     };
@@ -642,9 +660,14 @@ fn mutate_impl(
     // never in a body. Refuse a declared body before any flash/program effect
     // and close its read side so IDF cannot purge a 400ms-byte dribbler on the
     // sole HTTP worker after the handler returns.
-    let bodyless_post = verb == V_HIST_LOAD
-        || (verb == V_WORKOUT_ID && method == sys::http_method_HTTP_POST as i32);
-    if bodyless_post && crate::net::api::reject_unexpected_body(req) {
+    let bodyless = verb == V_HIST_LOAD
+        || (verb == V_WORKOUT_ID
+            && matches!(
+                method,
+                x if x == sys::http_method_HTTP_POST as i32
+                    || x == sys::http_method_HTTP_DELETE as i32
+            ));
+    if bodyless && crate::net::api::reject_unexpected_body(req) {
         return sys::ESP_OK;
     }
 
@@ -826,10 +849,7 @@ fn reply_program(req: *mut sys::httpd_req_t, p: &Program) -> sys::esp_err_t {
 }
 
 fn workout_save(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
-    let Some(mut lease) = scratch(req) else {
-        return sys::ESP_OK;
-    };
-    let Some(n) = read_slot_body(req, &mut lease) else {
+    let Some((mut lease, n)) = read_slot_body(req) else {
         return sys::ESP_OK;
     };
 
