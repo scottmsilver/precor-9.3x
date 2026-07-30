@@ -128,15 +128,26 @@ Dirty and untracked source files are hashed from the working tree, not from
 `HEAD`. Git timestamps and output-directory timestamps are never inputs.
 
 The build creates an immutable temporary snapshot of the declared working-tree
-inputs while holding the existing exclusive build lock. The snapshot includes
-tracked, dirty, and relevant untracked files with their repository-relative
-paths; Cargo and ESP-IDF compile only that snapshot, never the live bind mount.
-Its content digest is the manifest input digest. After the bundle is produced
-but before publication, the builder recomputes the live working-tree digest
-and requires it to equal the snapshot digest. A later live edit therefore
-invalidates publication, while a transient edit-and-revert during compilation
-cannot affect the artifact because the compiler cannot see the live tree.
-Temporary snapshots and unpublished bundles are removed on every exit.
+inputs while holding the existing exclusive build lock. Snapshot creation
+happens before any build gate. The snapshot includes tracked, dirty, and
+relevant untracked files with their repository-relative paths. All four
+existing pre-build gates run from that snapshot, and Cargo and ESP-IDF compile
+only that snapshot; none of them reads the live bind mount.
+
+The snapshot input declaration includes the gates and every transitive input
+they consume: Python imports and fixtures, `design.py`, the safety-model tests
+and manifests, the committed C++ parity core/native harness, generated-model
+source inputs, and the Rust workspace/build inputs listed above. A structural
+test fails when a gate imports, opens, compiles, or invokes a repository file
+that the input declaration does not classify.
+
+The snapshot's content digest is the manifest input digest. After all four
+gates and the bundle build complete but before publication, the builder
+recomputes the live working-tree digest and requires it to equal the snapshot
+digest. A later live edit therefore invalidates publication, while a transient
+edit-and-revert during gates or compilation cannot affect the artifact because
+no consumer can see the live tree. Temporary snapshots and unpublished
+bundles are removed on every exit.
 
 The build image is created through a tracked wrapper which fingerprints the
 Dockerfile plus its declared build context and writes that fingerprint into an
@@ -162,17 +173,23 @@ every Rust QEMU entry point will:
    `ONLY=qemu bash tools/build.sh` or `ONLY=prod bash tools/build.sh`.
 
 This enforcement covers both pytest families:
-`tools/qemu_scenarios` and `tools/qemu_harness`. The committed
-`qemu_session.py` is strengthened to invoke the Rust provenance checker before
-its first `_lease()` call, so the local `qemu_harness/pytest.ini` root cannot
-bypass preflight. The change is committed as part of the verified harness
-rather than hidden as a dirty local edit, and `verify_harness_copy.py` keeps
-enforcing the repository's harness-copy contract. Scenario fixtures may also
-preflight at session scope for a faster error, but the session constructor is
-the non-bypassable boundary. The Rust `qemu_smoke.sh` entry becomes a checked
-wrapper around the read-only shared smoke implementation. The normal sweep
-verifies the production bundle before its smoke launch and the QEMU bundle
-before pytest.
+`tools/qemu_scenarios` and `tools/qemu_harness`. Their session-scoped image
+fixtures are mandatory provenance checks: they call the checker and use
+`pytest.fail`, never `pytest.skip`, for a missing, stale, or invalid required
+bundle. The check runs before Docker availability checks and before any test
+or fixture may read an artifact. This includes artifact-only tests such as the
+production-image surface check, which never construct a `QemuSession`.
+
+The locally rooted `qemu_harness/conftest.py` is therefore an explicit,
+allowlisted committed harness strengthening. It is committed rather than left
+as a dirty edit, and `verify_harness_copy.py` is updated to verify the new
+approved baseline. `qemu_session.py` also invokes the checker before its first
+`_lease()` call as defense in depth for non-pytest callers; it is not the sole
+enforcement point.
+
+The Rust `qemu_smoke.sh` entry becomes a checked wrapper around the read-only
+shared smoke implementation. The normal sweep verifies the production bundle
+before its smoke launch and the QEMU bundle before pytest.
 
 Verification and flash assembly hold the existing shared/read build lease
 continuously, including under xdist, so an exclusive build cannot replace a
@@ -278,9 +295,14 @@ Integration tests will prove:
 
 - both direct pytest families refuse the known tracked stale-image shape before
   port allocation or Docker;
+- missing required bundles fail rather than skip, including artifact-only test
+  selection that never creates a QEMU session;
 - direct smoke refuses a stale production bundle before Docker;
 - a fresh build creates a valid manifest and focused QEMU scenario passes;
 - modifying a relevant source invalidates the artifact immediately;
+- all four existing host build gates execute against the identical immutable
+  snapshot compiled into the artifact, and undeclared transitive gate inputs
+  fail the structural completeness test;
 - normal and deep sweep command lists are unchanged; and
 - each logical QEMU test still receives a fresh guest and flash image.
 
