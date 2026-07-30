@@ -898,6 +898,93 @@ def test_manifest_rejects_member_above_kind_specific_limit_before_hashing(
         manifest_for(staging, toolchain)
 
 
+def deterministic_growing_reader(
+    monkeypatch: pytest.MonkeyPatch,
+    path: Path,
+    *,
+    growth: bytes = b"x" * 16,
+) -> tuple[dict[str, int], int]:
+    identity = path.stat()
+    append_fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+    real_read = os.read
+    observed = {"calls": 0, "bytes": 0}
+
+    def grow_before_read(fd: int, count: int) -> bytes:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (
+            identity.st_dev,
+            identity.st_ino,
+        ):
+            return real_read(fd, count)
+        observed["calls"] += 1
+        if observed["calls"] > 12:
+            raise AssertionError("reader continued beyond its deterministic cap")
+        os.write(append_fd, growth)
+        block = real_read(fd, count)
+        observed["bytes"] += len(block)
+        return block
+
+    monkeypatch.setattr(os, "read", grow_before_read)
+    return observed, append_fd
+
+
+def test_hashing_growing_member_stops_inside_limit_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    member = tmp_path / "esp32tap.bin"
+    member.write_bytes(b"a")
+    monkeypatch.setitem(provenance.MEMBER_MAX_BYTES, member.name, 32)
+    observed, append_fd = deterministic_growing_reader(monkeypatch, member)
+    try:
+        with pytest.raises(provenance.InvalidError, match="size limit"):
+            provenance._hash_file(member)
+    finally:
+        os.close(append_fd)
+
+    assert observed["bytes"] <= 33
+
+
+def test_reading_growing_manifest_stops_before_accumulating_past_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = tmp_path / MANIFEST_NAME
+    manifest.write_bytes(b"a")
+    observed, append_fd = deterministic_growing_reader(monkeypatch, manifest)
+    try:
+        with pytest.raises(provenance.InvalidError, match="size limit"):
+            provenance._read_safe_bytes(manifest, "artifact manifest", limit=32)
+    finally:
+        os.close(append_fd)
+
+    assert observed["bytes"] <= 33
+
+
+def test_copying_growing_member_never_writes_beyond_expected_size(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "esp32tap.bin"
+    destination = tmp_path / "copy.bin"
+    source.write_bytes(b"a")
+    monkeypatch.setitem(provenance.MEMBER_MAX_BYTES, source.name, 32)
+    observed, append_fd = deterministic_growing_reader(monkeypatch, source)
+    expected = {
+        "name": source.name,
+        "sha256": hashlib.sha256(b"a").hexdigest(),
+        "size": 1,
+    }
+    try:
+        with pytest.raises(provenance.InvalidError, match="size limit|manifest"):
+            provenance._copy_member(source, destination, expected)
+    finally:
+        os.close(append_fd)
+
+    assert destination.stat().st_size <= expected["size"]
+    assert observed["bytes"] <= expected["size"] + 1
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -1053,13 +1140,154 @@ def test_legacy_exchange_crash_keeps_public_and_recovers_old_directory(
     assert os.path.lexists(public)
     assert public.is_symlink()
     assert verify_locked(public, replace(toolchain, features=()), "a" * 64).ok
-    leftovers = list(rs.glob(".build.tmp-*"))
+    leftovers = list(rs.glob(".artifact-provenance-legacy-build-*.swap"))
+    markers = list(rs.glob(".artifact-provenance-legacy-build-*.json"))
     assert len(leftovers) == 1
+    assert len(markers) == 1
+    assert leftovers[0].stem == markers[0].stem
     assert (leftovers[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
 
     publish_generation_atomic(staging, public, manifest)
-    assert not list(rs.glob(".build.tmp-*"))
+    assert not list(rs.glob(".artifact-provenance-legacy-build-*"))
+    retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
+    assert len(retired) == 1
+    assert (retired[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
     assert public.is_symlink()
+
+
+def test_recovery_never_consumes_unrelated_broad_prefix_directory(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+) -> None:
+    _, rs, _ = layout
+    unrelated = rs / ".build.tmp-unrelated-user-data"
+    unrelated.mkdir()
+    keep = unrelated / "keep"
+    keep.write_text("user data", encoding="utf-8")
+
+    publish(layout, toolchain)
+
+    assert keep.read_text(encoding="utf-8") == "user data"
+
+
+@pytest.mark.parametrize("marker_kind", ["malformed", "symlink"])
+def test_recovery_rejects_forged_exact_marker_without_consuming_directory(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    tmp_path: Path,
+    marker_kind: str,
+) -> None:
+    _, rs, _ = layout
+    token = "0" * 64
+    prefix = f".artifact-provenance-legacy-build-{token}"
+    leftover = rs / f"{prefix}.swap"
+    leftover.mkdir()
+    keep = leftover / "keep"
+    keep.write_text("do not consume", encoding="utf-8")
+    marker = rs / f"{prefix}.json"
+    if marker_kind == "malformed":
+        marker.write_text("{}\n", encoding="ascii")
+        marker.chmod(0o400)
+    else:
+        outside = tmp_path / "outside-marker"
+        outside.write_text("{}\n", encoding="ascii")
+        marker.symlink_to(outside)
+
+    with pytest.raises(provenance.InvalidError, match="marker|recovery"):
+        publish(layout, toolchain)
+
+    assert keep.read_text(encoding="utf-8") == "do not consume"
+
+
+def test_recovery_rejects_forged_valid_marker_without_public_commit_state(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+) -> None:
+    _, rs, _ = layout
+    token = "1" * 64
+    prefix = f".artifact-provenance-legacy-build-{token}"
+    leftover = rs / f"{prefix}.swap"
+    leftover.mkdir()
+    keep = leftover / "keep"
+    keep.write_text("do not consume", encoding="utf-8")
+    info = leftover.lstat()
+    marker = rs / f"{prefix}.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "legacy_dev": info.st_dev,
+                "legacy_ino": info.st_ino,
+                "public_name": "build",
+                "schema_version": 1,
+                "target": ".artifacts/prod/" + "a" * 64,
+                "token": token,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    marker.chmod(0o400)
+
+    with pytest.raises(provenance.InvalidError, match="commit state"):
+        publish(layout, toolchain)
+
+    assert keep.read_text(encoding="utf-8") == "do not consume"
+
+
+def test_recovery_restores_racing_replacement_instead_of_consuming_it(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, rs, _ = layout
+    public, _ = publish(layout, toolchain)
+    token = "2" * 64
+    prefix = f".artifact-provenance-legacy-build-{token}"
+    leftover = rs / f"{prefix}.swap"
+    leftover.mkdir()
+    (leftover / "tracked-old").write_text("old", encoding="utf-8")
+    legacy_info = leftover.lstat()
+    marker = rs / f"{prefix}.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "legacy_dev": legacy_info.st_dev,
+                "legacy_ino": legacy_info.st_ino,
+                "public_name": "build",
+                "schema_version": 1,
+                "target": os.readlink(public),
+                "token": token,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    marker.chmod(0o400)
+    saved = rs / ".saved-valid-old-directory"
+    real_rename = os.rename
+    raced = False
+
+    def replace_at_rename(
+        source: os.PathLike[str], destination: os.PathLike[str]
+    ) -> None:
+        nonlocal raced
+        if Path(source) == leftover and not raced:
+            raced = True
+            real_rename(leftover, saved)
+            leftover.mkdir()
+            (leftover / "keep").write_text("replacement", encoding="utf-8")
+        real_rename(source, destination)
+
+    monkeypatch.setattr(provenance.os, "rename", replace_at_rename)
+    with pytest.raises(provenance.InvalidError, match="changed"):
+        publish_generation_atomic(layout[2], public, manifest_for(layout[2], toolchain))
+
+    assert (leftover / "keep").read_text(encoding="utf-8") == "replacement"
+    assert (saved / "tracked-old").read_text(encoding="utf-8") == "old"
 
 
 def test_legacy_migration_fails_closed_without_rename_exchange(

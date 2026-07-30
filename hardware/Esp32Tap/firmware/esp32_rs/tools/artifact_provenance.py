@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import selectors
 import signal
 import shutil
@@ -62,6 +63,9 @@ MAX_FEATURE_NAME_LENGTH = 128
 CHECK_TIMEOUT_SECONDS = 10.0
 MAX_CHECK_OUTPUT_BYTES = 1024 * 1024
 CHECK_TERMINATE_GRACE_SECONDS = 1.0
+BOUNDED_READ_CHUNK_BYTES = 1024 * 1024
+LEGACY_MARKER_MAX_BYTES = 4096
+LEGACY_MARKER_SCHEMA_VERSION = 1
 
 _KIND_LAYOUT = {
     "production": ("build", "prod"),
@@ -269,7 +273,18 @@ def _hash_file(path: Path) -> tuple[int, str]:
             raise InvalidError(f"{path.name} changed while opening")
         if limit is not None and opened.st_size > limit:
             raise InvalidError(f"{path.name} exceeds its size limit")
-        while block := os.read(fd, 1024 * 1024):
+        size = 0
+        while block := os.read(
+            fd,
+            (
+                BOUNDED_READ_CHUNK_BYTES
+                if limit is None
+                else min(BOUNDED_READ_CHUNK_BYTES, limit - size + 1)
+            ),
+        ):
+            size += len(block)
+            if limit is not None and size > limit:
+                raise InvalidError(f"{path.name} exceeds its size limit")
             digest.update(block)
         after = os.fstat(fd)
         if (
@@ -305,7 +320,11 @@ def _read_safe_bytes(path: Path, label: str, limit: int = MAX_MANIFEST_BYTES) ->
         if opened.st_size > limit:
             raise InvalidError(f"{label} exceeds its size limit")
         chunks = []
-        while block := os.read(fd, 1024 * 1024):
+        size = 0
+        while block := os.read(fd, min(BOUNDED_READ_CHUNK_BYTES, limit - size + 1)):
+            size += len(block)
+            if size > limit:
+                raise InvalidError(f"{label} exceeds its size limit")
             chunks.append(block)
         after = os.fstat(fd)
         if (
@@ -692,6 +711,8 @@ def _copy_member(source: Path, destination: Path, expected: dict) -> None:
             raise InvalidError(f"{source.name} changed while publishing")
         if opened.st_size > limit:
             raise InvalidError(f"{source.name} exceeds its size limit")
+        if opened.st_size != expected["size"]:
+            raise InvalidError(f"{source.name} does not match manifest")
         destination_fd = os.open(
             destination,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -699,9 +720,15 @@ def _copy_member(source: Path, destination: Path, expected: dict) -> None:
         )
         digest = hashlib.sha256()
         size = 0
-        while block := os.read(source_fd, 1024 * 1024):
-            digest.update(block)
+        copy_limit = min(limit, expected["size"])
+        while block := os.read(
+            source_fd,
+            min(BOUNDED_READ_CHUNK_BYTES, copy_limit - size + 1),
+        ):
             size += len(block)
+            if size > copy_limit:
+                raise InvalidError(f"{source.name} does not match manifest")
+            digest.update(block)
             view = memoryview(block)
             while view:
                 written = os.write(destination_fd, view)
@@ -801,26 +828,214 @@ def _generation_is_sealed(generation: Path) -> bool:
     return True
 
 
+def _legacy_transaction_paths(
+    esp32_rs: Path,
+    artifacts: Path,
+    public_name: str,
+    token: str,
+) -> tuple[Path, Path, Path]:
+    prefix = f".artifact-provenance-legacy-{public_name}-{token}"
+    return (
+        esp32_rs / f"{prefix}.swap",
+        esp32_rs / f"{prefix}.json",
+        artifacts / f".retired-legacy-{public_name}-{token}",
+    )
+
+
+def _legacy_marker_bytes(marker: dict) -> bytes:
+    try:
+        encoded = (
+            json.dumps(
+                marker,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("ascii")
+            + b"\n"
+        )
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise InvalidError(f"invalid legacy recovery marker: {exc}") from exc
+    if len(encoded) > LEGACY_MARKER_MAX_BYTES:
+        raise InvalidError("legacy recovery marker exceeds its size limit")
+    return encoded
+
+
+def _write_legacy_marker(path: Path, marker: dict) -> os.stat_result:
+    encoded = _legacy_marker_bytes(marker)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    fd = os.open(path, flags, 0o400)
+    created = os.fstat(fd)
+    try:
+        view = memoryview(encoded)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        os.fchmod(fd, 0o400)
+        os.fsync(fd)
+        created = os.fstat(fd)
+    except Exception:
+        try:
+            current = path.lstat()
+            if (created.st_dev, created.st_ino) == (current.st_dev, current.st_ino):
+                path.unlink()
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(fd)
+    return created
+
+
+def _load_legacy_marker(
+    path: Path,
+    public_name: str,
+    token: str,
+) -> tuple[dict, os.stat_result]:
+    info = _safe_file(path, "legacy recovery marker")
+    if (
+        info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o400
+        or info.st_size > LEGACY_MARKER_MAX_BYTES
+    ):
+        raise InvalidError("legacy recovery marker is not a private owned file")
+    raw = _read_safe_bytes(
+        path, "legacy recovery marker", limit=LEGACY_MARKER_MAX_BYTES
+    )
+    try:
+        marker = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise InvalidError(f"malformed legacy recovery marker: {exc}") from exc
+    required = {
+        "legacy_dev",
+        "legacy_ino",
+        "public_name",
+        "schema_version",
+        "target",
+        "token",
+    }
+    _, artifact_name = _kind(_bundle_kind_from_name(Path(public_name)) or "")
+    if (
+        not isinstance(marker, dict)
+        or set(marker) != required
+        or type(marker.get("schema_version")) is not int
+        or marker.get("schema_version") != LEGACY_MARKER_SCHEMA_VERSION
+        or marker.get("public_name") != public_name
+        or marker.get("token") != token
+        or type(marker.get("legacy_dev")) is not int
+        or marker["legacy_dev"] < 0
+        or type(marker.get("legacy_ino")) is not int
+        or marker["legacy_ino"] <= 0
+        or not isinstance(marker.get("target"), str)
+        or not re.fullmatch(
+            rf"\.artifacts/{re.escape(artifact_name)}/[0-9a-f]{{64}}",
+            marker["target"],
+        )
+        or raw != _legacy_marker_bytes(marker)
+    ):
+        raise InvalidError("legacy recovery marker fields are invalid")
+    return marker, info
+
+
+def _unlink_exact_marker(path: Path, expected: os.stat_result) -> None:
+    current = path.lstat()
+    if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino) != (
+        expected.st_dev,
+        expected.st_ino,
+    ):
+        raise InvalidError("legacy recovery marker changed before cleanup")
+    path.unlink()
+
+
 def _recover_legacy_exchange_leftovers(
     esp32_rs: Path, artifacts: Path, public_name: str
 ) -> None:
-    for leftover in esp32_rs.glob(f".{public_name}.tmp-*"):
-        info = leftover.lstat()
-        if stat.S_ISLNK(info.st_mode):
-            leftover.unlink()
+    pattern = re.compile(
+        rf"\.artifact-provenance-legacy-{re.escape(public_name)}-"
+        r"([0-9a-f]{64})\.json\Z"
+    )
+    for entry in sorted(os.scandir(esp32_rs), key=lambda item: item.name):
+        match = pattern.fullmatch(entry.name)
+        if match is None:
             continue
-        if not stat.S_ISDIR(info.st_mode):
-            raise InvalidError("unsafe publication temporary path remains")
-        retired = artifacts / f".retired-legacy-{public_name}-{uuid.uuid4().hex}"
-        os.replace(leftover, retired)
-        _fsync_dir(esp32_rs)
-        _fsync_dir(artifacts)
+        token = match.group(1)
+        leftover, marker_path, retired = _legacy_transaction_paths(
+            esp32_rs, artifacts, public_name, token
+        )
+        marker, marker_info = _load_legacy_marker(marker_path, public_name, token)
+        public = esp32_rs / public_name
         try:
-            _remove_tree_exact(retired, artifacts, ".retired-legacy-")
-            _fsync_dir(artifacts)
-        except OSError:
-            # Recovery remains correct with the complete old directory retired.
-            pass
+            public_info = public.lstat()
+        except OSError as exc:
+            raise InvalidError(
+                f"legacy recovery has no valid public commit state: {exc}"
+            ) from exc
+        legacy_identity = (marker["legacy_dev"], marker["legacy_ino"])
+        if (
+            stat.S_ISDIR(public_info.st_mode)
+            and (
+                public_info.st_dev,
+                public_info.st_ino,
+            )
+            == legacy_identity
+        ):
+            try:
+                temporary_info = leftover.lstat()
+            except OSError as exc:
+                raise InvalidError(
+                    f"legacy recovery has no valid precommit state: {exc}"
+                ) from exc
+            if (
+                not stat.S_ISLNK(temporary_info.st_mode)
+                or os.readlink(leftover) != marker["target"]
+            ):
+                raise InvalidError("legacy recovery precommit swap is invalid")
+            current = leftover.lstat()
+            if (current.st_dev, current.st_ino) != (
+                temporary_info.st_dev,
+                temporary_info.st_ino,
+            ):
+                raise InvalidError("legacy recovery precommit swap changed")
+            leftover.unlink()
+            _unlink_exact_marker(marker_path, marker_info)
+            _fsync_dir(esp32_rs)
+            continue
+        if (
+            not stat.S_ISLNK(public_info.st_mode)
+            or os.readlink(public) != marker["target"]
+        ):
+            raise InvalidError("legacy recovery has no valid public commit state")
+        if os.path.lexists(leftover) and os.path.lexists(retired):
+            raise InvalidError("legacy recovery has conflicting old directories")
+        candidate = leftover if os.path.lexists(leftover) else retired
+        if os.path.lexists(candidate):
+            candidate_info = candidate.lstat()
+            if (
+                not stat.S_ISDIR(candidate_info.st_mode)
+                or (candidate_info.st_dev, candidate_info.st_ino) != legacy_identity
+            ):
+                raise InvalidError("legacy recovery old directory identity is invalid")
+            if candidate == leftover:
+                if os.path.lexists(retired):
+                    raise InvalidError("legacy recovery retirement path exists")
+                os.rename(leftover, retired)
+                moved = retired.lstat()
+                if (moved.st_dev, moved.st_ino) != legacy_identity:
+                    if not os.path.lexists(leftover):
+                        os.rename(retired, leftover)
+                        _fsync_dir(esp32_rs)
+                        _fsync_dir(artifacts)
+                    raise InvalidError("legacy recovery directory changed while moving")
+                _fsync_dir(esp32_rs)
+                _fsync_dir(artifacts)
+        _unlink_exact_marker(marker_path, marker_info)
+        _fsync_dir(esp32_rs)
 
 
 def _ensure_real_directory(path: Path, label: str) -> None:
@@ -1015,27 +1230,55 @@ def _publish_locked(
         _fsync_dir(esp32_rs)
         return
 
-    token = uuid.uuid4().hex
-    temp_link = esp32_rs / f".{public_link.name}.tmp-{token}"
-    rollback_link = esp32_rs / f".{public_link.name}.rollback-{token}"
+    token = secrets.token_hex(32)
     legacy_public = False
+    legacy_info: os.stat_result | None = None
     old_target: str | None = None
     legacy_exchanged = False
     swapped = False
-    os.symlink(str(relative_target), temp_link)
     if os.path.lexists(public_link):
         old_info = public_link.lstat()
         if stat.S_ISLNK(old_info.st_mode):
             old_target = os.readlink(public_link)
-            os.symlink(old_target, rollback_link)
         elif stat.S_ISDIR(old_info.st_mode):
             legacy_public = True
+            legacy_info = old_info
         else:
-            temp_link.unlink()
             raise InvalidError(
                 "public path is neither a legacy directory nor a symlink"
             )
+    marker_path: Path | None = None
+    marker_info: os.stat_result | None = None
+    retired: Path | None = None
+    if legacy_public:
+        temp_link, marker_path, retired = _legacy_transaction_paths(
+            esp32_rs, artifacts, public_link.name, token
+        )
+    else:
+        temp_link = (
+            esp32_rs / f".artifact-provenance-link-{public_link.name}-{token}.swap"
+        )
+    rollback_link = (
+        esp32_rs / f".artifact-provenance-rollback-{public_link.name}-{token}.link"
+    )
+    os.symlink(str(relative_target), temp_link)
+    if old_target is not None:
+        os.symlink(old_target, rollback_link)
     try:
+        if legacy_public:
+            assert legacy_info is not None
+            assert marker_path is not None
+            marker_info = _write_legacy_marker(
+                marker_path,
+                {
+                    "legacy_dev": legacy_info.st_dev,
+                    "legacy_ino": legacy_info.st_ino,
+                    "public_name": public_link.name,
+                    "schema_version": LEGACY_MARKER_SCHEMA_VERSION,
+                    "target": str(relative_target),
+                    "token": token,
+                },
+            )
         # Make both the new and rollback symlinks durable before mutation.
         _fsync_dir(esp32_rs)
         _failure_point("before_link_swap")
@@ -1071,6 +1314,8 @@ def _publish_locked(
                 temp_link.unlink()
             if os.path.lexists(rollback_link):
                 rollback_link.unlink()
+            if marker_path is not None and marker_info is not None:
+                _unlink_exact_marker(marker_path, marker_info)
             _fsync_dir(esp32_rs)
             _fsync_dir(artifacts)
         except Exception as rollback_error:
@@ -1093,14 +1338,19 @@ def _publish_locked(
         except Exception:
             pass
     if legacy_public and os.path.lexists(temp_link):
-        retired = artifacts / f".retired-legacy-{public_link.name}-{token}"
+        assert retired is not None
         try:
+            if os.path.lexists(retired):
+                raise InvalidError("legacy retirement path unexpectedly exists")
             os.replace(temp_link, retired)
             _fsync_dir(esp32_rs)
             _fsync_dir(artifacts)
             _failure_point("before_retired_cleanup")
             _remove_tree_exact(retired, artifacts, ".retired-legacy-")
             _fsync_dir(artifacts)
+            if marker_path is not None and marker_info is not None:
+                _unlink_exact_marker(marker_path, marker_info)
+                _fsync_dir(esp32_rs)
         except Exception:
             # The complete retired directory remains recoverable on any
             # failure before recursive cleanup begins.
