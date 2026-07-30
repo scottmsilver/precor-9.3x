@@ -19,6 +19,7 @@ Topology:
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import os
 import re
 import shlex
@@ -67,9 +68,40 @@ _HEARTBEAT_RE = re.compile(r"heartbeat uptime=(\d+)s")
 # hand-run pytest. The bind probe is kept as a guard against a NON-harness
 # process holding the port (and against a lingering TIME_WAIT), not as the
 # mechanism.
+# This checkout, mirroring build.sh's own ESP32_RS derivation.
+ESP32_RS_DIR = Path(__file__).resolve().parents[2]
+
 _PORT_BASE = 21000
 _PORT_COUNT = 400  # ends at 21399, well clear of the ephemeral range
 _LEASE_DIR = Path(os.environ.get("ESP32TAP_PORT_LEASES", "/tmp/esp32tap-qemu-ports"))
+
+
+# THE BUILD DIRECTORY IS SHARED STATE TOO, and it bit exactly as hard as the
+# ports did. Every session reads `build_qemu_test/` off the BIND-MOUNTED REPO to
+# merge its flash image. Nothing stopped another session's `tools/build.sh` from
+# rewriting that directory mid-read, and on 2026-07-29 that is precisely what
+# happened: two workflows built concurrently, a DEEP sweep failed `memreview`,
+# and the failure was first diagnosed as a firmware bug and then as a QEMU clock
+# artifact before the real cause — a second builder — was found. The per-session
+# flash image (below) already isolates the OUTPUT; this isolates the INPUT.
+#
+# Readers take SHARED, builders take EXCLUSIVE, both on one file keyed by this
+# checkout so worktrees do not contend. Many sessions still run at once; a build
+# waits for them, and a session cannot start mid-build. The cost is real and
+# accepted: a build queues behind running sessions. "Do not run two builders" was
+# the convention it replaces, and I broke that convention twice in one night,
+# which is the argument for making it a mechanism.
+_BUILD_LOCK = Path("/tmp") / (
+    "esp32tap-build-%s.lock" % hashlib.md5(str(ESP32_RS_DIR).encode()).hexdigest()[:12]
+)
+
+
+def _lease_build_shared() -> "object":
+    """Hold the build directory against a concurrent rebuild. Returns the lock
+    file; the caller keeps it alive and closes it when done."""
+    f = open(_BUILD_LOCK, "a+")
+    fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+    return f
 
 
 class HarnessError(AssertionError):
@@ -164,6 +196,9 @@ class QemuSession:
         # Leases are held (flock) until close(), so QEMU's own bind on these
         # ports cannot race any other harness process.
         p0, p1 = self._lease(), self._lease()
+        # Shared lock on the build dir: see _lease_build_shared. Closed by
+        # close() with the port leases, or by the kernel if we die.
+        self._leases.append(_lease_build_shared())
         nic = ""
         if self.net:
             self.http_port = self._lease()

@@ -64,7 +64,7 @@ IGNORE_NAMES = {"__pycache__", ".pytest_cache"}
 # small harness edit" cannot ride along unnoticed.
 ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
     "qemu_session.py": (
-        "ae4bec993f4863cdff36aea4498774b915f1ea7e10d42447d52f00cd97b34792",
+        "0b0e0e1b5056d8291f0228d312f871b67d5a9cbaefaf7c9bd76c5cfe110f5d6e",
         "(a) the emulated flash is padded to the size the image header "
         "declares (read from the build's own flash_args) instead of a "
         "hard-coded 2MB; a header that claims more flash than the emulated "
@@ -88,7 +88,15 @@ ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
         "writes now track their own offset against an explicit deadline and "
         "a dead pacer or capture thread is RE-RAISED at the next waiter "
         "instead of being reported as a firmware fault 30 s later. "
-        "None of (a)-(d) touches an assertion, a bound, a comparison or a "
+        "(e) THE BUILD DIRECTORY IS LEASED SHARED for the session's life, "
+        "against `tools/build.sh` which now takes the same lock EXCLUSIVE. "
+        "Sessions read build_qemu_test/ off the bind-mounted repo to merge "
+        "their image; (a) isolated the OUTPUT but nothing stopped a second "
+        "builder rewriting the INPUT mid-read. On 2026-07-29 that happened "
+        "and the resulting DEEP failure was diagnosed twice wrongly — as a "
+        "firmware bug, then as a QEMU clock artifact — before the real cause "
+        "was found. Many sessions still run at once; a build waits for them. "
+        "None of (a)-(e) touches an assertion, a bound, a comparison or a "
         "control flow of any scenario.",
     ),
 }

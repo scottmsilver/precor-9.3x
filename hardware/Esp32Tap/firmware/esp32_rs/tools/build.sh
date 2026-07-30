@@ -27,6 +27,29 @@ PROFILE="${PROFILE:-release}"
 # ONLY=prod or ONLY=qemu to build a single image.
 ONLY="${ONLY:-both}"
 
+# EXCLUSIVE BUILD LOCK. Sessions in tools/qemu_harness/qemu_session.py read
+# build_qemu_test/ off the bind-mounted repo to merge their flash images, and
+# they hold this same file SHARED for their lifetime. Without this a rebuild
+# could rewrite the directory a running guest was booting from — which happened
+# on 2026-07-29 and cost two wrong diagnoses (a firmware bug, then a QEMU clock
+# artifact) before the real cause, a second concurrent builder, was found.
+#
+# Re-exec under flock rather than wrapping the body, so every exit path releases
+# it and a crash releases it via the kernel. The key must match
+# _BUILD_LOCK in qemu_session.py: md5 of this checkout's esp32_rs path, first 12.
+if [ -z "${ESP32TAP_BUILD_LOCK_HELD:-}" ]; then
+  _lock="/tmp/esp32tap-build-$(printf '%s' "$ESP32_RS" | md5sum | cut -c1-12).lock"
+  export ESP32TAP_BUILD_LOCK_HELD=1
+  # -w, not an unbounded wait: a wedged holder should fail LOUDLY rather than
+  # hang a build forever with no output, which is the failure mode this repo
+  # least tolerates. 30 min is far longer than any real session.
+  exec flock -x -w 1800 "$_lock" "$0" "$@" || {
+    echo "build.sh: could not acquire $_lock within 30 min — another build or a" >&2
+    echo "  running QEMU session is holding it. Check with: fuser -v $_lock" >&2
+    exit 4
+  }
+fi
+
 mkdir -p "$CARGO_CACHE"
 
 # --- host-side source gates (fail BEFORE spending 10 min in the container) ---
