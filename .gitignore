@@ -17,6 +17,7 @@ venv/
 *.csv
 !cpp/captures/*.csv
 !hardware/Esp32Tap/bom/*.csv
+!hardware/Esp32Tap/firmware/esp32_rs/partitions_esp32tap.csv
 
 # Editor backups
 *~

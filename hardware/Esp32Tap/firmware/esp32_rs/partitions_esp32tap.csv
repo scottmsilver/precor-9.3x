@@ -1,0 +1,13 @@
+# partitions_esp32tap.csv — Esp32Tap 8 MB module (ESP32-S3-WROOM-1-N8).
+#
+# The module really is 8 MB; the old default table (single 1 MB factory
+# app on a 2 MB-configured flash) was a config bug (see PLAN.md dated
+# note). The native server tier needs ~2 MB of app (wifi + lwip +
+# mbedtls + httpd + mdns) plus a dedicated LittleFS data partition for
+# program/run/workout history and the per-device TLS cert.
+#
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     0x9000,   0x6000
+phy_init,   data, phy,     0xf000,   0x1000
+factory,    app,  factory, 0x10000,  0x200000
+storage,    data, spiffs,  0x210000, 0x100000
