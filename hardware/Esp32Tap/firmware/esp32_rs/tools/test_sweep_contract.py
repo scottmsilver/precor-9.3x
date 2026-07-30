@@ -76,12 +76,17 @@ def aggregate_contract_sha256(source: str) -> str:
     return hashlib.sha256(aggregate_contract_bytes(source)).hexdigest()
 
 
-def matches_base_aggregate_contract(source: str) -> bool:
+def sweep_sha256(source: str) -> str:
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def matches_base_sweep_contract(source: str) -> bool:
     fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     return (
         fixture["aggregates_failures"] is True
         and aggregate_contract_sha256(source)
         == fixture["aggregate_contract_sha256"]
+        and sweep_sha256(source) == fixture["sweep_sha256"]
     )
 
 
@@ -97,6 +102,7 @@ def test_release_sweep_contract() -> None:
         aggregate_contract_sha256(source)
         == fixture["aggregate_contract_sha256"]
     )
+    assert sweep_sha256(source) == fixture["sweep_sha256"]
 
 
 def test_aggregation_rejects_failure_reset_before_summary() -> None:
@@ -108,7 +114,7 @@ def test_aggregation_rejects_failure_reset_before_summary() -> None:
     )
 
     assert mutated != source
-    assert not matches_base_aggregate_contract(mutated)
+    assert not matches_base_sweep_contract(mutated)
 
 
 def test_aggregation_rejects_summary_before_run_commands() -> None:
@@ -123,7 +129,7 @@ def test_aggregation_rejects_summary_before_run_commands() -> None:
     )
     lines[first_run_index:first_run_index] = final_lines
 
-    assert not matches_base_aggregate_contract("".join(lines))
+    assert not matches_base_sweep_contract("".join(lines))
 
 
 def test_aggregation_rejects_run_wrapper_that_ignores_argv() -> None:
@@ -135,7 +141,7 @@ def test_aggregation_rejects_run_wrapper_that_ignores_argv() -> None:
     )
 
     assert mutated != source
-    assert not matches_base_aggregate_contract(mutated)
+    assert not matches_base_sweep_contract(mutated)
 
 
 def test_aggregation_rejects_early_return_from_run_wrapper() -> None:
@@ -147,7 +153,7 @@ def test_aggregation_rejects_early_return_from_run_wrapper() -> None:
     )
 
     assert mutated != source
-    assert not matches_base_aggregate_contract(mutated)
+    assert not matches_base_sweep_contract(mutated)
 
 
 def test_aggregation_rejects_early_exit_before_summary() -> None:
@@ -159,4 +165,32 @@ def test_aggregation_rejects_early_exit_before_summary() -> None:
     )
 
     assert mutated != source
-    assert not matches_base_aggregate_contract(mutated)
+    assert not matches_base_sweep_contract(mutated)
+
+
+def test_aggregation_rejects_changed_accumulator_initialization() -> None:
+    source = read_sweep_source()
+    mutated = source.replace("\nfail=0\n", "\nfail=7\n", 1)
+
+    assert mutated != source
+    assert not matches_base_sweep_contract(mutated)
+
+
+def test_aggregation_rejects_removed_accumulator_initialization() -> None:
+    source = read_sweep_source()
+    mutated = source.replace("\nfail=0\n", "\n", 1)
+
+    assert mutated != source
+    assert not matches_base_sweep_contract(mutated)
+
+
+def test_aggregation_rejects_early_exit_before_deep_block() -> None:
+    source = read_sweep_source()
+    mutated = source.replace(
+        '\nif [ -n "${DEEP:-}" ]; then',
+        '\nexit 0\nif [ -n "${DEEP:-}" ]; then',
+        1,
+    )
+
+    assert mutated != source
+    assert not matches_base_sweep_contract(mutated)
