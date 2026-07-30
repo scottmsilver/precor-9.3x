@@ -788,60 +788,97 @@ def restore_final(prior_id: str | None) -> None:
         verify_reference(image_tag, prior_id)
 
 
-token = secrets.token_hex(32)
-task_root = Path("/tmp") / f"esp32tap-image-build.{token}"
-try:
-    task_root.mkdir(mode=0o700)
-except OSError as exc:
-    raise BuildImageError(f"cannot create private image-build directory: {exc}") from exc
-context = task_root / "context"
-stage = f"esp32tap-rust-stage:{token}"
-candidate = f"esp32tap-rust-candidate:{token}"
-container = f"esp32tap-rust-probe-{token}"
-container_possible = False
-stage_possible = False
-candidate_possible = False
-try:
-    recipe_values, recipe = read_recipe(root)
-    component_sha = component_digest(root)
-    write_snapshot(context, recipe_values)
-    if read_recipe(context)[1] != recipe:
-        raise BuildImageError("private Docker recipe snapshot changed")
+def required_remove_container(reference: str) -> None:
+    completed = docker("rm", "-f", reference, check=False)
+    if completed.returncode != 0:
+        raise BuildImageError(
+            f"cannot remove probe container before publication: {completed.stderr.strip()}"
+        )
 
-    stage_possible = True
-    docker("build", "--tag", stage, str(context))
-    container_possible = True
-    probe = docker(
-        "run",
-        "--name",
-        container,
-        "-e",
-        f"ESP32TAP_PROBE_COMMAND_TIMEOUT={probe_timeout:g}",
-        stage,
-        "python3",
-        "-c",
-        PROBE_PROGRAM,
-    )
-    attestation = validate_probe(probe.stdout, component_sha)
-    if read_recipe(context)[1] != recipe:
-        raise BuildImageError("private Docker recipe snapshot changed during build")
 
-    candidate_possible = True
-    docker(
-        "commit",
-        "--change",
-        label_change(recipe_label, recipe),
-        "--change",
-        label_change(toolchain_label, attestation),
-        container,
-        candidate,
-    )
-    candidate_image = inspect_image(candidate)
-    if candidate_image is None:
-        raise BuildImageError("candidate image is missing after commit")
-    candidate_id = validate_candidate(candidate_image, recipe, attestation)
+def required_remove_image(reference: str) -> None:
+    completed = docker("image", "rm", reference, check=False)
+    if completed.returncode != 0:
+        raise BuildImageError(
+            f"cannot remove temporary image before publication: {completed.stderr.strip()}"
+        )
 
-    with publication_lock():
+
+with publication_lock():
+    token = secrets.token_hex(32)
+    task_root = Path("/tmp") / f"esp32tap-image-build.{token}"
+    context = task_root / "context"
+    stage = f"esp32tap-rust-stage:{token}"
+    candidate = f"esp32tap-rust-candidate:{token}"
+    container = f"esp32tap-rust-probe-{token}"
+    task_root_exists = False
+    container_possible = False
+    stage_possible = False
+    candidate_possible = False
+    publication_succeeded = False
+    try:
+        try:
+            task_root.mkdir(mode=0o700)
+            task_root_exists = True
+        except OSError as exc:
+            raise BuildImageError(
+                f"cannot create private image-build directory: {exc}"
+            ) from exc
+
+        recipe_values, recipe = read_recipe(root)
+        component_sha = component_digest(root)
+        write_snapshot(context, recipe_values)
+        if read_recipe(context)[1] != recipe:
+            raise BuildImageError("private Docker recipe snapshot changed")
+
+        stage_possible = True
+        docker("build", "--tag", stage, str(context))
+        container_possible = True
+        probe = docker(
+            "run",
+            "--name",
+            container,
+            "-e",
+            f"ESP32TAP_PROBE_COMMAND_TIMEOUT={probe_timeout:g}",
+            stage,
+            "python3",
+            "-c",
+            PROBE_PROGRAM,
+        )
+        attestation = validate_probe(probe.stdout, component_sha)
+        if read_recipe(context)[1] != recipe:
+            raise BuildImageError("private Docker recipe snapshot changed during build")
+
+        candidate_possible = True
+        docker(
+            "commit",
+            "--change",
+            label_change(recipe_label, recipe),
+            "--change",
+            label_change(toolchain_label, attestation),
+            container,
+            candidate,
+        )
+        candidate_image = inspect_image(candidate)
+        if candidate_image is None:
+            raise BuildImageError("candidate image is missing after commit")
+        candidate_id = validate_candidate(candidate_image, recipe, attestation)
+
+        # These resources are no longer needed once the candidate is attested.
+        # Their cleanup is part of the transaction: failure leaves the prior
+        # final tag untouched and makes this invocation fail.
+        required_remove_container(container)
+        container_possible = False
+        required_remove_image(stage)
+        stage_possible = False
+        try:
+            shutil.rmtree(task_root)
+            task_root_exists = False
+        except OSError as exc:
+            raise BuildImageError(
+                f"cannot remove private build context before publication: {exc}"
+            ) from exc
+
         prior = inspect_image(image_tag, missing_ok=True)
         prior_id = None if prior is None else immutable_id(prior)
         if read_recipe(root)[1] != recipe or component_digest(root) != component_sha:
@@ -853,6 +890,7 @@ try:
             docker("tag", candidate_id, image_tag)
             verify_reference(image_tag, candidate_id)
             mutation_possible = False
+            publication_succeeded = True
         except Exception as promotion_error:
             if mutation_possible:
                 try:
@@ -862,36 +900,46 @@ try:
                         f"promotion failed ({promotion_error}); rollback failed ({restore_error})"
                     ) from restore_error
             raise
-finally:
-    cleanup_errors = []
-    if container_possible:
-        try:
-            completed = docker("rm", "-f", container, check=False)
-            if completed.returncode != 0:
-                cleanup_errors.append(f"cannot remove probe container: {completed.stderr.strip()}")
-        except Exception as exc:
-            cleanup_errors.append(str(exc))
-    for reference, possible in ((candidate, candidate_possible), (stage, stage_possible)):
-        if possible:
+    finally:
+        cleanup_warnings = []
+        if container_possible:
             try:
-                completed = docker("image", "rm", reference, check=False)
+                completed = docker("rm", "-f", container, check=False)
                 if completed.returncode != 0:
-                    cleanup_errors.append(
-                        f"cannot remove temporary image {reference}: {completed.stderr.strip()}"
+                    cleanup_warnings.append(
+                        f"cannot remove probe container: {completed.stderr.strip()}"
                     )
             except Exception as exc:
-                cleanup_errors.append(str(exc))
-    try:
-        shutil.rmtree(task_root)
-    except OSError as exc:
-        cleanup_errors.append(f"cannot remove private build context: {exc}")
-    if cleanup_errors:
-        if sys.exc_info()[0] is None:
-            raise BuildImageError("; ".join(cleanup_errors))
-        print(
-            "build_image.sh: cleanup also failed: " + "; ".join(cleanup_errors),
-            file=sys.stderr,
-        )
+                cleanup_warnings.append(str(exc))
+        for reference, possible in (
+            (candidate, candidate_possible),
+            (stage, stage_possible),
+        ):
+            if possible:
+                try:
+                    completed = docker("image", "rm", reference, check=False)
+                    if completed.returncode != 0:
+                        cleanup_warnings.append(
+                            f"cannot remove temporary image {reference}: "
+                            f"{completed.stderr.strip()}"
+                        )
+                except Exception as exc:
+                    cleanup_warnings.append(str(exc))
+        if task_root_exists:
+            try:
+                shutil.rmtree(task_root)
+            except OSError as exc:
+                cleanup_warnings.append(f"cannot remove private build context: {exc}")
+        if cleanup_warnings:
+            prefix = (
+                "best-effort cleanup warning after successful publication"
+                if publication_succeeded
+                else "cleanup also failed"
+            )
+            print(
+                f"build_image.sh: {prefix}: " + "; ".join(cleanup_warnings),
+                file=sys.stderr,
+            )
 
 print(f"built {image_tag}")
 PY

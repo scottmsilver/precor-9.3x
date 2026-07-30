@@ -83,6 +83,9 @@ fail = os.environ.get("FAKE_DOCKER_FAIL", "")
 if fail and argv and argv[0] == fail:
     print("forced fake-docker failure", file=sys.stderr)
     raise SystemExit(17)
+if argv[:2] == ["rm", "-f"] and os.environ.get("FAKE_DOCKER_FAIL_CONTAINER_RM"):
+    print("forced container removal failure", file=sys.stderr)
+    raise SystemExit(18)
 if argv and argv[0] == "build" and os.environ.get("FAKE_DOCKER_MUTATE_CONTEXT"):
     with open(os.path.join(os.environ["FAKE_LIVE_CONTEXT"], "Dockerfile"), "a", encoding="utf-8") as stream:
         stream.write("# concurrent edit\\n")
@@ -100,6 +103,9 @@ if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_BARRIER"):
         stream.write("ready")
     while not os.path.exists(barrier + ".release"):
         time.sleep(0.01)
+if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_STARTED_MARKER"):
+    with open(os.environ["FAKE_BUILD_STARTED_MARKER"], "w", encoding="utf-8") as stream:
+        stream.write("started")
 
 state_path = os.environ["FAKE_DOCKER_STATE"]
 
@@ -196,6 +202,12 @@ elif argv and argv[0] == "tag":
         mutate(lambda state: state["events"].__setitem__("tag_active", False))
 elif argv[:2] == ["image", "rm"]:
     for reference in argv[2:]:
+        if "candidate" in reference and os.environ.get("FAKE_DOCKER_FAIL_CANDIDATE_RM"):
+            print("forced candidate removal failure", file=sys.stderr)
+            raise SystemExit(19)
+        if "stage" in reference and os.environ.get("FAKE_DOCKER_FAIL_STAGE_RM"):
+            print("forced stage removal failure", file=sys.stderr)
+            raise SystemExit(20)
         mutate(lambda state, ref=reference: state["refs"].pop(ref, None))
 """,
         encoding="utf-8",
@@ -668,6 +680,25 @@ def test_failed_probe_does_not_commit_over_final_tag(
     assert any(call[:2] == ["image", "rm"] for call in calls)
 
 
+def test_precommit_probe_and_container_cleanup_failures_preserve_final(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={
+            "FAKE_DOCKER_PROBE": "not json",
+            "FAKE_DOCKER_FAIL_CONTAINER_RM": "1",
+        },
+    )
+    assert completed.returncode != 0
+    assert "cleanup also failed" in completed.stderr
+    calls = docker_calls(fake_docker[1])
+    assert not any(call[0] == "commit" for call in calls)
+    assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
+    assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
+
+
 def test_commit_daemon_success_after_client_timeout_cleans_candidate_and_preserves_final(
     context: Path, fake_docker: tuple[Path, Path]
 ) -> None:
@@ -697,6 +728,41 @@ def test_commit_that_ignores_labels_never_promotes_candidate(
     calls = docker_calls(fake_docker[1])
     assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
     assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
+
+
+@pytest.mark.parametrize(
+    "failure_env",
+    ["FAKE_DOCKER_FAIL_CONTAINER_RM", "FAKE_DOCKER_FAIL_STAGE_RM"],
+)
+def test_required_prepublication_cleanup_failure_preserves_prior_final(
+    context: Path,
+    fake_docker: tuple[Path, Path],
+    failure_env: str,
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={failure_env: "1"},
+    )
+    assert completed.returncode != 0
+    assert not any(
+        call[0] == "tag" and call[-1] == IMAGE_TAG
+        for call in docker_calls(fake_docker[1])
+    )
+    assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
+
+
+def test_postpublication_candidate_cleanup_failure_is_warning_only(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_FAIL_CANDIDATE_RM": "1"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "best-effort cleanup" in completed.stderr
+    assert docker_state(fake_docker[1])["refs"][IMAGE_TAG]["Id"].startswith("sha256:")
 
 
 def test_ambiguous_promotion_timeout_restores_prior_final_id(
@@ -802,10 +868,15 @@ def test_consecutive_builds_use_unique_candidate_resources(
     assert runs[0][runs[0].index("--name") + 1] != runs[1][runs[1].index("--name") + 1]
 
 
-def test_older_concurrent_snapshot_cannot_overwrite_new_recipe(
+def test_image_lock_orders_complete_cross_worktree_build_lifecycles(
     context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
 ) -> None:
+    newer = second_context(context, tmp_path / "newer-lifecycle")
+    (newer / "Dockerfile").write_text(
+        "FROM scratch\n# newer serialized recipe\n", encoding="utf-8"
+    )
     barrier = tmp_path / "old-build"
+    newer_started = tmp_path / "newer-build.started"
     old_env = run_environment(
         context,
         fake_docker,
@@ -819,24 +890,40 @@ def test_older_concurrent_snapshot_cannot_overwrite_new_recipe(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    newer_process: subprocess.Popen[str] | None = None
     try:
         wait_for(Path(str(barrier) + ".ready"))
-        (context / "Dockerfile").write_text(
-            "FROM scratch\n# newer recipe\n", encoding="utf-8"
+        newer_process = subprocess.Popen(
+            [str(newer / "tools" / "build_image.sh")],
+            cwd=newer,
+            env=run_environment(
+                newer,
+                fake_docker,
+                extra_env={"FAKE_BUILD_STARTED_MARKER": str(newer_started)},
+            ),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        newer = run(context, fake_docker)
-        assert newer.returncode == 0, newer.stderr
+        time.sleep(0.2)
+        assert not newer_started.exists()
         Path(str(barrier) + ".release").write_text("go", encoding="utf-8")
-        _, old_stderr = old.communicate(timeout=8)
-        assert old.returncode != 0
-        assert "changed" in old_stderr or "stale" in old_stderr
+        old_result = old.communicate(timeout=8)
+        assert old.returncode == 0, old_result
+        wait_for(newer_started)
+        newer_result = newer_process.communicate(timeout=8)
+        assert newer_process.returncode == 0, newer_result
         final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
         assert final["Config"]["Labels"][
             "org.treddy.esp32tap.recipe-sha256"
-        ] == recipe(context)
+        ] == recipe(newer)
     finally:
+        Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
         old.kill()
         old.wait()
+        if newer_process is not None:
+            newer_process.kill()
+            newer_process.wait()
 
 
 def test_publication_lock_serializes_same_image_across_worktrees(
