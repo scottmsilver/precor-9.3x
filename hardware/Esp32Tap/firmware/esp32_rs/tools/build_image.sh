@@ -584,16 +584,23 @@ def write_snapshot(context: Path, values: dict[str, tuple[bytes, int]]) -> None:
 
 PROBE_PROGRAM = r'''
 import contextlib
+import hashlib
 import json
 import os
+import re
 import selectors
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 LIMIT = 64 * 1024
 TIMEOUT = float(os.environ.get("ESP32TAP_PROBE_COMMAND_TIMEOUT", "30"))
+LDPROXY_VERSION = "0.3.4"
+LDPROXY_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
 
 def stop(process):
     for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -658,12 +665,118 @@ def probe(argv):
         raise SystemExit("invalid toolchain probe output")
     return stdout
 
+def read_regular(path, limit, label):
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise SystemExit(f"cannot inspect {label}: {exc}")
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > limit
+    ):
+        raise SystemExit(f"{label} must be a bounded single-link regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise SystemExit(f"cannot safely open {label}: {exc}")
+    data = bytearray()
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise SystemExit(f"{label} changed while opening")
+        while block := os.read(fd, min(1024 * 1024, limit - len(data) + 1)):
+            data.extend(block)
+            if len(data) > limit:
+                raise SystemExit(f"{label} exceeds its size limit")
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    identity = lambda value: (
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+        value.st_mode,
+        value.st_nlink,
+    )
+    if len(data) != opened.st_size or identity(opened) != identity(after):
+        raise SystemExit(f"{label} changed while reading")
+    return bytes(data)
+
+def ldproxy_attestation():
+    cargo_home_text = os.environ.get("CARGO_HOME", "")
+    if (
+        not cargo_home_text
+        or "\0" in cargo_home_text
+        or not Path(cargo_home_text).is_absolute()
+    ):
+        raise SystemExit("invalid CARGO_HOME for ldproxy attestation")
+    try:
+        cargo_home = Path(cargo_home_text).resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"cannot resolve CARGO_HOME for ldproxy attestation: {exc}")
+    metadata_path = cargo_home / ".crates2.json"
+    metadata_bytes = read_regular(
+        metadata_path, 1024 * 1024, "Cargo install metadata"
+    )
+    try:
+        metadata = json.loads(metadata_bytes.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"invalid Cargo install metadata: {exc}")
+    if (
+        not isinstance(metadata, dict)
+        or set(metadata) != {"installs"}
+        or not isinstance(metadata["installs"], dict)
+    ):
+        raise SystemExit("invalid Cargo install metadata schema")
+    installs = []
+    for identifier, record in metadata["installs"].items():
+        if not isinstance(identifier, str):
+            raise SystemExit("invalid Cargo install package identifier")
+        match = re.fullmatch(r"([^ ]+) ([0-9]+\.[0-9]+\.[0-9]+) \(([^)]+)\)", identifier)
+        if match is not None and match.group(1) == "ldproxy":
+            installs.append((match.group(2), match.group(3), record))
+    if len(installs) != 1:
+        raise SystemExit("Cargo metadata must contain exactly one ldproxy install")
+    version, source, record = installs[0]
+    if version != LDPROXY_VERSION or source != LDPROXY_SOURCE:
+        raise SystemExit("Cargo metadata contains unexpected ldproxy version or source")
+    if (
+        not isinstance(record, dict)
+        or record.get("version_req") != f"={LDPROXY_VERSION}"
+        or record.get("bins") != ["ldproxy"]
+        or record.get("profile") != "release"
+    ):
+        raise SystemExit("Cargo metadata contains invalid ldproxy install details")
+    expected_binary = cargo_home / "bin" / "ldproxy"
+    found_binary = shutil.which("ldproxy")
+    if found_binary is None:
+        raise SystemExit("Cargo-installed ldproxy binary is absent from PATH")
+    try:
+        if (
+            Path(found_binary).resolve(strict=True)
+            != expected_binary.resolve(strict=True)
+        ):
+            raise SystemExit("PATH ldproxy is not the Cargo-installed binary")
+    except OSError as exc:
+        raise SystemExit(f"cannot resolve Cargo-installed ldproxy binary: {exc}")
+    binary = read_regular(expected_binary, 64 * 1024 * 1024, "ldproxy binary")
+    if not os.access(expected_binary, os.X_OK):
+        raise SystemExit("Cargo-installed ldproxy binary is not executable")
+    digest = hashlib.sha256(binary).hexdigest()
+    return f"ldproxy {version} ({source}) sha256:{digest}"
+
 value = {
     "schema_version": 1,
     "idf_commit": probe(["git", "-C", "/opt/esp/idf", "rev-parse", "--verify", "HEAD"]),
     "rustc_verbose": probe(["rustc", "+esp", "--version", "--verbose"]),
     "target": "xtensa-esp32s3-espidf",
-    "linker_version": probe(["ldproxy", "--version"]),
+    "linker_version": ldproxy_attestation(),
     "esptool_version": probe([sys.executable, "-m", "esptool", "version"]),
 }
 print(json.dumps(value, sort_keys=True, separators=(",", ":")))
@@ -701,6 +814,13 @@ def validate_probe(text: str, component_sha: str) -> str:
         raise BuildImageError("invalid IDF commit")
     if value["target"] != "xtensa-esp32s3-espidf":
         raise BuildImageError("unexpected Rust target")
+    if not re.fullmatch(
+        r"ldproxy 0\.3\.4 "
+        r"\(registry\+https://github\.com/rust-lang/crates\.io-index\) "
+        r"sha256:[0-9a-f]{64}",
+        value["linker_version"],
+    ):
+        raise BuildImageError("invalid verified ldproxy identity")
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
     if text != canonical:
         raise BuildImageError("toolchain probe JSON is not canonical")

@@ -26,18 +26,47 @@ README = ESP32_RS / "README.md"
 IMAGE_ID = "sha256:" + "a" * 64
 IMAGE_TAG = "example/esp32tap:test"
 PUBLICATION_LOCK = Path("/tmp") / "esp32tap-image-publication.lock"
+LDPROXY_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+FAKE_LDPROXY_PROGRAM = """#!/usr/bin/env python3
+import sys
+
+print("ldproxy entered link mode", file=sys.stderr)
+raise SystemExit(101)
+"""
+FAKE_LDPROXY_SHA256 = hashlib.sha256(FAKE_LDPROXY_PROGRAM.encode()).hexdigest()
 COMMON = {
     "schema_version": 1,
     "idf_commit": "b" * 40,
     "rustc_verbose": "rustc 1.90.0-dev\nbinary: rustc\ncommit-hash: " + "c" * 40,
     "target": "xtensa-esp32s3-espidf",
-    "linker_version": "ldproxy 0.3.4",
+    "linker_version": (
+        f"ldproxy 0.3.4 ({LDPROXY_SOURCE}) sha256:{FAKE_LDPROXY_SHA256}"
+    ),
     "esptool_version": "esptool.py v4.9.0",
 }
 
 
 def canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def cargo_install_metadata(
+    package: str = "ldproxy", version: str = "0.3.4"
+) -> dict[str, object]:
+    return {
+        "installs": {
+            f"{package} {version} ({LDPROXY_SOURCE})": {
+                "version_req": f"={version}",
+                "bins": ["ldproxy"],
+                "features": [],
+                "all_features": False,
+                "no_default_features": False,
+                "profile": "release",
+                "target": "x86_64-unknown-linux-gnu",
+                "rustc": "rustc fake installer",
+            }
+        }
+    }
 
 
 def attestation(context: Path) -> dict[str, object]:
@@ -68,6 +97,16 @@ def context(tmp_path: Path) -> Path:
 def fake_docker(tmp_path: Path) -> tuple[Path, Path]:
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
+    cargo_home = tmp_path / "cargo"
+    cargo_bin = cargo_home / "bin"
+    cargo_bin.mkdir(parents=True)
+    ldproxy = cargo_bin / "ldproxy"
+    ldproxy.write_text(FAKE_LDPROXY_PROGRAM, encoding="utf-8")
+    ldproxy.chmod(0o755)
+    (cargo_home / ".crates2.json").write_text(
+        canonical(cargo_install_metadata()),
+        encoding="utf-8",
+    )
     log = tmp_path / "docker.jsonl"
     docker = fake_bin / "docker"
     docker.write_text(
@@ -293,7 +332,7 @@ if name == "git" and attack == "closed-fd-sleeper":
     raise SystemExit(0)
 values = {
     "git": "b" * 40,
-    "rustc": "rustc 1.90.0-dev\\\\nbinary: rustc\\\\ncommit-hash: " + "c" * 40,
+    "rustc": "rustc 1.90.0-dev\\nbinary: rustc\\ncommit-hash: " + "c" * 40,
     "ldproxy": "ldproxy 0.3.4",
 }
 print(values[name])
@@ -316,6 +355,7 @@ def run_environment(
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
     fake_bin, log = fake_docker
+    cargo_home = fake_bin.parent / "cargo"
     inspect = [
         {
             "Id": IMAGE_ID,
@@ -333,7 +373,8 @@ def run_environment(
     ]
     return {
         **os.environ,
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PATH": f"{cargo_home / 'bin'}:{fake_bin}:{os.environ['PATH']}",
+        "CARGO_HOME": str(cargo_home),
         "FAKE_DOCKER_LOG": str(log),
         "FAKE_DOCKER_STATE": str(log.with_name("docker-state.json")),
         "FAKE_DOCKER_INSPECT": canonical(inspect),
@@ -742,6 +783,79 @@ def test_probe_bounds_output_and_reaps_pipe_holding_descendants(
     assert elapsed < 3
     assert "toolchain probe" in completed.stderr
     assert "exceeds" in completed.stderr or "timed out" in completed.stderr
+
+
+def test_probe_attests_cargo_metadata_without_invoking_ldproxy(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_EXEC_PROBE": "1"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+    label = json.loads(
+        final["Config"]["Labels"]["org.treddy.esp32tap.toolchain-json"]
+    )
+    assert label["linker_version"] == COMMON["linker_version"]
+
+
+@pytest.mark.parametrize(
+    ("package", "version"),
+    [("not-ldproxy", "0.3.4"), ("ldproxy", "0.3.5")],
+)
+def test_probe_rejects_mismatched_ldproxy_cargo_metadata(
+    context: Path,
+    fake_docker: tuple[Path, Path],
+    package: str,
+    version: str,
+) -> None:
+    cargo_metadata = fake_docker[0].parent / "cargo" / ".crates2.json"
+    cargo_metadata.write_text(
+        canonical(cargo_install_metadata(package, version)),
+        encoding="utf-8",
+    )
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_EXEC_PROBE": "1"},
+    )
+    assert completed.returncode != 0
+    assert "ldproxy" in completed.stderr
+    assert not any(call[0] == "commit" for call in docker_calls(fake_docker[1]))
+
+
+def test_probe_rejects_path_spoof_of_cargo_installed_ldproxy(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    fake_bin = fake_docker[0]
+    cargo_bin = fake_bin.parent / "cargo" / "bin"
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={
+            "FAKE_DOCKER_EXEC_PROBE": "1",
+            "PATH": f"{fake_bin}:{cargo_bin}:{os.environ['PATH']}",
+        },
+    )
+    assert completed.returncode != 0
+    assert "ldproxy" in completed.stderr
+    assert not any(call[0] == "commit" for call in docker_calls(fake_docker[1]))
+
+
+def test_probe_rejects_unverified_ldproxy_version_string_before_commit(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    spoofed = {**COMMON, "linker_version": "ldproxy 0.3.4"}
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_PROBE": canonical(spoofed)},
+    )
+    assert completed.returncode != 0
+    assert "ldproxy" in completed.stderr
+    assert not any(call[0] == "commit" for call in docker_calls(fake_docker[1]))
 
 
 def test_failed_probe_does_not_commit_over_final_tag(
@@ -1513,3 +1627,6 @@ def test_readme_documents_tracked_partition_and_attested_image_workflow() -> Non
     assert "tools/build_image.sh --check --kind qemu-test" in text
     assert "`--check` performs one `docker image inspect` and never starts a container" in text
     assert "the recipe SHA-256 is not the Docker image ID" in text
+    assert "`ldproxy` has no version-reporting CLI mode" in text
+    assert "`$CARGO_HOME/.crates2.json`" in text
+    assert "SHA-256 of `$CARGO_HOME/bin/ldproxy` without executing it" in prose

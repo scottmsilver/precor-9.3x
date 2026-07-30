@@ -146,7 +146,12 @@ The wrapper probes the pinned IDF commit, verbose Espressif Rust compiler,
 creates the image, then stores the canonical result in OCI labels. `ldproxy`
 is the relevant linker identity here because it is the linker Cargo is
 configured to invoke; the Xtensa linker it delegates to is not a replacement
-for that fact.
+for that fact. `ldproxy` has no version-reporting CLI mode: version/help flags
+enter link mode and fail without linker arguments. The wrapper instead
+validates the exact `ldproxy 0.3.4` package and bin record in
+`$CARGO_HOME/.crates2.json`, requires PATH to resolve to that Cargo-installed
+binary, and records the SHA-256 of `$CARGO_HOME/bin/ldproxy` without executing
+it.
 
 `--check` performs one `docker image inspect` and never starts a container. It
 requires the current recipe label, the creation-time toolchain attestation,
