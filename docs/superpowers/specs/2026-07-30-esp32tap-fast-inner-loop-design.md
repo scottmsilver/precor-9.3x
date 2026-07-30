@@ -1,7 +1,7 @@
 # Esp32Tap Provenance-Safe Fast Inner Loop
 
 Date: 2026-07-30
-Status: Owner-approved design; implementation not started
+Status: Owner-approved design under review; implementation not started
 Tracking: `precor-9_3x-40g`, `precor-9_3x-344`
 
 ## Decision
@@ -81,21 +81,36 @@ wall time without changing guest-state acceptance criteria.
 
 Rust firmware build outputs, including `build/` and `build_qemu_test/`, are
 generated state and must not be Git source-of-truth. Implementation will stop
-tracking them and add explicit ignore rules. Removing tracked generated files
-must not remove the build recipes or required source inputs.
+tracking them and add explicit ignore rules.
+
+That migration also closes the clean-checkout prerequisite tracked by
+`precor-9_3x-344`: `sdkconfig.defaults` names
+`partitions_esp32tap.csv`, but the file is currently untracked and hidden by
+the repository's global `*.csv` ignore. The implementation must either
+explicitly unignore and track that exact source file or generate it
+deterministically from a tracked source and verify the result. Generated
+flash bundles may not be removed from Git until a clean checkout can build
+both production and QEMU bundles without borrowing any old output.
 
 ### Manifest
 
-`ONLY=qemu tools/build.sh` will write an atomic manifest beside the completed
-image only after all existing build gates succeed. The manifest will contain:
+Each successful branch of `tools/build.sh` will write an atomic manifest beside
+its completed flash bundle only after all existing build gates succeed.
+`ONLY=qemu`, `ONLY=prod`, and the normal `ONLY=both` invocation therefore
+publish the same schema for the outputs they build. Each manifest will contain:
 
 - a schema version;
-- artifact kind (`qemu-test`);
+- artifact kind (`production` or `qemu-test`);
 - enabled features and Cargo profile;
-- firmware binary SHA-256 and byte size;
+- an exact expected-member list plus SHA-256 and byte size for
+  `esp32tap.bin`, `bootloader.bin`, `partition-table.bin`, `flash_args`, and
+  the copied generated `sdkconfig`;
 - a deterministic digest of all declared build inputs;
-- the build container/toolchain identity already printed by the build; and
-- the generated sdkconfig digest.
+- the immutable Docker image ID, the build-image recipe fingerprint, and the
+  configured image tag;
+- exact IDF commit, Rust toolchain, target, linker, esptool/component-lock,
+  Cargo profile, and feature identities; and
+- the generated sdkconfig digest (also present as a bundle member).
 
 The input digest will hash path names and file contents in sorted order. Its
 declared input set includes:
@@ -106,35 +121,65 @@ declared input set includes:
   `coach_core` inputs;
 - normal and QEMU sdkconfig defaults;
 - partition/build metadata consumed by the build; and
-- the build/provenance scripts themselves.
+- the build/provenance scripts, container recipe, component locks, linker
+  configuration, and toolchain selectors themselves.
 
 Dirty and untracked source files are hashed from the working tree, not from
 `HEAD`. Git timestamps and output-directory timestamps are never inputs.
 
+The build captures this input digest while holding the existing exclusive
+build lock, before invoking Cargo against the live bind mount. It recomputes
+the digest after the image and bundle members are produced but before
+publishing any output or manifest. If the two snapshots differ, the temporary
+bundle is discarded and the build fails. A manifest can therefore never
+certify source edits that the compiler may not have consumed.
+
+The verifier recomputes the current build-image recipe fingerprint and
+resolves the configured local image to its immutable Docker image ID. Both
+must match the manifest. A mutable tag alone is never accepted as toolchain
+identity.
+
 ### Fixture enforcement
 
 Before acquiring a port, starting Docker, merging flash, or launching QEMU,
-the fixture will:
+every Rust QEMU entry point will:
 
-1. require the image and manifest;
+1. require the complete expected bundle and manifest;
 2. recompute the declared input digest;
-3. verify manifest schema, feature/profile identity, image size, and image
-   SHA-256; and
+3. verify manifest schema, artifact kind, feature/profile/toolchain identity,
+   exact member set, every member's size and SHA-256, and generated config;
+   and
 4. fail with one exact remediation command when anything differs:
-   `ONLY=qemu bash tools/build.sh`.
+   `ONLY=qemu bash tools/build.sh` or `ONLY=prod bash tools/build.sh`.
 
-The check remains under the existing build/read lock so a build cannot replace
-the image between verification and flash assembly.
+This enforcement covers both pytest families:
+`tools/qemu_scenarios` and the byte-locked `tools/qemu_harness`. A Rust-owned
+parent pytest plugin will run the preflight before either local fixture is
+eligible to acquire ports; this preserves the byte-identical shared harness
+files. The Rust `qemu_smoke.sh` entry becomes a checked wrapper around the
+read-only shared smoke implementation, and `verify_harness_copy.py` continues
+to verify that underlying shared implementation rather than treating the
+wrapper as a divergent copy. The normal sweep verifies the production bundle
+before its smoke launch and the QEMU bundle before pytest.
 
-The checker will also have a cheap standalone mode so the fast lane and CI can
-validate provenance without starting pytest.
+Verification and flash assembly hold the existing shared/read build lease
+continuously, including under xdist, so an exclusive build cannot replace a
+member after it was hashed. Automatic rebuild first releases the read lease,
+acquires the exclusive build lease, publishes atomically, releases it, then
+reacquires the read lease and verifies again. The checker will also have a
+cheap standalone mode so the fast lane and CI can validate provenance without
+starting pytest.
 
 ## Impact-Aware Fast Lane
 
 Add one command, provisionally `tools/fast.sh`, backed by a small testable
-selector. With no explicit paths it inspects staged, unstaged, and untracked
-working-tree changes. Explicit paths are accepted for reviewing an already
-committed task.
+selector. With no revision arguments it inspects the union of staged,
+unstaged, and untracked working-tree changes. For committed work it accepts an
+authoritative `--base REV` or `--range REV1..REV2` and derives NUL-delimited
+Git name/status records, including both sides of renames and deleted paths.
+Explicit paths may be added, but are unioned with detected changes and never
+replace them. A clean tree with no revision range or explicit path is an error,
+not an empty successful gate.
 
 The selector maps paths to named gate groups, for example:
 
@@ -150,7 +195,7 @@ The selector maps paths to named gate groups, for example:
 - documentation-only: syntax/link or documentation checks, with no firmware
   build unless executable examples changed.
 
-Every input path must resolve to at least one policy. Shared build files,
+Every changed or deleted path must resolve to at least one policy. Shared build files,
 sdkconfig, the QEMU harness, safety/control interfaces, feature flags, route
 registration, the selector itself, and unknown paths select the conservative
 broad lane. No rule may silently select an empty gate set.
@@ -158,12 +203,20 @@ broad lane. No rule may silently select an empty gate set.
 The fast lane runs in this order:
 
 1. cheap syntax, structural, and affected host gates;
-2. provenance check;
-3. one incremental `ONLY=qemu` build only if a selected QEMU gate needs it and
-   provenance is stale;
+2. provenance check only when the selected lane consumes a firmware artifact;
+3. one incremental build only if such a gate needs it and the checker reports
+   a recognized missing or stale artifact;
 4. selected focused QEMU gates with their currently proven worker counts; and
 5. a summary of selected policies, wall time per gate, image identity, and the
    exact reason for any broad fallback.
+
+Documentation-only lanes skip artifact provenance and firmware building unless
+the changed document is itself an executable build/test input.
+
+Broad fallback executes the existing `tools/sweep.sh` verbatim; it does not
+copy or reconstruct the sweep's gate list. The sweep retains its aggregate
+failure reporting. Production and QEMU manifests are published by its normal
+`ONLY=both` build and are checked at their respective consumers.
 
 The selector does not use `-n auto`. Existing worker counts of three or four
 remain ceilings until repeated benchmarks show a lower p95 wall time without
@@ -171,8 +224,14 @@ new flakes or guest-time distortion.
 
 ## Correctness and Failure Behavior
 
-- A stale or unverifiable image is a hard failure in direct pytest use.
-- The fast lane may rebuild that image automatically once, then re-check it.
+- A missing or recognized stale artifact is a hard failure in direct pytest
+  or smoke use.
+- The fast lane may automatically rebuild once only for those two recognized
+  states, then re-check it.
+- A malformed manifest, unknown schema, member mismatch not attributable to
+  current inputs, checker exception, toolchain-policy failure, source mutation
+  during build, build failure, or lock failure does not trigger a rebuild
+  loop. It fails with a distinct exit code and diagnostic.
 - A failed selected gate stops the fast lane and reports its retained log.
 - A selector bug must fail broad, not narrow.
 - QEMU sessions keep private ports and flash and continue to boot once per
@@ -188,23 +247,47 @@ Host tests will prove:
 - dirty and untracked inputs invalidate a manifest;
 - changed image bytes, features, sdkconfig, or schema invalidate it;
 - atomic/incomplete manifests are rejected;
+- bootloader, partition table, flash arguments, sdkconfig, or member-set
+  changes invalidate the bundle;
+- a working-tree mutation during the build prevents manifest publication;
+- mutable image tags cannot conceal a Docker image/recipe change;
 - every tracked workspace path is classified or forces broad fallback;
 - multiple changed paths produce the union of their gates;
+- revision ranges handle clean trees, deletions, and renames without trusting
+  a caller-supplied partial path list;
 - unknown and cross-cutting paths select broad;
 - documentation-only changes do not build firmware; and
 - a QEMU-selected change builds at most once per fast-lane invocation.
 
 Integration tests will prove:
 
-- direct pytest refuses the known tracked stale-image shape before Docker;
+- both direct pytest families refuse the known tracked stale-image shape before
+  port allocation or Docker;
+- direct smoke refuses a stale production bundle before Docker;
 - a fresh build creates a valid manifest and focused QEMU scenario passes;
 - modifying a relevant source invalidates the artifact immediately;
 - normal and deep sweep command lists are unchanged; and
 - each logical QEMU test still receives a fresh guest and flash image.
 
 Benchmark output will record cold/warm build time, provenance-check time,
-selected gate time, host load, and pass/fail. Optimization is accepted only if
-assertions and isolation are unchanged.
+selected gate time, one- and five-minute host load, image identity, and
+pass/fail. Before implementation, capture the corresponding broad-lane
+baseline. Acceptance uses ten alternating warm baseline/candidate samples and
+three cold-build samples whose starting one-minute loads are within 20% of
+their paired run. Report median and p95 wall time and observed flake rate.
+
+The implementation is accepted only when:
+
+- provenance rejection p95 is under one second;
+- a representative host-only lane p95 is under five seconds;
+- a representative localized program or HTTP firmware lane has warm p95 under
+  30 seconds and at least 50% lower median wall time than its prior broad gate;
+- all ten warm candidate samples pass with no retries; and
+- assertions, guest isolation, deadlines, release commands, and deep commands
+  are byte-for-byte or structurally proven unchanged where applicable.
+
+If host load cannot satisfy the comparison band, the benchmark is postponed;
+the implementation is not accepted on incomparable timing data.
 
 ## Deferred Optimizations
 
