@@ -34,20 +34,26 @@ ONLY="${ONLY:-both}"
 # on 2026-07-29 and cost two wrong diagnoses (a firmware bug, then a QEMU clock
 # artifact) before the real cause, a second concurrent builder, was found.
 #
-# Re-exec under flock rather than wrapping the body, so every exit path releases
-# it and a crash releases it via the kernel. The key must match
-# _BUILD_LOCK in qemu_session.py: md5 of this checkout's esp32_rs path, first 12.
-if [ -z "${ESP32TAP_BUILD_LOCK_HELD:-}" ]; then
-  _lock="/tmp/esp32tap-build-$(printf '%s' "$ESP32_RS" | md5sum | cut -c1-12).lock"
-  export ESP32TAP_BUILD_LOCK_HELD=1
-  # -w, not an unbounded wait: a wedged holder should fail LOUDLY rather than
-  # hang a build forever with no output, which is the failure mode this repo
-  # least tolerates. 30 min is far longer than any real session.
-  exec flock -x -w 1800 "$_lock" "$0" "$@" || {
-    echo "build.sh: could not acquire $_lock within 30 min — another build or a" >&2
-    echo "  running QEMU session is holding it. Check with: fuser -v $_lock" >&2
-    exit 4
-  }
+# HELD ON AN FD, NOT VIA `exec flock`. The first version re-exec'd itself under
+# flock with a `|| { echo ...; exit 4; }` fallback — which codex proved
+# UNREACHABLE: once exec succeeds the shell is gone, so a lock timeout returned
+# status 1 with no message. A silent 30-minute wait ending in an unexplained
+# failure is precisely what the diagnostic was there to prevent. Holding fd 9
+# keeps this shell alive to report, needs no re-exec and no env-var guard, and
+# the kernel releases the lock when the script exits by any path.
+#
+# The key must match _BUILD_LOCK in qemu_session.py, which derives it from a
+# RESOLVED path — so use `pwd -P`. A logical path from a symlinked checkout
+# hashes differently and would disable the interlock with no error at all.
+_lock="/tmp/esp32tap-build-$(printf '%s' "$(cd "$ESP32_RS" && pwd -P)" | md5sum | cut -c1-12).lock"
+exec 9>"$_lock"
+# Overridable ONLY so the timeout path is testable in place. It was unreachable
+# in the first version and nobody could have noticed without exercising it.
+if ! flock -x -w "${BUILD_LOCK_WAIT:-1800}" 9; then
+  echo "build.sh: could not acquire $_lock within ${BUILD_LOCK_WAIT:-1800}s." >&2
+  echo "  A QEMU session holds it SHARED for its lifetime, or another build holds it." >&2
+  echo "  Inspect with: fuser -v $_lock" >&2
+  exit 4
 fi
 
 mkdir -p "$CARGO_CACHE"

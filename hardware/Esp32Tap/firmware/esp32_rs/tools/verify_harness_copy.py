@@ -64,7 +64,7 @@ IGNORE_NAMES = {"__pycache__", ".pytest_cache"}
 # small harness edit" cannot ride along unnoticed.
 ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
     "qemu_session.py": (
-        "0b0e0e1b5056d8291f0228d312f871b67d5a9cbaefaf7c9bd76c5cfe110f5d6e",
+        "981372c4d7e215c183c4b8eb1a7d8c6b6660386274217b547590b53318d52f41",
         "(a) the emulated flash is padded to the size the image header "
         "declares (read from the build's own flash_args) instead of a "
         "hard-coded 2MB; a header that claims more flash than the emulated "
@@ -95,7 +95,11 @@ ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
         "builder rewriting the INPUT mid-read. On 2026-07-29 that happened "
         "and the resulting DEEP failure was diagnosed twice wrongly — as a "
         "firmware bug, then as a QEMU clock artifact — before the real cause "
-        "was found. Many sessions still run at once; a build waits for them. "
+        "was found. Many sessions still run at once; a build waits for them, and "
+        "the lease is released on EVERY construction failure — the boot waits are "
+        "inside the protected region and close() frees leases in a `finally` — "
+        "because a stranded shared lock turned one boot timeout into a 30-minute "
+        "hang for the next build. "
         "None of (a)-(e) touches an assertion, a bound, a comparison or a "
         "control flow of any scenario.",
     ),

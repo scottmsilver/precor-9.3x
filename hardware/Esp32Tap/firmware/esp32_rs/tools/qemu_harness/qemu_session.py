@@ -264,23 +264,32 @@ class QemuSession:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
+        # EVERYTHING from here to the end of __init__ is protected. The boot
+        # waits used to sit OUTSIDE this try, and the pytest fixture only
+        # registers the session AFTER construction returns — so a boot timeout
+        # left the container running and, worse, left this session's SHARED
+        # build lock and port leases held by live daemon threads with nothing
+        # able to release them. One boot timeout then became a 30-minute hang
+        # for the NEXT build. Found by codex.
         try:
             # serial0 first: with wait=on QEMU creates the serial1 listener
             # only after the serial0 client connects.
             self.sock0 = self._connect(p0, timeout=60.0)
             self.sock1 = self._connect(p1, timeout=30.0)
-        except Exception:
+            for sock, fn in ((self.sock0, self._reader0), (self.sock1, self._reader1)):
+                t = threading.Thread(target=fn, args=(sock,), daemon=True)
+                t.start()
+                self._threads.append(t)
+            # Guest boots only now (both chardevs connected) — no lost output.
+            self.wait_log(r"esp32tap phase-1 safety core started", timeout=boot_timeout)
+            if self.expect_shim:
+                self.wait_log(r"qemu_test task started", timeout=30.0)
+                self.wait_log(r"QEMU-TEST build", timeout=10.0)
+        except BaseException:
+            # BaseException, not Exception: a KeyboardInterrupt or a pytest
+            # timeout must not strand the lock either.
             self.close()
             raise
-        for sock, fn in ((self.sock0, self._reader0), (self.sock1, self._reader1)):
-            t = threading.Thread(target=fn, args=(sock,), daemon=True)
-            t.start()
-            self._threads.append(t)
-        # Guest boots only now (both chardevs connected) — no lost output.
-        self.wait_log(r"esp32tap phase-1 safety core started", timeout=boot_timeout)
-        if self.expect_shim:
-            self.wait_log(r"qemu_test task started", timeout=30.0)
-            self.wait_log(r"QEMU-TEST build", timeout=10.0)
 
     def _connect(self, port: int, timeout: float) -> socket.socket:
         deadline = time.monotonic() + timeout
@@ -313,16 +322,21 @@ class QemuSession:
                     s.close()
                 except OSError:
                     pass
-        for t in self._threads:
-            t.join(timeout=5)
-        # Release the port leases LAST — after QEMU is gone, so the next
-        # session cannot lease a port this one's QEMU is still listening on.
-        for f in self._leases:
-            try:
-                f.close()  # closing the fd drops the flock
-            except OSError:
-                pass
-        self._leases = []
+        try:
+            for t in self._threads:
+                t.join(timeout=5)
+        finally:
+            # Release the port leases and the shared build lock LAST — after
+            # QEMU is gone, so the next session cannot lease a port this one's
+            # QEMU is still listening on — but in a `finally`, because an
+            # exception from docker kill, wait or stdout cleanup used to skip
+            # this entirely and strand every lease this session held.
+            for f in self._leases:
+                try:
+                    f.close()  # closing the fd drops the flock
+                except OSError:
+                    pass
+            self._leases = []
 
     # --- readers ---------------------------------------------------------
 

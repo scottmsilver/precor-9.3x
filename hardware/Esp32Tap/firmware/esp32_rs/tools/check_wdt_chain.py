@@ -213,6 +213,20 @@ def check_tasks() -> list[str]:
                 "subscribes a task by that name"
             )
 
+    # EVERY row's WDT cell must be READABLE as one or the other. A typo like
+    # "EXMPT" made a row neither supervised nor exempt, so it fell out of both
+    # checks and an unsupervised task passed with no WDT assertion at all
+    # (found by codex). A cell this gate cannot classify is a cell it is not
+    # checking.
+    for name, row in matrix_table().items():
+        cell = row["wdt"].lower()
+        if ("subscribe" in cell) == ("exempt" in cell):
+            failures.append(
+                f"matrix row {name!r} has WDT cell {row['wdt']!r}, which is neither clearly "
+                "'subscribe' nor clearly 'EXEMPT' — this gate cannot tell whether a stall in "
+                "that task is supposed to reboot the device"
+            )
+
     # An EXEMPT row is a CLAIM, and a claim that contradicts the code is worse
     # than no row: somebody deciding whether a task is safe unsupervised would
     # read the exemption and its argument, when in fact the task is supervised.
@@ -230,11 +244,21 @@ MAIN_RS = FW_SRC / "main.rs"
 
 # `spawn_pinned(c"name", <stack>, <prio>, <body>)`, across line breaks.
 SPAWN_RE = re.compile(
-    r"spawn_pinned\(\s*c\"(?P<name>[A-Za-z0-9_]+)\"\s*,"
-    r"\s*(?P<stack>[A-Za-z0-9_:]+)\s*,"
-    r"\s*(?P<prio>[A-Za-z0-9_:]+)\s*,",
+    r"spawn_pinned\s*\(\s*c\"(?P<name>[A-Za-z0-9_]+)\"\s*,"
+    r"\s*(?P<stack>[^,]+?)\s*,"
+    r"\s*(?P<prio>[^,]+?)\s*,",
     re.S,
 )
+
+# Any `spawn_pinned` token the strict pattern above did NOT match. A call the
+# gate cannot parse is a task whose priority nothing is checking, and the
+# original version only noticed if EVERY call vanished — so one call written
+# `spawn_pinned (…)` or with a comment before the paren went unchecked while
+# the gate stayed green (found by codex, by mutation).
+# `fn spawn_pinned(` is the DEFINITION, not a call site. Excluding it by
+# lookbehind rather than by subtracting one, so the count stays honest if the
+# helper is ever renamed or duplicated.
+SPAWN_TOKEN_RE = re.compile(r"(?<!fn )\bspawn_pinned\s*\(")
 
 
 def resolve_const(expr: str) -> int | None:
@@ -244,9 +268,15 @@ def resolve_const(expr: str) -> int | None:
     rather than skipping: a spawn whose priority this gate cannot read is a
     spawn whose priority nothing is checking.
     """
+    expr = expr.strip()
     lit = expr.replace("_", "")
     if lit.isdigit():
         return int(lit)
+    # An EXPRESSION is refused rather than approximated. `4096 * 2` used to
+    # "resolve" to 4096 because the literal was unanchored — a wrong value that
+    # reads as a pass, which is worse than no check (found by codex).
+    if not re.fullmatch(r"[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*", expr):
+        return None
     parts = expr.split("::")
     if len(parts) < 2:
         return None
@@ -256,7 +286,8 @@ def resolve_const(expr: str) -> int | None:
         FW_SRC.joinpath(*mod_path).with_suffix(".rs"),
         FW_SRC.joinpath(*mod_path, "mod.rs"),
     ]
-    pat = re.compile(rf"pub const {re.escape(const)}\s*:\s*\w+\s*=\s*([0-9_]+)")
+    # Anchored to `;`: `pub const X: usize = 4096 * 2;` must NOT resolve to 4096.
+    pat = re.compile(rf"pub const {re.escape(const)}\s*:\s*\w+\s*=\s*([0-9_]+)\s*;")
     for c in candidates:
         if not c.exists():
             continue
@@ -276,9 +307,15 @@ def row_for(spawn_name: str, table: dict[str, dict[str, str]]) -> str | None:
     """
     if spawn_name in table:
         return spawn_name
-    for head in table:
-        if head.startswith(spawn_name) or spawn_name.startswith(head):
-            return head
+    # AMBIGUITY IS A FAILURE, not a coin flip. Returning the first prefix match
+    # meant a spawn named `foo` silently compared against row `foo_a` while
+    # `foo_b` also existed; if the wrong row carried the same numbers the error
+    # was invisible (found by codex).
+    pref = [h for h in table if h.startswith(spawn_name) or spawn_name.startswith(h)]
+    if len(pref) > 1:
+        return None
+    if pref:
+        return pref[0]
     for head, row in table.items():
         segments = re.split(r"[/\s(]+", row["source"])
         if spawn_name in segments:
@@ -307,11 +344,17 @@ def check_spawn_matrix() -> list[str]:
             "main.rs no longer pins spawned tasks to Core0 in spawn_pinned — the matrix's "
             "Core column would become a claim nothing supports"
         )
-    stray = [
-        rel(p, FW_SRC)
-        for p in FW_SRC.rglob("*.rs")
-        if p != MAIN_RS and "ThreadSpawnConfiguration" in strip_comments(p.read_text(encoding="utf-8"))
-    ]
+    # Catch a bare `std::thread` spawn as well, not only a reconfigured one: a
+    # thread created without ThreadSpawnConfiguration carries neither a checked
+    # priority nor a pinned core, and the substring search for the config type
+    # alone walked straight past it (found by codex).
+    stray = []
+    for q in FW_SRC.rglob("*.rs"):
+        if q == MAIN_RS:
+            continue
+        body = strip_comments(q.read_text(encoding="utf-8"))
+        if "ThreadSpawnConfiguration" in body or "thread::Builder" in body or "thread::spawn" in body:
+            stray.append(rel(q, FW_SRC))
     if stray:
         failures.append(
             "spawn_pinned in main.rs is supposed to be the ONLY spawn path, but "
@@ -326,6 +369,16 @@ def check_spawn_matrix() -> list[str]:
     spawns = list(SPAWN_RE.finditer(src))
     if not spawns:
         return failures + ["no spawn_pinned call sites found in main.rs — this gate would be vacuous"]
+
+    # EVERY `spawn_pinned` token must have been parsed. Previously the gate only
+    # complained when ALL calls vanished, so one call the pattern could not read
+    # was simply unchecked.
+    tokens = len(SPAWN_TOKEN_RE.findall(src))
+    if tokens != len(spawns):
+        failures.append(
+            f"main.rs contains {tokens} spawn_pinned call(s) but this gate could only parse "
+            f"{len(spawns)} — an unparsed call is a task whose priority and stack nothing checks"
+        )
 
     for m in spawns:
         name, stack_x, prio_x = m.group("name"), m.group("stack"), m.group("prio")
@@ -351,6 +404,28 @@ def check_spawn_matrix() -> list[str]:
                     f"{head!r} says {want} — the table and the code disagree, and the table is "
                     "what somebody reads when reasoning about this task"
                 )
+        # The Core column was RECORDED and never compared: changing every cell
+        # from 0 to 1 produced zero failures (found by codex, by mutation). Every
+        # spawn goes through spawn_pinned, which pins Core0 — asserted above — so
+        # any row claiming otherwise is a false statement about this firmware.
+        if row["core"].strip() != "0":
+            failures.append(
+                f"matrix row {head!r} says Core {row['core']!r}, but spawn_pinned pins every "
+                "task to Core0 — the row claims a placement the firmware cannot produce"
+            )
+
+    # REVERSE DIRECTION. Without this, DELETING a spawn left the gate green:
+    # check_spawn_matrix only ever iterated the calls it found, and check_tasks
+    # discovers subscriber FILES rather than reachable tasks. Codex deleted the
+    # priority-10 serial_engine spawn — the task the treadmill depends on — and
+    # nothing failed.
+    spawned_rows = {row_for(m.group("name"), table) for m in spawns}
+    for head in table:
+        if head not in spawned_rows:
+            failures.append(
+                f"the matrix names task {head!r} but main.rs never spawns it — either the task "
+                "is gone (and the device is missing it) or the row is stale"
+            )
     return failures
 
 
