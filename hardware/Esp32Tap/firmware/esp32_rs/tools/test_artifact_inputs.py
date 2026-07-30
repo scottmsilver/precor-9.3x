@@ -20,6 +20,7 @@ from artifact_inputs import (
 
 
 RS = Path("hardware/Esp32Tap/firmware/esp32_rs")
+SNAPSHOT_MARKER = ".esp32tap-snapshot-v1"
 GATES = (
     "check_unsafe_budget.py",
     "check_case_parity.py",
@@ -62,9 +63,20 @@ def commit_all(root: Path) -> None:
 @pytest.fixture(autouse=True)
 def cleanup_sealed_snapshots(tmp_path: Path):
     yield
-    for child in tmp_path.iterdir():
-        if child.name.startswith("snapshot"):
-            remove_snapshot(child, tmp_path)
+    markers = [
+        marker
+        for marker in tmp_path.rglob(SNAPSHOT_MARKER)
+        if (
+            marker.is_file()
+            and not marker.is_symlink()
+            and marker.stat().st_nlink == 1
+            and stat.S_IMODE(marker.stat().st_mode) == 0o444
+        )
+    ]
+    for marker in sorted(markers, key=lambda path: len(path.parts), reverse=True):
+        root = marker.parent
+        if os.path.lexists(root):
+            remove_snapshot(root, root.parent)
 
 
 def test_digest_ignores_mtime_but_not_same_size_content(repo: Path) -> None:
@@ -561,6 +573,98 @@ def test_remove_snapshot_removes_sealed_tree_and_is_idempotent(
     artifact_inputs.remove_snapshot(snapshot.root, parent)
 
 
+def test_published_snapshot_has_sealed_cleanup_capability_outside_digest(
+    repo: Path, tmp_path: Path
+) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    parent = tmp_path / "snapshots"
+    parent.mkdir()
+    expected_digest = working_digest(repo)
+
+    snapshot = create_snapshot(repo, parent / "snapshot", tmp_path / "target")
+    marker = snapshot.root / SNAPSHOT_MARKER
+
+    assert marker.is_file()
+    assert not marker.is_symlink()
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o444
+    assert SNAPSHOT_MARKER not in snapshot.paths
+    assert snapshot.digest == expected_digest
+
+
+def test_remove_snapshot_rejects_git_repository_before_chmod_or_rmtree(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protected = write(repo, "DO_NOT_DELETE", "git repository")
+    protected.chmod(0o444)
+    original_mode = stat.S_IMODE(protected.stat().st_mode)
+    rmtree_called = False
+
+    def forbidden_rmtree(*args, **kwargs) -> None:
+        nonlocal rmtree_called
+        rmtree_called = True
+        raise AssertionError("rmtree must not be reached for a Git repository")
+
+    monkeypatch.setattr(artifact_inputs.shutil, "rmtree", forbidden_rmtree)
+
+    with pytest.raises(ValueError, match="Git|snapshot|capability"):
+        remove_snapshot(repo, tmp_path)
+
+    assert not rmtree_called
+    assert (repo / ".git").is_dir()
+    assert protected.read_text(encoding="utf-8") == "git repository"
+    assert stat.S_IMODE(protected.stat().st_mode) == original_mode
+
+
+def test_remove_snapshot_rejects_linked_worktree_before_chmod_or_rmtree(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(repo, "tracked.txt", "tracked")
+    commit_all(repo)
+    worktree = tmp_path / "linked-worktree"
+    git(repo, "worktree", "add", "-q", "-b", "cleanup-worktree", str(worktree))
+    protected = write(worktree, "DO_NOT_DELETE", "linked worktree")
+    protected.chmod(0o444)
+    original_mode = stat.S_IMODE(protected.stat().st_mode)
+    rmtree_called = False
+
+    def forbidden_rmtree(*args, **kwargs) -> None:
+        nonlocal rmtree_called
+        rmtree_called = True
+        raise AssertionError("rmtree must not be reached for a Git worktree")
+
+    monkeypatch.setattr(artifact_inputs.shutil, "rmtree", forbidden_rmtree)
+
+    with pytest.raises(ValueError, match="Git|snapshot|capability"):
+        remove_snapshot(worktree, tmp_path)
+
+    assert not rmtree_called
+    assert (worktree / ".git").is_file()
+    assert protected.read_text(encoding="utf-8") == "linked worktree"
+    assert stat.S_IMODE(protected.stat().st_mode) == original_mode
+
+
+def test_remove_snapshot_rejects_existing_non_snapshot_before_chmod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent = tmp_path / "snapshots"
+    ordinary = parent / "ordinary-directory"
+    protected = write(ordinary, "DO_NOT_DELETE", "ordinary")
+    protected.chmod(0o444)
+    original_mode = stat.S_IMODE(protected.stat().st_mode)
+
+    def forbidden_rmtree(*args, **kwargs) -> None:
+        raise AssertionError("rmtree must not be reached without snapshot capability")
+
+    monkeypatch.setattr(artifact_inputs.shutil, "rmtree", forbidden_rmtree)
+
+    with pytest.raises(ValueError, match="snapshot|capability"):
+        remove_snapshot(ordinary, parent)
+
+    assert protected.read_text(encoding="utf-8") == "ordinary"
+    assert stat.S_IMODE(protected.stat().st_mode) == original_mode
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -625,19 +729,67 @@ def test_remove_snapshot_rejects_symlink_root(repo: Path, tmp_path: Path) -> Non
     assert marker.read_text(encoding="utf-8") == "untouched"
 
 
-def test_remove_snapshot_never_follows_internal_symlink(tmp_path: Path) -> None:
+@pytest.mark.parametrize("marker_kind", ["symlink", "fifo", "hardlink"])
+def test_remove_snapshot_rejects_invalid_capability_types(
+    tmp_path: Path, marker_kind: str
+) -> None:
     parent = tmp_path / "snapshots"
-    snapshot_root = parent / "snapshot"
-    snapshot_root.mkdir(parents=True)
+    root = parent / "ordinary"
+    protected = write(root, "DO_NOT_DELETE", "untouched")
+    protected.chmod(0o444)
+    marker = root / SNAPSHOT_MARKER
+    outside = write(tmp_path, f"{marker_kind}-outside", "not a capability")
+    if marker_kind == "symlink":
+        marker.symlink_to(outside)
+    elif marker_kind == "fifo":
+        os.mkfifo(marker)
+    else:
+        os.link(outside, marker)
+
+    with pytest.raises(ValueError, match="capability"):
+        remove_snapshot(root, parent)
+
+    assert protected.read_text(encoding="utf-8") == "untouched"
+    assert outside.read_text(encoding="utf-8") == "not a capability"
+
+
+def test_remove_snapshot_rejects_invalid_capability_content(tmp_path: Path) -> None:
+    parent = tmp_path / "snapshots"
+    root = parent / "ordinary"
+    protected = write(root, "DO_NOT_DELETE", "untouched")
+    protected.chmod(0o444)
+    marker = write(root, SNAPSHOT_MARKER, "forged")
+    marker.chmod(0o444)
+
+    with pytest.raises(ValueError, match="capability.*invalid"):
+        remove_snapshot(root, parent)
+
+    assert protected.read_text(encoding="utf-8") == "untouched"
+    marker.chmod(0o644)
+
+
+def test_remove_snapshot_never_follows_internal_symlink(
+    repo: Path, tmp_path: Path
+) -> None:
+    target = write(repo, RS / "shared/target.py", "inside")
+    link = repo / RS / "tools/internal-link.py"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(os.path.relpath(target, link.parent))
+    commit_all(repo)
+    parent = tmp_path / "snapshots"
+    parent.mkdir()
+    snapshot = create_snapshot(repo, parent / "snapshot", tmp_path / "target")
     outside = tmp_path / "outside"
     marker = write(outside, "marker", "untouched")
-    (snapshot_root / "outside-link").symlink_to(outside, target_is_directory=True)
-    write(snapshot_root, "sealed.txt", "sealed").chmod(0o444)
-    snapshot_root.chmod(0o555)
+    copied_link = snapshot.root / link.relative_to(repo)
+    copied_link.parent.chmod(0o755)
+    copied_link.unlink()
+    copied_link.symlink_to(outside, target_is_directory=True)
+    copied_link.parent.chmod(0o555)
 
-    artifact_inputs.remove_snapshot(snapshot_root, parent)
+    artifact_inputs.remove_snapshot(snapshot.root, parent)
 
-    assert not os.path.lexists(snapshot_root)
+    assert not os.path.lexists(snapshot.root)
     assert marker.read_text(encoding="utf-8") == "untouched"
 
 

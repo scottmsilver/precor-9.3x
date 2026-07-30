@@ -6,6 +6,7 @@ import ctypes
 import errno
 import hashlib
 import os
+import re
 import shutil
 import stat
 import struct
@@ -18,6 +19,7 @@ from pathlib import Path, PurePosixPath
 
 
 _ESP32_RS = PurePosixPath("hardware/Esp32Tap/firmware/esp32_rs")
+_SNAPSHOT_MARKER = ".esp32tap-snapshot-v1"
 _ESP32_REFERENCE = PurePosixPath("hardware/Esp32Tap/firmware/esp32")
 _CAPTURE_FIXTURES = PurePosixPath("cpp/captures")
 _TRACKED_INPUT_PREFIXES = (_ESP32_RS, _ESP32_REFERENCE, _CAPTURE_FIXTURES)
@@ -287,6 +289,28 @@ def _record(
     hasher.update(content)
 
 
+def _path_set_digest(paths: tuple[str, ...]) -> str:
+    hasher = hashlib.sha256()
+    for relative in sorted(paths, key=os.fsencode):
+        encoded = os.fsencode(relative)
+        hasher.update(struct.pack(">Q", len(encoded)))
+        hasher.update(encoded)
+    return hasher.hexdigest()
+
+
+def _snapshot_marker_payload(
+    digest: str, worktree_key: str, paths: tuple[str, ...]
+) -> bytes:
+    return (
+        "ESP32TAP_IMMUTABLE_SNAPSHOT\n"
+        "version=1\n"
+        f"digest={digest}\n"
+        f"worktree_key={worktree_key}\n"
+        f"path_count={len(paths)}\n"
+        f"paths_sha256={_path_set_digest(paths)}\n"
+    ).encode("ascii")
+
+
 def _read_input(
     root: Path, relative: str, selected: frozenset[str]
 ) -> tuple[bytes, bytes, int]:
@@ -426,15 +450,111 @@ def _restore_tree_owner_write(root: Path, expected_parent: Path) -> None:
         root, topdown=False, followlinks=False
     ):
         base = Path(directory)
-        for name in filenames:
-            path = base / name
-            if not path.is_symlink():
-                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
         for name in dirnames:
             path = base / name
             if not path.is_symlink():
                 path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
         base.chmod(stat.S_IMODE(base.stat().st_mode) | stat.S_IWUSR)
+
+
+def _snapshot_inventory(root: Path) -> tuple[str, ...]:
+    paths: list[str] = []
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        base = Path(directory)
+        for name in dirnames:
+            path = base / name
+            if path.is_symlink():
+                paths.append(path.relative_to(root).as_posix())
+        for name in filenames:
+            path = base / name
+            relative = path.relative_to(root).as_posix()
+            if relative == _SNAPSHOT_MARKER:
+                continue
+            mode = path.lstat().st_mode
+            if not (stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
+                raise ValueError(
+                    f"snapshot contains unsupported entry type: {relative}"
+                )
+            paths.append(relative)
+    return tuple(sorted(paths, key=os.fsencode))
+
+
+def _validate_snapshot_capability(root: Path) -> None:
+    marker = root / _SNAPSHOT_MARKER
+    try:
+        before = marker.lstat()
+    except FileNotFoundError as exc:
+        raise ValueError(f"snapshot cleanup capability is missing: {marker}") from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != 0o444
+    ):
+        raise ValueError(
+            f"snapshot cleanup capability must be one sealed, non-symlink "
+            f"regular file: {marker}"
+        )
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(marker, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_nlink,
+        ) != (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_nlink,
+        ):
+            raise ValueError(
+                f"snapshot cleanup capability changed before validation: {marker}"
+            )
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            payload = stream.read()
+    finally:
+        os.close(descriptor)
+    after = marker.lstat()
+    if (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_nlink,
+        after.st_size,
+        after.st_mtime_ns,
+    ) != (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_nlink,
+        before.st_size,
+        before.st_mtime_ns,
+    ):
+        raise ValueError(
+            f"snapshot cleanup capability changed during validation: {marker}"
+        )
+    match = re.fullmatch(
+        rb"ESP32TAP_IMMUTABLE_SNAPSHOT\n"
+        rb"version=1\n"
+        rb"digest=([0-9a-f]{64})\n"
+        rb"worktree_key=([0-9a-f]{12})\n"
+        rb"path_count=([0-9]+)\n"
+        rb"paths_sha256=([0-9a-f]{64})\n",
+        payload,
+    )
+    if match is None:
+        raise ValueError(f"snapshot cleanup capability has invalid content: {marker}")
+    inventory = _snapshot_inventory(root)
+    if int(match.group(3)) != len(inventory):
+        raise ValueError(
+            f"snapshot cleanup capability path count does not match: {marker}"
+        )
+    if match.group(4).decode("ascii") != _path_set_digest(inventory):
+        raise ValueError(
+            f"snapshot cleanup capability path identity does not match: {marker}"
+        )
 
 
 def _validated_cleanup_paths(
@@ -481,6 +601,9 @@ def _validated_cleanup_paths(
             raise ValueError(f"snapshot root is not a directory: {root}")
         if root.resolve(strict=True).parent != parent:
             raise ValueError(f"snapshot root resolves outside cleanup parent: {root}")
+        if os.path.lexists(root / ".git"):
+            raise ValueError(f"refusing to remove Git repository or worktree: {root}")
+        _validate_snapshot_capability(root)
     return root, parent
 
 
@@ -499,6 +622,9 @@ def remove_snapshot(snapshot_root: Path, expected_parent: Path) -> None:
     _restore_tree_owner_write(root, parent)
     if root.is_symlink():
         raise ValueError(f"snapshot root became a symlink during cleanup: {root}")
+    _validate_snapshot_capability(root)
+    if os.path.lexists(root / ".git"):
+        raise ValueError(f"snapshot became a Git repository during cleanup: {root}")
     shutil.rmtree(root)
 
 
@@ -570,6 +696,7 @@ def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> S
         tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent)
     )
     hasher = hashlib.sha256()
+    worktree_key = _worktree_key(root)
     try:
         for relative in paths:
             kind, content, permissions = _read_input(root, relative, selected)
@@ -586,7 +713,13 @@ def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> S
                     f"filesystem could not set snapshot input newer than target cache: {relative}"
                 )
             _record(hasher, relative, kind, permissions, content)
+        digest = hasher.hexdigest()
+        marker = staging / _SNAPSHOT_MARKER
+        marker.write_bytes(_snapshot_marker_payload(digest, worktree_key, paths))
+        marker.chmod(0o444)
+        _set_input_mtime(marker, snapshot_mtime)
         _seal_snapshot_tree(staging)
+        _validate_snapshot_capability(staging)
         _publish_no_replace(staging, destination)
     except BaseException:
         _restore_tree_owner_write(staging, destination.parent)
@@ -595,9 +728,9 @@ def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> S
         raise
     return Snapshot(
         root=destination,
-        digest=hasher.hexdigest(),
+        digest=digest,
         paths=paths,
-        worktree_key=_worktree_key(root),
+        worktree_key=worktree_key,
     )
 
 
