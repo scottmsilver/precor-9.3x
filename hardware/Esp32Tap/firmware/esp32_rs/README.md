@@ -29,8 +29,8 @@ esp32_rs/
 │                                 esp Rust 1.90.0.0, ldproxy 0.3.4)
 ├── sdkconfig.defaults            PLAN normative key set + Rust-specific keys
 ├── sdkconfig.defaults.qemu    -> ../esp32/sdkconfig.defaults.qemu   (symlink)
-├── partitions_esp32tap.csv    -> ../esp32/partitions_esp32tap.csv   (symlink)
-├── build/  build_qemu_test/      idf.py-shaped artifacts (gitignored)
+├── partitions_esp32tap.csv       tracked partition-table source
+├── build/  build_qemu_test/      idf.py-shaped generated artifacts
 │
 ├── safety_core/    CRATE 1 — portable, no_std, ZERO dependencies, host-tested
 ├── esp32tap/       CRATE 2 — the ESP32-S3 binary (esp-idf-hal + esp-idf-sys)
@@ -57,6 +57,13 @@ esp32_rs/
     ├── check_sdkconfig.py        GATE: build_safety_manifest.py's own rules
     └── dump_capture_fixtures.py  real capture data -> difftest/fixtures/
 ```
+
+During the provenance migration, `build_qemu_test/` remains a tracked legacy
+bundle until the clean-build proof succeeds. Do not treat it as current
+firmware: the provenance checks reject bundles that lack a matching manifest.
+The later migration step removes both generated bundle paths from Git only
+after production and QEMU outputs have been built and verified from a clean
+checkout.
 
 **Independent crates, no virtual workspace.** A workspace containing both
 a `build-std` xtensa member and host members forces a default target on every
@@ -102,8 +109,10 @@ python3 tools/check_wdt_chain.py       # every checkable link of the WDT chain
 python3 tools/check_sdkconfig.py build/sdkconfig --label prod
 python3 tools/check_sdkconfig.py build_qemu_test/sdkconfig --allow-qemu
 
-# Device images (pinned container).
-docker build -t esp32tap-rust:build .
+# Device images (pinned, recipe- and toolchain-attested container).
+tools/build_image.sh              # build and label the pinned image
+tools/build_image.sh --check --kind production
+tools/build_image.sh --check --kind qemu-test
 tools/build.sh                 # -> build/ and build_qemu_test/
 # Reproducible: three from-scratch builds (cargo target dirs wiped between
 # each) are byte-identical. This is a PLAN requirement, not hygiene —
@@ -128,6 +137,26 @@ cd tools/qemu_scenarios && python3 -m pytest . -v
 make -C ../esp32/host test
 bash ../esp32/tools/qemu_harness/run.sh
 ```
+
+`tools/build_image.sh --recipe` fingerprints the exact build recipe: the
+Dockerfile's path, mode, and bytes plus the deny-by-default `.dockerignore`
+policy. Generated bundles, Cargo targets, and caches are outside that context.
+The wrapper probes the pinned IDF commit, verbose Espressif Rust compiler,
+`ldproxy` linker shim, esptool, target, and managed-component lock once when it
+creates the image, then stores the canonical result in OCI labels. `ldproxy`
+is the relevant linker identity here because it is the linker Cargo is
+configured to invoke; the Xtensa linker it delegates to is not a replacement
+for that fact.
+
+`--check` performs one `docker image inspect` and never starts a container. It
+requires the current recipe label, the creation-time toolchain attestation,
+and an immutable `sha256:…` image ID, then emits the complete canonical
+toolchain record for either the production feature set (empty) or QEMU-test
+(`ble,net,qemu-test`). Both are release-profile builds. Keep the two identities
+straight: the recipe SHA-256 is not the Docker image ID. A changed recipe or
+component lock intentionally rejects the old image with a command to rebuild
+it; changing ordinary firmware source invalidates the artifact input digest,
+not the toolchain image.
 
 `IDF_REF=v5.5.4` is a **hard requirement**, not hygiene: the
 `espressif/idf:release-v5.5` tag tracks a branch, and IDF commit `b70607c08b7`
