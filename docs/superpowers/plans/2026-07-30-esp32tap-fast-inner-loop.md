@@ -47,8 +47,8 @@
 
 - Create: `hardware/Esp32Tap/firmware/esp32_rs/tools/fixtures/sweep_contract_base.json`
 - Create: `hardware/Esp32Tap/firmware/esp32_rs/tools/test_sweep_contract.py`
-- Create: ignored local file:
-  `hardware/Esp32Tap/firmware/esp32_rs/.bench/fast-loop-baseline.json`
+- Create outside the repository:
+  `/tmp/esp32tap-fast-baseline-<physical-worktree-key>.json`
 
 - [ ] **Step 1: Record immutable base identity**
 
@@ -88,7 +88,19 @@ python3 -m pytest hardware/Esp32Tap/firmware/esp32_rs/tools/test_sweep_contract.
 
 RED: fixture absent/incomplete. GREEN: exact current sweep passes.
 
-- [ ] **Step 4: Capture pre-implementation timing**
+- [ ] **Step 4: Rebuild current source before timing**
+
+The tracked image is known stale. Run:
+
+```bash
+docker build -t esp32tap-rust:build hardware/Esp32Tap/firmware/esp32_rs
+env ONLY=qemu bash hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
+```
+
+Expected: current-source image, not the 1,299,008-byte tracked blob. Record
+bytes and SHA.
+
+- [ ] **Step 5: Capture pre-implementation timing**
 
 Run three warm samples each, without changing tests:
 
@@ -100,10 +112,10 @@ Run three warm samples each, without changing tests:
 ```
 
 Store command, SHA, image SHA/bytes, start load averages, exit status, and wall
-time in ignored `.bench/fast-loop-baseline.json`. This is orientation data;
+time in `/tmp/esp32tap-fast-baseline-<key>.json`. This is orientation data;
 Task 11 performs the required alternating acceptance comparison.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add hardware/Esp32Tap/firmware/esp32_rs/tools/fixtures/sweep_contract_base.json \
@@ -123,8 +135,9 @@ git commit -m "test(Esp32Tap): freeze release sweep contract"
 
 - [ ] **Step 1: Write RED**
 
-Test that the exact CSV is tracked and not ignored. Do **not** yet assert that
-old bundles are untracked.
+Test that the exact CSV is tracked and not ignored using
+`git check-ignore --no-index`. Do **not** yet assert that old bundles are
+untracked.
 
 ```bash
 python3 -m pytest hardware/Esp32Tap/firmware/esp32_rs/tools/test_source_layout.py -q
@@ -155,6 +168,10 @@ git add .gitignore \
   hardware/Esp32Tap/firmware/esp32_rs/tools/test_source_layout.py
 git commit -m "build(Esp32Tap): track the partition source"
 ```
+
+Record Task 1 HEAD as `CLEAN_BASE_SHA` in bead notes. Task 11 uses this SHA,
+not Task 0, because it is the first clean-build-capable baseline without any
+fast-loop behavior.
 
 ---
 
@@ -221,8 +238,11 @@ Implementation rules:
 - sorted length-prefixed relative path + file bytes;
 - internal symlinks copied as symlinks, including `tools/check_pins.py`;
 - escaping/broken symlinks fail;
-- `.git`, `build*`, `target`, caches, secrets, and unrelated untracked files
-  excluded;
+- exact output directories only are excluded:
+  `esp32_rs/build/`, `esp32_rs/build_qemu_test/`, `esp32_rs/.artifacts/`,
+  every crate `target/`, caches, secrets, and unrelated untracked files;
+- files named `build.rs`, `tools/build.sh`, `tools/build_image.sh`, and
+  `firmware/build_safety_manifest.py` are explicitly tested as declared;
 - target cache:
   `/tmp/esp32tap-target-<sha256(real-worktree)[:12]>/<prod|qemu>`;
 - prod/QEMU never share target directories;
@@ -303,6 +323,7 @@ def shared_bundle(repo_root: Path, kind: str): ...
 
 def verify_locked(bundle: Path, expected: Toolchain, input_digest: str) -> Result: ...
 def locked_exec(repo_root: Path, kind: str, argv: list[str]) -> NoReturn: ...
+def locked_exec_many(repo_root: Path, kinds: tuple[str, ...], argv: list[str]) -> NoReturn: ...
 def publish_generation_atomic(staging: Path, public_link: Path, manifest: dict) -> None: ...
 ```
 
@@ -318,9 +339,18 @@ build_qemu_test -> .artifacts/qemu/<manifest-digest>
 Create generation fully, fsync members/manifest/directory, create a temporary
 relative symlink, then `os.replace(temp_link, public_link)`. Readers resolve
 the link only while holding the shared lock. On failure, old link remains.
+`publish_generation_atomic` also owns a tested legacy migration: when the
+public path is the tracked/pre-migration real directory, it atomically renames
+that directory to a task-specific backup, installs the symlink, and restores
+the original directory on any failure. The backup is removed only after the
+new link and generation are durable. Tests cover success and every injected
+failure point.
 
 CLI `exec --kind ... -- COMMAND` sets the lock FD inheritable, verifies, and
 `os.execvp`s COMMAND so smoke delegation retains the lock continuously.
+CLI `exec-many --kind production --kind qemu-test -- COMMAND` acquires kinds
+in sorted order, verifies both, and preserves both inheritable FDs across the
+single `execvp`.
 
 - [ ] **Step 4: GREEN and commit**
 
@@ -349,7 +379,8 @@ Tests use a fake `docker` binary and assert:
 - Dockerfile/context change changes recipe digest;
 - build/target/cache change does not;
 - absent/stale label rejects;
-- matching OCI label returns immutable `.Id`;
+- matching OCI labels return immutable `.Id` and the creation-time toolchain
+  attestation without invoking `docker run`;
 - script Git mode is `100755`.
 
 ```bash
@@ -360,15 +391,20 @@ python3 -m pytest hardware/Esp32Tap/firmware/esp32_rs/tools/test_build_image.py 
 
 `.dockerignore` denies everything then allows only `Dockerfile` and any exact
 future context files. `build_image.sh --recipe` hashes the Dockerfile plus the
-sorted allowed context. `build_image.sh --check` compares:
+sorted allowed context. Default mode builds a temporary image, runs the exact
+toolchain probes once inside it, validates their output, and commits the final
+image with these inspectable OCI labels:
 
 ```text
 org.treddy.esp32tap.recipe-sha256
+org.treddy.esp32tap.toolchain-json
 ```
 
-to current recipe and emits complete `Toolchain` JSON collected inside the
-container using exact commits/verbose versions, never `git describe` alone.
-Default mode builds with that label. Set mode:
+`build_image.sh --check` performs only `docker image inspect`: it compares the
+recipe label with the current recipe, validates the creation-time toolchain
+JSON, and emits the complete `Toolchain` plus immutable image `.Id`. It never
+starts a container. Toolchain probes use exact commits/verbose versions, never
+`git describe` alone. Set mode:
 
 ```bash
 chmod 0755 hardware/Esp32Tap/firmware/esp32_rs/tools/build_image.sh
@@ -445,16 +481,31 @@ python3 -m pytest \
 bash -n hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
 ```
 
-- [ ] **Step 5: Real build**
+- [ ] **Step 5: Real build and legacy migration proof**
+
+Do not replace the tracked `build_qemu_test` directory in the implementation
+worktree. Prove the first atomic publication, including migration of that real
+directory to a symlink, in a disposable detached worktree:
 
 ```bash
-hardware/Esp32Tap/firmware/esp32_rs/tools/build_image.sh
+IMPL_HEAD="$(git rev-parse HEAD)"
+PROOF_WT="$(mktemp -d /tmp/esp32tap-publish-proof.XXXXXX)"
+git worktree add --detach "$PROOF_WT" "$IMPL_HEAD"
+cleanup_proof() { git worktree remove --force "$PROOF_WT"; }
+trap cleanup_proof EXIT
+"$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/build_image.sh"
 /usr/bin/time -v env ONLY=both \
-  bash hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
-python3 hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py \
-  verify --kind production hardware/Esp32Tap/firmware/esp32_rs/build
-python3 hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py \
-  verify --kind qemu-test hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test
+  bash "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh"
+test -L "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build"
+test -L "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test"
+python3 "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py" \
+  verify --kind production \
+  "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build"
+python3 "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py" \
+  verify --kind qemu-test \
+  "$PROOF_WT/hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test"
+cleanup_proof
+trap - EXIT
 ```
 
 Record timing/load/bytes/SHA.
@@ -479,22 +530,38 @@ git commit -m "build(Esp32Tap): publish gated snapshot builds"
 
 - [ ] **Step 1: Clean-checkout proof before deletion**
 
-Create a detached temporary worktree at Task 5 HEAD. Explicitly remove its old
-output directories, then:
+Create a detached temporary worktree at Task 5 HEAD. Resolve and remove only
+its known output paths, then build from scratch:
 
 ```bash
-env ONLY=both bash hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh
-python3 hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py verify \
-  --kind production hardware/Esp32Tap/firmware/esp32_rs/build
-python3 hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py verify \
-  --kind qemu-test hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test
+CLEAN_HEAD="$(git rev-parse HEAD)"
+CLEAN_WT="$(mktemp -d /tmp/esp32tap-clean-proof.XXXXXX)"
+git worktree add --detach "$CLEAN_WT" "$CLEAN_HEAD"
+cleanup_clean() { git worktree remove --force "$CLEAN_WT"; }
+trap cleanup_clean EXIT
+rm -rf -- \
+  "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/build" \
+  "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test" \
+  "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/.artifacts"
+env ONLY=both \
+  bash "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/build.sh"
+python3 "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py" \
+  verify --kind production \
+  "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/build"
+python3 "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/tools/artifact_provenance.py" \
+  verify --kind qemu-test \
+  "$CLEAN_WT/hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test"
+cleanup_clean
+trap - EXIT
 ```
 
 Expected: both valid from clean source.
 
 - [ ] **Step 2: RED layout assertion**
 
-Extend layout test to require no tracked `esp32_rs/build*` files and ignored
+Extend the layout test to require no tracked files beneath the exact output
+directories `esp32_rs/build/` and `esp32_rs/build_qemu_test/`, while explicitly
+allowing source files such as `build.rs` and `tools/build*.sh`. Require ignored
 public links/generations. Run; expected FAIL.
 
 - [ ] **Step 3: Remove only from index**
@@ -550,9 +617,11 @@ and corresponding members into a temp fixture without a manifest. Do not rely
 on the current local output.
 
 Tests assert missing/stale bundles fail, never skip, before fake Docker/port
-functions; artifact-only S6 checks both bundles; `QemuSession` acquires shared
-lock then verifies before first port; writer cannot publish during assembly;
-smoke/run_harness/harness-run cannot delegate before verification.
+functions; artifact-only S6 checks both bundles and retains both shared locks
+through every fixture read; `QemuSession` acquires its shared lock then
+verifies before first port and holds it through assembly/session teardown;
+writer cannot publish during assembly; smoke/run_harness/harness-run cannot
+delegate before verification.
 
 - [ ] **Step 2: Run RED**
 
@@ -562,10 +631,12 @@ python3 -m pytest hardware/Esp32Tap/firmware/esp32_rs/tools/test_provenance_entr
 
 - [ ] **Step 3: Implement**
 
-- both conftests use mandatory session fixtures with `pytest.fail`;
+- both conftests use mandatory session fixtures with `pytest.fail`, retaining
+  the shared-lock context managers for the entire pytest session;
 - `QemuSession` holds `shared_bundle()` through flash assembly/session life;
 - `qemu_harness/run.sh` becomes a checked delegation to `../run_harness.sh`;
-- `run_harness.sh` uses `artifact_provenance.py exec` so the FD survives exec;
+- `run_harness.sh` uses `artifact_provenance.py exec-many` for production and
+  QEMU so both FDs survive exec;
 - replace smoke symlink with an executable `artifact_provenance.py exec`
   wrapper around the unchanged C++ smoke script;
 - update exact SHA pins/rationales for all strengthened harness files.
@@ -583,9 +654,18 @@ env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios \
 
 - [ ] **Step 5: Commit**
 
-Commit all listed source/test files as:
+Stage every listed source/test file explicitly, then commit:
 
 ```bash
+git add \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_harness/conftest.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios/conftest.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_harness/qemu_session.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_harness/run.sh \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/run_harness.sh \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_smoke.sh \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/verify_harness_copy.py \
+  hardware/Esp32Tap/firmware/esp32_rs/tools/test_provenance_entrypoints.py
 git commit -m "test(Esp32Tap): reject stale artifacts before QEMU"
 ```
 
@@ -605,30 +685,38 @@ Paths are under `hardware/Esp32Tap/firmware/esp32_rs/`.
 Working tree:
 
 ```text
-git diff --name-status -z
-git diff --cached --name-status -z
-git ls-files --others --exclude-standard -z
+git -C <repo-root> diff -M --name-status -z --
+git -C <repo-root> diff -M --cached --name-status -z --
+git -C <repo-root> ls-files --others --exclude-standard -z --
 ```
 
-`--base REV` means `git diff --name-status -z REV --` plus working-tree union.
-`--range A..B` means `git diff --name-status -z A..B --` plus working-tree
-union. Options conflict; clean committed work requires one. Renames include
-old and new paths. Explicit paths must be relative, normalized, non-escaping,
-and only augment a nonempty authoritative set.
+Discover `<repo-root>` with `git -C <script-directory> rev-parse
+--show-toplevel`. `--base REV` adds `git -C <repo-root> diff -M --name-status
+-z REV --`; `--range A..B` adds `git -C <repo-root> diff -M --name-status -z
+A..B --`. Both union the working-tree commands above. Options conflict; clean
+committed work requires one. Renames include old and new paths. Explicit paths
+must be repository-relative, normalized, non-escaping, and only augment a
+nonempty authoritative set. A changed path outside `esp32_rs`, unless it is a
+documentation-only path, selects broad.
 
 Exact initial table:
 
-| Pattern | Policy | Host argv | QEMU argv | workers | artifacts |
-|---|---|---|---|---:|---|
-| `program_core/**` | program-host | `cargo test --manifest-path program_core/Cargo.toml -q` | none | 0 | none |
-| `esp32tap/src/net/program.rs`, `tasks/interval_executor.rs`, `control.rs` | program-control | program_core + safety/difftest | focused `test_program.py` + reviewer D | 2 | qemu |
-| `esp32tap/src/net/**`, `reqbudget/**` | request-api | reqbudget/unsafe gates | focused route/reviewer tests | 2 | qemu |
-| `safety_core/**` | safety | safety + difftest | normal-exit + reviewer control | 2 | qemu |
-| `ble_core/**`, `esp32tap/src/ble/**` | ble | ble_core | BLE focused suites | 2 | qemu |
-| `coach_core/**`, `esp32tap/src/net/coach.rs` | coach | coach_core | coach focused suites | 2 | qemu |
-| `esp32tap/src/net/records.rs` | storage | record/static gates | records/storepers/storetorn | 2 | qemu |
-| `docs/**`, `*.md` outside executable inputs | docs | diff/link checks | none | 0 | none |
-| build/sdkconfig/harness/route registration/selector/unknown | broad | `bash tools/sweep.sh` | embedded in sweep | existing | prod+qemu |
+| Pattern | Policy | Exact host argv | Exact QEMU argv | artifacts |
+|---|---|---|---|---|
+| `hardware/Esp32Tap/firmware/esp32_rs/program_core/**` | program-host | `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/program_core/Cargo.toml -q` | `<none>` | none |
+| `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/net/program.rs`, `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/tasks/interval_executor.rs`, `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/control.rs` | program-control | `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/program_core/Cargo.toml -q`; `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/safety_core/Cargo.toml -q`; `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/difftest/Cargo.toml -q` | `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_program.py -q -n 4`; `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_reviewer_attacks.py -q -n 3 -k console_takeover` | qemu |
+| `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/net/**`, `hardware/Esp32Tap/firmware/esp32_rs/reqbudget/**` | request-api | `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/reqbudget/Cargo.toml -q`; `bash hardware/Esp32Tap/firmware/esp32_rs/tools/check_log_contract.sh` | `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_http_entry.py -q`; `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_reviewer_attacks.py -q -n 3 -k "body_policy or unread_declared_body"` | qemu |
+| `hardware/Esp32Tap/firmware/esp32_rs/safety_core/**` | safety | `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/safety_core/Cargo.toml -q`; `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/difftest/Cargo.toml -q` | `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_normal_exit.py -q`; `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_reviewer_attacks.py -q -n 3` | qemu |
+| `hardware/Esp32Tap/firmware/esp32_rs/ble_core/**`, `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/ble/**` | ble | `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/ble_core/Cargo.toml -q` | `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_ble_degraded.py -q -n 3`; `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_ble_control_point.py -q -n 4` | qemu |
+| `hardware/Esp32Tap/firmware/esp32_rs/coach_core/**`, `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/net/coach.rs` | coach | `cargo test --manifest-path hardware/Esp32Tap/firmware/esp32_rs/coach_core/Cargo.toml -q` | `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_coach.py -q -n 4` | qemu |
+| `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/net/records.rs`, `hardware/Esp32Tap/firmware/esp32_rs/esp32tap/src/net/store.rs` | storage | `bash hardware/Esp32Tap/firmware/esp32_rs/tools/check_log_contract.sh` | `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_records.py -q -n 4`; `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_store_persistence.py -q`; `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m pytest test_store_power_loss.py -q -n 4` | qemu |
+| `docs/**`, `*.md` outside declared executable inputs | docs | `python3 -m pytest hardware/Esp32Tap/firmware/esp32_rs/tools/test_source_layout.py -q` | `<none>` | none |
+| build scripts, Dockerfile/context, sdkconfig/partition source, harness, selector/runner, route-registration diff, outside subtree, unknown | broad | `env -C hardware/Esp32Tap/firmware/esp32_rs bash tools/sweep.sh` | `<embedded in sweep>` | production + qemu |
+
+Policy precedence is broad first. A diff hunk adding/removing
+`httpd_register_uri_handler`, `httpd_uri_t`, or `register_*_handlers` in any
+source file is an exact route-registration trigger and therefore broad even
+when its path otherwise matches a focused row. Tests cover each trigger.
 
 Real-repository test enumerates `git ls-files -z`; every path selects a named
 policy or explicit broad fallback. Malformed selector output/process failure
@@ -686,17 +774,33 @@ Use task-specific `mktemp -d` logs and exact argv arrays; no `eval`.
 
 - [ ] **Step 3: Exact real integration setup**
 
-Create a temporary worktree at current HEAD, make and commit one comment-only
-localized change to `program_core/src/state.rs`, then run:
+Create a temporary worktree at current HEAD with the exact lifecycle below,
+make and commit one comment-only localized change to
+`program_core/src/state.rs`, then run:
 
 ```bash
-bash tools/fast.sh --base HEAD~1
+FAST_WT="$(mktemp -d /tmp/esp32tap-fast-proof.XXXXXX)"
+git worktree add --detach "$FAST_WT" HEAD
+cleanup_fast() { git worktree remove --force "$FAST_WT"; }
+trap cleanup_fast EXIT
+git -C "$FAST_WT" add \
+  hardware/Esp32Tap/firmware/esp32_rs/program_core/src/state.rs
+git -C "$FAST_WT" commit -m "test: localized fast-loop proof"
+env -C "$FAST_WT/hardware/Esp32Tap/firmware/esp32_rs" \
+  bash tools/fast.sh --base HEAD~1
 ```
 
 Expected: authoritative one-commit change, program-host policy, no QEMU. Make a
-second temp commit in `esp32tap/src/net/program.rs`; run the same command and
-expect current QEMU bundle reuse plus focused program-control cases. Remove the
-temporary worktree with `git worktree remove` after clean verification.
+second temp commit in `esp32tap/src/net/program.rs`; run the same command
+twice. The first invocation expects exactly one missing/stale rebuild followed
+by focused program-control cases; the second expects reuse of that current
+QEMU bundle and no rebuild. Then:
+
+```bash
+git -C "$FAST_WT" status --short
+cleanup_fast
+trap - EXIT
+```
 
 - [ ] **Step 4: Commit**
 
@@ -719,8 +823,9 @@ git commit -m "test(Esp32Tap): add provenance-safe fast runner"
 - [ ] **Step 1: RED**
 
 Tests assert exact nearest-rank p95, median, 20% load-pair rejection,
-nonzero/retry failure, ten warm/three cold sample counts, isolated cache paths,
-and executable mode.
+nonzero/retry failure, ten provenance samples, ten host samples, ten warm
+firmware pairs, three cold baseline/candidate pairs, isolated cache paths, and
+executable mode.
 
 - [ ] **Step 2: Implement deterministic tool**
 
@@ -731,7 +836,7 @@ Exit nonzero unless:
 - provenance p95 <1 s;
 - host p95 <5 s;
 - firmware p95 <30 s;
-- candidate median at least 50% below broad;
+- candidate median at least 50% below the exact Task 0 broad reviewer command;
 - 10/10 candidates pass without retries;
 - each accepted pair starts within 20% one-minute load.
 
@@ -767,16 +872,21 @@ git commit -m "test(Esp32Tap): add fast-loop benchmark contract"
 
 - [ ] **Step 1: Create controlled baseline and candidate worktrees**
 
-Baseline worktree at Task 0 SHA; candidate at Task 10 HEAD. In each, create the
-same reproducible localized comment-only commit in `net/program.rs`. Build
-separate physical-worktree-keyed artifacts/caches.
+Baseline worktree at the `CLEAN_BASE_SHA` recorded after Task 1; candidate at
+Task 10 HEAD. In each, create the same reproducible localized comment-only
+commit in `net/program.rs`. Build separate physical-worktree-keyed
+artifacts/caches. The Task 0 timing JSON remains orientation evidence only.
 
 - [ ] **Step 2: Run alternating warm samples**
 
-Alternate baseline broad reviewer command and candidate `tools/fast.sh
---base HEAD~1` ten times. `benchmark_fast.py` records command, SHA, load,
-artifact identity, time, exit, and retry count. Run three cold candidate builds
-with unique target cache paths.
+Collect ten provenance-check samples and ten program-host samples. Then
+alternate the exact Task 0 broad command
+`env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m
+pytest test_reviewer_attacks.py -q -n 3` in the baseline worktree with
+candidate `tools/fast.sh --base HEAD~1` ten times. Finally alternate three
+cold baseline/candidate pairs, giving every sample a unique target-cache path.
+`benchmark_fast.py` records dataset, command argv, SHA, load, artifact
+identity, time, exit, retry count, and pair index.
 
 - [ ] **Step 3: Enforce acceptance**
 
@@ -860,4 +970,3 @@ git status
 ```
 
 If Beads reports no Dolt remote, include that exact result in the handoff.
-
