@@ -1,0 +1,10 @@
+[package]
+name = "reqbudget"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# NO DEPENDENCIES. Same discipline as safety_core: the request budget is pure
+# logic, so it builds and tests on the host in milliseconds instead of needing
+# an Xtensa image and a QEMU boot.
+[dependencies]

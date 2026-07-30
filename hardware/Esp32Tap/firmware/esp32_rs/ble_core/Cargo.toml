@@ -1,0 +1,25 @@
+[package]
+name = "ble_core"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+publish = false
+
+# ONE dependency, and it is ours: safety_core (which itself has zero). Same
+# reason program_core takes it — UNIT SAFETY at the edge. A Control Point write
+# arrives in km/h*100 and percent*10; the belt is commanded in `SpeedTenths`
+# and `InclineHalfPct`. Producing those newtypes HERE, under test, is what
+# stops a raw integer in the wrong unit from reaching `control::command`.
+#
+# Deliberately NOT taken: `uuid`. The Pi daemon uses it because `bluer` wants a
+# 128-bit `Uuid`; NimBLE registers 16-bit SIG UUIDs directly, and the 128-bit
+# expansion is four lines of const byte shuffling with a vector against the
+# daemon's value (`sig_uuid128_matches_the_pi_daemon_expansion`).
+[dependencies]
+safety_core = { path = "../safety_core" }
+
+[dev-dependencies]
+
+[lib]
+name = "ble_core"
+path = "src/lib.rs"

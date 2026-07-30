@@ -1,0 +1,44 @@
+# sdkconfig.defaults.qemu — QEMU-ONLY overrides for the test image.
+# Applied ONLY by the test build, via
+#   ESP_IDF_SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.qemu"
+# in tools/build.sh. The production image never sees these keys ("never weaken
+# production semantics for testability").
+#
+# ---------------------------------------------------------------------------
+# WHY THIS IS A REAL FILE AND NOT THE SYMLINK IT WAS
+# ---------------------------------------------------------------------------
+# It used to be `sdkconfig.defaults.qemu -> ../esp32/sdkconfig.defaults.qemu`,
+# and that target DOES NOT EXIST on this branch — the C++ file lives only on
+# the archived `abandoned C++ native server tier` commit. The symlink was
+# dangling, ESP-IDF skipped the missing fragment without a word, and the
+# QEMU-test image was therefore configured with NO OpenCores NIC at all.
+#
+# That went unnoticed for slices because ESP-IDF only applies SDKCONFIG_DEFAULTS
+# when there is no generated `sdkconfig` yet: a stale one in the cargo target
+# dir, produced back when the symlink still resolved, kept being reused. It
+# survived every rebuild and every sweep. The first change to
+# `esp32tap/Cargo.toml` moved the esp-idf-sys OUT_DIR hash, a FRESH sdkconfig
+# was generated, and the whole network tier stopped compiling
+# (`esp_eth_mac_new_openeth` not found) — with `mbedtls` interrupt MPI and
+# silent-reboot panics silently restored at the same time, which would have
+# taken TLS and every harness dump with them.
+#
+# A dangling symlink that changes the build without failing it is exactly the
+# silent failure mode CLAUDE.md calls the worst one. It is a checked-in file
+# now, so it cannot resolve to nothing.
+#
+# 1. openeth: the esp32s3 QEMU machine exposes the OpenCores ethernet MAC
+#    (-nic user,model=open_eth). Production attaches WiFi STA instead;
+#    everything from esp_netif/lwIP up is identical.
+CONFIG_ETH_USE_OPENETH=y
+#
+# 2. Interrupt-driven hardware MPI Guru-Meditates under this QEMU
+#    (esp_mpi_isr_initialise). Polled hardware MPI works. QEMU-only override;
+#    production keeps the IDF default.
+# CONFIG_MBEDTLS_MPI_USE_INTERRUPT is not set
+#
+# 3. Diagnostic-only: print the panic before rebooting so a harness dump shows
+#    WHY a guest died. Production keeps SILENT_REBOOT (PLAN normative); the
+#    reboot behaviour itself is identical. `tools/check_sdkconfig.py`
+#    --allow-qemu relaxes exactly these two keys and nothing else.
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y

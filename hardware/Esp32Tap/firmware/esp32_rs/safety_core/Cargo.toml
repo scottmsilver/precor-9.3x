@@ -1,0 +1,30 @@
+[package]
+name = "safety_core"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+
+# ZERO dependencies, dev or otherwise. Owner preference: "our logic is our
+# own Rust". Nothing here needs a third-party crate.
+[dependencies]
+
+[dev-dependencies]
+
+[features]
+default = []
+# TEST-HARNESS ONLY: exposes SafetyTimeoutFired::mint_for_differential_test so
+# the difftest crate can drive the one fork-extension method the token would
+# otherwise make undrivable. The esp32tap firmware crate never enables it.
+test-mint = []
+# TEST-HARNESS ONLY: emits the in-guest exit-ordering fact
+# (relay_cmd_off:zero_frame_done|unfinished) as an audit event so the QEMU
+# harness can decide PLAN step1-before-step3 from ONE channel instead of racing
+# the audit log against the motor-TX capture. OFF by default: the obligation is
+# a fork extension with no safety_model.py counterpart, so emitting it in
+# production would diverge the compared event stream from the C++ core (it did
+# — the differential caught event_count 18 vs 17).
+exit-ordering-audit = []
+
+[lib]
+name = "safety_core"
+path = "src/lib.rs"

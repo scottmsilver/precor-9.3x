@@ -58,6 +58,7 @@ cpp/tests/test_*_cov
 
 # Build staging directory (matches build/ at any depth, incl. kotlin/app/build)
 build/
+hardware/Esp32Tap/firmware/esp32/build_qemu_test/
 
 # Rust build artifacts
 **/target/
@@ -122,3 +123,8 @@ provisioning/dietpi/dietpi-wifi.txt*
 
 # JLCPCB session cookies (secret — never commit)
 .jlc_cookies*.json
+
+# Per-session QEMU flash images now live inside the container (/tmp);
+# the old shared one is obsolete and build outputs are not source.
+hardware/Esp32Tap/firmware/esp32_rs/build*/qemu_flash*.bin
+hardware/Esp32Tap/firmware/esp32/build_prof/

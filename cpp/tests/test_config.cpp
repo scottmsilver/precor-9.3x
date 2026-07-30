@@ -47,7 +47,7 @@ TEST_CASE("missing console_read section") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "console_read") != nullptr);
+    CHECK(result.error.find("console_read") != std::string::npos);
 }
 
 TEST_CASE("missing motor_write section") {
@@ -58,7 +58,7 @@ TEST_CASE("missing motor_write section") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "motor_write") != nullptr);
+    CHECK(result.error.find("motor_write") != std::string::npos);
 }
 
 TEST_CASE("missing motor_read section") {
@@ -69,7 +69,7 @@ TEST_CASE("missing motor_read section") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "motor_read") != nullptr);
+    CHECK(result.error.find("motor_read") != std::string::npos);
 }
 
 // ── Missing gpio field ──────────────────────────────────────────────
@@ -83,8 +83,8 @@ TEST_CASE("section exists but no gpio field") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "gpio") != nullptr);
-    CHECK(std::strstr(result.error, "console_read") != nullptr);
+    CHECK(result.error.find("gpio") != std::string::npos);
+    CHECK(result.error.find("console_read") != std::string::npos);
 }
 
 // ── Invalid values ──────────────────────────────────────────────────
@@ -98,7 +98,7 @@ TEST_CASE("gpio value out of range (negative)") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "out of range") != nullptr);
+    CHECK(result.error.find("out of range") != std::string::npos);
 }
 
 TEST_CASE("gpio value out of range (too high)") {
@@ -110,7 +110,7 @@ TEST_CASE("gpio value out of range (too high)") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "out of range") != nullptr);
+    CHECK(result.error.find("out of range") != std::string::npos);
 }
 
 TEST_CASE("gpio value is string not int") {
@@ -122,7 +122,7 @@ TEST_CASE("gpio value is string not int") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "gpio") != nullptr);
+    CHECK(result.error.find("gpio") != std::string::npos);
 }
 
 TEST_CASE("section is not an object") {
@@ -134,7 +134,7 @@ TEST_CASE("section is not an object") {
     GpioConfig cfg;
     auto result = parse_gpio_config(json, &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "console_read") != nullptr);
+    CHECK(result.error.find("console_read") != std::string::npos);
 }
 
 // ── Malformed JSON ──────────────────────────────────────────────────
@@ -143,7 +143,7 @@ TEST_CASE("empty string") {
     GpioConfig cfg;
     auto result = parse_gpio_config("", &cfg);
     CHECK_FALSE(result.ok);
-    CHECK(std::strstr(result.error, "invalid JSON") != nullptr);
+    CHECK(result.error.find("invalid JSON") != std::string::npos);
 }
 
 TEST_CASE("not JSON") {

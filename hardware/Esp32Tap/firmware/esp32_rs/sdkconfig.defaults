@@ -1,0 +1,340 @@
+# Esp32Tap Rust safety core — the PLAN.md NORMATIVE phase-1 key set, carried
+# over from firmware/esp32/sdkconfig.defaults. Network-tier keys (wifi / lwip
+# / httpd / mbedtls) are omitted: this image is the safety core only.
+#
+# Every key here must survive into the esp-idf-sys-generated sdkconfig; the
+# flashed artifact is gated by `grep CONFIG_ESP_TASK_WDT_PANIC=y sdkconfig`
+# (PLAN treadmill-contact checklist item 2).
+
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_IDF_TARGET_ESP32S3=y
+
+# --- FreeRTOS tick: 1000 Hz, NOT the IDF default 100 Hz. Guarded in
+# src/tasks/mod.rs by a const assertion on esp_idf_sys::configTICK_RATE_HZ,
+# so a regression is a COMPILE ERROR rather than a boot loop. (Parity with
+# the C++ static_assert — Rust gives nothing extra here.)
+CONFIG_FREERTOS_HZ=1000
+
+# --- Task WDT: 2 s, panic-on-stall (MANDATORY) ---
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=2
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+# --- Panic action: immediate silent reboot (-> GPIO21 Hi-Z -> R23
+# pull-down -> relay released). There is deliberately no software handler.
+CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT=y
+# Hidden/default key; if the generated sdkconfig emits it, it must be 0
+# (PLAN — nothing may delay the reset that releases the relay).
+CONFIG_ESP_SYSTEM_PANIC_REBOOT_DELAY_SECONDS=0
+CONFIG_ESP_COREDUMP_ENABLE_TO_NONE=y
+CONFIG_APPTRACE_DEST_NONE=y
+CONFIG_APPTRACE_DEST_UART_NONE=y
+
+# --- OCD-aware panic handling is a debug/halt path and is FORBIDDEN in an
+# Emulate-capable build (PLAN; build_safety_manifest.py fail-closes on it).
+# It is not merely cosmetic: with OCDAWARE on, the panic handler consults
+# esp_cpu_dbgr_is_attached() and BREAKS/HALTS instead of resetting when a
+# debugger is present — GPIO21 would stay driven and the relay latched.
+#
+# NOTE the IDF default is =y, so this MUST be stated explicitly. The C++
+# core carries the identical line; omitting it here silently re-enabled the
+# forbidden path in the Rust image and made it unshippable (the generated
+# sdkconfig had CONFIG_ESP_DEBUG_OCDAWARE=y). tools/build.sh now runs
+# build_safety_manifest.py over the generated sdkconfig so the whole
+# FORBIDDEN_ENABLED_SDKCONFIG set is gated, not two hand-picked greps.
+# CONFIG_ESP_DEBUG_OCDAWARE is not set
+
+# --- Brownout detection on (selector left at the IDF default pending the
+# measured min +3V3 of the production artifact).
+CONFIG_ESP_BROWNOUT_DET=y
+
+# --- Main task stack. Raised from the C++ core's 8192: Rust std formatting
+# frames are fatter and main builds the UART drivers on this stack.
+#
+# Raised again 12288 -> 16384 for Slice 3. `mbedtls_x509write_crt_pem` parks a
+# 4 KB DER buffer on ITS CALLER'S stack (and `mbedtls_pk_write_key_pem` a
+# smaller one), and the TLS identity is generated from `main`. This is measured
+# headroom, not superstition: without it the keygen overruns the main task and
+# the failure appears as a boot-path stack canary, which looks like anything
+# but "the certificate writer needed 4 KB".
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- Flash layout: the ESP-IDF STOCK 2 MB / single-app table.
+#
+# This is deliberate, and it is what the committed QEMU harness assumes.
+# `qemu_session.py` merges the flash with `--fill-flash-size 2MB` and
+# `qemu_smoke.sh` does the same; an image whose partition table places a
+# partition above 2 MB cannot be booted by that harness AT ALL, and the only
+# way to run it would be to edit the harness — which is exactly what this
+# port must not need. The safety core is 447 KB / 461 KB, i.e. 43-44% of the
+# stock 1 MB factory partition, and it owns no data partition (no LittleFS,
+# no TLS identity, no history stores), so nothing here wants the larger
+# table. If the port ever grows a data partition, the 8 MB N8 layout comes
+# back in a QEMU-only sdkconfig fragment, never in a harness edit.
+#
+# (Retained for that day — the sharp edge that cost an afternoon: a RELATIVE
+# CONFIG_PARTITION_TABLE_CUSTOM_FILENAME does NOT work under esp-idf-sys.
+# idf.py resolves it against the project dir; esp-idf-sys generates its own
+# CMake project under target/.../esp-idf-sys-<HASH>/out/ and resolves against
+# THAT, and <HASH> is not knowable in advance. Use the absolute /project path
+# that tools/build.sh always bind-mounts.)
+
+# --- Rust-specific: IDF defaults to CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y.
+# That peripheral is NOT emulated by esp-QEMU, the VFS write returns 0 bytes,
+# and Rust std turns that into a panic on the FIRST print — a 31k-line boot
+# loop. The C++ core never hit it because ESP_LOGx goes straight out UART0
+# via ets_printf, bypassing the VFS. We log via ESP_LOG for the same reason,
+# and set this as belt-and-braces.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# --- Reproducible build (added 2026-07-28) ---
+#
+# WHY THIS IS A SAFETY KEY, not a nicety: PLAN's "exact production artifact
+# identity" section makes `bundle_sha256` — a hash of the application,
+# bootloader, partition table and sdkconfig — the name every bench log, scope
+# capture and contact-timing record is filed under. If two builds of identical
+# source produce different bytes, that identity is meaningless: evidence can
+# never be re-derived, and "rebuild and confirm the hash" is not a check
+# anyone can run.
+#
+# Measured before this key was set: wiping the cargo target dirs and building
+# the same commit twice produced DIFFERENT application and bootloader images
+# (the partition table was already stable). The cause is IDF's default
+# `CONFIG_APP_COMPILE_TIME_DATE=y`, which stamps __DATE__/__TIME__ into the
+# esp_app_desc, plus absolute build paths in the binaries.
+# CONFIG_APP_REPRODUCIBLE_BUILD=y turns both off.
+CONFIG_APP_REPRODUCIBLE_BUILD=y
+
+# Slice 1: /ws is part of the app-facing contract (status stream), so the
+# WebSocket support in esp_http_server is a production feature, not test-only.
+CONFIG_HTTPD_WS_SUPPORT=y
+
+# --- Slice 3: TLS. THIS ONE KEY IS THE WHOLE "httpd_ssl_* is uncallable" BUG.
+#
+# The recorded blocker said esp_https_server was "absent from the bindings" and
+# guessed the fix was a component whitelist. It was neither: the component was
+# being BUILT the whole time (the generated build had
+# `esp_idf_comp_esp_https_server_enabled`), and esp-idf-sys's stock
+# src/include/esp-idf/bindings.h already carries
+#
+#     #ifdef CONFIG_ESP_HTTPS_SERVER_ENABLE
+#     #include "esp_https_server.h"
+#     #endif
+#
+# — gated on the KCONFIG SYMBOL, not on the component. The generated sdkconfig
+# read `# CONFIG_ESP_HTTPS_SERVER_ENABLE is not set`, so bindgen never saw the
+# header and emitted zero `httpd_ssl_*` symbols. One Kconfig line fixes it.
+#
+# Its Kconfig dependency (`depends on ESP_TLS_USING_MBEDTLS && MBEDTLS_TLS_SERVER`)
+# is already satisfied by the defaults, so this key takes effect as written.
+CONFIG_ESP_HTTPS_SERVER_ENABLE=y
+
+# --- Slice 3: mDNS. The component itself is pulled in as a remote (managed)
+# component from esp32tap/Cargo.toml — see the long note there. These are its
+# knobs.
+#
+# The console CLI defaults to y and drags the `console` component (and an
+# argtable/linenoise-shaped surface) into an image whose only job is to answer
+# DNS-SD queries. There is no UART shell on this device; refuse it.
+# CONFIG_MDNS_ENABLE_CONSOLE_CLI is not set
+# One netif (ETH today, WiFi later) — the default of 3 sizes per-interface
+# state we will never use.
+CONFIG_MDNS_MAX_INTERFACES=1
+#
+# PREDEFINED INTERFACES OFF — and this is a CORRECTNESS fix, not a diet.
+#
+# With the predefs on, the component learns about an interface ONLY from an
+# event: `mdns_preset_if_handle_system_event` enables the PCB when it sees
+# ETHERNET_EVENT_CONNECTED / IP_EVENT_ETH_GOT_IP. The firmware brings the link
+# up and waits for DHCP BEFORE it starts mDNS (a record must not advertise an
+# address the device does not have yet), so those events have already fired by
+# the time `mdns_init` registers the handler. The result is a responder that
+# starts, logs success, answers `mdns_service_add` with ESP_OK — and never
+# replies to a single query, because no PCB was ever enabled. That is exactly
+# the failure this cost a debugging cycle to find, and it is silent.
+#
+# With the predefs off, `MDNS_MAX_INTERFACES` slots are all CUSTOM, so
+# net/mdns.rs registers ETH_DEF explicitly and drives ENABLE_IP4/ANNOUNCE_IP4
+# itself. That works whatever order the link and the responder come up in, and
+# it says in the source which interface serves discovery — which matters when
+# this board moves from openeth to WiFi.
+# CONFIG_MDNS_PREDEF_NETIF_STA is not set
+# CONFIG_MDNS_PREDEF_NETIF_AP is not set
+# CONFIG_MDNS_PREDEF_NETIF_ETH is not set
+
+# --- 8 MB layout with a data partition (added 2026-07-28) ---
+#
+# The note above said the 8 MB N8 table comes back "if the port ever grows a
+# data partition". It has: the persistence tier needs the `storage` partition
+# at 0x210000, which does not exist under the stock 2 MB table — the image
+# carried only `factory` and `nvs`, and esp_partition_find_first("storage")
+# returned null, so every store probe answered no_partition.
+#
+# The FILENAME MUST BE ABSOLUTE — the sharp edge documented above. idf.py
+# resolves a relative path against the project dir, but esp-idf-sys generates
+# its own CMake project under target/.../esp-idf-sys-<HASH>/out/ and resolves
+# against THAT, and <HASH> is not knowable in advance. tools/build.sh always
+# bind-mounts the worktree at /project, so this path is stable.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="/project/hardware/Esp32Tap/firmware/esp32_rs/partitions_esp32tap.csv"
+
+# --- Slice 6: BLE (NimBLE). --------------------------------------------------
+#
+# TWO KEYS ARE THE WHOLE ENABLEMENT, and they were found by READING rather than
+# probing — esp-idf-sys 0.37's own src/include/esp-idf/bindings.h gates the
+# NimBLE headers on exactly `CONFIG_BT_ENABLED` plus `CONFIG_BT_NIMBLE_ENABLED`
+# (and excludes only S2/P4, so the S3 is fine). BUILD-OPTIONS.md does NOT
+# document them; it points at `cargo pio espidf menuconfig`, which applies to
+# the `pio` builder and not the `native` one this port uses.
+#
+# NO `extra_components` AND NO `bindings_header` ARE NEEDED, and that is not an
+# oversight — it is the mDNS lesson applied in reverse. mDNS needed
+# `extra_components` because it is a MANAGED (remote) component outside base
+# ESP-IDF. `bt` is a BASE component, compiled by the native builder's own CMake
+# tree and gated purely by Kconfig, exactly like `esp_https_server` above:
+# turning the symbol on is sufficient to make `nimble_port_*`, `ble_hs_*`,
+# `ble_gap_*`, `ble_gatts_*` and `ble_gattc_*` appear in the generated bindings.
+CONFIG_BT_ENABLED=y
+# Bluedroid is the DEFAULT stack when BT is enabled and it is the wrong one:
+# it is a Kconfig `choice`, so naming NimBLE selects it, and the explicit
+# negative below makes the intent unmissable to anyone reading this file.
+# CONFIG_BT_BLUEDROID_ENABLED is not set
+CONFIG_BT_NIMBLE_ENABLED=y
+#
+# TWO connections, not the IDF default of 3. This device needs exactly two: one
+# inbound (a fitness app on the FTMS peripheral) and one outbound (a heart-rate
+# strap on the central). Each slot costs controller and host memory whether or
+# not it is used, and "resident memory must not move with connection count"
+# starts with bounding the count.
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=2
+# The FTMS Treadmill Data value is 13 bytes and an HR Measurement is 2-3, so
+# nothing here needs a large MTU. The default (256) buys a bigger msys pool for
+# no benefit; 128 still clears every payload this firmware sends or receives
+# with room to spare.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=128
+#
+# THE NIMBLE HOST TASK'S STACK, SIZED RATHER THAN DEFAULTED.
+#
+# This key was absent, so the build took the IDF default of 4096 B — and that
+# is the ONE task in this firmware whose stack was never sized, while being the
+# task with the DEEPEST UNTRUSTED CALL CHAIN. Everything a radio peer can reach
+# runs on it: `access_cb` -> `on_control_point` -> `plan` -> `apply` ->
+# `control::command` -> `SafetyController::command_motion` + `request_emulate`
+# + `apply_outputs` (GPIO), plus `stop_the_belt`'s program-lock path, plus
+# `treadmill_data()` and all five `central.rs` discovery callbacks.
+#
+# Every other task in this tree has its arithmetic written down (see the
+# normative matrix in tasks/mod.rs: serial_engine 8192, emulate_cycle 6144,
+# interval_exec 16384, session 12288). That discipline exists BECAUSE the httpd
+# task already overflowed its stack on POST /history/{id}/resume and silently
+# rebooted (commit a055117) — and a reboot drops the relay mid-run.
+#
+# THE ARITHMETIC, worst case, one Control Point write:
+#   NimBLE host internals (HCI event dispatch, L2CAP, ATT/GATT,
+#     os_mbuf chain walking) — what the 4096 default exists to cover ~2500 B
+#   access_cb frame + the CP_MAX=20 bounded copy                      ~100 B
+#   on_control_point -> plan -> apply -> stop_the_belt                ~400 B
+#   control::command -> command_motion / request_emulate              ~350 B
+#   apply_outputs (GPIO writes through the HAL)                       ~150 B
+#   logging: log_fmt's FixedStr<192> + write_line's SECOND
+#     FixedStr<192> + [u8;193], all live at once                      ~600 B
+#   esp_log_write -> vsnprintf into the console driver                ~500 B
+#                                                              total ~4600 B
+# That is already OVER the 4096 default before any margin, which is the whole
+# point: the overflow was reachable by an unauthenticated peer in radio range
+# writing 3 bytes. 8192 matches the serial engine and leaves ~44% headroom.
+#
+# THE NUMBER IS NOT LEFT AS ARITHMETIC. `ble::ftms::on_control_point` samples
+# uxTaskGetStackHighWaterMark on this task after every write and logs
+# `ble: host task stack low-water N bytes` whenever a NEW minimum is reached,
+# so the first real board replaces this estimate with a measurement. Bead
+# precor-9_3x-l0h.
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=8192
+
+# --- Persistence: LittleFS over the `storage` partition ---------------------
+#
+# THE SIZES ARE STATED HERE BECAUSE THEY ARE RESIDENT MEMORY, not tuning. Every
+# one of these is a buffer littlefs holds for the life of the mount, and the
+# tier this replaced (`recstore`) held 200 bytes total — so the cost of using a
+# real filesystem is exactly what these lines add. See net/store.rs, which
+# MEASURES the total at mount and reports it through `QT store_stat`, rather
+# than leaving this arithmetic as the claim.
+#
+# The buffers, per mount: one read cache (CACHE_SIZE), one program cache
+# (CACHE_SIZE) and one lookahead bitmap (LOOKAHEAD_SIZE), plus `lfs_t` and the
+# esp_littlefs wrapper. Each OPEN FILE additionally costs CACHE_SIZE, and this
+# firmware opens exactly one at a time and closes it before it returns.
+#
+# CACHE_SIZE=128 rather than the component's 512: littlefs requires
+# `cache_size % read_size == 0` and `block_size % cache_size == 0`, so 128 is
+# the smallest legal value at READ/WRITE_SIZE=128 and it saves 384 bytes on
+# each of the two mount caches AND on every open file. A record here is under
+# 1 KB, so the extra block reads a small cache costs are invisible next to a
+# 4 KB sector erase.
+CONFIG_LITTLEFS_READ_SIZE=128
+CONFIG_LITTLEFS_WRITE_SIZE=128
+CONFIG_LITTLEFS_CACHE_SIZE=128
+#
+# LOOKAHEAD=32 IS SIZED TO THE PARTITION, not defaulted. The lookahead buffer
+# is a bitmap of free blocks at 8 blocks per byte; the `storage` partition is
+# 1 MB of 4 KB blocks = 256 blocks = exactly 32 bytes. The component's default
+# of 128 would reserve 96 bytes to describe blocks that do not exist.
+CONFIG_LITTLEFS_LOOKAHEAD_SIZE=32
+#
+# One partition is mounted, so do not reserve slots for three.
+CONFIG_LITTLEFS_MAX_PARTITIONS=1
+#
+# BLOCK_CYCLES IS THE WEAR KNOB, so it is stated rather than inherited. It is
+# how many erase cycles littlefs allows a metadata block to take before it
+# RELOCATES that block's contents elsewhere — i.e. it is dynamic wear
+# levelling, and it is the single most wear-relevant setting in this component.
+# 512 happens to be the component's default; it is written here because the
+# block above claims to state the costs, and a defaulted wear setting inside a
+# block that states everything else reads as an oversight.
+#
+# THE ERASE BUDGET THIS TIER ACTUALLY SPENDS, since the cadence is ours:
+# net/session.rs checkpoints the in-progress run every 30 s into the SAME slot,
+# so a 3-hour session is ~360 rewrites — the dominant write load on the device
+# by an order of magnitude (history and workouts are user actions, a handful per
+# session). Each rewrite is a copy-on-write data block plus one metadata commit
+# in the mount root's pair, so ~400 erases per session against a 1 MB / 256-block
+# partition. With relocation at 512 cycles those erases spread across the whole
+# partition rather than pounding two blocks: ~1.6 erases per block per session,
+# and a 100k-cycle NOR sector then survives tens of thousands of sessions —
+# decades of daily use, with the assumption stated so a future cadence change
+# (a 5 s checkpoint would be 6x this) has something to be checked against.
+# net/store.rs::slot_equals is the other half of this bound and belongs in the
+# same budget: a checkpoint whose numbers did not change (a paused session, a
+# belt at zero) writes NOTHING, so an idle hour costs zero erases rather than
+# 120 of them.
+CONFIG_LITTLEFS_BLOCK_CYCLES=512
+#
+# NO MTIME. It costs 4 bytes per file on flash plus an attribute write on every
+# commit, and it would be a LIE on this device: there is no RTC and no
+# guarantee of NTP, so `time(NULL)` at the moment a run record is checkpointed
+# is whatever the epoch says. Record ordering comes from an explicit sequence
+# number in the record itself (net/store.rs) precisely so it does not depend on
+# a clock this hardware does not have.
+# CONFIG_LITTLEFS_USE_MTIME is not set
+#
+# NO SPIFFS COMPATIBILITY SHIM. It auto-creates parent directories on open and
+# deletes them when they empty; this tier uses flat, fixed filenames at the
+# mount root and wants an open of a name that is not there to FAIL rather than
+# to conjure a path.
+# CONFIG_LITTLEFS_SPIFFS_COMPAT is not set
+#
+# NO MMAP. Mapping 1 MB of flash into the address space to speed up a store
+# that is read a few times per request is a poor trade on a part where the
+# address space is the scarce thing.
+# CONFIG_LITTLEFS_MMAP_PARTITION is not set
+#
+# NO WDT PETTING INSIDE FLASH OPERATIONS, and that is a safety decision rather
+# than an oversight. CONFIG_LITTLEFS_WDT_RESET makes littlefs call
+# esp_task_wdt_reset() during read/write/erase — i.e. it makes a stalled flash
+# operation invisible to the watchdog. The task WDT here is 2 s with PANIC, and
+# panic means reset means the relay is released; a store operation that cannot
+# finish in 2 s is precisely the condition that must reach it. The longest
+# thing this tier does on purpose is one 4 KB sector erase (~30 ms).
+# CONFIG_LITTLEFS_WDT_RESET is not set

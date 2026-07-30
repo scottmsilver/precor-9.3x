@@ -98,3 +98,10 @@ ship-check:
 
 ship-check-nobelt:
 	deploy/ship-check.sh --no-belt
+
+# Esp32Tap QEMU behavioral harness (docker + pytest; ~10 min headless).
+# Deliberately NOT wired into test-all — run on demand or in firmware CI.
+esp32tap-qemu-behavior:
+	bash hardware/Esp32Tap/firmware/esp32/tools/qemu_harness/run.sh
+
+.PHONY: esp32tap-qemu-behavior

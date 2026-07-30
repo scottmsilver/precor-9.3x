@@ -1,0 +1,20 @@
+[package]
+name = "program_core"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+publish = false
+
+# ONE dependency, and it is ours: safety_core, which itself has zero. The
+# reason is unit safety, not convenience — an interval's speed is a
+# `SpeedTenths` and its incline an `InclineHalfPct`, the SAME newtypes
+# `SafetyController::command_motion` takes, so the executor cannot hand the
+# belt a number in the wrong unit. Re-declaring local integer fields here and
+# converting at the call site is exactly the mistake those newtypes exist to
+# make impossible.
+[dependencies]
+safety_core = { path = "../safety_core" }
+
+[lib]
+name = "program_core"
+path = "src/lib.rs"

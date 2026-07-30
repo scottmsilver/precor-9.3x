@@ -1,0 +1,143 @@
+[package]
+name = "esp32tap"
+version = "0.0.0"
+edition = "2021"
+resolver = "2"
+rust-version = "1.90"
+
+[[bin]]
+name = "esp32tap"
+harness = false
+
+[profile.release]
+opt-level = "s"
+debug = true
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = "z"
+debug = true
+
+[dependencies]
+# Our own safety core — zero dependencies of its own.
+safety_core = { path = "../safety_core" }
+# Host-testable request budget (see reqbudget/src/lib.rs).
+reqbudget = { path = "../reqbudget" }
+# The interval executor's decisions: portable, allocation-free, host-tested.
+program_core = { path = "../program_core" }
+# The BLE wire bytes: FTMS encoding + HR Measurement parsing, ported from the
+# working Pi daemons and host-tested against their vectors. Taken
+# UNCONDITIONALLY, not behind `feature = "ble"`, because `src/hr.rs` uses its
+# `HrReading`/`peer` types to answer `/api/hrm` on a build with no radio.
+ble_core = { path = "../ble_core" }
+# The AI coach's judgement: the bounded reply scanner, the clamps applied to a
+# model's tool call, the request builder and the truncation salvage. Taken
+# UNCONDITIONALLY, not behind `feature = "net"`, for the same reason `ble_core`
+# is: it is a pure host-tested crate with no IDF surface, and gating it would
+# mean the safety build could not even typecheck the tier it declines to run.
+coach_core = { path = "../coach_core" }
+
+# Espressif-provided. NOTE ON esp-idf-svc: it would be the natural home for
+# the HTTP/TLS server and mDNS wrappers, but its latest release (0.51) pins
+# esp-idf-hal ^0.45 -> esp-idf-sys ^0.36, a full generation behind the 0.46/
+# 0.37 pair this port is built on, and only one crate may link `esp_idf_hal`.
+# Downgrading the whole stack broke the toolchain probe. We therefore call the
+# same ESP-IDF services directly through esp-idf-sys (see net/mod.rs) — not a
+# reimplementation of the service, just no intermediary crate forcing a
+# downgrade. Revisit when esp-idf-svc catches up to hal 0.46.
+esp-idf-hal = "0.46.2"
+esp-idf-sys = "0.37.2"
+
+[build-dependencies]
+embuild = "0.33"
+
+# --- mDNS: a MANAGED (remote) component, not part of base ESP-IDF ----------
+#
+# READ THIS BEFORE CHANGING IT. The previous attempt at this reached for
+# `[package.metadata.esp-idf-sys] esp_idf_components = [...]` and was burned:
+# that key is an EXCLUSIVE whitelist ("this list is used to TRIM the esp-idf
+# build"), so naming a handful of components dropped every other one and CMake
+# failed outright. It is the wrong lever entirely — it removes components, it
+# does not add them.
+#
+# The documented lever is `extra_components` with a `remote_component`
+# (esp-idf-sys 0.37 BUILD-OPTIONS.md, "Remote components (idf component
+# registry)"), which maps 1:1 onto an `idf_component.yml` dependency and is
+# resolved by the IDF component manager (on by default). It ADDS to the build
+# instead of trimming it, so nothing else is disturbed.
+#
+# NO `bindings_header` IS NEEDED, and that is not an oversight. esp-idf-sys's
+# own src/include/esp-idf/bindings.h already carries
+#
+#     #if defined(ESP_IDF_COMP_MDNS_ENABLED) || defined(ESP_IDF_COMP_ESPRESSIF__MDNS_ENABLED)
+#     #include "mdns.h"
+#     #endif
+#
+# and `-DESP_IDF_COMP_<NAME>_ENABLED` is emitted for every component that was
+# actually built (build/common.rs, `clang_args`). Pulling the component in is
+# therefore sufficient to make `mdns_*` appear in the generated bindings; the
+# slash in the name becomes `__`, hence ESPRESSIF__MDNS.
+#
+# The version is pinned to a compatible range rather than floating; the exact
+# resolution is recorded in the generated `components_esp32s3.lock`
+# (1.8.2 at the time of writing).
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = "~1.8.0" }
+
+# --- LittleFS: a MANAGED component that ALSO needs a bindings header -------
+#
+# This is the mDNS entry above with ONE extra field, and that field is the
+# whole difference between "the component builds" and "the component is
+# callable". mDNS needs no `bindings_header` because esp-idf-sys's own
+# src/include/esp-idf/bindings.h already carries an `#include "mdns.h"` behind
+# `ESP_IDF_COMP_ESPRESSIF__MDNS_ENABLED`. joltwallet/littlefs is not in that
+# file at all, so without a header of our own the component compiles into the
+# image and bindgen emits nothing — a build that succeeds and a crate that
+# cannot name a single symbol.
+#
+# READ bindings/littlefs.h BEFORE MOVING THIS. The recorded blocker
+# ("declaring a bindings_header in [package.metadata.esp-idf-sys] did not take
+# effect — the metadata parsed but the key was absent at build time") was a
+# MISPLACED KEY, not a missing capability: `bindings_header` is a field on
+# each `[[…extra_components]]` ENTRY and does not exist on the table itself,
+# so setting it there parses and is never read.
+#
+# `bindings_module` puts them in their own module (`esp_idf_sys::littlefs`)
+# rather than merging them into the crate root. That costs duplicate esp-idf
+# types inside that module — we only cross the boundary with a nul-terminated
+# path, a null partition pointer and an esp_err_t, so nothing is affected —
+# and buys a blast radius: a bindgen change here cannot perturb the root
+# bindings every other module in this firmware compiles against.
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "joltwallet/littlefs", version = "^1.14" }
+bindings_header = "bindings/littlefs.h"
+bindings_module = "littlefs"
+
+
+[features]
+default = []
+# Compile-time gate for the QEMU behavioral-harness shim. A cfg'd-out module
+# is never compiled, so no `qemu_test` panic-location strings can leak into
+# the production binary (S6 asserts their absence).
+# The QEMU-test image also turns on safety_core's exit-ordering audit fact so
+# the harness can decide PLAN step1-before-step3 in-guest. Production does not.
+qemu-test = ["safety_core/exit-ordering-audit"]
+# Slice 1 network foundation (openeth/WiFi netif + server tier).
+# Gated while it is developed so the safety image and its gates are
+# unaffected until the stack is proven.
+net = []
+# The BLE tier: FTMS peripheral + HRM central over NimBLE.
+#
+# GATED FOR THE SAME REASON `net` IS, and with the same honesty about what is
+# proven: QEMU has no BLE radio, so nothing about advertising, connecting,
+# pairing or notifying can be tested here. What CAN be tested — and is, by
+# every QEMU gate in the tree, because the test image carries this feature —
+# is that a device whose radio does not come up still boots, still serves
+# HTTPS, still pushes `/ws`, and still moves the belt. See bead
+# precor-9_3x-l0h for what stays unproven until a board exists.
+#
+# The Kconfig side (`CONFIG_BT_ENABLED`, `CONFIG_BT_NIMBLE_ENABLED`) lives in
+# sdkconfig.defaults; a build with this feature off simply never references
+# libbt, so the linker drops it.
+ble = []
