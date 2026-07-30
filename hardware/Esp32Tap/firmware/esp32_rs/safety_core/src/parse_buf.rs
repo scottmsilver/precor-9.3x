@@ -24,7 +24,8 @@
 //! no externally visible symptom until someone presses the button and nothing
 //! happens.
 //!
-//! The C++ `firmware/esp32/main/serial_engine_task.cpp` has the same wedge;
+//! The C++ `main/serial_engine_task.cpp` — retired with the C++ application,
+//! preserved on `archive/esp32tap-cpp-net-tier` — had the same wedge;
 //! it is reported, not silently forked. This buffer is task-layer plumbing —
 //! it is NOT part of the 148-case ported corpus and changes no model
 //! semantics, so it does not affect the differential.

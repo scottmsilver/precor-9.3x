@@ -37,7 +37,7 @@ check-pins:
 # relies on CONFIG_COMPILER_CXX_RTTI being unset. Guard the property the
 # flag protects: no RTTI constructs may enter the firmware sources.
 check-no-rtti:
-	@if grep -rnE '\b(typeid|dynamic_cast)\b' ../components ../main \
+	@if grep -rnE '\b(typeid|dynamic_cast)\b' ../components \
 	      --include='*.cpp' --include='*.h' --include='*.hpp' \
 	    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(//|\*|/\*)'; then \
 	  echo 'error: RTTI construct found (build relies on -fno-rtti)'; exit 1; \
