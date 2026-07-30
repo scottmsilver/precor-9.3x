@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import fcntl
 import hashlib
 import json
@@ -880,14 +881,63 @@ def test_ambiguous_first_promotion_removes_final_when_no_prior_tag(
     assert IMAGE_TAG not in docker_state(fake_docker[1])["refs"]
 
 
+def test_suite_never_mutates_global_publication_lock() -> None:
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    mutators = {
+        "chmod",
+        "hardlink_to",
+        "mkdir",
+        "rename",
+        "replace",
+        "symlink_to",
+        "touch",
+        "unlink",
+        "write_bytes",
+        "write_text",
+    }
+    unsafe_lines = [
+        node.lineno
+        for node in ast.walk(tree)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "PUBLICATION_LOCK"
+            and node.func.attr in mutators
+        )
+    ]
+    assert unsafe_lines == []
+
+
 def test_publication_refuses_preplaced_symlink_lock(
     context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
 ) -> None:
+    def lock_identity(path: Path) -> tuple[int, int, int, int] | None:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return None
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink)
+
     image_tag = f"example/esp32tap:symlink-{tmp_path.name}"
+    production_identity = lock_identity(PUBLICATION_LOCK)
+    fixture_lock = tmp_path / "fixture-publication.lock"
+    fixture_script = context / "tools" / "build_image.sh"
+    original = fixture_script.read_text(encoding="utf-8")
+    lock_declaration = (
+        'publication_lock_path = Path("/tmp/esp32tap-image-publication.lock")'
+    )
+    assert original.count(lock_declaration) == 1
+    fixture_script.write_text(
+        original.replace(
+            lock_declaration,
+            f"publication_lock_path = Path({str(fixture_lock)!r})",
+        ),
+        encoding="utf-8",
+    )
     target = tmp_path / "attacker-target"
     target.write_text("", encoding="utf-8")
-    PUBLICATION_LOCK.unlink(missing_ok=True)
-    PUBLICATION_LOCK.symlink_to(target)
+    fixture_lock.symlink_to(target)
     try:
         completed = run(
             context,
@@ -900,7 +950,9 @@ def test_publication_refuses_preplaced_symlink_lock(
             for call in docker_calls(fake_docker[1])
         )
     finally:
-        PUBLICATION_LOCK.unlink()
+        fixture_lock.unlink(missing_ok=True)
+        assert PUBLICATION_LOCK == Path("/tmp/esp32tap-image-publication.lock")
+        assert lock_identity(PUBLICATION_LOCK) == production_identity
 
 
 def test_boolean_probe_schema_version_never_reaches_final_tag(
