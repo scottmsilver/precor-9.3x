@@ -160,6 +160,8 @@ def _always_excluded(relative: str) -> bool:
 
 def _relevant_untracked(relative: str) -> bool:
     path = PurePosixPath(relative)
+    if not _under(path, _ESP32_RS):
+        return False
     name = path.name
     if name in _UNTRACKED_INPUT_NAMES:
         return True

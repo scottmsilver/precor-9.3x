@@ -200,8 +200,15 @@ def test_unrelated_untracked_files_caches_and_secrets_are_excluded(repo: Path) -
     commit_all(repo)
     unrelated = (
         "notes.txt",
+        "notes.py",
+        "config.json",
+        "Makefile",
         "download.bin",
         "scratch/random.dat",
+        "scratch/notes.py",
+        "scratch/config.json",
+        "scratch/Makefile",
+        "another_project/src/lib.rs",
         str(RS / "esp32tap/src/__pycache__/thing.py"),
         str(RS / "esp32tap/.pytest_cache/state.json"),
         str(RS / "esp32tap/.env"),
@@ -285,7 +292,43 @@ def test_completeness_runs_all_four_gates_from_snapshot(
     make_gate_fixture(repo)
     snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
 
+    unavailable = tmp_path / "source-unavailable"
+    assert repo.parent == tmp_path
+    assert not unavailable.exists()
+    repo.rename(unavailable)
+    try:
+        verify_gate_input_completeness(snapshot.root)
+    finally:
+        unavailable.rename(repo)
+
+
+def test_completeness_exposes_absolute_fallback_to_live_source(
+    repo: Path, tmp_path: Path
+) -> None:
+    make_gate_fixture(repo)
+    live_only = write(repo, "live-only.txt", "live\n")
+    gate = repo / RS / "tools/check_unsafe_budget.py"
+    gate.write_text(
+        "from pathlib import Path\n"
+        f"assert Path({str(live_only)!r}).read_text(encoding='utf-8') == 'live\\n'\n",
+        encoding="utf-8",
+    )
+    commit_all(repo)
+    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
+
     verify_gate_input_completeness(snapshot.root)
+    unavailable = tmp_path / "source-unavailable"
+    assert repo.parent == tmp_path
+    assert not unavailable.exists()
+    repo.rename(unavailable)
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="check_unsafe_budget.py.*failed|failed.*check_unsafe_budget.py",
+        ):
+            verify_gate_input_completeness(snapshot.root)
+    finally:
+        unavailable.rename(repo)
 
 
 @pytest.mark.parametrize("missing", ["gate_helper.py", "gate-data.txt", "native_gate"])
@@ -336,6 +379,20 @@ def test_real_repository_declares_build_inputs_and_safe_pin_symlink(
 @pytest.mark.slow
 def test_real_repository_snapshot_runs_all_current_host_gates(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[5]
-    snapshot = create_snapshot(repo_root, tmp_path / "snapshot", tmp_path / "target")
+    disposable = tmp_path / "disposable-checkout"
+    subprocess.run(
+        ["git", "clone", "-q", "--shared", str(repo_root), str(disposable)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    snapshot = create_snapshot(disposable, tmp_path / "snapshot", tmp_path / "target")
 
-    verify_gate_input_completeness(snapshot.root)
+    unavailable = tmp_path / "disposable-source-unavailable"
+    assert disposable.parent == tmp_path
+    assert not unavailable.exists()
+    disposable.rename(unavailable)
+    try:
+        verify_gate_input_completeness(snapshot.root)
+    finally:
+        unavailable.rename(disposable)
