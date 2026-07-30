@@ -386,7 +386,7 @@ impl ProgramState {
     /// Commit the pause after its zero-speed command was accepted.
     pub fn commit_pause(&mut self, now: Micros) -> Plan {
         let plan = self.prepare_pause();
-        if !self.paused {
+        if self.running && !self.paused {
             self.paused = true;
             self.pause_start = Some(now);
         }
@@ -776,6 +776,7 @@ mod tests {
     #[test]
     fn test_toggle_pause() {
         let mut s = loaded();
+        s.start(at(0), 0, 0);
         s.toggle_pause(at(0));
         assert!(s.paused());
         s.toggle_pause(at(1));
@@ -850,8 +851,13 @@ mod tests {
     #[test]
     fn pausing_a_program_that_is_not_running_commands_nothing() {
         let mut s = loaded();
-        assert!(s.toggle_pause(at(0)).is_empty());
-        assert!(s.toggle_pause(at(1)).is_empty());
+        assert!(s.prepare_pause().is_empty());
+        assert!(s.commit_pause(at(0)).is_empty());
+        assert!(!s.running());
+        assert!(
+            !s.paused(),
+            "Pause on a stopped program is a semantic no-op"
+        );
     }
 
     #[test]

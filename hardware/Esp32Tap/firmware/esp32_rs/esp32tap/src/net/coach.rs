@@ -160,7 +160,7 @@ use crate::context::lock;
 use crate::control::{self, Surface};
 use crate::net::api::{parse_key_str, read_body_into, respond};
 use crate::net::program::{
-    drive, drive_stop, pause_transaction, resume_transaction, start_transaction,
+    drive, drive_stop, pause_transaction, resume_transaction, start_transaction, PauseOutcome,
 };
 use crate::{logi, logw};
 use coach_core::hist::Role;
@@ -639,7 +639,8 @@ fn apply(action: &Action) -> Option<&'static str> {
                 return Some("no workout is running");
             }
             match pause_transaction(&mut p, now) {
-                Ok(()) => None,
+                Ok(PauseOutcome::Paused) => None,
+                Ok(PauseOutcome::NotRunning) => Some("no workout is running"),
                 Err(_) => Some("the treadmill refused to pause the workout"),
             }
         }

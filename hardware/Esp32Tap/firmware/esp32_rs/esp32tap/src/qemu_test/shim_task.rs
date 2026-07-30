@@ -89,6 +89,44 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
     match verb {
         "state" => print_state(ctx),
 
+        "program_owner" => {
+            let d = {
+                let g = lock(&ctx.guarded);
+                crate::control::program_owner_debug(&g)
+            };
+            qt!(
+                "QTOK program_owner generation={} current={} active={} owns={}",
+                d.generation,
+                d.current as u32,
+                d.active as u32,
+                d.owns as u32
+            );
+        }
+
+        // Freeze the 1 s executor before setting its sticky interlock. Taking
+        // program→guarded here drains any in-flight tick before QTOK, making
+        // the handler-level rejected-Pause assertion deterministic instead of
+        // a scheduler race. Test image only; production has no such command.
+        "executor_inhibit" => {
+            let Some(v) = parse_int(args) else {
+                qt!("QTERR executor_inhibit_args");
+                return;
+            };
+            if v != 0 && v != 1 {
+                qt!("QTERR executor_inhibit_args");
+                return;
+            }
+            if v == 1 {
+                let _p = lock(&ctx.program);
+                crate::qemu_test::set_executor_held(true);
+                let mut g = lock(&ctx.guarded);
+                g.executor_inhibited = true;
+            } else {
+                crate::qemu_test::set_executor_held(false);
+            }
+            qt!("QTOK executor_inhibit v={}", v);
+        }
+
         "lease" => {
             let (connected, acquired, gen) = {
                 let mut g = lock(&ctx.guarded);

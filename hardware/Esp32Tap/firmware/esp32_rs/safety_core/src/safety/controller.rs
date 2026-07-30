@@ -596,6 +596,15 @@ impl SafetyController {
             .any(|a| a == c)
     }
 
+    /// Read-only connection observation for integration diagnostics.
+    ///
+    /// Ownership is a separate fact (`owner()`); a failed acquisition can be
+    /// connected without owning, which is exactly the state transactional
+    /// application rollback must remove.
+    pub fn is_connected(&self, connection: &ConnectionIdentity) -> bool {
+        self.is_active(connection)
+    }
+
     fn retain_active<F: Fn(&ConnectionIdentity) -> bool>(&mut self, keep: F) {
         let mut w = 0;
         for i in 0..self.active_count {

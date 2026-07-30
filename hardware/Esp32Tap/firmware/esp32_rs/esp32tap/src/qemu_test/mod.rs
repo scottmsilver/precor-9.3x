@@ -31,6 +31,17 @@ pub use safety_io::{K1Mode, QemuTestSafetyIo};
 pub use shim_task::run;
 
 use safety_core::FixedStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static EXECUTOR_HELD: AtomicBool = AtomicBool::new(false);
+
+pub fn set_executor_held(held: bool) {
+    EXECUTOR_HELD.store(held, Ordering::Release);
+}
+
+pub fn executor_held() -> bool {
+    EXECUTOR_HELD.load(Ordering::Acquire)
+}
 
 /// Raw console print with NO `ESP_LOG` decoration — the exact equivalent of
 /// the C++ shim's `std::printf`.

@@ -236,13 +236,29 @@ pub(crate) fn resume_transaction(p: &mut ProgramState, now: Micros) -> Result<()
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PauseOutcome {
+    Paused,
+    NotRunning,
+}
+
 /// Pause only after the zero-speed command was accepted.
-pub(crate) fn pause_transaction(p: &mut ProgramState, now: Micros) -> Result<(), control::Reject> {
+///
+/// `NotRunning` is a Pi-level semantic no-op, not a safety rejection. Keeping
+/// it outside `control::Reject` lets HTTP preserve the existing 200/ok:false
+/// contract while genuine controller refusals remain 409.
+pub(crate) fn pause_transaction(
+    p: &mut ProgramState,
+    now: Micros,
+) -> Result<PauseOutcome, control::Reject> {
+    if !p.running() {
+        return Ok(PauseOutcome::NotRunning);
+    }
     let plan = p.prepare_pause();
     let mut g = lock(&crate::CTX.guarded);
     apply_plan(&mut g, plan, false, now)?;
     p.commit_pause(now);
-    Ok(())
+    Ok(PauseOutcome::Paused)
 }
 
 /// The WHOLE meaning of Stop: the program's plan, and then the belt itself.
@@ -530,13 +546,24 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
         }
         V_PAUSE => {
             let result = if p.paused() {
-                resume_transaction(&mut p, now)
+                resume_transaction(&mut p, now).map(|()| PauseOutcome::Paused)
             } else {
                 pause_transaction(&mut p, now)
             };
-            if let Err(reject) = result {
-                drop(p);
-                return respond_reject(req, reject);
+            match result {
+                Ok(PauseOutcome::Paused) => {}
+                Ok(PauseOutcome::NotRunning) => {
+                    drop(p);
+                    return respond(
+                        req,
+                        c"200 OK",
+                        br#"{"ok":false,"error":"No program running"}"#,
+                    );
+                }
+                Err(reject) => {
+                    drop(p);
+                    return respond_reject(req, reject);
+                }
             }
             (Plan::none(), false, None)
         }

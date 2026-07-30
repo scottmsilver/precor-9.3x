@@ -275,6 +275,36 @@ def test_failed_start_is_rolled_back_and_does_not_strand_the_executor_lease(qemu
     s.stop_pacer()
 
 
+def test_start_ownership_conflict_cleans_attempted_executor_identity(qemu):
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/speed", {"value": 2.0})
+    assert st == 200 and body["ok"] is True, body
+    s.wait_tx_contains(WIRE[2.0], timeout=45)
+    st, body = http(s, "POST", "/api/program/load", PROGRAM)
+    assert st == 200 and body["running"] is False, body
+
+    st, body = http(s, "POST", "/api/program/start")
+    assert st == 409 and body["ok"] is False, body
+    owner = s.cmd_ok("QT program_owner")
+    assert "generation=1" in owner, owner
+    assert "current=0" in owner and "active=0" in owner and "owns=0" in owner, owner
+    st, state = http(s, "GET", "/api/status")
+    assert state["speed"] == 2.0, state
+
+    # Stop releases the unrelated manual owner. A new explicit Start must mint
+    # generation 2 (never reuse the cleaned generation 1) and then succeed.
+    n0 = len(s.audit_events())
+    st, body = http(s, "POST", "/api/program/stop")
+    assert st == 200, body
+    s.wait_audit("lease_released", since=n0, timeout=45)
+    st, body = http(s, "POST", "/api/program/start")
+    assert st == 200 and body["running"] is True, body
+    owner = s.cmd_ok("QT program_owner")
+    assert "generation=2" in owner, owner
+    assert "current=1" in owner and "active=1" in owner and "owns=1" in owner, owner
+    s.stop_pacer()
+
+
 def test_intervals_advance_on_the_guest_clock_with_no_client(qemu):
     s = armed(qemu)
     st, body = http(s, "POST", "/api/program/start", PROGRAM)
@@ -325,6 +355,42 @@ def test_pause_holds_the_program_and_zeroes_the_belt_then_resume_restores_it(qem
     assert st == 200 and body["paused"] is False, body
     # Resume re-commands the current interval.
     s.wait_tx_contains(WIRE[1.0], timeout=60, offset=tx0)
+    s.stop_pacer()
+
+
+def test_pause_of_stopped_program_is_a_semantic_noop(qemu):
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/program/load", PROGRAM)
+    assert st == 200 and body["running"] is False and body["paused"] is False, body
+    st, body = http(s, "POST", "/api/program/pause")
+    assert st == 200 and body["ok"] is False, body
+    state = prog(s)
+    assert state["running"] is False and state["paused"] is False, state
+    s.stop_pacer()
+
+
+def test_rejected_pause_does_not_publish_paused_while_motion_remains_nonzero(qemu):
+    """Isolate the pre-executor-sync interlock window deterministically.
+
+    Production sets this sticky bit during ownership loss and the 1 s executor
+    consumes it later. The test-image command sets only that application gate,
+    intentionally preserving the nonzero controller command so this asserts
+    the stronger atomicity property: a rejected zero can never commit Pause.
+    """
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/program/start", PROGRAM)
+    assert st == 200 and body["running"] is True and body["paused"] is False, body
+    s.wait_tx_contains(WIRE[1.0], timeout=60)
+    s.cmd_ok("QT executor_inhibit 1")
+
+    st, body = http(s, "POST", "/api/program/pause")
+    assert st == 409 and body["ok"] is False, body
+    state = prog(s)
+    assert state["running"] is True and state["paused"] is False, state
+    st, belt = http(s, "GET", "/api/status")
+    assert st == 200 and belt["speed"] == 1.0 and belt["mode"] == "emulate", belt
+    s.cmd_ok("QT executor_inhibit 0")
+    http(s, "POST", "/api/program/stop")
     s.stop_pacer()
 
 

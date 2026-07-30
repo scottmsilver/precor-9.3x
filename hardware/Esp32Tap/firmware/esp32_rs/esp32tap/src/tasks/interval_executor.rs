@@ -127,6 +127,14 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
         delay_ms(EXECUTOR_TICK_MS);
         seconds = seconds.wrapping_add(1);
 
+        #[cfg(feature = "qemu-test")]
+        if crate::qemu_test::executor_held() {
+            if seconds % 5 == 0 {
+                logi!("heartbeat uptime={}s", seconds);
+            }
+            continue;
+        }
+
         // ONE tick, decided and commanded atomically under both locks.
         //
         // `tick` reads the clock rather than counting ticks, so a late wake-up

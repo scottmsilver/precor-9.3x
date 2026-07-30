@@ -241,10 +241,8 @@ pub fn rollback_program_entry(g: &mut Guarded, now: Micros) {
     let Some(id) = owner(g, Surface::Executor).identity() else {
         return;
     };
-    if g.controller.owner() != Some(id) {
-        return;
-    }
-    if g.controller.mode() == SafeMode::Emulating {
+    let owns = g.controller.owner() == Some(id);
+    if owns && g.controller.mode() == SafeMode::Emulating {
         let _ = command_as(
             g,
             Surface::Executor,
@@ -255,7 +253,36 @@ pub fn rollback_program_entry(g: &mut Guarded, now: Micros) {
             now,
         );
     }
-    release(g, Surface::Executor, now);
+    // `disconnect` removes the active identity even when it is not the lease
+    // owner. That non-owner case is the ownership-conflict hole: connect
+    // succeeded, acquire failed, and the attempted identity otherwise stayed
+    // active forever. If it DOES own (including a partially entered transfer),
+    // disconnect is the immediate fail-safe release rather than a delayed
+    // normal exit.
+    let _ = g.controller.disconnect(&id, now);
+    owner_mut(g, Surface::Executor).current = None;
+    g.apply_outputs();
+}
+
+#[cfg(feature = "qemu-test")]
+pub struct ProgramOwnerDebug {
+    pub generation: i64,
+    pub current: bool,
+    pub active: bool,
+    pub owns: bool,
+}
+
+/// QEMU-only observation of transaction cleanup; never part of production.
+#[cfg(feature = "qemu-test")]
+pub fn program_owner_debug(g: &Guarded) -> ProgramOwnerDebug {
+    let owner = owner(g, Surface::Executor);
+    let id = owner.identity();
+    ProgramOwnerDebug {
+        generation: owner.generation,
+        current: id.is_some(),
+        active: id.is_some_and(|id| g.controller.is_connected(&id)),
+        owns: id.is_some_and(|id| g.controller.owner() == Some(id)),
+    }
 }
 
 /// The motion + auto-emulate choreography for an identity that ALREADY owns
