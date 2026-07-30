@@ -665,6 +665,42 @@ fn machine_status_vectors() {
 }
 
 #[test]
+fn rejected_completion_suppresses_optimistic_status_notifications() {
+    let completion = complete_control_point(
+        ControlCommand::SetTargetSpeed(322),
+        RESULT_INVALID_PARAM,
+    );
+    assert_eq!(completion.machine_status, None);
+    assert_eq!(completion.training_status, None);
+    assert_eq!(
+        completion.response,
+        [RESPONSE_CODE, OP_SET_TARGET_SPEED, RESULT_INVALID_PARAM]
+    );
+
+    let start = complete_control_point(ControlCommand::StartOrResume, RESULT_FAILED);
+    assert_eq!(start.machine_status, None);
+    assert_eq!(start.training_status, None);
+    assert_eq!(
+        start.response,
+        [RESPONSE_CODE, OP_START_OR_RESUME, RESULT_FAILED]
+    );
+}
+
+#[test]
+fn successful_completion_preserves_machine_then_training_payloads() {
+    let completion = complete_control_point(ControlCommand::StartOrResume, RESULT_SUCCESS);
+    assert_eq!(
+        completion.machine_status.unwrap().as_slice(),
+        &[0x04],
+    );
+    assert_eq!(completion.training_status, Some([0x00, 0x0D]));
+    assert_eq!(
+        completion.response,
+        [RESPONSE_CODE, OP_START_OR_RESUME, RESULT_SUCCESS]
+    );
+}
+
+#[test]
 fn every_notification_fits_the_fixed_buffer() {
     // The whole reason `Notification` replaces the daemon's `Vec<u8>`: the
     // notify path must be allocation-free, which is only sound if 3 bytes is

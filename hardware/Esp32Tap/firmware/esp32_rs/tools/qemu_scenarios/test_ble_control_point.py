@@ -373,6 +373,7 @@ def test_positive_speed_reports_failed_recovery_while_feedback_is_invalid(qemu):
     s.cmd_ok("QT k1 closed")
     s.wait_audit("emergency:relay_feedback_both_closed", timeout=30)
 
+    tx0 = len(s.tx_bytes())
     op, result = ble_cp(s, OP_SET_TARGET_SPEED, *KMH[2.0])
     assert op == OP_SET_TARGET_SPEED
     # `control::Reject::Refused` deliberately uses the existing FTMS mapping:
@@ -383,6 +384,9 @@ def test_positive_speed_reports_failed_recovery_while_feedback_is_invalid(qemu):
     assert after["mode"] == "proxy", after
     assert after["relay"] is False, after
     assert after["speed"] == 0.0, after
+    audit0 = s.audit_events()[-1][0] + 1
+    s.wait_audit("complete_console_frame", since=audit0, timeout=5)
+    assert b"[hmph:C8]" not in s.tx_bytes()[tx0:]
     s.stop_pacer()
 
 

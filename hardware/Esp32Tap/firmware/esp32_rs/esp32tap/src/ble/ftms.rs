@@ -509,10 +509,16 @@ unsafe fn on_control_point(conn_handle: u16, cp_handle: u16, bytes: &[u8]) {
         }
     };
 
-    // Fitness Machine Status and Training Status FIRST, exactly as the daemon
-    // orders it: a client's own UI mirrors what it asked for, and it should
-    // see that echo whether or not the belt accepts the motion.
-    if let Some(note) = proto::encode_status_notification(cmd) {
+    let effect = proto::effect_of(cmd);
+    let result = apply(effect);
+    sample_host_stack();
+    let completion = proto::complete_control_point(cmd, result);
+
+    // Preserve the daemon's successful wire order: Fitness Machine Status,
+    // Training Status, then the Control Point indication. Unlike the daemon,
+    // emit the request echo only after this device's safety controller
+    // accepted it; a refusal must not announce motion that never happened.
+    if let Some(note) = completion.machine_status {
         notify(
             conn_handle,
             H_MACHINE_STATUS.load(Ordering::Relaxed),
@@ -520,7 +526,7 @@ unsafe fn on_control_point(conn_handle: u16, cp_handle: u16, bytes: &[u8]) {
             note.as_slice(),
         );
     }
-    if let Some(ts) = proto::encode_training_status(cmd) {
+    if let Some(ts) = completion.training_status {
         notify(
             conn_handle,
             H_TRAINING_STATUS.load(Ordering::Relaxed),
@@ -529,15 +535,7 @@ unsafe fn on_control_point(conn_handle: u16, cp_handle: u16, bytes: &[u8]) {
         );
     }
 
-    let effect = proto::effect_of(cmd);
-    let result = apply(effect);
-    sample_host_stack();
-
-    indicate(
-        conn_handle,
-        cp_handle,
-        &proto::encode_control_response(cmd.opcode(), result),
-    );
+    indicate(conn_handle, cp_handle, &completion.response);
 }
 
 /// Turn a Control Point effect into belt motion, through THE ONE PATH.

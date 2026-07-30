@@ -401,6 +401,35 @@ pub fn encode_status_notification(cmd: ControlCommand) -> Option<Notification> {
     }
 }
 
+/// The wire effects allowed after a Control Point command has been applied.
+///
+/// A request echo is truthful only after the belt accepted the effect. On
+/// refusal the indication remains mandatory, but optimistic Machine Status or
+/// Training Status would announce motion that never happened.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ControlPointCompletion {
+    pub machine_status: Option<Notification>,
+    pub training_status: Option<[u8; 2]>,
+    pub response: [u8; 3],
+}
+
+pub fn complete_control_point(cmd: ControlCommand, result: u8) -> ControlPointCompletion {
+    let accepted = result == RESULT_SUCCESS;
+    ControlPointCompletion {
+        machine_status: if accepted {
+            encode_status_notification(cmd)
+        } else {
+            None
+        },
+        training_status: if accepted {
+            encode_training_status(cmd)
+        } else {
+            None
+        },
+        response: encode_control_response(cmd.opcode(), result),
+    }
+}
+
 // --- Unit conversion ------------------------------------------------------
 
 /// mph x 10 -> km/h x 100. `mph_tenths * 16.0934`, computed as

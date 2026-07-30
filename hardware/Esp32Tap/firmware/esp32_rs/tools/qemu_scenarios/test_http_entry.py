@@ -125,6 +125,7 @@ def test_positive_speed_reports_rejected_recovery_truthfully(qemu):
     s.cmd_ok("QT k1 closed")
     s.wait_audit("emergency:relay_feedback_both_closed", timeout=30)
 
+    tx0 = len(s.tx_bytes())
     st, body = http_result(s, "POST", "/api/speed", {"value": 2.0})
     assert st == 409 and body["ok"] is False, (st, body)
 
@@ -133,4 +134,7 @@ def test_positive_speed_reports_rejected_recovery_truthfully(qemu):
     assert after["mode"] == "proxy", after
     assert after["relay"] is False, after
     assert after["speed"] == 0.0, after
+    audit0 = s.audit_events()[-1][0] + 1
+    s.wait_audit("complete_console_frame", since=audit0, timeout=5)
+    assert b"[hmph:C8]" not in s.tx_bytes()[tx0:]
     s.stop_pacer()
