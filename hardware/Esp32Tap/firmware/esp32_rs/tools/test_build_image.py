@@ -74,6 +74,7 @@ import fcntl
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -110,6 +111,18 @@ if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_STARTED_MARKER"):
         stream.write("started")
 if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_SIGNAL_BARRIER"):
     barrier = os.environ["FAKE_BUILD_SIGNAL_BARRIER"]
+    with open(barrier + ".pid", "w", encoding="utf-8") as stream:
+        stream.write(str(os.getpid()))
+    with open(barrier + ".ready", "w", encoding="utf-8") as stream:
+        stream.write("ready")
+    while not os.path.exists(barrier + ".release"):
+        time.sleep(0.01)
+if argv and argv[0] == "build" and os.environ.get("FAKE_TERM_RESISTANT_BARRIER"):
+    barrier = os.environ["FAKE_TERM_RESISTANT_BARRIER"]
+    def resist_term(_signum, _frame):
+        with open(barrier + ".term", "w", encoding="utf-8") as stream:
+            stream.write("term")
+    signal.signal(signal.SIGTERM, resist_term)
     with open(barrier + ".pid", "w", encoding="utf-8") as stream:
         stream.write(str(os.getpid()))
     with open(barrier + ".ready", "w", encoding="utf-8") as stream:
@@ -1097,6 +1110,48 @@ def test_termination_during_build_or_probe_reaps_child_and_preserves_final(
         assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
         followup = run(context, fake_docker)
         assert followup.returncode == 0, followup.stderr
+    finally:
+        Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
+        process.kill()
+        process.wait()
+        if child_pid > 0:
+            wait_process_gone(child_pid)
+
+
+def test_duplicate_termination_during_reaping_cannot_strand_resistant_child(
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
+) -> None:
+    barrier = tmp_path / "term-resistant-child"
+    process = subprocess.Popen(
+        [str(context / "tools" / "build_image.sh")],
+        cwd=context,
+        env=run_environment(
+            context,
+            fake_docker,
+            extra_env={"FAKE_TERM_RESISTANT_BARRIER": str(barrier)},
+        ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    child_pid = -1
+    try:
+        wait_for(Path(str(barrier) + ".ready"))
+        child_pid = int(Path(str(barrier) + ".pid").read_text(encoding="utf-8"))
+        os.kill(process.pid, signal.SIGTERM)
+        wait_for(Path(str(barrier) + ".term"))
+        os.kill(process.pid, signal.SIGTERM)
+        os.kill(process.pid, signal.SIGTERM)
+        result = process.communicate(timeout=8)
+        assert process.returncode == 128 + signal.SIGTERM, result
+        wait_process_gone(child_pid)
+
+        calls = docker_calls(fake_docker[1])
+        build_call = next(call for call in calls if call[0] == "build")
+        assert not Path(build_call[-1]).exists()
+        assert any(call[:2] == ["image", "rm"] for call in calls)
+        assert not any(call[0] == "commit" for call in calls)
+        assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
     finally:
         Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
         process.kill()

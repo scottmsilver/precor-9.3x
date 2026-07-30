@@ -365,8 +365,9 @@ cancellation_deferred = False
 
 def cancel_build(signum: int, _frame: object) -> None:
     global cancellation_signum
-    if cancellation_signum is None:
-        cancellation_signum = signum
+    if cancellation_signum is not None:
+        return
+    cancellation_signum = signum
     if not cancellation_deferred:
         raise BuildCancelled(cancellation_signum)
 
