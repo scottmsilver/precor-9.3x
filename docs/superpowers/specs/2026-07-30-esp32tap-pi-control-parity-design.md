@@ -295,7 +295,8 @@ Add tests proving:
 
 - one manual speed command remains active beyond four and ten seconds;
 - repeated commands reuse ownership and do not cycle the relay;
-- Stop and Pause command zero and release as specified;
+- Pause commands zero while retaining executor ownership, and Stop commands
+  zero then completes normal exit and releases ownership;
 - a console takeover sets the executor inhibit and no executor acquisition can
   clear it;
 - accepted Start/Resume clears that inhibit through the guarded path;
