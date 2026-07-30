@@ -1598,6 +1598,37 @@ def test_identity_bound_cleanup_leaves_replaced_retired_alias_untouched(
     assert (saved / "tracked-old").read_text(encoding="utf-8") == "genuine"
 
 
+def test_descriptor_bound_cleanup_does_not_follow_replaced_root_path(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    (public / "tracked-old").write_text("genuine", encoding="utf-8")
+    saved = rs / ".saved-open-retired"
+    replaced: Path | None = None
+
+    def replace_after_fd_validation(point: str) -> None:
+        nonlocal replaced
+        if point != "after_retired_fd_validation":
+            return
+        candidates = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
+        assert len(candidates) == 1
+        replaced = candidates[0]
+        replaced.rename(saved)
+        replaced.mkdir()
+        (replaced / "keep").write_text("unrelated", encoding="utf-8")
+
+    monkeypatch.setattr(provenance, "_failure_point", replace_after_fd_validation)
+    publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
+
+    assert replaced is not None
+    assert (replaced / "keep").read_text(encoding="utf-8") == "unrelated"
+    assert saved.is_dir()
+
+
 @pytest.mark.parametrize(
     "bad",
     [
