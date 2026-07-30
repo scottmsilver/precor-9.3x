@@ -413,7 +413,7 @@ def test_locked_exec_child_inherits_lock_until_it_exits(
                 "facts=json.loads(" + repr(expected_json) + ");"
                 "facts['features']=tuple(facts['features']);"
                 "p._current_input_digest=lambda _:'a'*64;"
-                "p._current_toolchain=lambda _:p.Toolchain(**facts);"
+                "p._current_toolchain=lambda _,_kind:p.Toolchain(**facts);"
                 f"p.locked_exec(Path({str(root)!r}),'production',"
                 f"[{sys.executable!r},'-c',{code!r}])"
             ),
@@ -450,15 +450,11 @@ def test_exec_many_sorts_unique_kinds_and_preserves_two_fds(
     qemu_staging.mkdir()
     for member in BUNDLE_MEMBERS:
         (qemu_staging / member).write_bytes((staging / member).read_bytes())
+    qemu_expected = replace(toolchain, profile="qemu-release")
     publish_generation_atomic(
         qemu_staging,
         rs / "build_qemu_test",
-        make_manifest(
-            qemu_staging,
-            "qemu-test",
-            "a" * 64,
-            replace(toolchain, features=()),
-        ),
+        make_manifest(qemu_staging, "qemu-test", "a" * 64, qemu_expected),
     )
     seen: list[tuple[str, ...]] = []
 
@@ -476,7 +472,9 @@ def test_exec_many_sorts_unique_kinds_and_preserves_two_fds(
     monkeypatch.setattr(
         provenance,
         "_current_toolchain",
-        lambda _root: replace(toolchain, features=()),
+        lambda _root, kind: (
+            replace(toolchain, features=()) if kind == "production" else qemu_expected
+        ),
     )
     with pytest.raises(provenance._ExecIntercept):
         locked_exec_many(
@@ -485,6 +483,43 @@ def test_exec_many_sorts_unique_kinds_and_preserves_two_fds(
             [sys.executable, "-c", "pass"],
         )
     assert len(seen[0]) >= 2
+
+
+@pytest.mark.parametrize("mismatched_kind", ["production", "qemu-test"])
+def test_exec_many_rejects_either_kind_specific_toolchain_mismatch(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+    mismatched_kind: str,
+) -> None:
+    root, rs, staging = layout
+    production = replace(toolchain, features=())
+    publish(layout, toolchain)
+    qemu_staging = rs / "staging-qemu"
+    qemu_staging.mkdir()
+    for member in BUNDLE_MEMBERS:
+        (qemu_staging / member).write_bytes((staging / member).read_bytes())
+    publish_generation_atomic(
+        qemu_staging,
+        rs / "build_qemu_test",
+        make_manifest(qemu_staging, "qemu-test", "a" * 64, toolchain),
+    )
+
+    def current(_root: Path, kind: str) -> Toolchain:
+        expected = production if kind == "production" else toolchain
+        if kind == mismatched_kind:
+            return replace(expected, profile="current-profile-changed")
+        return expected
+
+    monkeypatch.setattr(provenance, "_current_input_digest", lambda _root: "a" * 64)
+    monkeypatch.setattr(provenance, "_current_toolchain", current)
+    monkeypatch.setattr(
+        provenance.os,
+        "execvp",
+        lambda *_args: pytest.fail("exec must not run for kind mismatch"),
+    )
+    with pytest.raises(provenance.InvalidError):
+        locked_exec_many(root, ("production", "qemu-test"), ["true"])
 
 
 @pytest.mark.parametrize(
@@ -506,7 +541,7 @@ def test_locked_exec_rejects_current_fact_or_source_drift_before_exec(
     current = replace(toolchain, features=())
     if mode == "toolchain":
         current = replace(current, linker_version="current linker changed")
-    monkeypatch.setattr(provenance, "_current_toolchain", lambda _root: current)
+    monkeypatch.setattr(provenance, "_current_toolchain", lambda _root, _kind: current)
     monkeypatch.setattr(
         provenance,
         "_current_input_digest",
@@ -1199,7 +1234,7 @@ def test_cli_classifies_missing_manifest_as_missing(
     monkeypatch.setattr(
         provenance,
         "_current_toolchain",
-        lambda _root: replace(toolchain, features=()),
+        lambda _root, _kind: replace(toolchain, features=()),
     )
 
     assert (
@@ -1218,9 +1253,11 @@ def test_cli_classifies_missing_manifest_as_missing(
     )
 
 
-def test_current_toolchain_runs_snapshot_check_and_parses_canonical_json(
+@pytest.mark.parametrize("kind", ["production", "qemu-test"])
+def test_current_toolchain_runs_kind_specific_snapshot_check(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
+    kind: str,
 ) -> None:
     root, rs, _ = layout
     checker = rs / "tools/build_image.sh"
@@ -1229,19 +1266,23 @@ def test_current_toolchain_runs_snapshot_check_and_parses_canonical_json(
     checker.chmod(0o755)
     calls: list[tuple[list[str], dict]] = []
 
-    def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+    expected = replace(toolchain, features=()) if kind == "production" else toolchain
+
+    def kind_runner(
+        argv: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
         calls.append((argv, kwargs))
         return subprocess.CompletedProcess(
             argv,
             0,
-            stdout=canonical_toolchain_json(toolchain),
+            stdout=canonical_toolchain_json(expected),
             stderr="",
         )
 
-    assert provenance._current_toolchain(root, runner=runner) == toolchain
+    assert provenance._current_toolchain(root, kind, runner=kind_runner) == expected
     assert calls == [
         (
-            [str(checker), "--check"],
+            [str(checker), "--check", "--kind", kind],
             {
                 "cwd": root,
                 "stdout": subprocess.PIPE,
@@ -1256,10 +1297,12 @@ def test_current_toolchain_runs_snapshot_check_and_parses_canonical_json(
 @pytest.mark.parametrize(
     ("mode", "error"),
     [
-        ("missing", provenance.MissingError),
+        ("missing", provenance.InvalidError),
+        ("nonexecutable", provenance.InvalidError),
         ("noncanonical", provenance.InvalidError),
         ("malformed", provenance.InvalidError),
-        ("failed", provenance.InternalError),
+        ("policy", provenance.InvalidError),
+        ("failed", provenance.InvalidError),
         ("runner_error", provenance.InternalError),
     ],
 )
@@ -1274,7 +1317,7 @@ def test_current_toolchain_error_classification(
     if mode != "missing":
         checker.parent.mkdir()
         checker.write_text("#!/bin/sh\n", encoding="utf-8")
-        checker.chmod(0o755)
+        checker.chmod(0o644 if mode == "nonexecutable" else 0o755)
 
     def runner(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if mode == "runner_error":
@@ -1284,6 +1327,10 @@ def test_current_toolchain_error_classification(
             output = json.dumps(json.loads(output), indent=2) + "\n"
         elif mode == "malformed":
             output = "{"
+        elif mode == "policy":
+            value = json.loads(output)
+            value["features"] = ["NOT-CANONICAL"]
+            output = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
         return subprocess.CompletedProcess(
             argv,
             7 if mode == "failed" else 0,
@@ -1292,7 +1339,7 @@ def test_current_toolchain_error_classification(
         )
 
     with pytest.raises(error):
-        provenance._current_toolchain(root, runner=runner)
+        provenance._current_toolchain(root, "production", runner=runner)
 
 
 def test_verify_cli_uses_live_digest_and_current_toolchain(
@@ -1304,7 +1351,13 @@ def test_verify_cli_uses_live_digest_and_current_toolchain(
     public, _ = publish(layout, toolchain)
     expected = replace(toolchain, features=())
     calls: list[Path] = []
-    monkeypatch.setattr(provenance, "_current_toolchain", lambda actual: expected)
+    monkeypatch.setattr(
+        provenance,
+        "_current_toolchain",
+        lambda actual, actual_kind: (
+            expected if actual == root and actual_kind == "production" else None
+        ),
+    )
 
     def digest(actual: Path) -> str:
         calls.append(actual)
@@ -1353,7 +1406,7 @@ def test_verify_cli_rejects_each_changed_current_toolchain_fact(
     root, _, _ = layout
     public, _ = publish(layout, toolchain)
     current = replace(replace(toolchain, features=()), **{field: value})
-    monkeypatch.setattr(provenance, "_current_toolchain", lambda _root: current)
+    monkeypatch.setattr(provenance, "_current_toolchain", lambda _root, _kind: current)
     monkeypatch.setattr(provenance, "_current_input_digest", lambda _root: "a" * 64)
 
     assert (
@@ -1381,7 +1434,7 @@ def test_verify_cli_rejects_changed_live_source_digest(
     monkeypatch.setattr(
         provenance,
         "_current_toolchain",
-        lambda _root: replace(toolchain, features=()),
+        lambda _root, _kind: replace(toolchain, features=()),
     )
     monkeypatch.setattr(provenance, "_current_input_digest", lambda _root: "b" * 64)
 

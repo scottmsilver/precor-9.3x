@@ -924,20 +924,22 @@ def _current_input_digest(repo_root: Path) -> str:
 
 def _current_toolchain(
     repo_root: Path,
+    kind: str,
     *,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> Toolchain:
+    _kind(kind)
     esp32_rs = _physical_esp32_rs(repo_root)
     checker = esp32_rs / "tools" / "build_image.sh"
     try:
         info = checker.lstat()
     except FileNotFoundError as exc:
-        raise MissingError("tools/build_image.sh is missing") from exc
+        raise InvalidError("tools/build_image.sh is missing") from exc
     except OSError as exc:
         raise InternalError(f"cannot inspect tools/build_image.sh: {exc}") from exc
     if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
         raise InvalidError("tools/build_image.sh must be an executable regular file")
-    argv = [str(checker), "--check"]
+    argv = [str(checker), "--check", "--kind", kind]
     try:
         completed = runner(
             argv,
@@ -954,7 +956,7 @@ def _current_toolchain(
     if completed.returncode != 0:
         detail = completed.stderr.strip()
         suffix = f": {detail}" if detail else ""
-        raise InternalError(f"tools/build_image.sh --check failed{suffix}")
+        raise InvalidError(f"tools/build_image.sh --check failed{suffix}")
     try:
         value = json.loads(completed.stdout)
     except (json.JSONDecodeError, UnicodeError, TypeError) as exc:
@@ -990,7 +992,7 @@ def _verify_current(repo_root: Path, kind: str, bundle: Path) -> Result:
         return Result(EXIT_INVALID, "bundle does not match requested kind")
     fd = _open_locked(_lock_for_esp32_rs(esp32_rs), fcntl.LOCK_SH, False)
     try:
-        expected = _current_toolchain(repo_root)
+        expected = _current_toolchain(repo_root, kind)
         input_digest = _current_input_digest(repo_root)
         return verify_locked(expected_bundle, expected, input_digest)
     except ArtifactError as exc:
@@ -1042,8 +1044,8 @@ def _locked_exec_many(
     _, held = _acquire_exec_locks(repo_root, kinds)
     try:
         live_digest = _current_input_digest(repo_root)
-        expected = _current_toolchain(repo_root)
-        for _, _, bundle in held:
+        for kind, _, bundle in held:
+            expected = _current_toolchain(repo_root, kind)
             result = verify_locked(bundle, expected, live_digest)
             _raise_result(result)
         os.execvp(argv[0], argv)
