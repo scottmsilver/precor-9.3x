@@ -48,6 +48,9 @@ import synth  # noqa: E402
 from conftest import *  # noqa: F401,F403,E402
 
 PACER_INTERVAL = 0.10
+INTERVAL_EXECUTOR_RS = (
+    HERE.parents[1] / "esp32tap" / "src" / "tasks" / "interval_executor.rs"
+)
 
 
 def http(s, method, path, body=None, timeout=20):
@@ -78,6 +81,22 @@ PROGRAM = {
         {"name": "Cooldown", "duration": 600, "speed": 2.0, "incline": 0},
     ],
 }
+
+
+def test_executor_hold_is_rechecked_after_acquiring_program_lock():
+    """The QEMU hold must close the pre-lock check/use race.
+
+    A tick can pass the cheap pre-lock check, wait behind the test shim's
+    program lock, and wake only after the shim has set the hold. Rechecking
+    while owning that lock ensures the shim's lock drain is a real barrier.
+    """
+    source = INTERVAL_EXECUTOR_RS.read_text()
+    lock_at = source.index("let mut p = lock(&ctx.program);")
+    first_mutation = source.index("if !p.running()", lock_at)
+    post_lock_gate = source[lock_at:first_mutation]
+    assert "executor_held()" in post_lock_gate, post_lock_gate
+    assert "drop(p);" in post_lock_gate, post_lock_gate
+    assert "continue;" in post_lock_gate, post_lock_gate
 
 # hmph is mph*100 in uppercase hex — the wire encoding the motor sees.
 WIRE = {1.0: b"[hmph:64]", 4.0: b"[hmph:190]", 2.0: b"[hmph:C8]"}
@@ -382,6 +401,20 @@ def test_rejected_pause_does_not_publish_paused_while_motion_remains_nonzero(qem
     assert st == 200 and body["running"] is True and body["paused"] is False, body
     s.wait_tx_contains(WIRE[1.0], timeout=60)
     s.cmd_ok("QT executor_inhibit 1")
+
+    # Hold for more than one complete executor tick. QTOK is emitted only
+    # after the shim has set the hold while owning and then releasing the
+    # program lock; no already-in-flight tick may mutate program state after
+    # that acknowledgement.
+    s.wait_guest_uptime_delta(2, timeout=90)
+    held = prog(s)
+    assert held["running"] is True and held["paused"] is False, held
+    st, held_belt = http(s, "GET", "/api/status")
+    assert (
+        st == 200
+        and held_belt["speed"] == 1.0
+        and held_belt["mode"] == "emulate"
+    ), held_belt
 
     st, body = http(s, "POST", "/api/program/pause")
     assert st == 409 and body["ok"] is False, body

@@ -147,6 +147,19 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
         let mut ended_log = false;
         let mut p = lock(&ctx.program);
 
+        // Test-shim barrier: a tick may have passed the cheap check above and
+        // then blocked behind the shim while it acquired this lock and set
+        // the hold. Recheck under the same lock before observing or mutating
+        // program state so QTOK means all earlier ticks are drained.
+        #[cfg(feature = "qemu-test")]
+        if crate::qemu_test::executor_held() {
+            drop(p);
+            if seconds % 5 == 0 {
+                logi!("heartbeat uptime={}s", seconds);
+            }
+            continue;
+        }
+
         // Steady idle is program-lock-only. The safety lock is taken once on
         // the running→ended edge (a no-op if the endpoint already released
         // it), never once per second for an idle device.
