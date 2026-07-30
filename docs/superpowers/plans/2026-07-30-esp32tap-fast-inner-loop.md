@@ -918,12 +918,13 @@ artifacts/caches. The Task 0 timing JSON remains orientation evidence only.
 
 - [ ] **Step 2: Run alternating warm samples**
 
-Create disposable copies of a valid bundle, remove one required member for
-five samples and alter one member without updating its manifest for five
-samples. Time `artifact_provenance.py verify` directly: expected exits are
-missing=20 and stale=21, with no `fast.sh` invocation and therefore no
-auto-rebuild. Collect ten program-host samples separately. Then alternate the
-exact Task 0 broad command
+For five missing samples, point `artifact_provenance.py verify` at a
+task-specific absent bundle/public link and require exit 20. For five stale
+samples, keep a valid bundle unchanged, make a reversible edit to one declared
+source input so the live input digest differs, verify exit 21, then restore
+that source input before the next sample. Invoke the verifier directly, never
+`fast.sh`, so no sample auto-rebuilds. Collect ten program-host samples
+separately. Then alternate the exact Task 0 broad command
 `env -C hardware/Esp32Tap/firmware/esp32_rs/tools/qemu_scenarios python3 -m
 pytest test_reviewer_attacks.py -q -n 3` in the baseline worktree with
 candidate `tools/fast.sh --base HEAD~1` ten times.
