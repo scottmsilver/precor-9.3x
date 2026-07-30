@@ -25,8 +25,16 @@ case "$DOCKER_TIMEOUT" in
     0) echo "build_image.sh: BUILD_IMAGE_DOCKER_TIMEOUT must be positive" >&2; exit 2 ;;
 esac
 case "$IMAGE" in
-    ''|-*|*[!A-Za-z0-9._/:@+-]*) echo "build_image.sh: invalid RUST_IMAGE tag" >&2; exit 2 ;;
+    [A-Za-z0-9]*) ;;
+    *) echo "build_image.sh: invalid RUST_IMAGE tag" >&2; exit 2 ;;
 esac
+case "$IMAGE" in
+    *[!A-Za-z0-9._/:@+-]*) echo "build_image.sh: invalid RUST_IMAGE tag" >&2; exit 2 ;;
+esac
+if [ "${#IMAGE}" -gt 16384 ]; then
+    echo "build_image.sh: invalid RUST_IMAGE tag" >&2
+    exit 2
+fi
 
 recipe_sha256() {
     python3 - "$ESP32_RS" <<'PY'
@@ -198,7 +206,7 @@ keys = {
 }
 if not isinstance(value, dict) or set(value) != keys:
     raise SystemExit("build_image.sh: toolchain probe fields do not match schema")
-if value["schema_version"] != 1:
+if type(value["schema_version"]) is not int or value["schema_version"] != 1:
     raise SystemExit("build_image.sh: unsupported toolchain probe schema")
 for key in keys - {"schema_version"}:
     item = value[key]
@@ -294,7 +302,10 @@ if not isinstance(attestation, dict) or set(attestation) != keys:
 canonical = json.dumps(attestation, sort_keys=True, separators=(",", ":"))
 if attestation_text != canonical:
     raise SystemExit("build_image.sh: toolchain label JSON is not canonical")
-if attestation["schema_version"] != 1:
+if (
+    type(attestation["schema_version"]) is not int
+    or attestation["schema_version"] != 1
+):
     raise SystemExit("build_image.sh: unsupported toolchain label schema")
 for key in keys - {"schema_version"}:
     value = attestation[key]

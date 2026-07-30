@@ -235,6 +235,28 @@ def test_check_emits_kind_specific_qemu_toolchain(
 
 
 @pytest.mark.parametrize(
+    "image_tag",
+    [".bad", "_bad", "/bad", ":bad", "@bad", "+bad", "-" + "bad", "a" * 16385],
+)
+def test_rejects_image_tags_outside_toolchain_schema_without_docker(
+    context: Path,
+    fake_docker: tuple[Path, Path],
+    image_tag: str,
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        "--check",
+        "--kind",
+        "production",
+        extra_env={"RUST_IMAGE": image_tag},
+    )
+    assert completed.returncode == 2
+    assert "invalid RUST_IMAGE tag" in completed.stderr
+    assert docker_calls(fake_docker[1]) == []
+
+
+@pytest.mark.parametrize(
     "labels",
     [
         {},
@@ -315,6 +337,23 @@ def test_check_rejects_mutable_id_or_invalid_attestation(
     assert docker_calls(fake_docker[1]) == [["image", "inspect", IMAGE_TAG]]
 
 
+def test_check_rejects_boolean_schema_version(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    invalid = attestation(context)
+    invalid["schema_version"] = True
+    labels = {
+        "org.treddy.esp32tap.recipe-sha256": recipe(context),
+        "org.treddy.esp32tap.toolchain-json": canonical(invalid),
+    }
+    completed = run(
+        context, fake_docker, "--check", "--kind", "production", labels=labels
+    )
+    assert completed.returncode != 0
+    assert "schema" in completed.stderr
+    assert docker_calls(fake_docker[1]) == [["image", "inspect", IMAGE_TAG]]
+
+
 @pytest.mark.parametrize(
     "args",
     [
@@ -376,6 +415,21 @@ def test_failed_probe_does_not_commit_over_final_tag(
     assert not any(call[0] == "commit" for call in calls)
     assert any(call[:2] == ["rm", "-f"] for call in calls)
     assert any(call[:2] == ["image", "rm"] for call in calls)
+
+
+def test_boolean_probe_schema_version_never_reaches_final_tag(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    invalid = {**COMMON, "schema_version": True}
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_PROBE": canonical(invalid)},
+    )
+    assert completed.returncode != 0
+    assert "schema" in completed.stderr
+    calls = docker_calls(fake_docker[1])
+    assert not any(call[0] == "commit" for call in calls)
 
 
 def test_context_mutation_during_candidate_build_prevents_publication(
