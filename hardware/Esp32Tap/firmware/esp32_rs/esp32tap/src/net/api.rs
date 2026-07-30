@@ -639,7 +639,7 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
         // The controller refused — clamp violation, wrong mode, or a latched
         // fault. It has already recorded WHY in the audit ring; the handler
         // does not second-guess or paraphrase it.
-        Err(control::Reject::Refused) => respond(
+        Err(control::Reject::Refused | control::Reject::ExitInProgress) => respond(
             req,
             c"409 Conflict",
             br#"{"ok":false,"error":"rejected by safety controller"}"#,

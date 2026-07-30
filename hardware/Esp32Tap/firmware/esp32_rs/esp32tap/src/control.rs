@@ -122,7 +122,7 @@ impl Default for Owner {
 }
 
 /// Why a command could not be issued. Maps onto an HTTP status so a handler
-/// cannot invent a fourth outcome.
+/// cannot invent a different outcome.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Reject {
     /// A safety ownership loss suspended the background executor. Only a
@@ -134,6 +134,10 @@ pub enum Reject {
     /// The controller refused the motion: out of clamp, or a latched fault.
     /// It has already recorded WHY in the audit ring.
     Refused,
+    /// A gap-safe normal exit is already in progress. Start/Resume must wait
+    /// for it to finish; interrupting it would strand the new program after
+    /// the old exit releases the relay and lease.
+    ExitInProgress,
     /// `i64` generations exhausted. Unreachable (2^63 commands) and still
     /// handled, because unreachable is not the same as cannot-panic under
     /// `panic = "abort"`.
@@ -221,6 +225,17 @@ pub fn command_program_entry(
     incline: InclineHalfPct,
     now: Micros,
 ) -> Result<(), Reject> {
+    // An exiting controller still owns the executor lease, so
+    // `command_motion` alone would accept. That is not a safe entry: the
+    // already-committed exit will subsequently open K1 and release the lease.
+    // Refuse before `hold_lease` so this outcome mutates no owner state and
+    // never cancels or short-circuits the fail-safe exit choreography.
+    if matches!(
+        g.controller.mode(),
+        SafeMode::ExitWaitGap | SafeMode::ExitWaitFeedback
+    ) {
+        return Err(Reject::ExitInProgress);
+    }
     let id = hold_lease(g, Surface::Executor, now, true)?;
     command_as(
         g,

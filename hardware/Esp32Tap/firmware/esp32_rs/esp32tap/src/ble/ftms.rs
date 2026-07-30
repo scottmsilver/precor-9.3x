@@ -654,6 +654,9 @@ pub(crate) fn apply(effect: proto::CpEffect) -> u8 {
             }
             proto::result_for_reject(proto::CpReject::Refused)
         }
+        Err(control::Reject::ExitInProgress) => {
+            proto::result_for_reject(proto::CpReject::Other)
+        }
         Err(control::Reject::GenerationExhausted) => {
             proto::result_for_reject(proto::CpReject::Other)
         }

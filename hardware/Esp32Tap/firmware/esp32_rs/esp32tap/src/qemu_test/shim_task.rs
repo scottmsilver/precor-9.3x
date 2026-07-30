@@ -103,6 +103,95 @@ fn execute_command(ctx: &'static FirmwareContext, line: &str, owner: &mut Owner)
             );
         }
 
+        // Reproduce the program-entry/normal-exit race without a scheduler
+        // gap. Both variants hold program→guarded across the real program
+        // finish, real normal-exit request and real transactional entry path.
+        // `stop_gap` attempts in EXIT_WAIT_GAP. `natural_feedback` advances
+        // the already-started normal exit to EXIT_WAIT_FEEDBACK before the
+        // attempt, so both asynchronous exit phases are pinned independently.
+        #[cfg(feature = "net")]
+        "program_exit_race" => {
+            if args != "stop_gap" && args != "natural_feedback" {
+                qt!("QTERR program_exit_race_args");
+                return;
+            }
+            let now = ctx.clock.now();
+            let mut p = lock(&ctx.program);
+            let mut g = lock(&ctx.guarded);
+
+            let exit_plan = if args == "stop_gap" {
+                p.stop()
+            } else {
+                // Tests load a one-interval program. Advancing beyond its
+                // duration exercises ProgramState's natural finish path
+                // without waiting ten guest seconds.
+                let finish_at = safety_core::units::Micros::new(
+                    now.get()
+                        .saturating_add((p.total_duration().saturating_add(1)) * 1_000_000),
+                );
+                p.tick(finish_at)
+            };
+            if exit_plan.is_empty() || p.running() {
+                qt!("QTERR program_exit_race_not_running");
+                return;
+            }
+
+            let exit_ok =
+                crate::tasks::interval_executor::apply_plan(&mut g, exit_plan, true, now).is_ok();
+            if args == "stop_gap" {
+                // Match POST /api/program/stop's unconditional belt half.
+                let _ = crate::control::stop_belt(&mut g, now);
+            } else {
+                // Test-only phase placement. The normal-exit request above is
+                // real; this consumes its real step-1 token and advances its
+                // real controller state to the second asynchronous phase.
+                let Some(proof) = g.controller.take_exit_zero_frame() else {
+                    qt!("QTERR program_exit_race_no_zero");
+                    return;
+                };
+                g.controller.discharge_exit_zero_frame(proof);
+                if !g.controller.observe_interframe_gap(now) {
+                    qt!("QTERR program_exit_race_no_feedback_phase");
+                    return;
+                }
+                g.apply_outputs();
+            }
+
+            let before = g.controller.mode();
+            let prepared = p.prepare_start(now, 0, 0);
+            let start_ok = match crate::tasks::interval_executor::apply_program_entry(
+                &mut g,
+                prepared.plan(),
+                now,
+            ) {
+                Ok(_) => {
+                    g.executor_inhibited = false;
+                    g.executor_inhibited_at = None;
+                    p.commit_start(prepared);
+                    true
+                }
+                Err(_) => {
+                    g.executor_inhibited = true;
+                    false
+                }
+            };
+            let owner = crate::control::program_owner_debug(&g);
+            qt!(
+                "QTOK program_exit_race kind={} exit_ok={} before={} after={} \
+start_ok={} running={} paused={} current={} active={} owns={}",
+                args,
+                exit_ok as u32,
+                before.as_str(),
+                g.controller.mode().as_str(),
+                start_ok as u32,
+                p.running() as u32,
+                p.paused() as u32,
+                owner.current as u32,
+                owner.active as u32,
+                owner.owns as u32
+            );
+        }
+
         // Freeze the 1 s executor before setting its sticky interlock. Taking
         // program→guarded here drains any in-flight tick before QTOK, making
         // the handler-level rejected-Pause assertion deterministic instead of

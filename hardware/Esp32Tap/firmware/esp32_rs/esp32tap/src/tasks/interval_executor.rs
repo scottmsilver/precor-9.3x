@@ -101,7 +101,13 @@ pub fn apply_program_entry(
     let mut accepted = 0usize;
     for (speed, incline) in plan.commands() {
         if let Err(reject) = control::command_program_entry(g, *speed, *incline, now) {
-            control::rollback_program_entry(g, now);
+            // ExitInProgress is a read-only preflight refusal. Disconnecting
+            // its still-owning executor identity here would turn the required
+            // gap-safe normal exit into an emergency stop. Every other error
+            // may follow partial acquisition and must still be rolled back.
+            if reject != control::Reject::ExitInProgress {
+                control::rollback_program_entry(g, now);
+            }
             return Err(reject);
         }
         accepted += 1;

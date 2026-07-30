@@ -82,6 +82,13 @@ PROGRAM = {
     ],
 }
 
+ONE_INTERVAL_PROGRAM = {
+    "name": "QEMU One Interval",
+    "intervals": [
+        {"name": "Only", "duration": 10, "speed": 1.0, "incline": 0},
+    ],
+}
+
 
 def test_executor_hold_is_rechecked_after_acquiring_program_lock():
     """The QEMU hold must close the pre-lock check/use race.
@@ -508,6 +515,95 @@ def test_stop_ends_the_program_zeroes_the_belt_and_returns_the_lease(qemu):
     # and the device would be unusable after one workout.
     st, body = http(s, "POST", "/api/speed", {"value": 2.0})
     assert st == 200 and body["ok"] is True, body
+    s.stop_pacer()
+
+
+def test_stop_then_immediate_start_is_rejected_until_normal_exit_finishes(qemu):
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/program/start", ONE_INTERVAL_PROGRAM)
+    assert st == 200 and body["running"] is True, body
+    s.wait_tx_contains(WIRE[1.0], timeout=60)
+
+    n0 = len(s.audit_events())
+    race = s.cmd_ok("QT program_exit_race stop_gap")
+    assert "exit_ok=1" in race and "before=EXIT_WAIT_GAP" in race, race
+    assert "after=EXIT_WAIT_GAP" in race, race
+    assert "start_ok=0" in race and "running=0" in race and "paused=0" in race, race
+    state = prog(s)
+    assert state["running"] is False and state["paused"] is False, state
+
+    s.wait_audit("lease_released", since=n0, timeout=45)
+    s.assert_no_audit(
+        lambda text: text.startswith("emergency:"),
+        since=n0,
+        label="while rejecting Start during stop exit",
+    )
+    owner = s.cmd_ok("QT program_owner")
+    assert "owns=0" in owner, owner
+
+    # The rejection neither committed a false run nor stranded the lease.
+    st, body = http(s, "POST", "/api/program/start")
+    assert st == 200 and body["running"] is True, body
+    owner = s.cmd_ok("QT program_owner")
+    assert "owns=1" in owner, owner
+    s.stop_pacer()
+
+
+def test_natural_completion_then_immediate_start_is_rejected_until_exit_finishes(qemu):
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/program/start", ONE_INTERVAL_PROGRAM)
+    assert st == 200 and body["running"] is True, body
+    s.wait_tx_contains(WIRE[1.0], timeout=60)
+
+    n0 = len(s.audit_events())
+    race = s.cmd_ok("QT program_exit_race natural_feedback")
+    assert "exit_ok=1" in race and "before=EXIT_WAIT_FEEDBACK" in race, race
+    assert "after=EXIT_WAIT_FEEDBACK" in race, race
+    assert "start_ok=0" in race and "running=0" in race and "paused=0" in race, race
+    state = prog(s)
+    assert state["running"] is False and state["paused"] is False, state
+    assert state["completed"] is True, state
+
+    s.wait_audit("lease_released", since=n0, timeout=45)
+    s.assert_no_audit(
+        lambda text: text.startswith("emergency:"),
+        since=n0,
+        label="while rejecting Start during natural-completion exit",
+    )
+    owner = s.cmd_ok("QT program_owner")
+    assert "owns=0" in owner, owner
+
+    st, body = http(s, "POST", "/api/program/start")
+    assert st == 200 and body["running"] is True, body
+    owner = s.cmd_ok("QT program_owner")
+    assert "owns=1" in owner, owner
+    s.stop_pacer()
+
+
+def test_zero_then_motion_start_may_continue_through_legitimate_entry_phase(qemu):
+    """Reject normal EXIT phases without confusing them with safe ENTRY."""
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/program/start", ONE_INTERVAL_PROGRAM)
+    assert st == 200 and body["running"] is True, body
+    s.wait_tx_contains(WIRE[1.0], timeout=60)
+
+    # Keep ProgramState running while a hardware permission loss returns the
+    # controller to Proxy. The fresh Start now prepares zero-then-motion:
+    # command one begins entry, command two arrives in EntryWaitGap.
+    s.cmd_ok("QT executor_inhibit 1")
+    s.cmd_ok("QT tread 0")
+    s.wait_audit("emergency:tread_not_ok", timeout=30)
+    s.cmd_ok("QT tread 1")
+    s.wait_audit("complete_console_frame", timeout=30)
+
+    n0 = len(s.audit_events())
+    st, body = http(s, "POST", "/api/program/start")
+    assert st == 200 and body["running"] is True and body["paused"] is False, body
+    s.cmd_ok("QT executor_inhibit 0")
+    assert_emulate_entry_completed(s, since=n0)
+    s.wait_tx_contains(WIRE[1.0], timeout=45)
+    owner = s.cmd_ok("QT program_owner")
+    assert "owns=1" in owner, owner
     s.stop_pacer()
 
 

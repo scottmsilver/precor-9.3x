@@ -673,6 +673,9 @@ pub(crate) fn respond_reject(
             br#"{"ok":false,"error":"program executor is safety-paused"}"#
         }
         control::Reject::Refused => br#"{"ok":false,"error":"rejected by safety controller"}"#,
+        control::Reject::ExitInProgress => {
+            br#"{"ok":false,"error":"normal safety exit is still in progress"}"#
+        }
         control::Reject::GenerationExhausted => {
             br#"{"ok":false,"error":"control generation exhausted"}"#
         }
