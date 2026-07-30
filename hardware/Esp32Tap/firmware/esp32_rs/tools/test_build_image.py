@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import shutil
 import stat
 import subprocess
@@ -106,6 +107,14 @@ if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_BARRIER"):
 if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_STARTED_MARKER"):
     with open(os.environ["FAKE_BUILD_STARTED_MARKER"], "w", encoding="utf-8") as stream:
         stream.write("started")
+if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_SIGNAL_BARRIER"):
+    barrier = os.environ["FAKE_BUILD_SIGNAL_BARRIER"]
+    with open(barrier + ".pid", "w", encoding="utf-8") as stream:
+        stream.write(str(os.getpid()))
+    with open(barrier + ".ready", "w", encoding="utf-8") as stream:
+        stream.write("ready")
+    while not os.path.exists(barrier + ".release"):
+        time.sleep(0.01)
 
 state_path = os.environ["FAKE_DOCKER_STATE"]
 
@@ -148,6 +157,14 @@ if argv[:2] == ["image", "inspect"]:
         raise SystemExit(1)
     print(json.dumps([image], sort_keys=True, separators=(",", ":")))
 elif argv and argv[0] == "run":
+    if os.environ.get("FAKE_RUN_SIGNAL_BARRIER"):
+        barrier = os.environ["FAKE_RUN_SIGNAL_BARRIER"]
+        with open(barrier + ".pid", "w", encoding="utf-8") as stream:
+            stream.write(str(os.getpid()))
+        with open(barrier + ".ready", "w", encoding="utf-8") as stream:
+            stream.write("ready")
+        while not os.path.exists(barrier + ".release"):
+            time.sleep(0.01)
     if os.environ.get("FAKE_DOCKER_EXEC_PROBE"):
         child_env = os.environ.copy()
         for index, value in enumerate(argv):
@@ -189,6 +206,14 @@ elif argv and argv[0] == "tag":
         state["events"]["tagged"] = True
         return first
     first = mutate(promote)
+    if os.environ.get("FAKE_TAG_SIGNAL_BARRIER"):
+        barrier = os.environ["FAKE_TAG_SIGNAL_BARRIER"]
+        with open(barrier + ".pid", "w", encoding="utf-8") as stream:
+            stream.write(str(os.getpid()))
+        with open(barrier + ".ready", "w", encoding="utf-8") as stream:
+            stream.write("ready")
+        while not os.path.exists(barrier + ".release"):
+            time.sleep(0.01)
     if first and os.environ.get("FAKE_DOCKER_TAG_TIMEOUT"):
         time.sleep(30)
     delay = float(os.environ.get("FAKE_DOCKER_TAG_DELAY", "0"))
@@ -356,6 +381,23 @@ def wait_for_state(log: Path, predicate, timeout: float = 5.0) -> dict:
 def second_context(context: Path, destination: Path) -> Path:
     shutil.copytree(context, destination)
     return destination
+
+
+def process_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def wait_process_gone(pid: int, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not process_exists(pid):
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"process {pid} survived cancellation")
 
 
 def test_recipe_frames_allowed_path_mode_and_content(context: Path) -> None:
@@ -994,6 +1036,105 @@ def test_ambiguous_older_rollback_cannot_clobber_newer_worktree_publication(
     finally:
         old.kill()
         old.wait()
+
+
+@pytest.mark.parametrize(
+    ("barrier_env", "expects_container_cleanup", "cancellation_signal"),
+    [
+        ("FAKE_BUILD_SIGNAL_BARRIER", False, signal.SIGHUP),
+        ("FAKE_BUILD_SIGNAL_BARRIER", False, signal.SIGINT),
+        ("FAKE_BUILD_SIGNAL_BARRIER", False, signal.SIGTERM),
+        ("FAKE_RUN_SIGNAL_BARRIER", True, signal.SIGTERM),
+    ],
+)
+def test_termination_during_build_or_probe_reaps_child_and_preserves_final(
+    context: Path,
+    fake_docker: tuple[Path, Path],
+    tmp_path: Path,
+    barrier_env: str,
+    expects_container_cleanup: bool,
+    cancellation_signal: signal.Signals,
+) -> None:
+    barrier = tmp_path / barrier_env.lower()
+    process = subprocess.Popen(
+        [str(context / "tools" / "build_image.sh")],
+        cwd=context,
+        env=run_environment(
+            context,
+            fake_docker,
+            extra_env={barrier_env: str(barrier)},
+        ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    child_pid = -1
+    try:
+        wait_for(Path(str(barrier) + ".ready"))
+        child_pid = int(Path(str(barrier) + ".pid").read_text(encoding="utf-8"))
+        os.kill(process.pid, cancellation_signal)
+        time.sleep(0.05)
+        Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
+        result = process.communicate(timeout=8)
+        assert process.returncode == 128 + cancellation_signal, result
+        wait_process_gone(child_pid)
+        calls = docker_calls(fake_docker[1])
+        build_call = next(call for call in calls if call[0] == "build")
+        assert not Path(build_call[-1]).exists()
+        assert any(call[:2] == ["image", "rm"] for call in calls)
+        assert any(call[:2] == ["rm", "-f"] for call in calls) is expects_container_cleanup
+        assert not any(call[0] == "commit" for call in calls)
+        assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
+        assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
+        followup = run(context, fake_docker)
+        assert followup.returncode == 0, followup.stderr
+    finally:
+        Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
+        process.kill()
+        process.wait()
+        if child_pid > 0:
+            wait_process_gone(child_pid)
+
+
+def test_termination_is_deferred_across_verified_promotion_then_releases_lock(
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
+) -> None:
+    barrier = tmp_path / "tag-signal"
+    process = subprocess.Popen(
+        [str(context / "tools" / "build_image.sh")],
+        cwd=context,
+        env=run_environment(
+            context,
+            fake_docker,
+            extra_env={"FAKE_TAG_SIGNAL_BARRIER": str(barrier)},
+        ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    child_pid = -1
+    try:
+        wait_for(Path(str(barrier) + ".ready"))
+        child_pid = int(Path(str(barrier) + ".pid").read_text(encoding="utf-8"))
+        os.kill(process.pid, signal.SIGTERM)
+        time.sleep(0.1)
+        assert process.poll() is None
+        Path(str(barrier) + ".release").write_text("finish", encoding="utf-8")
+        result = process.communicate(timeout=8)
+        assert process.returncode == 128 + signal.SIGTERM, result
+        wait_process_gone(child_pid)
+        final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+        assert final["Config"]["Labels"][
+            "org.treddy.esp32tap.recipe-sha256"
+        ] == recipe(context)
+        followup = run(context, fake_docker)
+        assert followup.returncode == 0, followup.stderr
+    finally:
+        Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
+        process.kill()
+        process.wait()
+        if child_pid > 0:
+            wait_process_gone(child_pid)
 
 
 def test_script_is_executable_and_tracked_as_100755() -> None:

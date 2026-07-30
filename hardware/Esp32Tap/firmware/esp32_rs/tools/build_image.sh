@@ -312,7 +312,7 @@ if [ "$#" -ne 0 ]; then
     usage
 fi
 
-python3 - \
+exec python3 - \
     "$ESP32_RS" "$IMAGE" "$DOCKER_TIMEOUT" "$PROBE_TIMEOUT" \
     "$RECIPE_LABEL" "$TOOLCHAIN_LABEL" <<'PY'
 import contextlib
@@ -350,6 +350,32 @@ component_limit = 4 * 1024 * 1024
 
 class BuildImageError(Exception):
     pass
+
+
+class BuildCancelled(SystemExit):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        super().__init__(128 + signum)
+
+
+cancel_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+cancellation_signum: int | None = None
+
+
+def cancel_build(signum: int, _frame: object) -> None:
+    global cancellation_signum
+    if cancellation_signum is not None:
+        return
+    cancellation_signum = signum
+    # Cleanup must not be interrupted by a duplicate signal delivered both to
+    # a shell/process group and directly to this helper.
+    for watched in cancel_signals:
+        signal.signal(watched, signal.SIG_IGN)
+    raise BuildCancelled(signum)
+
+
+for watched_signal in cancel_signals:
+    signal.signal(watched_signal, cancel_build)
 
 
 def clean_excepthook(
@@ -766,6 +792,18 @@ def publication_lock():
         os.close(fd)
 
 
+@contextlib.contextmanager
+def defer_cancellation_during_promotion():
+    # A final-tag update plus ID verification/rollback is one tiny critical
+    # transaction. Deliver a pending cancellation only after it is known to be
+    # fully published or fully restored.
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, cancel_signals)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
 def verify_reference(reference: str, expected_id: str) -> None:
     image = inspect_image(reference)
     if image is None:
@@ -817,9 +855,11 @@ with publication_lock():
     candidate_possible = False
     publication_succeeded = False
     try:
+        # Mark possible before the mkdir so a signal between the syscall and
+        # the following Python bytecode still drives cleanup.
+        task_root_exists = True
         try:
             task_root.mkdir(mode=0o700)
-            task_root_exists = True
         except OSError as exc:
             raise BuildImageError(
                 f"cannot create private image-build directory: {exc}"
@@ -885,21 +925,23 @@ with publication_lock():
             raise BuildImageError(
                 "recipe or component lock changed during image build"
             )
-        mutation_possible = True
-        try:
-            docker("tag", candidate_id, image_tag)
-            verify_reference(image_tag, candidate_id)
-            mutation_possible = False
-            publication_succeeded = True
-        except Exception as promotion_error:
-            if mutation_possible:
-                try:
-                    restore_final(prior_id)
-                except Exception as restore_error:
-                    raise BuildImageError(
-                        f"promotion failed ({promotion_error}); rollback failed ({restore_error})"
-                    ) from restore_error
-            raise
+        with defer_cancellation_during_promotion():
+            mutation_possible = True
+            try:
+                docker("tag", candidate_id, image_tag)
+                verify_reference(image_tag, candidate_id)
+                mutation_possible = False
+                publication_succeeded = True
+            except BaseException as promotion_error:
+                if mutation_possible:
+                    try:
+                        restore_final(prior_id)
+                    except BaseException as restore_error:
+                        raise BuildImageError(
+                            f"promotion failed ({promotion_error}); "
+                            f"rollback failed ({restore_error})"
+                        ) from restore_error
+                raise
     finally:
         cleanup_warnings = []
         if container_possible:
