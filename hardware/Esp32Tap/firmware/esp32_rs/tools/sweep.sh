@@ -126,6 +126,20 @@ if [ -n "${DEEP:-}" ]; then
   run adversar   env -C tools/qemu_scenarios python3 -m pytest test_adversarial.py -q
   # The two heap-convergence cases held back from the per-commit gate above.
   run memheap    env -C tools/qemu_scenarios python3 -m pytest test_mem_review.py -q -n 2 -k "storm or rejected"
+  # The coach tier's reviewer repros — ALL SEVEN, as one gate. They were the
+  # reviewers' reproductions of five coach defects, and the fix round closed
+  # every one: the truncated args object echoed verbatim into invalid JSON, the
+  # actions buffer saturating mid-entry at the DECLARED maximum of four calls,
+  # the tool name written between quotes UNESCAPED (a `"` injected members, a
+  # control byte made the body unparseable), and `stop_treadmill` reporting
+  # "treadmill stopped" while leaving the belt at speed.
+  #
+  # This block used to run 2 of the 7 and describe the other 5 as "red by
+  # design". They had stopped being red — the comment outlived the defects — so
+  # five passing tests sat outside the sweep, which is EXACTLY the hole
+  # test_store_persistence.py was in and which the block below is careful not
+  # to be. Measured green 7/7 in 59 s before wiring in.
+  run coachrev   env -C tools/qemu_scenarios python3 -m pytest test_coach_review.py -q -n 2
   # test_reviewer_attacks.py is DELIBERATELY NOT RUN HERE, and that is not the
   # same hole test_store_persistence.py was in. It is RED BY DESIGN: each of
   # its tests asserts the SAFE behaviour of a defect that is still open in the

@@ -348,8 +348,8 @@ def check_spawn_matrix() -> list[str]:
             if str(got) != want.replace("_", ""):
                 failures.append(
                     f"{name!r} is spawned with {label} {got} but the normative matrix row "
-                    f"{head!r} says {want} — the table and the code disagree about what "
-                    "preempts what"
+                    f"{head!r} says {want} — the table and the code disagree, and the table is "
+                    "what somebody reads when reasoning about this task"
                 )
     return failures
 
