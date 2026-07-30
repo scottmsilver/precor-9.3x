@@ -1517,6 +1517,87 @@ def test_postcommit_legacy_retire_fsync_failure_returns_success(
     assert (backups[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
 
 
+def test_postcommit_retirement_race_never_deletes_unrelated_substitute(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    (public / "tracked-old").write_text("genuine", encoding="utf-8")
+    saved = rs / ".saved-genuine-legacy"
+    real_replace = provenance.os.replace
+    raced = False
+    substitute: Path | None = None
+
+    def replace_at_retirement(source: Path, destination: Path) -> None:
+        nonlocal raced, substitute
+        source = Path(source)
+        destination = Path(destination)
+        if (
+            not raced
+            and source.name.endswith(".swap")
+            and destination.name.startswith(".retired-legacy-build-")
+        ):
+            raced = True
+            real_replace(source, saved)
+            source.mkdir()
+            (source / "keep").write_text("unrelated", encoding="utf-8")
+            substitute = source
+        real_replace(source, destination)
+
+    monkeypatch.setattr(provenance.os, "replace", replace_at_retirement)
+    publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
+
+    assert raced
+    assert substitute is not None
+    assert (substitute / "keep").read_text(encoding="utf-8") == "unrelated"
+    assert (saved / "tracked-old").read_text(encoding="utf-8") == "genuine"
+    assert public.is_symlink()
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "hardlink"])
+def test_identity_bound_cleanup_leaves_replaced_retired_alias_untouched(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    replacement: str,
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build"
+    public.mkdir()
+    (public / "tracked-old").write_text("genuine", encoding="utf-8")
+    saved = rs / ".saved-retired-legacy"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_file = outside / "keep"
+    outside_file.write_text("unrelated", encoding="utf-8")
+    replaced: Path | None = None
+
+    def replace_before_cleanup(point: str) -> None:
+        nonlocal replaced
+        if point != "before_retired_cleanup":
+            return
+        candidates = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
+        assert len(candidates) == 1
+        replaced = candidates[0]
+        replaced.rename(saved)
+        if replacement == "symlink":
+            replaced.symlink_to(outside, target_is_directory=True)
+        else:
+            os.link(outside_file, replaced)
+
+    monkeypatch.setattr(provenance, "_failure_point", replace_before_cleanup)
+    publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
+
+    assert replaced is not None
+    assert os.path.lexists(replaced)
+    assert outside_file.read_text(encoding="utf-8") == "unrelated"
+    assert (saved / "tracked-old").read_text(encoding="utf-8") == "genuine"
+
+
 @pytest.mark.parametrize(
     "bad",
     [

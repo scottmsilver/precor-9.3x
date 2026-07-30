@@ -765,14 +765,41 @@ def _generation_matches(generation: Path, manifest: dict) -> bool:
         return False
 
 
-def _remove_tree_exact(path: Path, artifacts: Path, prefix: str) -> None:
+def _remove_tree_exact(
+    path: Path,
+    artifacts: Path,
+    prefix: str,
+    expected_identity: tuple[int, int],
+) -> None:
     if path.parent != artifacts or not path.name.startswith(prefix):
         raise InternalError("refusing unsafe backup removal target")
     info = path.lstat()
-    if stat.S_ISDIR(info.st_mode):
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or (info.st_dev, info.st_ino) != expected_identity
+    ):
+        raise InvalidError("retired legacy directory identity changed")
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise InternalError("safe descriptor-based tree removal is unavailable")
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != expected_identity
+            or (current.st_dev, current.st_ino) != expected_identity
+        ):
+            raise InvalidError("retired legacy directory changed before cleanup")
         shutil.rmtree(path)
-    else:
-        path.unlink()
+    finally:
+        os.close(fd)
 
 
 def _failure_point(_name: str) -> None:
@@ -1339,14 +1366,38 @@ def _publish_locked(
             pass
     if legacy_public and os.path.lexists(temp_link):
         assert retired is not None
+        assert legacy_info is not None
+        legacy_identity = (legacy_info.st_dev, legacy_info.st_ino)
         try:
             if os.path.lexists(retired):
                 raise InvalidError("legacy retirement path unexpectedly exists")
+            before_retirement = temp_link.lstat()
+            if (
+                not stat.S_ISDIR(before_retirement.st_mode)
+                or (before_retirement.st_dev, before_retirement.st_ino)
+                != legacy_identity
+            ):
+                raise InvalidError("legacy swap identity changed before retirement")
             os.replace(temp_link, retired)
+            after_retirement = retired.lstat()
+            if (
+                not stat.S_ISDIR(after_retirement.st_mode)
+                or (after_retirement.st_dev, after_retirement.st_ino) != legacy_identity
+            ):
+                if not os.path.lexists(temp_link):
+                    os.replace(retired, temp_link)
+                    _fsync_dir(esp32_rs)
+                    _fsync_dir(artifacts)
+                raise InvalidError("legacy swap identity changed during retirement")
             _fsync_dir(esp32_rs)
             _fsync_dir(artifacts)
             _failure_point("before_retired_cleanup")
-            _remove_tree_exact(retired, artifacts, ".retired-legacy-")
+            _remove_tree_exact(
+                retired,
+                artifacts,
+                ".retired-legacy-",
+                legacy_identity,
+            )
             _fsync_dir(artifacts)
             if marker_path is not None and marker_info is not None:
                 _unlink_exact_marker(marker_path, marker_info)
