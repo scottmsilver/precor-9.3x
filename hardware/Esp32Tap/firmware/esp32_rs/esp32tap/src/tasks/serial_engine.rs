@@ -69,6 +69,7 @@ fn drain_console(g: &mut Guarded, now: Micros) {
         mode,
         key_cache,
         last_console_rx,
+        executor_inhibited,
         ..
     } = g;
     let n = console_uart.read(scratch_raw);
@@ -100,6 +101,7 @@ fn drain_console(g: &mut Guarded, now: Micros) {
             //
             // TODO(M3): use the gap-safe normal exit when the console is
             // healthy and an owner is present.
+            *executor_inhibited = true;
             controller.emergency_stop("console_takeover", now);
         }
     }

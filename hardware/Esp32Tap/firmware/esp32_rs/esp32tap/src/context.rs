@@ -84,6 +84,13 @@ pub struct Guarded {
     /// module that writes them.
     pub http_owner: crate::control::Owner,
     pub executor_owner: crate::control::Owner,
+    /// Sticky ownership-loss interlock for the background program executor.
+    ///
+    /// Set under this lock by the serial task when the physical console takes
+    /// control, and by the executor when it detects any other lease loss.
+    /// Ordinary executor ticks may never clear it; only a future explicit
+    /// Start/Resume transaction is allowed to do that.
+    pub executor_inhibited: bool,
 }
 
 pub const SCRATCH_RAW_BYTES: usize = 512;
@@ -106,6 +113,7 @@ impl Guarded {
             scratch_pairs: [KvPair::empty(); SCRATCH_PAIRS],
             http_owner: crate::control::Owner::new(),
             executor_owner: crate::control::Owner::new(),
+            executor_inhibited: false,
         }
     }
 

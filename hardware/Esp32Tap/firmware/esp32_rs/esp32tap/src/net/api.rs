@@ -610,7 +610,6 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
         // no opinion about safety at all.
         control::command(&mut g, Surface::Http, motion_intent(is_incline, sp), sp, inc, now)
     };
-
     match outcome {
         // ANSWER WITH THE STATE, not with `{"ok":true}`. The app types
         // `setSpeed`/`setIncline` as returning a full `StatusMessage` (the Pi
@@ -636,6 +635,7 @@ unsafe extern "C" fn motion_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
             c"409 Conflict",
             br#"{"ok":false,"error":"a program owns the belt; pause or stop it first"}"#,
         ),
+        Err(control::Reject::ExecutorInhibited) => respond(req, c"409 Conflict", br#"{"ok":false,"error":"program executor is safety-paused; explicit resume required"}"#),
         // The controller refused — clamp violation, wrong mode, or a latched
         // fault. It has already recorded WHY in the audit ring; the handler
         // does not second-guess or paraphrase it.

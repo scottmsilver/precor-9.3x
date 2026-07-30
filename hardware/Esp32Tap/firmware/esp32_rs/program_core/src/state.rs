@@ -254,6 +254,20 @@ impl ProgramState {
 
     // --- transport controls ----------------------------------------------
 
+    /// Pause after the safety layer has already taken the belt away.
+    ///
+    /// Unlike [`Self::toggle_pause`], this is idempotent and emits no motion:
+    /// the event that calls it has already released the relay and ownership.
+    /// Keeping the current interval and elapsed counters intact lets a later,
+    /// explicit resume continue from the point where control was lost.
+    pub fn pause_due_to_safety(&mut self, now: Micros) -> Plan {
+        if self.running && !self.paused {
+            self.paused = true;
+            self.pause_start = Some(now);
+        }
+        Plan::none()
+    }
+
     /// `ProgramState.toggle_pause`, PLUS `server.py::_apply_pause_toggle`.
     ///
     /// DELIBERATE MERGE, and the only place two Python files become one here.
@@ -605,6 +619,66 @@ mod tests {
         run_secs(&mut s, 41, 45);
         // 10 s before the pause + 5 s after == 15 s of program time.
         assert_eq!(s.total_elapsed(), 15);
+    }
+
+    #[test]
+    fn safety_pause_is_sticky_and_preserves_the_program_position() {
+        let mut s = loaded();
+        s.start(at(0), 0, 0);
+        run_secs(&mut s, 1, 12);
+        let before = (
+            s.current_interval(),
+            s.interval_elapsed(),
+            s.total_elapsed(),
+        );
+
+        assert!(
+            s.pause_due_to_safety(at(12)).is_empty(),
+            "the safety path already stopped the belt"
+        );
+        assert!(s.running());
+        assert!(s.paused());
+        assert_eq!(
+            (
+                s.current_interval(),
+                s.interval_elapsed(),
+                s.total_elapsed(),
+            ),
+            before
+        );
+
+        assert!(s.pause_due_to_safety(at(50)).is_empty());
+        assert!(s.paused(), "a repeated safety pause must never resume");
+        assert!(s.tick(at(50)).is_empty());
+        assert_eq!(
+            (
+                s.current_interval(),
+                s.interval_elapsed(),
+                s.total_elapsed(),
+            ),
+            before,
+            "neither repeated pauses nor ticks may advance a safety-paused program"
+        );
+    }
+
+    #[test]
+    fn safety_pause_only_changes_a_running_unpaused_program() {
+        let mut stopped = loaded();
+        assert!(stopped.pause_due_to_safety(at(5)).is_empty());
+        assert!(!stopped.paused());
+
+        let mut already_paused = loaded();
+        already_paused.start(at(0), 0, 0);
+        already_paused.toggle_pause(at(5));
+        assert!(already_paused.pause_due_to_safety(at(10)).is_empty());
+        assert!(already_paused.paused());
+        already_paused.toggle_pause(at(20));
+        already_paused.tick(at(21));
+        assert_eq!(
+            already_paused.total_elapsed(),
+            6,
+            "an idempotent safety pause must not replace the original pause timestamp"
+        );
     }
 
     // --- TestSkip ---------------------------------------------------------

@@ -8,6 +8,7 @@ Nothing here retries, sleeps for a guest fact, or loosens a bound.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import ssl
 import sys
@@ -55,6 +56,23 @@ def status(s):
     st, body = http(s, "GET", "/api/status")
     assert st == 200, body
     return body
+
+
+def program(s):
+    st, body = http(s, "GET", "/api/program")
+    assert st == 200, body
+    return body
+
+
+def wait_program(s, predicate, what: str, timeout: float = 90.0):
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        last = program(s)
+        if predicate(last):
+            return last
+        time.sleep(0.2)
+    raise AssertionError(f"never observed {what}; last state was {last!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -188,13 +206,13 @@ def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
 # ATTACK D — CONSOLE TAKEOVER MUST STICK.
 #
 # A physical console button press emergency-stops and drops to PROXY
-# (`emergency:console_takeover`). But `ProgramState` knows nothing about it and
-# keeps running; at the next interval boundary the executor calls
-# `control::command`, `hold_lease` sees `controller.owner() != Some(id)`, mints
-# a FRESH generation, re-acquires the free lease and re-enters emulate — taking
-# the belt back from the human who just grabbed it.
+# (`emergency:console_takeover`). The safety loss must also become a sticky
+# program pause. Otherwise, at the next interval boundary the executor can
+# mint a fresh generation, re-acquire the free lease and re-enter emulate —
+# taking the belt back from the human who just grabbed it.
 #
-# Two 6-second intervals make the boundary arrive inside the test.
+# Two minimum-duration 10-second intervals put two boundaries inside the
+# 25-second guest-time observation window.
 #
 # repro: ...::test_d_console_takeover_is_not_undone_by_the_running_program -q -s
 # ---------------------------------------------------------------------------
@@ -202,45 +220,87 @@ def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
 
 def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     s = armed(qemu)
-    prog = {
+    workout = {
         "name": "Takeover",
         "intervals": [
-            {"name": "A", "duration": 6, "speed": 3.0, "incline": 0},
-            {"name": "B", "duration": 6, "speed": 4.0, "incline": 0},
+            {"name": "A", "duration": 10, "speed": 3.0, "incline": 0},
+            {"name": "B", "duration": 10, "speed": 4.0, "incline": 0},
             {"name": "C", "duration": 600, "speed": 5.0, "incline": 0},
         ],
     }
-    st, body = http(s, "POST", "/api/program/start", prog)
+    st, body = http(s, "POST", "/api/program/start", workout)
     assert st == 200 and body["running"] is True, body
     s.wait_tx_contains(WIRE_3, timeout=60)
 
     ev = s.audit_events()
-    n0 = len(ev)
     idx0 = ev[-1][0] if ev else 0
     # Console button press: hmph 0 -> 2.0 mph at unchanged cadence.
     s.set_pacer_payload(synth.console_cycle_bytes(20, 0))
-    s.wait_audit("emergency:console_takeover", since=idx0, timeout=15)
+    takeover_idx = s.wait_audit("emergency:console_takeover", since=idx0, timeout=15)
     took = status(s)
     assert took["mode"] == "proxy" and took["relay"] is False, took
 
-    # The human now owns the belt. Watch for 20 s — long enough for two
-    # interval boundaries of the still-"running" program.
-    t0 = time.monotonic()
+    # The executor observes the loss on its next 1 s iteration. It must keep
+    # the workout loaded/running for explicit Resume, but pause its clock at
+    # the exact interval position where control was lost.
+    paused = wait_program(
+        s,
+        lambda p: p["running"] is True and p["paused"] is True,
+        "safety pause",
+        timeout=15,
+    )
+    held = (
+        paused["current_interval"],
+        paused["interval_elapsed"],
+        paused["total_elapsed"],
+    )
+    tx0 = len(s.tx_bytes())
+
+    # Observe 25 s of GUEST time — more than two complete 10 s intervals,
+    # even though QEMU wall time is elastic. Poll throughout so a forbidden
+    # audit event cannot roll out of the fixed-size ring under console traffic.
+    target_uptime = s.guest_uptime() + 25
+    deadline = time.monotonic() + 180
+    next_audit = takeover_idx + 1
+    forbidden = []
     reclaimed = None
-    while time.monotonic() - t0 < 20.0:
+    while s.guest_uptime() < target_uptime:
         st = status(s)
         if st["mode"] != "proxy" or st["relay"] is not False:
-            reclaimed = (round(time.monotonic() - t0, 1), st)
+            reclaimed = st
             break
-        time.sleep(0.5)
+        for idx, text in s.audit_events():
+            if idx >= next_audit:
+                next_audit = idx + 1
+                if text.startswith("lease_acquired:EXECUTOR") or text == "relay_cmd_on":
+                    forbidden.append((idx, text))
+        if time.monotonic() > deadline:
+            raise AssertionError("guest did not advance 25 s while observing console takeover")
+        time.sleep(0.2)
 
-    events = [t for _, t in s.audit_events()[n0:]]
+    after = program(s)
+    post_takeover_wire = s.tx_bytes()[tx0:]
+    nonzero_motor = [
+        token
+        for token in re.findall(rb"\[hmph:([0-9A-F]+)\]", post_takeover_wire)
+        if int(token, 16) != 0
+    ]
     print(f"\nATTACK D: reclaimed={reclaimed}")
-    print(f"          audit: {events[:40]}")
-    assert reclaimed is None, (
-        "the running program took the belt BACK from the physical console "
-        f"{reclaimed[0]}s after the takeover: {reclaimed[1]}"
+    print(f"          program={after}")
+    print(f"          forbidden audit={forbidden}")
+    print(f"          nonzero motor frames={nonzero_motor}")
+    assert reclaimed is None, f"the running program took the belt back: {reclaimed}"
+    assert after["running"] is True and after["paused"] is True, after
+    assert (
+        after["current_interval"],
+        after["interval_elapsed"],
+        after["total_elapsed"],
+    ) == held, (
+        f"safety-paused program advanced: {held} -> "
+        f"{(after['current_interval'], after['interval_elapsed'], after['total_elapsed'])}"
     )
+    assert not forbidden, f"executor reacquired control after takeover: {forbidden}"
+    assert not nonzero_motor, f"nonzero motor frames after takeover: {nonzero_motor}"
     s.stop_pacer()
 
 

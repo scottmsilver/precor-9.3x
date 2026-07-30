@@ -9,9 +9,10 @@
 //!
 //! # It never blocks on the network or on flash
 //!
-//! Not by care, by construction: this module does not name the network tier or
-//! NVS, and cannot reach either. The only things it touches are the program
-//! mutex, the safety mutex and `esp_timer`. A wedged socket, an unreachable
+//! Not by care, by construction: the tick touches only the program mutex, the
+//! safety mutex and `esp_timer`. After releasing both locks, a network build
+//! may queue a non-blocking WebSocket push when safety pauses a program; it
+//! never renders or writes a frame here. A wedged socket, an unreachable
 //! tablet, a full flash — none of them can stall the tick, so none of them can
 //! stall the WDT and reboot the device mid-run.
 //!
@@ -110,59 +111,82 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
         // is the 59:18 fix from the Python, and it matters more here than it
         // did there.
         let now = ctx.clock.now();
+        let mut interval_log = None;
+        let mut ended_log = false;
         let mut p = lock(&ctx.program);
-        let plan = p.tick(now);
-        let running = p.running();
-        let ended = was_running && !running;
-        was_running = running;
+        let mut g = lock(&ctx.guarded);
 
-        if !plan.is_empty() || ended {
-            let (current, elapsed) = (p.current_interval(), p.total_elapsed());
-            let n = {
-                let mut g = lock(&ctx.guarded);
-                apply_plan(&mut g, plan, ended, now)
-            };
-            if !plan.is_empty() {
-                logi!(
-                    "program: interval {} at {}s ({}/{} accepted)",
-                    current,
-                    elapsed,
-                    n,
-                    plan.commands().len()
-                );
-            }
-            if ended {
-                logi!("program: ended, belt released");
-            }
-        }
-
-        // WHAT THE PROGRAM WANTS RIGHT NOW, read from the program itself
-        // rather than remembered from the last plan — because a program can be
-        // started by `POST /api/program/start`, by quick-start, or by the
-        // coach, and every one of those commands the belt from the HTTP task,
-        // so the executor never sees a plan for it at all. Reading the state is
-        // also less code than tracking a copy of it, and a copy is a second
-        // fact that can disagree with the first.
-        //
-        // Paused is excluded: a paused program wants ZERO, which is what the
-        // pause plan already commanded, and re-asserting the interval's speed
-        // over it would un-pause the belt.
-        let owed = if running && !p.paused() {
-            p.motion_of_current()
+        // OWNERSHIP LOSS IS A STICKY PROGRAM EVENT, not merely a failed belt
+        // command. The remembered identity must still own the controller lease
+        // before every tick. Console takeover sets the inhibit in the serial
+        // task's existing guarded hold; other asynchronous lease losses are
+        // detected here. In either case, set the interlock before touching the
+        // program state so no later background command can reacquire.
+        let executor_owns = control::owner(&g, Surface::Executor)
+            .identity()
+            .is_some_and(|id| g.controller.owner() == Some(id));
+        let safety_blocked = p.running() && (g.executor_inhibited || !executor_owns);
+        let newly_paused = if safety_blocked {
+            g.executor_inhibited = true;
+            let changed = !p.paused();
+            let plan = p.pause_due_to_safety(now);
+            debug_assert!(plan.is_empty());
+            changed
         } else {
-            None
-        };
-        drop(p);
+            let plan = p.tick(now);
+            let running = p.running();
+            let ended = was_running && !running;
+            was_running = running;
 
-        // ASK AGAIN FOR A TRANSITION THAT DID NOT HAPPEN. `control::reassert`
-        // returns immediately unless the executor still owns the lease AND the
-        // controller is still in Proxy — so in the normal case (emulating) this
-        // is one uncontended lock and three comparisons per second, and in the
-        // console-takeover case it does nothing at all, which is attack D's
-        // requirement.
-        if let Some((speed, incline)) = owed {
-            let mut g = lock(&ctx.guarded);
-            control::reassert(&mut g, Surface::Executor, speed, incline, now);
+            if !plan.is_empty() || ended {
+                let (current, elapsed) = (p.current_interval(), p.total_elapsed());
+                let n = apply_plan(&mut g, plan, ended, now);
+                if !plan.is_empty() {
+                    interval_log = Some((current, elapsed, n, plan.commands().len()));
+                }
+                ended_log = ended;
+            }
+
+            // WHAT THE PROGRAM WANTS RIGHT NOW, read from the program itself
+            // rather than remembered from the last plan — because a program
+            // can be started by HTTP, quick-start, or coach. A copy would be a
+            // second fact that can disagree with the first.
+            //
+            // Paused is excluded: a paused program wants ZERO, which is what
+            // the pause plan already commanded, and re-asserting the
+            // interval's speed over it would un-pause the belt.
+            if running && !p.paused() {
+                if let Some((speed, incline)) = p.motion_of_current() {
+                    // ASK AGAIN FOR A TRANSITION THAT DID NOT HAPPEN.
+                    // `reassert` never mints a lease, and this guarded hold
+                    // prevents console takeover from landing between the
+                    // ownership check and the request.
+                    control::reassert(&mut g, Surface::Executor, speed, incline, now);
+                }
+            }
+            false
+        };
+
+        // The network notification is deliberately outside BOTH locks. The
+        // queued work renders and writes on the HTTP task, so the executor
+        // never blocks on a client and the non-network build never names net.
+        drop(g);
+        drop(p);
+        if let Some((current, elapsed, accepted, commands)) = interval_log {
+            logi!(
+                "program: interval {} at {}s ({}/{} accepted)",
+                current,
+                elapsed,
+                accepted,
+                commands
+            );
+        }
+        if ended_log {
+            logi!("program: ended, belt released");
+        }
+        if newly_paused {
+            #[cfg(feature = "net")]
+            crate::net::ws::request_push();
         }
 
         if seconds % 5 == 0 {

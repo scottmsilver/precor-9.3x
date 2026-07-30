@@ -642,6 +642,12 @@ pub(crate) fn apply(effect: proto::CpEffect) -> u8 {
             }
             proto::result_for_reject(proto::CpReject::NotOwner)
         }
+        Err(control::Reject::ExecutorInhibited) => {
+            if loud {
+                logw!("ble: control point refused — program executor is safety-paused");
+            }
+            proto::result_for_reject(proto::CpReject::Other)
+        }
         Err(control::Reject::Refused) => {
             if loud {
                 logw!("ble: control point refused by the safety controller");

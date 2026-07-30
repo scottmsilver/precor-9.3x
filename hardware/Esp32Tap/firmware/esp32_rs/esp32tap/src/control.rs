@@ -125,6 +125,9 @@ impl Default for Owner {
 /// cannot invent a fourth outcome.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Reject {
+    /// A safety ownership loss suspended the background executor. Only a
+    /// future explicit Start/Resume transaction may clear this interlock.
+    ExecutorInhibited,
     /// The other surface holds the lease. While a program runs, the executor
     /// owns the belt and a manual command is refused rather than fighting it.
     NotOwner,
@@ -157,6 +160,10 @@ fn hold_lease(
     surface: Surface,
     now: Micros,
 ) -> Result<ConnectionIdentity, Reject> {
+    if surface == Surface::Executor && g.executor_inhibited {
+        return Err(Reject::ExecutorInhibited);
+    }
+
     // Still ours? Reuse it. This is the branch that keeps a running program
     // from relay-cycling the treadmill once a second — see the module header.
     if let Some(id) = owner(g, surface).identity() {
