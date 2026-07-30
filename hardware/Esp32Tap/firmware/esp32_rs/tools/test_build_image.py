@@ -227,6 +227,14 @@ elif argv and argv[0] == "tag":
         mutate(lambda state: state["events"].__setitem__("tag_active", False))
 elif argv[:2] == ["image", "rm"]:
     for reference in argv[2:]:
+        if "candidate" in reference and os.environ.get("FAKE_CANDIDATE_RM_SIGNAL_BARRIER"):
+            barrier = os.environ["FAKE_CANDIDATE_RM_SIGNAL_BARRIER"]
+            with open(barrier + ".pid", "w", encoding="utf-8") as stream:
+                stream.write(str(os.getpid()))
+            with open(barrier + ".ready", "w", encoding="utf-8") as stream:
+                stream.write("ready")
+            while not os.path.exists(barrier + ".release"):
+                time.sleep(0.01)
         if "candidate" in reference and os.environ.get("FAKE_DOCKER_FAIL_CANDIDATE_RM"):
             print("forced candidate removal failure", file=sys.stderr)
             raise SystemExit(19)
@@ -1127,6 +1135,77 @@ def test_termination_is_deferred_across_verified_promotion_then_releases_lock(
         assert final["Config"]["Labels"][
             "org.treddy.esp32tap.recipe-sha256"
         ] == recipe(context)
+        followup = run(context, fake_docker)
+        assert followup.returncode == 0, followup.stderr
+    finally:
+        Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
+        process.kill()
+        process.wait()
+        if child_pid > 0:
+            wait_process_gone(child_pid)
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True], ids=["clean", "warning"])
+def test_termination_during_cleanup_finishes_cleanup_then_releases_lock(
+    context: Path,
+    fake_docker: tuple[Path, Path],
+    tmp_path: Path,
+    cleanup_fails: bool,
+) -> None:
+    barrier = tmp_path / "candidate-cleanup-signal"
+    process = subprocess.Popen(
+        [str(context / "tools" / "build_image.sh")],
+        cwd=context,
+        env=run_environment(
+            context,
+            fake_docker,
+            extra_env={
+                "FAKE_CANDIDATE_RM_SIGNAL_BARRIER": str(barrier),
+                **(
+                    {"FAKE_DOCKER_FAIL_CANDIDATE_RM": "1"}
+                    if cleanup_fails
+                    else {}
+                ),
+            },
+        ),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    child_pid = -1
+    try:
+        wait_for(Path(str(barrier) + ".ready"))
+        child_pid = int(Path(str(barrier) + ".pid").read_text(encoding="utf-8"))
+        os.kill(process.pid, signal.SIGTERM)
+        time.sleep(0.05)
+        os.kill(process.pid, signal.SIGHUP)
+        os.kill(process.pid, signal.SIGTERM)
+        time.sleep(0.1)
+        assert process.poll() is None
+        Path(str(barrier) + ".release").write_text("finish", encoding="utf-8")
+        result = process.communicate(timeout=8)
+        assert process.returncode == 128 + signal.SIGTERM, result
+        assert ("best-effort cleanup warning" in result[1]) is cleanup_fails
+        wait_process_gone(child_pid)
+
+        calls = docker_calls(fake_docker[1])
+        build_call = next(call for call in calls if call[0] == "build")
+        assert not Path(build_call[-1]).exists()
+        assert any(call[:2] == ["rm", "-f"] for call in calls)
+        assert any(
+            call[:2] == ["image", "rm"] and any("stage" in item for item in call)
+            for call in calls
+        )
+        candidate_remains = any(
+            "candidate" in reference
+            for reference in docker_state(fake_docker[1])["refs"]
+        )
+        assert candidate_remains is cleanup_fails
+        final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+        assert final["Config"]["Labels"][
+            "org.treddy.esp32tap.recipe-sha256"
+        ] == recipe(context)
+
         followup = run(context, fake_docker)
         assert followup.returncode == 0, followup.stderr
     finally:

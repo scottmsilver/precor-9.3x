@@ -360,6 +360,7 @@ class BuildCancelled(SystemExit):
 
 cancel_signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
 cancellation_signum: int | None = None
+cancellation_deferred = False
 
 
 def cancel_build(signum: int, _frame: object) -> None:
@@ -367,11 +368,14 @@ def cancel_build(signum: int, _frame: object) -> None:
     if cancellation_signum is not None:
         return
     cancellation_signum = signum
-    # Cleanup must not be interrupted by a duplicate signal delivered both to
-    # a shell/process group and directly to this helper.
-    for watched in cancel_signals:
-        signal.signal(watched, signal.SIG_IGN)
-    raise BuildCancelled(signum)
+    # Keep the recording handlers installed. Mutating dispositions from inside
+    # a handler can race with an interrupted selector; later invocations simply
+    # return, preserving the first signal without interrupting cleanup.
+
+
+def deliver_cancellation(*, force: bool = False) -> None:
+    if cancellation_signum is not None and (force or not cancellation_deferred):
+        raise BuildCancelled(cancellation_signum)
 
 
 for watched_signal in cancel_signals:
@@ -411,6 +415,7 @@ def run_bounded(
     max_output: int = max_docker_output,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    deliver_cancellation()
     try:
         process = subprocess.Popen(
             argv,
@@ -429,6 +434,7 @@ def run_bounded(
     deadline = time.monotonic() + timeout
     try:
         while selector.get_map():
+            deliver_cancellation()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 stop_group(process)
@@ -462,6 +468,7 @@ def run_bounded(
                 pipe.close()
         if process.poll() is None:
             stop_group(process)
+    deliver_cancellation()
     try:
         stdout = output["stdout"].decode("utf-8")
         stderr = output["stderr"].decode("utf-8")
@@ -777,6 +784,7 @@ def publication_lock():
         validate_named_lock()
         deadline = time.monotonic() + docker_timeout
         while True:
+            deliver_cancellation()
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
@@ -790,6 +798,17 @@ def publication_lock():
         with contextlib.suppress(OSError):
             fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
+
+@contextlib.contextmanager
+def publication_lifecycle():
+    # Deliver cancellation only after the daemon-global publication lock has
+    # been released. This preserves cleanup/rollback ordering across worktrees.
+    try:
+        with publication_lock():
+            yield
+    finally:
+        deliver_cancellation(force=True)
 
 
 @contextlib.contextmanager
@@ -842,7 +861,7 @@ def required_remove_image(reference: str) -> None:
         )
 
 
-with publication_lock():
+with publication_lifecycle():
     token = secrets.token_hex(32)
     task_root = Path("/tmp") / f"esp32tap-image-build.{token}"
     context = task_root / "context"
@@ -943,6 +962,10 @@ with publication_lock():
                         ) from restore_error
                 raise
     finally:
+        # From this point through publication_lifecycle.__exit__, handlers only
+        # record the first signal. Every cleanup path and the publication-lock
+        # release completes before the conventional 128+signal exit is raised.
+        cancellation_deferred = True
         cleanup_warnings = []
         if container_possible:
             try:
