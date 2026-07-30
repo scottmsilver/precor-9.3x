@@ -344,16 +344,25 @@ public path is the tracked/pre-migration real directory, it atomically renames
 that directory to an exact transaction swap, records its device and inode in a
 durable marker, and installs the symlink with an atomic exchange. A failure
 before that exchange leaves the original directory untouched. After durable
-publication, it may use a no-replace rename to durably retire the exact swap to
-a task-specific tombstone. It retains the transaction marker and never scans,
-validates, renames, unlinks, or otherwise mutates prior transaction leftovers
-during startup or publication. A later publish ignores all leftover markers,
-swaps, symlinks, and tombstones; a collision with its fresh 256-bit token fails
-without overwriting anything. Inspection or garbage collection is allowed only
-under an offline, exclusive maintenance workflow with stronger isolation than
-the online lock. Tests cover success, every crash point, forged markers, path
-substitutions, and token collisions while keeping the old or new public state
-available.
+publication, it may use a no-replace rename to durably retire the cooperative
+transaction swap to a task-specific tombstone.
+
+All cooperating ESP32Tap builders and readers must honor the physical lock.
+Fresh 256-bit transaction names protect against accidental collision, and
+normal directory permissions protect against other UIDs. An active same-UID
+process replacing a current transaction pathname is explicitly outside the
+threat model: unprivileged Linux provides no identity-conditional
+rename/exchange primitive for that case. No pathname validation is claimed to
+close that race.
+
+Prior transaction evidence remains inert even if a same-UID process changes
+it. Startup and publication never scan, validate, rename, unlink, or otherwise
+mutate prior markers, swaps, symlinks, or tombstones. A collision between a
+fresh token and an existing path fails without overwriting it. Inspection or
+garbage collection is allowed only under an offline, exclusive maintenance
+workflow with stronger isolation than the online lock. Tests cover cooperative
+success, every crash point, inert forged prior evidence, and fresh-token
+collisions while keeping the old or new public state available.
 
 CLI `exec --kind ... -- COMMAND` sets the lock FD inheritable, verifies, and
 `os.execvp`s COMMAND so smoke delegation retains the lock continuously.

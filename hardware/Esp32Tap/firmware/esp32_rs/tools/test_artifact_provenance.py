@@ -1211,7 +1211,7 @@ def test_publish_never_consumes_unrelated_broad_prefix_directory(
 
 
 @pytest.mark.parametrize("marker_kind", ["malformed", "symlink"])
-def test_publish_ignores_forged_exact_marker_and_path_substitution(
+def test_publish_ignores_forged_marker_and_changed_prior_path(
     layout: tuple[Path, Path, Path],
     toolchain: Toolchain,
     tmp_path: Path,
@@ -1580,122 +1580,6 @@ def test_postcommit_legacy_retire_fsync_failure_returns_success(
     assert public.is_symlink()
     assert len(backups) == 1
     assert (backups[0] / "tracked-old").read_text(encoding="utf-8") == "recover me"
-
-
-def test_retirement_destination_race_is_never_overwritten(
-    layout: tuple[Path, Path, Path],
-    toolchain: Toolchain,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _, rs, staging = layout
-    public = rs / "build"
-    public.mkdir()
-    (public / "tracked-old").write_text("genuine", encoding="utf-8")
-    real_rename = provenance._rename_noreplace
-    raced = False
-
-    def collide_at_retirement(source: Path, destination: Path) -> None:
-        nonlocal raced
-        raced = True
-        destination.mkdir()
-        (destination / "keep").write_text("unrelated", encoding="utf-8")
-        real_rename(source, destination)
-
-    monkeypatch.setattr(provenance, "_rename_noreplace", collide_at_retirement)
-    publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
-
-    retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
-    swaps = list(rs.glob(".artifact-provenance-legacy-build-*.swap"))
-    assert raced
-    assert public.is_symlink()
-    assert (public / MANIFEST_NAME).is_file()
-    assert len(retired) == 1
-    assert (retired[0] / "keep").read_text(encoding="utf-8") == "unrelated"
-    assert len(swaps) == 1
-    assert (swaps[0] / "tracked-old").read_text(encoding="utf-8") == "genuine"
-
-
-def test_postcommit_child_substitution_is_retired_without_deletion(
-    layout: tuple[Path, Path, Path],
-    toolchain: Toolchain,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _, rs, staging = layout
-    public = rs / "build"
-    public.mkdir()
-    child = public / "child"
-    child.mkdir()
-    (child / "tracked-old").write_text("genuine", encoding="utf-8")
-    saved = rs / ".saved-genuine-child"
-    real_rename = provenance._rename_noreplace
-    substituted = False
-
-    def replace_at_retirement(source: Path, destination: Path) -> None:
-        nonlocal substituted
-        source = Path(source)
-        destination = Path(destination)
-        if (
-            not substituted
-            and source.name.endswith(".swap")
-            and destination.name.startswith(".retired-legacy-build-")
-        ):
-            substituted = True
-            (source / "child").rename(saved)
-            replacement = source / "child"
-            replacement.mkdir()
-            (replacement / "keep").write_text("unrelated", encoding="utf-8")
-        real_rename(source, destination)
-
-    monkeypatch.setattr(provenance, "_rename_noreplace", replace_at_retirement)
-    publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
-
-    retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
-    assert substituted
-    assert public.is_symlink()
-    assert (public / MANIFEST_NAME).is_file()
-    assert len(retired) == 1
-    assert (retired[0] / "child" / "keep").read_text(encoding="utf-8") == "unrelated"
-    assert (saved / "tracked-old").read_text(encoding="utf-8") == "genuine"
-
-
-def test_postcommit_retirement_race_never_deletes_unrelated_substitute(
-    layout: tuple[Path, Path, Path],
-    toolchain: Toolchain,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _, rs, staging = layout
-    public = rs / "build"
-    public.mkdir()
-    (public / "tracked-old").write_text("genuine", encoding="utf-8")
-    saved = rs / ".saved-genuine-legacy"
-    real_rename = provenance._rename_noreplace
-    raced = False
-
-    def replace_at_retirement(source: Path, destination: Path) -> None:
-        nonlocal raced
-        source = Path(source)
-        destination = Path(destination)
-        if (
-            not raced
-            and source.name.endswith(".swap")
-            and destination.name.startswith(".retired-legacy-build-")
-        ):
-            raced = True
-            real_rename(source, saved)
-            source.mkdir()
-            (source / "keep").write_text("unrelated", encoding="utf-8")
-        real_rename(source, destination)
-
-    monkeypatch.setattr(provenance, "_rename_noreplace", replace_at_retirement)
-    publish_generation_atomic(staging, public, manifest_for(staging, toolchain))
-
-    retired = list((rs / ".artifacts").glob(".retired-legacy-build-*"))
-    assert raced
-    assert len(retired) == 1
-    assert (retired[0] / "keep").read_text(encoding="utf-8") == "unrelated"
-    assert (saved / "tracked-old").read_text(encoding="utf-8") == "genuine"
-    assert public.is_symlink()
-    assert (public / MANIFEST_NAME).is_file()
 
 
 @pytest.mark.parametrize(
