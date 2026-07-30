@@ -200,6 +200,10 @@ class Stub:
                 )
             cut = PROGRAM_JSON[: PROGRAM_JSON.index("Climb") + 20]
             return self.send(h, 200, candidate([{"text": cut}], finish="MAX_TOKENS"))
+        if path == "/start-workout":
+            return self.send(h, 200, candidate([fn_call("start_workout", {})]))
+        if path == "/resume-program":
+            return self.send(h, 200, candidate([fn_call("resume_program", {})]))
         if path == "/slow":
             # HOLDS THE DEVICE'S REQUEST OPEN. This is the whole point of the
             # tier's headline test: while this is in flight, the httpd worker
@@ -589,6 +593,39 @@ def test_a_generated_workout_lands_through_the_existing_program_path(qemu, stub)
     entry = next((h for h in hist if h["program"]["name"] == "Stub Hills"), None)
     assert entry is not None, hist
     assert entry["prompt"] == "hills", entry
+
+
+def test_coach_start_reports_safety_refusal_without_committing_running(qemu, stub):
+    s = armed(qemu)
+    st, loaded = http(s, "POST", "/api/program/load", json.loads(PROGRAM_JSON))
+    assert st == 200 and loaded["running"] is False, loaded
+    s.cmd_ok("QT tread 0")
+    point_at(s, stub, "/start-workout")
+
+    st, chat = ask(s, "start it")
+    assert st == 202, chat
+    got = await_reply(s, chat["turn"], timeout=90)
+    assert any("refused" in a["result"] for a in got["actions"]), got
+    st, state = http(s, "GET", "/api/program")
+    assert st == 200 and state["running"] is False, state
+    s.stop_pacer()
+
+
+def test_coach_resume_uses_the_same_successful_transaction_as_http(qemu, stub):
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/program/start", json.loads(PROGRAM_JSON))
+    assert st == 200 and body["running"] is True, body
+    st, body = http(s, "POST", "/api/program/pause")
+    assert st == 200 and body["paused"] is True, body
+    point_at(s, stub, "/resume-program")
+
+    st, chat = ask(s, "resume it")
+    assert st == 202, chat
+    got = await_reply(s, chat["turn"], timeout=90)
+    assert got["actions"] and "resumed" in got["actions"][0]["result"], got
+    st, state = http(s, "GET", "/api/program")
+    assert st == 200 and state["running"] is True and state["paused"] is False, state
+    s.stop_pacer()
 
 
 def test_a_workout_truncated_by_the_token_limit_is_salvaged_or_refused(qemu, stub):

@@ -237,6 +237,10 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     # Console button press: hmph 0 -> 2.0 mph at unchanged cadence.
     s.set_pacer_payload(synth.console_cycle_bytes(20, 0))
     takeover_idx = s.wait_audit("emergency:console_takeover", since=idx0, timeout=15)
+    # Baseline at the takeover event itself, before waiting for the executor's
+    # paused observation; otherwise a one-tick reacquisition can hide inside
+    # the observation wait.
+    tx0 = len(s.tx_bytes())
     took = status(s)
     assert took["mode"] == "proxy" and took["relay"] is False, took
 
@@ -254,8 +258,6 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
         paused["interval_elapsed"],
         paused["total_elapsed"],
     )
-    tx0 = len(s.tx_bytes())
-
     # Observe 25 s of GUEST time — more than two complete 10 s intervals,
     # even though QEMU wall time is elastic. Poll throughout so a forbidden
     # audit event cannot roll out of the fixed-size ring under console traffic.

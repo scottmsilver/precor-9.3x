@@ -59,21 +59,23 @@ use safety_core::units::Micros;
 /// the console frame is 1.6 s old is not the safety layer saying no to a
 /// motion; it is the safety layer saying "not yet", and treating the two the
 /// same cost a whole interval of a motionless belt under a running program.
-pub fn apply_plan(g: &mut Guarded, plan: Plan, release_belt: bool, now: Micros) -> usize {
+pub fn apply_plan(
+    g: &mut Guarded,
+    plan: Plan,
+    release_belt: bool,
+    now: Micros,
+) -> Result<usize, control::Reject> {
     let mut accepted = 0usize;
     for (speed, incline) in plan.commands() {
-        if control::command(
+        control::command(
             g,
             Surface::Executor,
             EntryIntent::Ordinary,
             *speed,
             *incline,
             now,
-        )
-        .is_ok()
-        {
-            accepted += 1;
-        }
+        )?;
+        accepted += 1;
     }
     if release_belt {
         // The program is over — completed, stopped or reset. Hand the belt
@@ -82,7 +84,29 @@ pub fn apply_plan(g: &mut Guarded, plan: Plan, release_belt: bool, now: Micros) 
         // no HTTP request could ever command the belt after one workout.
         control::release(g, Surface::Executor, now);
     }
-    accepted
+    Ok(accepted)
+}
+
+/// Apply a prepared Start/Resume plan as one safety transaction.
+///
+/// The first refusal aborts the plan, zeros/releases any executor ownership
+/// created by the attempt, and is returned verbatim to the API tier. The
+/// caller still holds the program lock and therefore commits lifecycle state
+/// only after this returns `Ok`.
+pub fn apply_program_entry(
+    g: &mut Guarded,
+    plan: Plan,
+    now: Micros,
+) -> Result<usize, control::Reject> {
+    let mut accepted = 0usize;
+    for (speed, incline) in plan.commands() {
+        if let Err(reject) = control::command_program_entry(g, *speed, *incline, now) {
+            control::rollback_program_entry(g, now);
+            return Err(reject);
+        }
+        accepted += 1;
+    }
+    Ok(accepted)
 }
 
 pub fn run(ctx: &'static FirmwareContext) -> ! {
@@ -114,6 +138,25 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
         let mut interval_log = None;
         let mut ended_log = false;
         let mut p = lock(&ctx.program);
+
+        // Steady idle is program-lock-only. The safety lock is taken once on
+        // the running→ended edge (a no-op if the endpoint already released
+        // it), never once per second for an idle device.
+        if !p.running() {
+            let ended = was_running;
+            was_running = false;
+            drop(p);
+            if ended {
+                let mut g = lock(&ctx.guarded);
+                control::release(&mut g, Surface::Executor, now);
+                logi!("program: ended, belt released");
+            }
+            if seconds % 5 == 0 {
+                logi!("heartbeat uptime={}s", seconds);
+            }
+            continue;
+        }
+
         let mut g = lock(&ctx.guarded);
 
         // OWNERSHIP LOSS IS A STICKY PROGRAM EVENT, not merely a failed belt
@@ -129,8 +172,16 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
         let newly_paused = if safety_blocked {
             g.executor_inhibited = true;
             let changed = !p.paused();
-            let plan = p.pause_due_to_safety(now);
+            let pause_at = g.executor_inhibited_at.take().unwrap_or(now);
+            if changed {
+                // Advance the wall-clock state to the exact takeover instant
+                // before freezing it. Any boundary plan is intentionally
+                // discarded: the takeover already stopped/released the belt.
+                let _ = p.tick(pause_at);
+            }
+            let plan = p.pause_due_to_safety(pause_at);
             debug_assert!(plan.is_empty());
+            was_running = p.running();
             changed
         } else {
             let plan = p.tick(now);
@@ -140,7 +191,7 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
 
             if !plan.is_empty() || ended {
                 let (current, elapsed) = (p.current_interval(), p.total_elapsed());
-                let n = apply_plan(&mut g, plan, ended, now);
+                let n = apply_plan(&mut g, plan, ended, now).unwrap_or(0);
                 if !plan.is_empty() {
                     interval_log = Some((current, elapsed, n, plan.commands().len()));
                 }

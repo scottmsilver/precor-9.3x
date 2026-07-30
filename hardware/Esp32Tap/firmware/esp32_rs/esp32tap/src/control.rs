@@ -159,8 +159,9 @@ fn hold_lease(
     g: &mut Guarded,
     surface: Surface,
     now: Micros,
+    allow_inhibited_executor: bool,
 ) -> Result<ConnectionIdentity, Reject> {
-    if surface == Surface::Executor && g.executor_inhibited {
+    if surface == Surface::Executor && g.executor_inhibited && !allow_inhibited_executor {
         return Err(Reject::ExecutorInhibited);
     }
 
@@ -204,8 +205,57 @@ pub fn command(
     incline: InclineHalfPct,
     now: Micros,
 ) -> Result<(), Reject> {
-    let id = hold_lease(g, surface, now)?;
+    let id = hold_lease(g, surface, now, false)?;
     command_as(g, surface, intent, &id, speed, incline, now)
+}
+
+/// Start/Resume-only executor command.
+///
+/// The sticky inhibit is deliberately *tested through*, not cleared first.
+/// The surrounding transaction clears it only after every plan command has
+/// been accepted. Keeping this bypass private to an explicit-recovery command
+/// prevents an ordinary executor tick from reopening the acquisition window.
+pub fn command_program_entry(
+    g: &mut Guarded,
+    speed: SpeedTenths,
+    incline: InclineHalfPct,
+    now: Micros,
+) -> Result<(), Reject> {
+    let id = hold_lease(g, Surface::Executor, now, true)?;
+    command_as(
+        g,
+        Surface::Executor,
+        EntryIntent::ExplicitRecovery,
+        &id,
+        speed,
+        incline,
+        now,
+    )
+}
+
+/// Remove any executor ownership created by a failed Start/Resume attempt.
+///
+/// This touches no other surface: a failed program acquisition must not leave
+/// a hidden owner, but neither may it disconnect an unrelated manual owner.
+pub fn rollback_program_entry(g: &mut Guarded, now: Micros) {
+    let Some(id) = owner(g, Surface::Executor).identity() else {
+        return;
+    };
+    if g.controller.owner() != Some(id) {
+        return;
+    }
+    if g.controller.mode() == SafeMode::Emulating {
+        let _ = command_as(
+            g,
+            Surface::Executor,
+            EntryIntent::Ordinary,
+            &id,
+            SpeedTenths::ZERO,
+            InclineHalfPct::ZERO,
+            now,
+        );
+    }
+    release(g, Surface::Executor, now);
 }
 
 /// The motion + auto-emulate choreography for an identity that ALREADY owns

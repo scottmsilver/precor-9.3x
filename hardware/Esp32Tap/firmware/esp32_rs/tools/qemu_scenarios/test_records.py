@@ -257,7 +257,7 @@ def test_an_unknown_or_oversized_id_is_refused_without_touching_the_store(qemu):
 
 
 def test_resume_is_gated_by_completion_and_picks_up_where_it_stopped(qemu):
-    s = booted(qemu)
+    s = armed(qemu)
     st, _ = http(s, "POST", "/api/program/load", program("Resumable"))
     assert st == 200
     st, hist = http(s, "GET", "/api/programs/history")
@@ -272,6 +272,34 @@ def test_resume_is_gated_by_completion_and_picks_up_where_it_stopped(qemu):
     assert body["running"] is True, body
     # Stop again so the belt is not left owned by a program.
     http(s, "POST", "/api/program/stop")
+
+
+def test_history_resume_rolls_back_on_safety_refusal_and_can_be_retried(qemu):
+    s = armed(qemu)
+    st, _ = http(s, "POST", "/api/program/load", program("Transactional Resume"))
+    assert st == 200
+    st, hist = http(s, "GET", "/api/programs/history")
+    hid = hist[0]["id"]
+
+    s.cmd_ok("QT tread 0")
+    st, body = http(s, "POST", f"/api/programs/history/{hid}/resume")
+    assert st == 409 and body["ok"] is False, body
+    st, state = http(s, "GET", "/api/program")
+    assert st == 200 and state["running"] is False and state["paused"] is False, state
+
+    # Restored manual control proves the failed transaction did not strand an
+    # executor lease. Stop releases that manual owner, then a fresh explicit
+    # history Resume is allowed to recover and commit.
+    s.cmd_ok("QT tread 1")
+    st, body = http(s, "POST", "/api/speed", {"value": 2.0})
+    assert st == 200 and body["ok"] is True, body
+    st, body = http(s, "POST", "/api/program/stop")
+    assert st == 200 and body["running"] is False, body
+
+    st, body = http(s, "POST", f"/api/programs/history/{hid}/resume")
+    assert st == 200 and body["ok"] is True and body["running"] is True, body
+    http(s, "POST", "/api/program/stop")
+    s.stop_pacer()
 
 
 def test_a_run_is_created_checkpointed_in_place_and_finalised(qemu):

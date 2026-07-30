@@ -70,6 +70,7 @@ fn drain_console(g: &mut Guarded, now: Micros) {
         key_cache,
         last_console_rx,
         executor_inhibited,
+        executor_inhibited_at,
         ..
     } = g;
     let n = console_uart.read(scratch_raw);
@@ -102,6 +103,7 @@ fn drain_console(g: &mut Guarded, now: Micros) {
             // TODO(M3): use the gap-safe normal exit when the console is
             // healthy and an owner is present.
             *executor_inhibited = true;
+            *executor_inhibited_at = Some(now);
             controller.emergency_stop("console_takeover", now);
         }
     }
@@ -212,9 +214,7 @@ pub fn run(ctx: &'static FirmwareContext) -> ! {
             // the controller either qualifies the transfer or fails it closed
             // at its own 10 ms deadline. Bounded well under the 2 s task WDT.
             if in_feedback_wait(&g.controller) {
-                let Guarded {
-                    controller, io, ..
-                } = &mut *g;
+                let Guarded { controller, io, .. } = &mut *g;
                 let mut wio = WindowIo {
                     io,
                     clock: &ctx.clock,

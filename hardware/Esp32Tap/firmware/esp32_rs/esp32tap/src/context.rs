@@ -18,7 +18,6 @@
 // reviewer disproved the "deny contains it" claim by counterexample.
 #![forbid(unsafe_code)]
 
-
 #[allow(unused_imports)]
 use crate::hal::{ConsoleMotorUart, Esp32Clock, Esp32SafetyIo, MotorTapUart};
 
@@ -91,6 +90,12 @@ pub struct Guarded {
     /// Ordinary executor ticks may never clear it; only a future explicit
     /// Start/Resume transaction is allowed to do that.
     pub executor_inhibited: bool,
+    /// Exact controller-clock instant of physical-console takeover.
+    ///
+    /// The serial task cannot take the program lock while it holds `guarded`
+    /// (that would invert program→guarded), so it leaves this bounded marker
+    /// for the executor to consume on its next tick.
+    pub executor_inhibited_at: Option<Micros>,
 }
 
 pub const SCRATCH_RAW_BYTES: usize = 512;
@@ -114,6 +119,7 @@ impl Guarded {
             http_owner: crate::control::Owner::new(),
             executor_owner: crate::control::Owner::new(),
             executor_inhibited: false,
+            executor_inhibited_at: None,
         }
     }
 

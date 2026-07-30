@@ -159,7 +159,9 @@
 use crate::context::lock;
 use crate::control::{self, Surface};
 use crate::net::api::{parse_key_str, read_body_into, respond};
-use crate::net::program::{drive, drive_stop};
+use crate::net::program::{
+    drive, drive_stop, pause_transaction, resume_transaction, start_transaction,
+};
 use crate::{logi, logw};
 use coach_core::hist::Role;
 use coach_core::scan::ReplyScanner;
@@ -455,7 +457,9 @@ fn turn_impl(turn: u32, msg: &str) {
         let mut state: FixedStr<{ req::STATE_BYTES }> = FixedStr::new();
         render_state_line(&mut state);
         let built = {
-            let Work { history, req: buf, .. } = &mut *w;
+            let Work {
+                history, req: buf, ..
+            } = &mut *w;
             req::build_chat(&mut buf[..], history, state.as_str(), msg)
         };
         let Some(n) = built else {
@@ -467,7 +471,9 @@ fn turn_impl(turn: u32, msg: &str) {
         };
         w.scanner.reset();
         let outcome = {
-            let Work { scanner, req: buf, .. } = &mut *w;
+            let Work {
+                scanner, req: buf, ..
+            } = &mut *w;
             post(url.as_str(), key_hdr.as_ref(), &buf[..n], scanner, started)
         };
         match outcome {
@@ -602,9 +608,10 @@ fn apply(action: &Action) -> Option<&'static str> {
             if p.program().is_none() {
                 return Some("there is no workout loaded to start");
             }
-            let plan = p.start(now, 0, 0);
-            drive(plan, false);
-            None
+            match start_transaction(&mut p, now, 0, 0) {
+                Ok(()) => None,
+                Err(_) => Some("the treadmill refused to start the workout"),
+            }
         }
         Action::StopTreadmill => {
             // THROUGH THE SAME STOP THE HTTP ENDPOINT USES, and the answer
@@ -626,14 +633,25 @@ fn apply(action: &Action) -> Option<&'static str> {
                 Some("I could not stop the belt — use the stop button")
             }
         }
-        Action::PauseProgram | Action::ResumeProgram => {
+        Action::PauseProgram => {
             let mut p = lock(&crate::CTX.program);
-            if !p.running() {
+            if !p.running() || p.paused() {
                 return Some("no workout is running");
             }
-            let plan = p.toggle_pause(now);
-            drive(plan, false);
-            None
+            match pause_transaction(&mut p, now) {
+                Ok(()) => None,
+                Err(_) => Some("the treadmill refused to pause the workout"),
+            }
+        }
+        Action::ResumeProgram => {
+            let mut p = lock(&crate::CTX.program);
+            if !p.running() || !p.paused() {
+                return Some("no workout is paused");
+            }
+            match resume_transaction(&mut p, now) {
+                Ok(()) => None,
+                Err(_) => Some("the treadmill refused to resume the workout"),
+            }
         }
         Action::SkipInterval => {
             let mut p = lock(&crate::CTX.program);
@@ -642,7 +660,7 @@ fn apply(action: &Action) -> Option<&'static str> {
             }
             let plan = p.skip(now);
             let ended = !p.running();
-            drive(plan, ended);
+            let _ = drive(plan, ended);
             None
         }
         Action::ExtendInterval(s) => {
@@ -682,7 +700,9 @@ fn generate(
     };
     w.scanner.reset();
     let outcome = {
-        let Work { scanner, req: buf, .. } = &mut *w;
+        let Work {
+            scanner, req: buf, ..
+        } = &mut *w;
         post(url.as_str(), key, &buf[..n], scanner, started)
     };
     match outcome {
@@ -723,7 +743,7 @@ fn generate(
     p.load(program);
     drop(p);
     if stopping {
-        drive(stop, true);
+        let _ = drive(stop, true);
     }
     "workout ready — say start when you are"
 }
@@ -1241,7 +1261,11 @@ fn config_post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
         // length, not a masked prefix.
         return respond(
             req,
-            if ok { c"200 OK" } else { c"500 Internal Server Error" },
+            if ok {
+                c"200 OK"
+            } else {
+                c"500 Internal Server Error"
+            },
             if ok {
                 br#"{"ok":true,"configured":true}"#
             } else {
@@ -1270,7 +1294,11 @@ fn config_post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
     );
     respond(
         req,
-        if ok { c"200 OK" } else { c"500 Internal Server Error" },
+        if ok {
+            c"200 OK"
+        } else {
+            c"500 Internal Server Error"
+        },
         if !ok {
             br#"{"ok":false,"error":"could not store the endpoint"}"#
         } else if pinned {
@@ -1288,11 +1316,36 @@ pub fn register(handle: sys::httpd_handle_t) -> Result<(), sys::esp_err_t> {
     // introduces no unsafe operation of its own.
     type H = unsafe extern "C" fn(*mut sys::httpd_req_t) -> sys::esp_err_t;
     let routes: [(&core::ffi::CStr, u32, H, usize); 5] = [
-        (c"/api/chat", sys::http_method_HTTP_POST, chat_post_handler, usize::MAX),
-        (c"/api/chat", sys::http_method_HTTP_GET, chat_get_handler, usize::MAX),
-        (c"/api/coach", sys::http_method_HTTP_GET, coach_get_handler, usize::MAX),
-        (c"/api/coach/key", sys::http_method_HTTP_POST, config_post_handler, V_KEY),
-        (c"/api/coach/url", sys::http_method_HTTP_POST, config_post_handler, V_URL),
+        (
+            c"/api/chat",
+            sys::http_method_HTTP_POST,
+            chat_post_handler,
+            usize::MAX,
+        ),
+        (
+            c"/api/chat",
+            sys::http_method_HTTP_GET,
+            chat_get_handler,
+            usize::MAX,
+        ),
+        (
+            c"/api/coach",
+            sys::http_method_HTTP_GET,
+            coach_get_handler,
+            usize::MAX,
+        ),
+        (
+            c"/api/coach/key",
+            sys::http_method_HTTP_POST,
+            config_post_handler,
+            V_KEY,
+        ),
+        (
+            c"/api/coach/url",
+            sys::http_method_HTTP_POST,
+            config_post_handler,
+            V_URL,
+        ),
     ];
     for (path, method, handler, ctx) in routes {
         let uri = sys::httpd_uri_t {

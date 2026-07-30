@@ -254,6 +254,27 @@ def test_starting_a_program_drives_a_real_relay_transfer_and_enters_at_zero(qemu
     s.stop_pacer()
 
 
+def test_failed_start_is_rolled_back_and_does_not_strand_the_executor_lease(qemu):
+    """A safety refusal is a failed transaction, not a running workout."""
+    s = armed(qemu)
+    s.cmd_ok("QT tread 0")
+
+    st, body = http(s, "POST", "/api/program/start", PROGRAM)
+    assert st == 409 and body["ok"] is False, body
+    loaded = prog(s)
+    assert loaded["program"]["name"] == PROGRAM["name"], loaded
+    assert loaded["running"] is False and loaded["paused"] is False, loaded
+
+    # Restore health and prove the failed transaction did not leave the
+    # executor owning the lease. This is deliberately a MANUAL positive-speed
+    # command: success means there is no hidden executor owner to fight.
+    s.cmd_ok("QT tread 1")
+    st, body = http(s, "POST", "/api/speed", {"value": 2.0})
+    assert st == 200 and body["ok"] is True, body
+    s.wait_tx_contains(WIRE[2.0], timeout=45)
+    s.stop_pacer()
+
+
 def test_intervals_advance_on_the_guest_clock_with_no_client(qemu):
     s = armed(qemu)
     st, body = http(s, "POST", "/api/program/start", PROGRAM)
@@ -304,6 +325,37 @@ def test_pause_holds_the_program_and_zeroes_the_belt_then_resume_restores_it(qem
     assert st == 200 and body["paused"] is False, body
     # Resume re-commands the current interval.
     s.wait_tx_contains(WIRE[1.0], timeout=60, offset=tx0)
+    s.stop_pacer()
+
+
+def test_failed_resume_stays_paused_and_does_not_strand_the_executor_lease(qemu):
+    s = armed(qemu)
+    st, body = http(s, "POST", "/api/program/start", PROGRAM)
+    assert st == 200 and body["running"] is True, body
+    s.wait_tx_contains(WIRE[1.0], timeout=60)
+    st, body = http(s, "POST", "/api/program/pause")
+    assert st == 200 and body["paused"] is True, body
+    held = body["total_elapsed"]
+
+    # Physical takeover makes the executor inhibit sticky and releases its
+    # controller lease. Then make relay feedback unqualified for recovery.
+    s.set_pacer_payload(synth.console_cycle_bytes(20, 0))
+    s.wait_audit("emergency:console_takeover", timeout=20)
+    s.cmd_ok("QT k1 closed")
+    st, body = http(s, "POST", "/api/program/pause")
+    assert st == 409 and body["ok"] is False, body
+    after = prog(s)
+    assert after["running"] is True and after["paused"] is True, after
+    assert after["total_elapsed"] == held, (held, after)
+
+    # Restore health. A manual positive command can own and move the belt,
+    # proving the failed Resume left no delayed executor acquisition behind.
+    s.cmd_ok("QT k1 auto")
+    s.set_pacer_payload(synth.console_cycle_bytes(0, 0))
+    s.wait_audit("complete_console_frame", timeout=20)
+    st, body = http(s, "POST", "/api/speed", {"value": 2.0})
+    assert st == 200 and body["ok"] is True, body
+    s.wait_tx_contains(WIRE[2.0], timeout=45)
     s.stop_pacer()
 
 
@@ -474,30 +526,16 @@ def test_program_storage_is_bounded_and_refusal_is_clean(qemu):
 
 
 # ---------------------------------------------------------------------------
-# A DECLINED MODE TRANSITION IS ASKED AGAIN.
+# A DECLINED START IS ROLLED BACK UNTIL A FRESH EXPLICIT START.
 #
-# `control::command` ATTEMPTS auto-emulate and `request_emulate` enforces six
-# preconditions of its own; a console frame older than 1.5 s fails one of them.
-# The executor commands only at interval BOUNDARIES, so before
-# `control::reassert` existed a single refusal cost the WHOLE interval — up to
-# MAX_DURATION_S of a motionless belt while `GET /api/program` reported
-# `running: true` and nothing, anywhere, said why.
-#
-# It was found as an INTERMITTENT in the coach gate (a loaded host delays the
-# console pacer past 1.5 s at exactly the wrong moment) and the audit ring named
-# it exactly: `lease_acquired:EXECUTOR:2:1` -> `owner_motion` ->
-# `entry_rejected:console_not_fresh`, then 25 s with ZERO bytes on the motor
-# UART. This reproduces that DETERMINISTICALLY by taking the console away on
-# purpose, so the mechanism is a gate rather than a race.
-#
-# The pair of it — that a running program must NOT take the belt back from a
-# human who grabbed the physical console — is `test_reviewer_attacks.py`'s
-# attack D, and `control::reassert` is written to satisfy both: it re-asks only
-# while the executor STILL OWNS the lease, and a console takeover drops it.
+# Start is a user-visible transaction now. A stale console is an unsafe entry,
+# so the request reports 409 and leaves the loaded workout stopped. No
+# background retry may convert that refusal into motion later; restoring health
+# only makes a NEW explicit Start eligible to recover.
 # ---------------------------------------------------------------------------
 
 
-def test_an_emulate_entry_declined_for_a_stale_console_is_asked_again(qemu):
+def test_stale_console_start_rolls_back_until_a_fresh_explicit_start(qemu):
     s = armed(qemu)
 
     # Take the console away. The staleness threshold is 1.5 s of GUEST time, so
@@ -510,17 +548,26 @@ def test_an_emulate_entry_declined_for_a_stale_console_is_asked_again(qemu):
 
     idx0 = s.audit_events()[-1][0] if s.audit_events() else 0
     st, body = http(s, "POST", "/api/program/start", PROGRAM)
-    assert st == 200 and body["running"] is True, body
+    assert st == 409 and body["ok"] is False, body
+    state = prog(s)
+    assert state["running"] is False and state["paused"] is False, state
 
     # The entry IS refused, and for the reason this test is about.
-    s.wait_audit("entry_rejected:console_not_fresh", timeout=30, since=idx0)
+    rollback = s.wait_audit("emergency:owner_disconnect", timeout=30, since=idx0)
     assert b"[hmph:" not in s.tx_bytes(), "the belt moved with a stale console"
+    s.wait_guest_uptime_delta(6, timeout=90)
+    s.assert_no_audit(
+        lambda t: t.startswith("lease_acquired:EXECUTOR"),
+        since=rollback + 1,
+        label="after a rejected transactional Start",
+    )
 
-    # Now give the console back. NO further request is made — the device must
-    # complete the transition on its own, because a user who started a workout
-    # is not going to press start again.
+    # Restored health is necessary but not sufficient. The fresh explicit
+    # Start is the sole event allowed to clear the sticky executor inhibit.
     s.start_pacer(synth.console_cycle_bytes(0, 0), PACER_INTERVAL)
     s.wait_audit("complete_console_frame", timeout=30)
+    st, body = http(s, "POST", "/api/program/start")
+    assert st == 200 and body["running"] is True, body
     s.wait_tx_contains(WIRE[1.0], timeout=45)
 
     st, state = http(s, "GET", "/api/status")

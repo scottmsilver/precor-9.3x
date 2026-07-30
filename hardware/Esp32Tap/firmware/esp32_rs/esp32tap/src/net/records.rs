@@ -672,7 +672,11 @@ fn mutate_impl(
 /// the same reason: leaving it moving under a program that no longer exists is
 /// not a state this device will hold. `python/server.py` only cancels its
 /// asyncio task here, because on the Pi the belt is somebody else's problem.
-fn install(program: Program, resume: Option<(usize, i64)>, history: &FixedStr<{ record::MAX_ID }>) {
+fn install(
+    program: Program,
+    resume: Option<(usize, i64)>,
+    history: &FixedStr<{ record::MAX_ID }>,
+) -> Result<(), crate::control::Reject> {
     let now = crate::CTX.clock.now();
     let mut p = lock(&crate::CTX.program);
     let stop = p.stop();
@@ -693,7 +697,7 @@ fn install(program: Program, resume: Option<(usize, i64)>, history: &FixedStr<{ 
     // reports itself running.
     let release_belt = resume.is_none();
     if !stop.is_empty() {
-        crate::net::program::drive(stop, release_belt);
+        let _ = crate::net::program::drive(stop, release_belt);
     }
     p.load(program);
     // UNDER THE PROGRAM LOCK, with the load. The session recorder reads both
@@ -703,9 +707,9 @@ fn install(program: Program, resume: Option<(usize, i64)>, history: &FixedStr<{ 
     // program's interval and elapsed time into the new entry.
     crate::net::session::set_current(history);
     if let Some((interval, elapsed)) = resume {
-        let plan = p.start(now, interval, elapsed);
-        crate::net::program::drive(plan, false);
+        crate::net::program::start_transaction(&mut p, now, interval, elapsed)?;
     }
+    Ok(())
 }
 
 fn history_load(req: *mut sys::httpd_req_t, id: &str, resume: bool) -> sys::esp_err_t {
@@ -732,12 +736,15 @@ fn history_load(req: *mut sys::httpd_req_t, id: &str, resume: bool) -> sys::esp_
     // The session recorder writes this entry's progress back as the program
     // runs, so it has to know which one is playing — set inside `install`,
     // under the program lock, so the two can never disagree.
-    install(
+    let installed = install(
         e.program,
         resume.then_some((e.last_interval as usize, e.last_elapsed_s as i64)),
         &e.id,
     );
     drop(lease);
+    if let Err(reject) = installed {
+        return crate::net::program::respond_reject(req, reject);
+    }
     if resume {
         // `server.py::api_resume_history` answers `{"ok": True,
         // **sess.prog.to_dict()}` — the FULL state, not a `{"program": …}`
@@ -791,7 +798,7 @@ fn workout_load(req: *mut sys::httpd_req_t, id: &str) -> sys::esp_err_t {
             br#"{"ok":false,"error":"could not write to storage"}"#,
         );
     }
-    install(program, None, &hid);
+    let _ = install(program, None, &hid);
     drop(lease);
     reply_program(req, &program)
 }

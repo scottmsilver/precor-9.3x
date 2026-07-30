@@ -726,7 +726,8 @@ fn stop_the_belt() -> u8 {
         // `release_belt = true` even for an empty plan: it is the half that
         // hands the lease back, and it is a no-op when this surface never had
         // it.
-        let accepted = crate::tasks::interval_executor::apply_plan(&mut g, plan, true, now);
+        let accepted =
+            crate::tasks::interval_executor::apply_plan(&mut g, plan, true, now).unwrap_or(0);
         had_plan && accepted > 0
     };
 

@@ -32,11 +32,12 @@
 //! together so they cannot drift.
 
 use crate::context::lock;
+use crate::control;
 use crate::net::api::{parse_key_hundredths, read_body, respond, MAX_CMD_BODY};
-use crate::tasks::interval_executor::apply_plan;
+use crate::tasks::interval_executor::{apply_plan, apply_program_entry};
 use esp_idf_sys as sys;
 use program_core::{json, Plan, Program, ProgramState};
-use safety_core::units::{InclineHalfPct, SpeedTenths};
+use safety_core::units::{InclineHalfPct, Micros, SpeedTenths};
 
 /// A program submission must fit one request slot, because admission refuses
 /// anything larger before parsing. `program_core` derives its interval count
@@ -117,7 +118,11 @@ impl core::fmt::Write for Sink<'_> {
 /// rather than a copy: `ProgramState` is ~1.5 KB, and neither a copy of it nor
 /// a second buffer belongs on the httpd task's stack alongside an
 /// mbedtls handshake.
-pub(crate) fn render_state(buf: &mut [u8; STATE_BUF], state: &ProgramState, lead: &str) -> Option<usize> {
+pub(crate) fn render_state(
+    buf: &mut [u8; STATE_BUF],
+    state: &ProgramState,
+    lead: &str,
+) -> Option<usize> {
     let mut sink = Sink {
         buf,
         len: 0,
@@ -173,13 +178,71 @@ fn respond_rendered(req: *mut sys::httpd_req_t, buf: &[u8], n: Option<usize>) ->
 /// Called with the PROGRAM lock already held — that is the mandatory order
 /// (`program` then `guarded`, see `context.rs`) and the reason the decision
 /// and the belt command cannot be interleaved with a concurrent tick.
-pub(crate) fn drive(plan: Plan, release_belt: bool) {
+pub(crate) fn drive(plan: Plan, release_belt: bool) -> Result<usize, control::Reject> {
     if plan.is_empty() && !release_belt {
-        return;
+        return Ok(0);
     }
     let now = crate::CTX.clock.now();
     let mut g = lock(&crate::CTX.guarded);
-    apply_plan(&mut g, plan, release_belt, now);
+    apply_plan(&mut g, plan, release_belt, now)
+}
+
+/// Prepare, safely enter, then commit a program Start under program→guarded.
+pub(crate) fn start_transaction(
+    p: &mut ProgramState,
+    now: Micros,
+    resume_interval: usize,
+    resume_elapsed: i64,
+) -> Result<(), control::Reject> {
+    let prepared = p.prepare_start(now, resume_interval, resume_elapsed);
+    if prepared.plan().is_empty() {
+        return Err(control::Reject::Refused);
+    }
+    let mut g = lock(&crate::CTX.guarded);
+    match apply_program_entry(&mut g, prepared.plan(), now) {
+        Ok(_) => {
+            // The accepted acquisition and sticky-inhibit clear are one
+            // guarded act. No ordinary executor tick can observe a gap.
+            g.executor_inhibited = false;
+            g.executor_inhibited_at = None;
+            p.commit_start(prepared);
+            Ok(())
+        }
+        Err(reject) => {
+            g.executor_inhibited = true;
+            Err(reject)
+        }
+    }
+}
+
+/// Resume a safety/user-paused program with the same atomic entry contract.
+pub(crate) fn resume_transaction(p: &mut ProgramState, now: Micros) -> Result<(), control::Reject> {
+    let prepared = p.prepare_resume(now);
+    if prepared.plan().is_empty() {
+        return Err(control::Reject::Refused);
+    }
+    let mut g = lock(&crate::CTX.guarded);
+    match apply_program_entry(&mut g, prepared.plan(), now) {
+        Ok(_) => {
+            g.executor_inhibited = false;
+            g.executor_inhibited_at = None;
+            p.commit_resume(prepared);
+            Ok(())
+        }
+        Err(reject) => {
+            g.executor_inhibited = true;
+            Err(reject)
+        }
+    }
+}
+
+/// Pause only after the zero-speed command was accepted.
+pub(crate) fn pause_transaction(p: &mut ProgramState, now: Micros) -> Result<(), control::Reject> {
+    let plan = p.prepare_pause();
+    let mut g = lock(&crate::CTX.guarded);
+    apply_plan(&mut g, plan, false, now)?;
+    p.commit_pause(now);
+    Ok(())
 }
 
 /// The WHOLE meaning of Stop: the program's plan, and then the belt itself.
@@ -197,7 +260,7 @@ pub(crate) fn drive(plan: Plan, release_belt: bool) {
 pub(crate) fn drive_stop(plan: Plan) -> bool {
     let now = crate::CTX.clock.now();
     let mut g = lock(&crate::CTX.guarded);
-    apply_plan(&mut g, plan, true, now);
+    let _ = apply_plan(&mut g, plan, true, now);
     crate::control::stop_belt(&mut g, now)
 }
 
@@ -356,7 +419,6 @@ fn get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
 }
 
 fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
-
     // Bodies are read BEFORE the program lock is taken. `httpd_req_recv` can
     // block on a dribbling client for up to `recv_wait_timeout`, and holding
     // the program lock across that would stall the interval executor — the one
@@ -418,7 +480,8 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
     // does not, because it does not replace anything — it starts what
     // `/api/programs/history/{id}/load` just installed, and clearing there
     // would throw away the entry the run is supposed to be written back to.
-    let replaces_program = matches!(verb, V_LOAD | V_QUICK) || (verb == V_START && program.is_some());
+    let replaces_program =
+        matches!(verb, V_LOAD | V_QUICK) || (verb == V_START && program.is_some());
 
     let now = crate::CTX.clock.now();
     let mut p = lock(&crate::CTX.program);
@@ -448,16 +511,35 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
                 p.load(prog);
             }
             if p.program().is_none() {
-                (Plan::none(), false, Some(br#"{"ok":false,"error":"No program loaded"}"#))
+                (
+                    Plan::none(),
+                    false,
+                    Some(br#"{"ok":false,"error":"No program loaded"}"#),
+                )
             } else {
-                (p.start(now, 0, 0), false, None)
+                if let Err(reject) = start_transaction(&mut p, now, 0, 0) {
+                    drop(p);
+                    return respond_reject(req, reject);
+                }
+                (Plan::none(), false, None)
             }
         }
         V_STOP => {
             let plan = p.stop();
             (plan, true, None)
         }
-        V_PAUSE => (p.toggle_pause(now), false, None),
+        V_PAUSE => {
+            let result = if p.paused() {
+                resume_transaction(&mut p, now)
+            } else {
+                pause_transaction(&mut p, now)
+            };
+            if let Err(reject) = result {
+                drop(p);
+                return respond_reject(req, reject);
+            }
+            (Plan::none(), false, None)
+        }
         V_SKIP => {
             let plan = p.skip(now);
             let ended = !p.running();
@@ -512,10 +594,14 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
             // before the replacement plan is driven.
             let stop = p.stop();
             if !stop.is_empty() {
-                drive(stop, false);
+                let _ = drive(stop, false);
             }
             p.load(quick_program(small));
-            (p.start(now, 0, 0), false, None)
+            if let Err(reject) = start_transaction(&mut p, now, 0, 0) {
+                drop(p);
+                return respond_reject(req, reject);
+            }
+            (Plan::none(), false, None)
         }
         _ => (
             Plan::none(),
@@ -540,12 +626,31 @@ fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
     if verb == V_STOP {
         drive_stop(plan);
     } else {
-        drive(plan, release_belt);
+        let _ = drive(plan, release_belt);
     }
     let mut buf = [0u8; STATE_BUF];
     let n = render_state(&mut buf, &p, OK_LEAD);
     drop(p);
     respond_rendered(req, &buf, n)
+}
+
+pub(crate) fn respond_reject(
+    req: *mut sys::httpd_req_t,
+    reject: control::Reject,
+) -> sys::esp_err_t {
+    let body: &[u8] = match reject {
+        control::Reject::NotOwner => {
+            br#"{"ok":false,"error":"belt is owned by another control surface"}"#
+        }
+        control::Reject::ExecutorInhibited => {
+            br#"{"ok":false,"error":"program executor is safety-paused"}"#
+        }
+        control::Reject::Refused => br#"{"ok":false,"error":"rejected by safety controller"}"#,
+        control::Reject::GenerationExhausted => {
+            br#"{"ok":false,"error":"control generation exhausted"}"#
+        }
+    };
+    respond(req, c"409 Conflict", body)
 }
 
 /// `{"seconds": -30}` / `{"delta_seconds": 300}`.
@@ -593,16 +698,66 @@ pub fn register(handle: sys::httpd_handle_t) -> Result<(), sys::esp_err_t> {
     // introduces no unsafe operation of its own.
     type H = unsafe extern "C" fn(*mut sys::httpd_req_t) -> sys::esp_err_t;
     let routes: [(&core::ffi::CStr, u32, H, usize); 10] = [
-        (c"/api/program", sys::http_method_HTTP_GET, get_handler, usize::MAX),
-        (c"/api/program/load", sys::http_method_HTTP_POST, post_handler, V_LOAD),
-        (c"/api/program/start", sys::http_method_HTTP_POST, post_handler, V_START),
-        (c"/api/program/stop", sys::http_method_HTTP_POST, post_handler, V_STOP),
-        (c"/api/program/pause", sys::http_method_HTTP_POST, post_handler, V_PAUSE),
-        (c"/api/program/skip", sys::http_method_HTTP_POST, post_handler, V_SKIP),
-        (c"/api/program/prev", sys::http_method_HTTP_POST, post_handler, V_PREV),
-        (c"/api/program/extend", sys::http_method_HTTP_POST, post_handler, V_EXTEND),
-        (c"/api/program/adjust-duration", sys::http_method_HTTP_POST, post_handler, V_ADJUST),
-        (c"/api/program/quick-start", sys::http_method_HTTP_POST, post_handler, V_QUICK),
+        (
+            c"/api/program",
+            sys::http_method_HTTP_GET,
+            get_handler,
+            usize::MAX,
+        ),
+        (
+            c"/api/program/load",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_LOAD,
+        ),
+        (
+            c"/api/program/start",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_START,
+        ),
+        (
+            c"/api/program/stop",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_STOP,
+        ),
+        (
+            c"/api/program/pause",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_PAUSE,
+        ),
+        (
+            c"/api/program/skip",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_SKIP,
+        ),
+        (
+            c"/api/program/prev",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_PREV,
+        ),
+        (
+            c"/api/program/extend",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_EXTEND,
+        ),
+        (
+            c"/api/program/adjust-duration",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_ADJUST,
+        ),
+        (
+            c"/api/program/quick-start",
+            sys::http_method_HTTP_POST,
+            post_handler,
+            V_QUICK,
+        ),
     ];
     for (path, method, handler, ctx) in routes {
         let uri = sys::httpd_uri_t {

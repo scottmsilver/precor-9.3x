@@ -72,6 +72,47 @@ impl Plan {
     }
 }
 
+/// A bounded, copyable program-entry transaction.
+///
+/// This deliberately contains only the proposed motion and lifecycle
+/// metadata. In particular it does not contain [`Program`], so preparing a
+/// Start/Resume on the HTTP task cannot put a program-sized clone on that
+/// task's stack. The caller may attempt the plan through the safety controller
+/// and commit this token only after every command was accepted.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedStart {
+    plan: Plan,
+    next: Lifecycle,
+    kind: PreparedKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedKind {
+    Start,
+    Resume,
+}
+
+/// All mutable lifecycle fields, but never the loaded program.
+#[derive(Clone, Copy, Debug)]
+struct Lifecycle {
+    running: bool,
+    paused: bool,
+    completed: bool,
+    current_interval: usize,
+    interval_elapsed: i64,
+    total_elapsed: i64,
+    loop_start: Micros,
+    pause_accumulated: Micros,
+    pause_start: Option<Micros>,
+    interval_start_elapsed: i64,
+}
+
+impl PreparedStart {
+    pub const fn plan(self) -> Plan {
+        self.plan
+    }
+}
+
 /// Port of `program_engine.ProgramState`.
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramState {
@@ -187,38 +228,75 @@ impl ProgramState {
     /// running (Python's internal `await self.stop()`), otherwise just the
     /// first interval.
     pub fn start(&mut self, now: Micros, resume_interval: usize, resume_elapsed: i64) -> Plan {
+        let prepared = self.prepare_start(now, resume_interval, resume_elapsed);
+        let plan = prepared.plan();
+        self.commit_start(prepared);
+        plan
+    }
+
+    /// Prepare `start` without changing a byte of lifecycle state.
+    pub fn prepare_start(
+        &self,
+        now: Micros,
+        resume_interval: usize,
+        resume_elapsed: i64,
+    ) -> PreparedStart {
         let was_running = self.running;
         let Some(program) = self.program.as_ref() else {
             // `stop()` still ran inside Python's `start()` before the
             // `if not self.program: return`, so a running-but-cleared state
             // still zeroes the belt.
-            self.running = false;
-            self.paused = false;
-            return if was_running { Plan::zero() } else { Plan::none() };
+            let mut next = self.lifecycle();
+            next.running = false;
+            next.paused = false;
+            return PreparedStart {
+                plan: if was_running {
+                    Plan::zero()
+                } else {
+                    Plan::none()
+                },
+                next,
+                kind: PreparedKind::Start,
+            };
         };
 
         let resume_interval = resume_interval.min(program.len());
         let resume_elapsed = resume_elapsed.max(0);
-
-        self.running = true;
-        self.paused = false;
-        self.completed = false;
-        self.current_interval = resume_interval;
-        self.total_elapsed = resume_elapsed;
-        self.interval_elapsed = resume_elapsed - self.cumulative_at(resume_interval);
-        self.loop_start = Micros::new(now.get().saturating_sub(resume_elapsed * SEC));
-        self.pause_accumulated = Micros::ZERO;
-        self.pause_start = None;
-        self.interval_start_elapsed = self.cumulative_at(resume_interval);
-
-        match self.motion_of_current() {
+        let cumulative = self.cumulative_at(resume_interval);
+        let next = Lifecycle {
+            running: true,
+            paused: false,
+            completed: false,
+            current_interval: resume_interval,
+            interval_elapsed: resume_elapsed - cumulative,
+            total_elapsed: resume_elapsed,
+            loop_start: Micros::new(now.get().saturating_sub(resume_elapsed * SEC)),
+            pause_accumulated: Micros::ZERO,
+            pause_start: None,
+            interval_start_elapsed: cumulative,
+        };
+        let motion = program
+            .get(resume_interval)
+            .map(|iv| (iv.speed, iv.incline));
+        let plan = match motion {
             Some((s, i)) if was_running => Plan::zero_then(s, i),
             Some((s, i)) => Plan::one(s, i),
             // Resuming past the end: the belt still has to be zeroed if it was
             // moving. Python emits nothing here, because `stop()` already did.
             None if was_running => Plan::zero(),
             None => Plan::none(),
+        };
+        PreparedStart {
+            plan,
+            next,
+            kind: PreparedKind::Start,
         }
+    }
+
+    /// Commit a previously prepared Start exactly once, after safety accepts.
+    pub fn commit_start(&mut self, prepared: PreparedStart) {
+        debug_assert_eq!(prepared.kind, PreparedKind::Start);
+        self.apply_lifecycle(prepared.next);
     }
 
     /// `ProgramState.stop` — zeroes the belt IF it was running.
@@ -288,27 +366,90 @@ impl ProgramState {
     /// byte for byte in effect.
     pub fn toggle_pause(&mut self, now: Micros) -> Plan {
         if !self.paused {
+            return self.commit_pause(now);
+        } else {
+            let prepared = self.prepare_resume(now);
+            let plan = prepared.plan();
+            self.commit_resume(prepared);
+            plan
+        }
+    }
+
+    /// Describe the pause command without marking the program paused.
+    pub fn prepare_pause(&self) -> Plan {
+        match self.current_iv() {
+            Some(iv) if self.running && !self.paused => Plan::one(SpeedTenths::ZERO, iv.incline),
+            _ => Plan::none(),
+        }
+    }
+
+    /// Commit the pause after its zero-speed command was accepted.
+    pub fn commit_pause(&mut self, now: Micros) -> Plan {
+        let plan = self.prepare_pause();
+        if !self.paused {
             self.paused = true;
             self.pause_start = Some(now);
-            // Incline is deliberately preserved: `_apply_pause_toggle` zeroes
-            // speed only, so a hill you paused on is still there when you
-            // step back on.
-            match self.current_iv() {
-                Some(iv) if self.running => Plan::one(SpeedTenths::ZERO, iv.incline),
-                _ => Plan::none(),
+        }
+        plan
+    }
+
+    /// Prepare the resume half of `toggle_pause` without changing timestamps.
+    pub fn prepare_resume(&self, now: Micros) -> PreparedStart {
+        let mut next = self.lifecycle();
+        let plan = if self.paused {
+            next.paused = false;
+            if let Some(started) = self.pause_start {
+                next.pause_accumulated = self.pause_accumulated + (now - started);
+            }
+            next.pause_start = None;
+            if self.running {
+                self.motion_of_current()
+                    .map_or_else(Plan::none, |(s, i)| Plan::one(s, i))
+            } else {
+                Plan::none()
             }
         } else {
-            self.paused = false;
-            if let Some(started) = self.pause_start.take() {
-                self.pause_accumulated = self.pause_accumulated + (now - started);
-            }
-            if self.running {
-                if let Some((s, i)) = self.motion_of_current() {
-                    return Plan::one(s, i);
-                }
-            }
             Plan::none()
+        };
+        PreparedStart {
+            plan,
+            next,
+            kind: PreparedKind::Resume,
         }
+    }
+
+    /// Commit a previously prepared Resume exactly once, after safety accepts.
+    pub fn commit_resume(&mut self, prepared: PreparedStart) {
+        debug_assert_eq!(prepared.kind, PreparedKind::Resume);
+        self.apply_lifecycle(prepared.next);
+    }
+
+    fn lifecycle(&self) -> Lifecycle {
+        Lifecycle {
+            running: self.running,
+            paused: self.paused,
+            completed: self.completed,
+            current_interval: self.current_interval,
+            interval_elapsed: self.interval_elapsed,
+            total_elapsed: self.total_elapsed,
+            loop_start: self.loop_start,
+            pause_accumulated: self.pause_accumulated,
+            pause_start: self.pause_start,
+            interval_start_elapsed: self.interval_start_elapsed,
+        }
+    }
+
+    fn apply_lifecycle(&mut self, next: Lifecycle) {
+        self.running = next.running;
+        self.paused = next.paused;
+        self.completed = next.completed;
+        self.current_interval = next.current_interval;
+        self.interval_elapsed = next.interval_elapsed;
+        self.total_elapsed = next.total_elapsed;
+        self.loop_start = next.loop_start;
+        self.pause_accumulated = next.pause_accumulated;
+        self.pause_start = next.pause_start;
+        self.interval_start_elapsed = next.interval_start_elapsed;
     }
 
     /// `ProgramState._effective_pause` — accumulated plus any in-progress
@@ -466,7 +607,10 @@ mod tests {
     }
 
     fn cmds(p: Plan) -> Vec<(i32, i32)> {
-        p.commands().iter().map(|(s, i)| (s.get(), i.get())).collect()
+        p.commands()
+            .iter()
+            .map(|(s, i)| (s.get(), i.get()))
+            .collect()
     }
 
     /// Drive `tick` once per second from `from` to `to`, inclusive of `to`,
@@ -537,6 +681,53 @@ mod tests {
         assert_eq!(cmds(s.start(at(5), 0, 0)), vec![(0, 0), (20, 0)]);
     }
 
+    #[test]
+    fn preparing_start_is_small_copyable_and_does_not_mutate_state() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<PreparedStart>();
+        assert!(
+            core::mem::size_of::<PreparedStart>() < core::mem::size_of::<Program>(),
+            "the transaction token must not copy the ~1.5 KB Program onto the HTTP stack"
+        );
+
+        let mut s = loaded();
+        s.start(at(0), 0, 0);
+        s.tick(at(7));
+        s.toggle_pause(at(7));
+        let before = (
+            s.running(),
+            s.paused(),
+            s.current_interval(),
+            s.interval_elapsed(),
+            s.total_elapsed(),
+            s.pause_start,
+            s.pause_accumulated,
+        );
+
+        let prepared = s.prepare_start(at(20), 1, 60);
+        assert_eq!(
+            (
+                s.running(),
+                s.paused(),
+                s.current_interval(),
+                s.interval_elapsed(),
+                s.total_elapsed(),
+                s.pause_start,
+                s.pause_accumulated,
+            ),
+            before,
+            "prepare_start must be read-only"
+        );
+        assert_eq!(cmds(prepared.plan()), vec![(0, 0), (60, 6)]);
+
+        s.commit_start(prepared);
+        assert!(s.running());
+        assert!(!s.paused());
+        assert_eq!(s.current_interval(), 1);
+        assert_eq!(s.total_elapsed(), 60);
+        assert_eq!(s.pause_start, None);
+    }
+
     // --- TestTick ---------------------------------------------------------
 
     #[test]
@@ -596,9 +787,64 @@ mod tests {
         let mut s = loaded();
         s.start(at(0), 0, 0);
         s.skip(at(1)); // Run: 6.0 mph, 3% incline
-        // `server.py::_apply_pause_toggle` zeroes speed and leaves incline.
+                       // `server.py::_apply_pause_toggle` zeroes speed and leaves incline.
         assert_eq!(cmds(s.toggle_pause(at(5))), vec![(0, 6)]);
         assert_eq!(cmds(s.toggle_pause(at(15))), vec![(60, 6)]);
+    }
+
+    #[test]
+    fn preparing_pause_keeps_running_state_until_the_zero_is_accepted() {
+        let mut s = loaded();
+        s.start(at(0), 0, 0);
+        s.skip(at(1));
+        let plan = s.prepare_pause();
+        assert_eq!(cmds(plan), vec![(0, 6)]);
+        assert!(s.running());
+        assert!(!s.paused(), "a refused zero must not be reported as paused");
+
+        assert_eq!(s.commit_pause(at(5)), plan);
+        assert!(s.running());
+        assert!(s.paused());
+    }
+
+    #[test]
+    fn preparing_resume_does_not_mutate_pause_or_elapsed_timestamps() {
+        let mut s = loaded();
+        s.start(at(0), 0, 0);
+        run_secs(&mut s, 1, 8);
+        s.toggle_pause(at(8));
+        let before = (
+            s.running(),
+            s.paused(),
+            s.interval_elapsed(),
+            s.total_elapsed(),
+            s.pause_start,
+            s.pause_accumulated,
+        );
+
+        let prepared = s.prepare_resume(at(23));
+        assert_eq!(
+            (
+                s.running(),
+                s.paused(),
+                s.interval_elapsed(),
+                s.total_elapsed(),
+                s.pause_start,
+                s.pause_accumulated,
+            ),
+            before,
+            "prepare_resume must be read-only"
+        );
+        assert_eq!(cmds(prepared.plan()), vec![(20, 0)]);
+
+        s.commit_resume(prepared);
+        assert!(s.running());
+        assert!(!s.paused());
+        assert_eq!(s.total_elapsed(), 8);
+        assert_eq!(s.pause_start, None);
+        assert_eq!(s.pause_accumulated, at(15));
+        s.tick(at(24));
+        assert_eq!(s.total_elapsed(), 9);
     }
 
     #[test]
@@ -714,7 +960,11 @@ mod tests {
         let mut s = ProgramState::new();
         s.load(p);
         s.start(at(0), 0, 0);
-        assert_eq!(cmds(s.skip(at(1))), vec![(0, 0)], "finishing zeroes the belt");
+        assert_eq!(
+            cmds(s.skip(at(1))),
+            vec![(0, 0)],
+            "finishing zeroes the belt"
+        );
         assert!(s.completed());
         assert!(!s.running());
     }
@@ -902,7 +1152,10 @@ mod tests {
     #[test]
     fn test_stop_when_not_running() {
         let mut s = loaded();
-        assert!(s.stop().is_empty(), "no belt command if nothing was running");
+        assert!(
+            s.stop().is_empty(),
+            "no belt command if nothing was running"
+        );
     }
 
     #[test]
