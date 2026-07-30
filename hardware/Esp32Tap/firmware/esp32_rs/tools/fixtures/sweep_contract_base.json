@@ -382,5 +382,6 @@
       ]
     }
   ],
-  "aggregates_failures": true
+  "aggregates_failures": true,
+  "aggregate_contract_sha256": "d9c425aa86f6e827eaa84bba136639cc50b8789c0123537fd053279b44667002"
 }
