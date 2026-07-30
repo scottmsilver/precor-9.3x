@@ -571,6 +571,43 @@ def lock_path(repo_root: Path, kind: str) -> Path:
     return _lock_for_esp32_rs(_physical_esp32_rs(repo_root))
 
 
+def _normalize_lock_file(fd: int, path: Path) -> os.stat_result:
+    try:
+        opened = os.fstat(fd)
+        lexical = path.lstat()
+    except OSError as exc:
+        raise InvalidError(f"cannot safely inspect artifact lock: {exc}") from exc
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or not stat.S_ISREG(lexical.st_mode)
+        or opened.st_nlink != 1
+        or opened.st_uid != os.geteuid()
+        or (opened.st_dev, opened.st_ino) != (lexical.st_dev, lexical.st_ino)
+    ):
+        raise InvalidError(
+            "artifact lock must be one owned regular file at its exact path"
+        )
+    if stat.S_IMODE(opened.st_mode) != 0o600:
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError as exc:
+            raise InternalError(f"cannot normalize artifact lock mode: {exc}") from exc
+    try:
+        normalized = os.fstat(fd)
+        current = path.lstat()
+    except OSError as exc:
+        raise InvalidError(f"artifact lock changed while normalizing: {exc}") from exc
+    if (
+        not stat.S_ISREG(normalized.st_mode)
+        or normalized.st_nlink != 1
+        or normalized.st_uid != os.geteuid()
+        or stat.S_IMODE(normalized.st_mode) != 0o600
+        or (normalized.st_dev, normalized.st_ino) != (current.st_dev, current.st_ino)
+    ):
+        raise InvalidError("artifact lock changed while normalizing")
+    return normalized
+
+
 def _open_locked(path: Path, operation: int, inheritable: bool) -> int:
     """Open the exact owned, single-link, regular 0600 lock and flock it."""
     fd = -1
@@ -583,18 +620,7 @@ def _open_locked(path: Path, operation: int, inheritable: bool) -> int:
         )
         fd = os.open(path, flags, 0o600)
         os.set_inheritable(fd, inheritable)
-        opened = os.fstat(fd)
-        lexical = path.lstat()
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or opened.st_nlink != 1
-            or opened.st_uid != os.geteuid()
-            or stat.S_IMODE(opened.st_mode) != 0o600
-            or (opened.st_dev, opened.st_ino) != (lexical.st_dev, lexical.st_ino)
-        ):
-            raise InvalidError(
-                "artifact lock must be one owned 0600 regular file at its exact path"
-            )
+        opened = _normalize_lock_file(fd, path)
         fcntl.flock(fd, operation)
         locked_path = path.lstat()
         if (opened.st_dev, opened.st_ino) != (
@@ -828,40 +854,16 @@ def _expected_rs_from_public(public_link: Path) -> tuple[Path, str, str]:
     raise InvalidError("public link name is not a known bundle")
 
 
-def _ancestor_pids() -> set[int]:
-    result = set()
-    pid = os.getpid()
-    while pid > 0 and pid not in result:
-        result.add(pid)
-        try:
-            text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-            fields = text.rpartition(") ")[2].split()
-            pid = int(fields[1])
-        except (OSError, ValueError, IndexError) as exc:
-            raise InternalError(f"cannot validate lock ownership: {exc}") from exc
-    return result
-
-
 def _validate_exclusive_lock_fd(lock_fd: int, expected_path: Path) -> None:
     if type(lock_fd) is not int or lock_fd < 0:
         raise InvalidError("lock_fd must be an open integer descriptor")
     try:
-        supplied = os.fstat(lock_fd)
-        expected = expected_path.lstat()
         inheritable = os.get_inheritable(lock_fd)
     except OSError as exc:
         raise InvalidError(f"lock_fd is not valid: {exc}") from exc
     if not inheritable:
         raise InvalidError("lock_fd must be explicitly inheritable")
-    if (
-        not stat.S_ISREG(supplied.st_mode)
-        or not stat.S_ISREG(expected.st_mode)
-        or supplied.st_nlink != 1
-        or supplied.st_uid != os.geteuid()
-        or stat.S_IMODE(supplied.st_mode) != 0o600
-        or (supplied.st_dev, supplied.st_ino) != (expected.st_dev, expected.st_ino)
-    ):
-        raise InvalidError("lock_fd does not refer to the physical build lock")
+    supplied = _normalize_lock_file(lock_fd, expected_path)
     try:
         lines = (
             Path(f"/proc/self/fdinfo/{lock_fd}")
@@ -870,7 +872,6 @@ def _validate_exclusive_lock_fd(lock_fd: int, expected_path: Path) -> None:
         )
     except OSError as exc:
         raise InternalError(f"cannot inspect caller lock ownership: {exc}") from exc
-    owners = _ancestor_pids()
     expected_device = (os.major(supplied.st_dev), os.minor(supplied.st_dev))
     for line in lines:
         if not line.startswith("lock:"):
@@ -884,8 +885,10 @@ def _validate_exclusive_lock_fd(lock_fd: int, expected_path: Path) -> None:
             major, minor = (int(part, 16) for part in lock_device.split(":", 1))
         except (ValueError, IndexError):
             continue
+        # flock(1) records its short-lived helper PID even though the lock
+        # remains attached to fd 9's inherited open file description.
         if (
-            owner in owners
+            owner > 0
             and (major, minor) == expected_device
             and int(inode) == supplied.st_ino
         ):
@@ -897,6 +900,15 @@ def _validate_exclusive_lock_fd(lock_fd: int, expected_path: Path) -> None:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise InvalidError("lock_fd lost its exclusive flock") from exc
+            try:
+                locked_path = expected_path.lstat()
+            except OSError as exc:
+                raise InvalidError(f"artifact lock path changed: {exc}") from exc
+            if (supplied.st_dev, supplied.st_ino) != (
+                locked_path.st_dev,
+                locked_path.st_ino,
+            ):
+                raise InvalidError("artifact lock path changed after validation")
             return
     raise InvalidError("lock_fd has no exclusive flock on its open file description")
 
@@ -1174,7 +1186,13 @@ def _run_bounded_checker(
                             "toolchain check output exceeds its size limit"
                         )
                     destination.write(block)
-            process.wait()
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired as exc:
+                _stop_process_group(process)
+                raise InternalError(
+                    f"tools/build_image.sh --check timed out after {timeout:g}s"
+                ) from exc
         finally:
             selector.close()
             process.stdout.close()

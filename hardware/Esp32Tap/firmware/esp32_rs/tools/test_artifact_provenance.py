@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -521,7 +522,74 @@ def test_open_locked_creates_exact_private_regular_lock(
         os.close(fd)
 
 
-@pytest.mark.parametrize("unsafe", ["symlink", "mode", "hardlink", "owner"])
+def test_open_locked_safely_normalizes_owned_0664_lock(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "artifact.lock"
+    path.write_bytes(b"")
+    path.chmod(0o664)
+
+    fd = provenance._open_locked(path, fcntl.LOCK_SH, False)
+    try:
+        info = os.fstat(fd)
+        assert stat.S_IMODE(info.st_mode) == 0o600
+        assert (info.st_dev, info.st_ino) == (
+            path.lstat().st_dev,
+            path.lstat().st_ino,
+        )
+    finally:
+        os.close(fd)
+
+
+def test_publish_accepts_shell_created_0664_inherited_build_lock(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+) -> None:
+    root, rs, staging = layout
+    lock = provenance.lock_path(root, "production")
+    manifest = manifest_for(staging, toolchain)
+    source = (
+        "import json;"
+        "from pathlib import Path;"
+        "from artifact_provenance import publish_generation_atomic;"
+        f"publish_generation_atomic(Path({str(staging)!r}),"
+        f"Path({str(rs / 'build')!r}),json.loads({json.dumps(manifest)!r}),"
+        "lock_fd=9)"
+    )
+    script = (
+        "set -eu\n"
+        "umask 0002\n"
+        f"exec 9>{shlex.quote(str(lock))}\n"
+        "flock -x 9\n"
+        f"exec {shlex.quote(sys.executable)} -c {shlex.quote(source)}"
+    )
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(TOOLS)
+
+    completed = subprocess.run(
+        ["bash", "-c", script],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=5,
+    )
+    try:
+        assert completed.returncode == 0, completed.stderr
+        assert stat.S_IMODE(lock.stat().st_mode) == 0o600
+        assert (rs / "build").is_symlink()
+    finally:
+        if os.path.lexists(lock):
+            info = lock.lstat()
+            if (
+                stat.S_ISREG(info.st_mode)
+                and info.st_nlink == 1
+                and info.st_uid == os.geteuid()
+            ):
+                lock.chmod(0o600)
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "hardlink", "owner"])
 def test_open_locked_rejects_unsafe_lock_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -534,7 +602,7 @@ def test_open_locked_rejects_unsafe_lock_file(
         path.symlink_to(target)
     else:
         path.write_bytes(b"")
-        path.chmod(0o600 if unsafe != "mode" else 0o644)
+        path.chmod(0o600)
         if unsafe == "hardlink":
             os.link(path, tmp_path / "second-link")
         elif unsafe == "owner":
@@ -1761,6 +1829,52 @@ def test_current_toolchain_timeout_terminates_and_reaps_checker_group(
     pid = int(pid_path.read_text(encoding="ascii"))
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+def test_checker_closing_outputs_cannot_escape_remaining_deadline(
+    layout: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root, rs, _ = layout
+    pid_path = tmp_path / "closed-output-checker.pid"
+    child_pid_path = tmp_path / "closed-output-checker-child.pid"
+    checker = rs / "tools/build_image.sh"
+    checker.parent.mkdir()
+    checker.write_text(
+        f"#!/bin/sh\n"
+        f"echo $$ > {str(pid_path)!r}\n"
+        "exec 1>&-\n"
+        "exec 2>&-\n"
+        "sleep .4 &\n"
+        f"echo $! > {str(child_pid_path)!r}\n"
+        "wait\n",
+        encoding="utf-8",
+    )
+    checker.chmod(0o755)
+    monkeypatch.setattr(provenance, "CHECK_TIMEOUT_SECONDS", 0.05)
+    started = time.monotonic()
+
+    with pytest.raises(provenance.InternalError, match="timed out"):
+        provenance._current_toolchain(root, "production")
+
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.3
+    wait_for_path(pid_path)
+    pid = int(pid_path.read_text(encoding="ascii"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    wait_for_path(child_pid_path)
+    child_pid = int(child_pid_path.read_text(encoding="ascii"))
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError("checker child process group member was not reaped")
+        time.sleep(0.01)
 
 
 @pytest.mark.parametrize(
