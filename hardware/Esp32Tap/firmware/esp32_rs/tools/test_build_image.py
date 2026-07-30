@@ -107,6 +107,15 @@ def fake_docker(tmp_path: Path) -> tuple[Path, Path]:
         canonical(cargo_install_metadata()),
         encoding="utf-8",
     )
+    idf_tools = tmp_path / "idf-tools"
+    esptool_dir = idf_tools / "python_env" / "idf5.5_py3.12_env" / "bin"
+    esptool_dir.mkdir(parents=True)
+    esptool = esptool_dir / "esptool.py"
+    esptool.write_text(
+        '#!/usr/bin/env python3\nprint("esptool.py v4.9.0")\n',
+        encoding="utf-8",
+    )
+    esptool.chmod(0o755)
     log = tmp_path / "docker.jsonl"
     docker = fake_bin / "docker"
     docker.write_text(
@@ -222,6 +231,11 @@ if argv[:2] == ["image", "inspect"]:
         raise SystemExit(1)
     print(json.dumps([image], sort_keys=True, separators=(",", ":")))
 elif argv and argv[0] == "run":
+    if "--entrypoint" not in argv:
+        sys.stdout.write("Activating ESP-IDF 5.5\\nDone!\\n")
+    elif argv[argv.index("--entrypoint") + 1] != "python3":
+        print("unexpected probe entrypoint", file=sys.stderr)
+        raise SystemExit(23)
     if os.environ.get("FAKE_RUN_SIGNAL_BARRIER"):
         barrier = os.environ["FAKE_RUN_SIGNAL_BARRIER"]
         with open(barrier + ".pid", "w", encoding="utf-8") as stream:
@@ -244,6 +258,11 @@ elif argv and argv[0] == "run":
             env=child_env,
             check=False,
         )
+        if os.environ.get("FAKE_PROBE_STDOUT_CAPTURE"):
+            with open(
+                os.environ["FAKE_PROBE_STDOUT_CAPTURE"], "w", encoding="utf-8"
+            ) as stream:
+                stream.write(completed.stdout)
         sys.stdout.write(completed.stdout)
         sys.stderr.write(completed.stderr)
         raise SystemExit(completed.returncode)
@@ -356,6 +375,7 @@ def run_environment(
 ) -> dict[str, str]:
     fake_bin, log = fake_docker
     cargo_home = fake_bin.parent / "cargo"
+    idf_tools = fake_bin.parent / "idf-tools"
     inspect = [
         {
             "Id": IMAGE_ID,
@@ -375,6 +395,7 @@ def run_environment(
         **os.environ,
         "PATH": f"{cargo_home / 'bin'}:{fake_bin}:{os.environ['PATH']}",
         "CARGO_HOME": str(cargo_home),
+        "IDF_TOOLS_PATH": str(idf_tools),
         "FAKE_DOCKER_LOG": str(log),
         "FAKE_DOCKER_STATE": str(log.with_name("docker-state.json")),
         "FAKE_DOCKER_INSPECT": canonical(inspect),
@@ -786,14 +807,31 @@ def test_probe_bounds_output_and_reaps_pipe_holding_descendants(
 
 
 def test_probe_attests_cargo_metadata_without_invoking_ldproxy(
-    context: Path, fake_docker: tuple[Path, Path]
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
 ) -> None:
+    captured = tmp_path / "probe.stdout"
     completed = run(
         context,
         fake_docker,
-        extra_env={"FAKE_DOCKER_EXEC_PROBE": "1"},
+        extra_env={
+            "FAKE_DOCKER_EXEC_PROBE": "1",
+            "FAKE_PROBE_STDOUT_CAPTURE": str(captured),
+        },
     )
     assert completed.returncode == 0, completed.stderr
+    run_call = next(call for call in docker_calls(fake_docker[1]) if call[0] == "run")
+    entrypoint_index = run_call.index("--entrypoint")
+    stage_index = next(
+        index
+        for index, value in enumerate(run_call)
+        if value.startswith("esp32tap-rust-stage:")
+    )
+    assert run_call[entrypoint_index + 1] == "python3"
+    assert entrypoint_index < stage_index
+    assert run_call[stage_index + 1] == "-c"
+    probe_stdout = captured.read_text(encoding="utf-8")
+    assert probe_stdout.endswith("\n")
+    assert probe_stdout == canonical(json.loads(probe_stdout)) + "\n"
     final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
     label = json.loads(
         final["Config"]["Labels"]["org.treddy.esp32tap.toolchain-json"]

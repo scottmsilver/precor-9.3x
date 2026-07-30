@@ -771,13 +771,36 @@ def ldproxy_attestation():
     digest = hashlib.sha256(binary).hexdigest()
     return f"ldproxy {version} ({source}) sha256:{digest}"
 
+def esptool_command():
+    tools_root_text = os.environ.get("IDF_TOOLS_PATH", "")
+    if (
+        not tools_root_text
+        or "\0" in tools_root_text
+        or not Path(tools_root_text).is_absolute()
+    ):
+        raise SystemExit("invalid IDF_TOOLS_PATH for esptool probe")
+    try:
+        tools_root = Path(tools_root_text).resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"cannot resolve IDF_TOOLS_PATH for esptool probe: {exc}")
+    candidates = sorted(
+        (tools_root / "python_env").glob("idf*_env/bin/esptool.py")
+    )
+    if len(candidates) != 1:
+        raise SystemExit("expected exactly one ESP-IDF esptool.py")
+    esptool = candidates[0]
+    read_regular(esptool, 1024 * 1024, "esptool.py")
+    if not os.access(esptool, os.X_OK):
+        raise SystemExit("ESP-IDF esptool.py is not executable")
+    return [str(esptool), "version"]
+
 value = {
     "schema_version": 1,
     "idf_commit": probe(["git", "-C", "/opt/esp/idf", "rev-parse", "--verify", "HEAD"]),
     "rustc_verbose": probe(["rustc", "+esp", "--version", "--verbose"]),
     "target": "xtensa-esp32s3-espidf",
     "linker_version": ldproxy_attestation(),
-    "esptool_version": probe([sys.executable, "-m", "esptool", "version"]),
+    "esptool_version": probe(esptool_command()),
 }
 print(json.dumps(value, sort_keys=True, separators=(",", ":")))
 '''
@@ -1025,8 +1048,9 @@ with publication_lifecycle():
             container,
             "-e",
             f"ESP32TAP_PROBE_COMMAND_TIMEOUT={probe_timeout:g}",
-            stage,
+            "--entrypoint",
             "python3",
+            stage,
             "-c",
             PROBE_PROGRAM,
         )
