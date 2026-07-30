@@ -189,6 +189,15 @@ def _relevant_untracked(relative: str) -> bool:
     return path.suffix.lower() in _UNTRACKED_INPUT_SUFFIXES
 
 
+def _generated_legacy_provenance_marker(relative: str) -> bool:
+    path = PurePosixPath(relative)
+    return path.parent == _ESP32_RS and re.fullmatch(
+        r"\.artifact-provenance-legacy-(?:build|build_qemu_test)-"
+        r"[0-9a-f]{64}\.json",
+        path.name,
+    ) is not None
+
+
 def _in_tracked_build_scope(relative: str) -> bool:
     path = PurePosixPath(relative)
     return path in _TRACKED_INPUT_FILES or any(
@@ -238,7 +247,11 @@ def _collect_paths(root: Path) -> tuple[str, ...]:
         if not _always_excluded(relative)
         and (
             (relative in tracked and _in_tracked_build_scope(relative))
-            or _relevant_untracked(relative)
+            or (
+                relative not in tracked
+                and not _generated_legacy_provenance_marker(relative)
+                and _relevant_untracked(relative)
+            )
         )
         and os.path.lexists(root / relative)
     }

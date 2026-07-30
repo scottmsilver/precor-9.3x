@@ -313,6 +313,60 @@ def test_generated_outputs_are_excluded_by_exact_directory_name(repo: Path) -> N
     assert paths.issuperset(path.as_posix() for path in included)
 
 
+def test_exact_untracked_legacy_provenance_markers_are_excluded(repo: Path) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    original = working_digest(repo)
+    markers = (
+        RS / f".artifact-provenance-legacy-build-{'a' * 64}.json",
+        RS / f".artifact-provenance-legacy-build_qemu_test-{'0' * 64}.json",
+    )
+    for marker in markers:
+        write(repo, marker, "generated provenance\n")
+
+    paths = set(declared_inputs(repo))
+
+    assert not paths.intersection(marker.as_posix() for marker in markers)
+    assert working_digest(repo) == original
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        RS / f".artifact-provenance-legacy-build-{'A' * 64}.json",
+        RS / f".artifact-provenance-legacy-build-{'a' * 63}.json",
+        RS / f".artifact-provenance-legacy-build-{'a' * 65}.json",
+        RS / f".artifact-provenance-legacy-build_debug-{'a' * 64}.json",
+        RS / f"x.artifact-provenance-legacy-build-{'a' * 64}.json",
+        RS / f".artifact-provenance-legacy-build-{'a' * 64}-extra.json",
+        RS / "nested" / f".artifact-provenance-legacy-build-{'a' * 64}.json",
+        RS / f".artifact_provenance-legacy-build-{'a' * 64}.json",
+    ],
+)
+def test_legacy_provenance_marker_lookalikes_remain_inputs(
+    repo: Path, marker: Path
+) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    original = working_digest(repo)
+    write(repo, marker, "not an exact generated marker\n")
+
+    assert marker.as_posix() in declared_inputs(repo)
+    assert working_digest(repo) != original
+
+
+def test_tracked_exact_legacy_provenance_marker_remains_an_input(repo: Path) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    original = working_digest(repo)
+    marker = RS / f".artifact-provenance-legacy-build-{'b' * 64}.json"
+    write(repo, marker, "tracked source with generated-looking name\n")
+    commit_all(repo)
+
+    assert marker.as_posix() in declared_inputs(repo)
+    assert working_digest(repo) != original
+
+
 def test_unrelated_untracked_files_caches_and_secrets_are_excluded(repo: Path) -> None:
     tracked = write(repo, RS / "esp32tap/src/main.rs")
     commit_all(repo)
