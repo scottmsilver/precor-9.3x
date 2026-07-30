@@ -71,7 +71,7 @@ for relative in sorted(paths):
         os.close(fd)
         raise SystemExit(f"build_image.sh: {relative} changed while opening")
     encoded = relative.encode("utf-8")
-    mode = stat.S_IMODE(opened.st_mode)
+    mode = stat.S_IMODE(opened.st_mode) & 0o111
     digest.update(struct.pack(">Q", len(encoded)))
     digest.update(encoded)
     digest.update(struct.pack(">I", mode))
@@ -537,7 +537,7 @@ def recipe_from(values: dict[str, tuple[bytes, int]]) -> str:
         encoded = relative.encode("utf-8")
         digest.update(struct.pack(">Q", len(encoded)))
         digest.update(encoded)
-        digest.update(struct.pack(">I", mode))
+        digest.update(struct.pack(">I", mode & 0o111))
         digest.update(struct.pack(">Q", len(data)))
         digest.update(data)
     return digest.hexdigest()

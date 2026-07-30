@@ -501,6 +501,12 @@ def wait_process_gone(pid: int, timeout: float = 5.0) -> None:
 
 def test_recipe_frames_allowed_path_mode_and_content(context: Path) -> None:
     original = recipe(context)
+    (context / "Dockerfile").chmod(0o444)
+    assert recipe(context) == original
+    (context / "Dockerfile").chmod(0o400)
+    assert recipe(context) == original
+    (context / "Dockerfile").chmod(0o644)
+
     (context / "Dockerfile").write_text("FROM scratch\n# changed\n", encoding="utf-8")
     assert recipe(context) != original
 
@@ -514,6 +520,26 @@ def test_recipe_frames_allowed_path_mode_and_content(context: Path) -> None:
         encoding="utf-8",
     )
     assert recipe(context) != mode_digest
+
+
+def test_sealed_recipe_build_and_check_are_compatible(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    unsealed_recipe = recipe(context)
+    (context / "Dockerfile").chmod(0o444)
+    (context / ".dockerignore").chmod(0o400)
+    assert recipe(context) == unsealed_recipe
+
+    built = run(context, fake_docker)
+    assert built.returncode == 0, built.stderr
+    for kind in ("production", "qemu-test"):
+        checked = run(context, fake_docker, "--check", "--kind", kind)
+        assert checked.returncode == 0, checked.stderr
+    final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+    assert (
+        final["Config"]["Labels"]["org.treddy.esp32tap.recipe-sha256"]
+        == unsealed_recipe
+    )
 
 
 def test_recipe_ignores_build_targets_and_caches(context: Path) -> None:
