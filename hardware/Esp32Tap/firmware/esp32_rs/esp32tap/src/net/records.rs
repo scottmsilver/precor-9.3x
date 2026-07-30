@@ -638,6 +638,16 @@ fn mutate_impl(
     method: i32,
     uri: &str,
 ) -> sys::esp_err_t {
+    // Stored-program/workout load and resume carry their identity in the URI,
+    // never in a body. Refuse a declared body before any flash/program effect
+    // and close its read side so IDF cannot purge a 400ms-byte dribbler on the
+    // sole HTTP worker after the handler returns.
+    let bodyless_post = verb == V_HIST_LOAD
+        || (verb == V_WORKOUT_ID && method == sys::http_method_HTTP_POST as i32);
+    if bodyless_post && crate::net::api::reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
+
     // THE ACTION IS MATCHED EXACTLY. A wildcard route hands this function
     // everything under its prefix, so treating "not `resume`" as "load" made
     // `POST /api/programs/history/h1/delete` load a program and

@@ -33,7 +33,9 @@
 
 use crate::context::lock;
 use crate::control;
-use crate::net::api::{parse_key_hundredths, read_body, respond, MAX_CMD_BODY};
+use crate::net::api::{
+    parse_key_hundredths, read_body, reject_unexpected_body, respond, MAX_CMD_BODY,
+};
 use crate::tasks::interval_executor::{apply_plan, apply_program_entry};
 use esp_idf_sys as sys;
 use program_core::{json, Plan, Program, ProgramState};
@@ -312,7 +314,7 @@ fn read_program(req: *mut sys::httpd_req_t) -> Body {
     let mut lease = match reqbudget::admit(declared) {
         Ok(l) => l,
         Err(reqbudget::Refusal::TooLarge) => {
-            respond(
+            crate::net::api::respond_and_close(
                 req,
                 c"413 Payload Too Large",
                 br#"{"ok":false,"error":"program too large"}"#,
@@ -320,7 +322,7 @@ fn read_program(req: *mut sys::httpd_req_t) -> Body {
             return Body::Answered;
         }
         Err(reqbudget::Refusal::Busy) => {
-            respond(
+            crate::net::api::respond_and_close(
                 req,
                 c"503 Service Unavailable",
                 br#"{"ok":false,"error":"server busy"}"#,
@@ -351,7 +353,7 @@ fn read_program(req: *mut sys::httpd_req_t) -> Body {
             )
         };
         if n <= 0 {
-            respond(
+            crate::net::api::respond_and_close(
                 req,
                 c"400 Bad Request",
                 br#"{"ok":false,"error":"short body"}"#,
@@ -435,6 +437,14 @@ fn get_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
 }
 
 fn post_impl(req: *mut sys::httpd_req_t, verb: usize) -> sys::esp_err_t {
+    // These actions have no body in the Pi/app contract. Reject and close a
+    // declared body before any program or belt effect; an ordinary response
+    // would leave IDF purging it on the sole worker with only a per-recv
+    // timeout, which a one-byte dribbler can refresh forever.
+    if matches!(verb, V_STOP | V_PAUSE | V_SKIP | V_PREV) && reject_unexpected_body(req) {
+        return sys::ESP_OK;
+    }
+
     // Bodies are read BEFORE the program lock is taken. `httpd_req_recv` can
     // block on a dribbling client for up to `recv_wait_timeout`, and holding
     // the program lock across that would stall the interval executor — the one

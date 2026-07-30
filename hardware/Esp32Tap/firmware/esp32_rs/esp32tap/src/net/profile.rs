@@ -310,10 +310,22 @@ unsafe extern "C" fn active_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_
 /// choose between, and pretending otherwise is a lie the storage tier would
 /// have to keep.
 ///
-/// SAFETY: `req` is live for the call; nothing derived from it is retained.
-unsafe extern "C" fn select_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+fn select_impl(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    // The app sends `{"id":"local"}`. There is only one valid selection, but
+    // the body still has to be admitted and drained; ignoring it hands IDF an
+    // unbounded purge on the sole HTTP worker after this handler returns.
+    let mut body = [0u8; MAX_CMD_BODY];
+    if read_body(req, &mut body).is_none() {
+        return sys::ESP_OK;
+    }
     let b = render(r#"{"ok":true,"guest_mode":false,"profile":"#, "}");
     respond(req, c"200 OK", &b.b[..b.n])
+}
+
+/// SAFETY: `req` is live for the call; nothing derived from it is retained.
+unsafe extern "C" fn select_handler(req: *mut sys::httpd_req_t) -> sys::esp_err_t {
+    let result = select_impl(req);
+    result
 }
 
 /// PUT /api/profiles/{id} — rename, recolour, reweigh. THE endpoint that makes

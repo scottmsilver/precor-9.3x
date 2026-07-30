@@ -133,6 +133,30 @@ pub(crate) fn respond_and_close(
     sys::ESP_OK
 }
 
+/// The body length declared on a live IDF request.
+pub(crate) fn request_content_len(req: *mut sys::httpd_req_t) -> usize {
+    // SAFETY: reading a scalar field of the live request.
+    unsafe { (*req).content_len }
+}
+
+/// Reject a body on an endpoint whose contract has no body.
+///
+/// The read-side shutdown is load-bearing: returning after an ordinary
+/// response lets IDF purge the unread body on the sole HTTP worker, and a peer
+/// can keep that purge alive forever by sending one byte before each receive
+/// timeout. Empty requests preserve their existing endpoint behavior.
+pub(crate) fn reject_unexpected_body(req: *mut sys::httpd_req_t) -> bool {
+    if request_content_len(req) == 0 {
+        return false;
+    }
+    respond_and_close(
+        req,
+        c"400 Bad Request",
+        br#"{"ok":false,"error":"request body not allowed"}"#,
+    );
+    true
+}
+
 pub(crate) fn respond(
     req: *mut sys::httpd_req_t,
     status: &core::ffi::CStr,
@@ -170,8 +194,7 @@ pub(crate) fn read_body(
 /// array-typed `read_body` above is kept because a dozen call sites read better
 /// with it, and it is now a one-line delegation rather than a duplicate.
 pub(crate) fn read_body_into(req: *mut sys::httpd_req_t, out: &mut [u8]) -> Option<usize> {
-    // SAFETY: reading a scalar field of a live request.
-    let declared = unsafe { (*req).content_len };
+    let declared = request_content_len(req);
 
     // ADMISSION FIRST — nothing is read before the budget says yes.
     let lease = match reqbudget::admit(declared) {
@@ -187,7 +210,10 @@ pub(crate) fn read_body_into(req: *mut sys::httpd_req_t, out: &mut [u8]) -> Opti
                     br#"{"ok":false,"error":"server busy"}"#,
                 ),
             };
-            respond(req, status, body);
+            // No byte was consumed, so close the read side with the response;
+            // otherwise IDF purges the rejected body with only a per-recv
+            // timeout and a dribbler can retain the sole worker indefinitely.
+            respond_and_close(req, status, body);
             return None;
         }
     };
@@ -195,7 +221,7 @@ pub(crate) fn read_body_into(req: *mut sys::httpd_req_t, out: &mut [u8]) -> Opti
     // stack buffer, so `declared` can never exceed `out`.
     if declared > out.len() {
         drop(lease);
-        respond(
+        respond_and_close(
             req,
             c"413 Payload Too Large",
             br#"{"ok":false,"error":"body too large"}"#,
@@ -222,7 +248,7 @@ pub(crate) fn read_body_into(req: *mut sys::httpd_req_t, out: &mut [u8]) -> Opti
         };
         if n <= 0 {
             drop(lease);
-            respond(
+            respond_and_close(
                 req,
                 c"400 Bad Request",
                 br#"{"ok":false,"error":"short body"}"#,

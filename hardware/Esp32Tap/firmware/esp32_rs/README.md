@@ -580,7 +580,10 @@ reaches real flash and survives a real SoC reset.
 `test_reviewer_attacks.py` is also a normal, mandatory sweep gate. Its seven
 Pi-parity attacks cover persistent manual motion, Stop, bounded request-body
 handling, sticky physical-console takeover plus explicit resume, health-gated
-latched-fault recovery and rejection, and total incline conversion.
+latched-fault recovery and rejection, and total incline conversion. The body
+gate uses a real timeout-refreshing peer (one byte every 400 ms) and proves that
+Stop remains reachable while profile, program-action, stored-load, and HRM
+POST routes share the sole HTTP worker.
 
 Not proven, and not claimed:
 

@@ -12,6 +12,7 @@ import re
 import socket
 import ssl
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -29,6 +30,8 @@ PACER_INTERVAL = 0.10
 WIRE_3 = b"[hmph:12C]"  # 3.00 mph
 WIRE_2 = b"[hmph:C8]"  # 2.00 mph
 WIRE_0 = b"[hmph:0]"
+WIRE_INC_5 = b"[inc:A]"  # 5.0% = 10 half-percent units
+WIRE_INC_0 = b"[inc:0]"
 
 ENTRY_SEQUENCE = [
     "command_zero",
@@ -39,6 +42,16 @@ ENTRY_SEQUENCE = [
     "relay_cmd_on",
     "feedback_candidate",
     "feedback_emulate_stable",
+]
+
+EXIT_SEQUENCE = [
+    "send_and_finish_complete_zero_frame",
+    "wait_exit_gap",
+    "relay_cmd_off",
+    "feedback_candidate",
+    "feedback_bypass_stable",
+    "tx_enable_off",
+    "lease_released",
 ]
 
 
@@ -86,6 +99,21 @@ def wait_program(s, predicate, what: str, timeout: float = 90.0):
     raise AssertionError(f"never observed {what}; last state was {last!r}")
 
 
+def wait_guest_time_delta(s, delta_us: int, timeout: float):
+    """Wait on the controller's direct monotonic timestamp from QTSTATE."""
+    start = s.state()["t_us"]
+    last = start
+    deadline = time.monotonic() + timeout
+    while last - start < delta_us:
+        if time.monotonic() > deadline:
+            raise AssertionError(
+                f"guest monotonic advanced only {last - start}us; wanted {delta_us}us"
+            )
+        time.sleep(0.05)
+        last = s.state()["t_us"]
+    return start, last
+
+
 def assert_proxy_fault_stop(s):
     belt = status(s)
     assert belt["mode"] == "proxy", belt
@@ -117,7 +145,7 @@ def wait_for_qualified_bypass(s):
     """Restore the relay model, then give Bypass a measured guest-time hold."""
     s.cmd_ok("QT k1 auto")
     frame_from = s.audit_events()[-1][0] + 1
-    s.wait_guest_uptime_delta(1, timeout=60)
+    wait_guest_time_delta(s, 1_000_000, timeout=60)
     s.wait_audit("complete_console_frame", since=frame_from, timeout=15)
 
 
@@ -145,7 +173,8 @@ def test_a_manual_speed_command_survives_ten_seconds(qemu):
     # started walking sends no further request. The wait observes the same
     # monotonic clock that drives the controller; it sends nothing to the guest.
     t0 = time.monotonic()
-    s.wait_guest_uptime_delta(10, timeout=90)
+    guest_start, guest_end = wait_guest_time_delta(s, 10_000_000, timeout=90)
+    assert guest_end - guest_start >= 10_000_000
 
     after = status(s)
     events = [t for _, t in s.audit_events()[n0:] if t != "complete_console_frame"]
@@ -165,16 +194,10 @@ def test_a_manual_speed_command_survives_ten_seconds(qemu):
 # ---------------------------------------------------------------------------
 # ATTACK B — STOP MUST STOP.
 #
-# `python/server.py::_apply_stop` unconditionally does `_hw_set_speed(0)` /
-# `_hw_set_incline(0)` whether or not a program was running. Here
-# `POST /api/program/stop` drives `ProgramState::stop()`'s plan (empty when no
-# program is loaded) and then `control::release(Surface::Executor)`, which is a
-# no-op when the EXECUTOR does not hold the lease. A belt commanded manually is
-# owned by `Surface::Http`, so nothing touches it.
-#
-# The Android `emergencyStop()` fires setSpeed(0) alongside stopProgram(), but
-# the running screen's plain Stop calls `stopProgram()` ALONE
-# (TreadmillViewModel.kt:518).
+# Stop is one public contract regardless of who owns the belt: command BOTH
+# axes to zero, put those zeros on the motor wire, complete the normal relay
+# exit to Proxy, and release ownership. This exercises the easy-to-miss manual
+# case where ProgramState itself has no running plan to stop.
 #
 # repro: ...::test_b_program_stop_zeroes_a_manually_commanded_belt -q -s
 # ---------------------------------------------------------------------------
@@ -185,26 +208,41 @@ def test_b_program_stop_zeroes_a_manually_commanded_belt(qemu):
     st, body = http(s, "POST", "/api/speed", {"value": 3.0})
     assert st == 200, body
     s.wait_tx_contains(WIRE_3, timeout=60)
+    st, body = http(s, "POST", "/api/incline", {"value": 5.0})
+    assert st == 200, body
+    s.wait_tx_contains(WIRE_INC_5, timeout=30)
 
+    audit_from = s.audit_events()[-1][0] + 1
+    tx_from = len(s.tx_bytes())
     st, body = http(s, "POST", "/api/program/stop")
     assert st == 200, body
+    s.wait_audit_sequence(EXIT_SEQUENCE, since=audit_from, timeout=45)
+    s.wait_tx_contains(WIRE_0, timeout=20, offset=tx_from)
+    s.wait_tx_contains(WIRE_INC_0, timeout=20, offset=tx_from)
     after = status(s)
     print(f"\nATTACK B: after /api/program/stop -> {after}")
-    assert after["speed"] == 0.0, "STOP left the belt commanded at a nonzero speed: " f"{after}"
+    assert after["speed"] == 0.0 and after["incline"] == 0.0, after
+    assert after["mode"] == "proxy" and after["relay"] is False, after
+    hardware = s.state()
+    assert hardware["mode"] == "PROXY", hardware
+    assert hardware["relay"] == 0 and hardware["tx"] == 0, hardware
+    assert hardware["io_relay"] == 0 and hardware["io_tx"] == 0, hardware
     s.stop_pacer()
 
 
 # ---------------------------------------------------------------------------
 # ATTACK C — ADMISSION IS NOT UNIVERSAL.
 #
-# `net/api.rs` claims "Every body-bearing endpoint calls `reqbudget::admit()`
-# first". Six POST routes never read a body and never admit one:
-# /api/program/{stop,pause,skip,prev} and /api/profile/select. IDF must then
-# PURGE the undeclared-but-declared body itself, on the single httpd worker,
-# before the connection can be reused or closed.
+# Program stop/pause/skip/prev, stored-program/workout load, and HRM actions
+# have no request-body contract. Profile select DOES carry `{"id":...}`, but
+# this single-profile implementation used to ignore rather than drain it. If a
+# handler answers without consuming or explicitly rejecting its declared body,
+# IDF purges the unread bytes on the sole HTTP worker.
 #
-# So: declare a 1 MB body on /api/program/stop, send one byte, and never send
-# another. Measure how long a DIFFERENT client waits for GET /api/status.
+# One byte followed by silence is not the attack: IDF's per-receive timeout
+# ends that connection after about a second. This client sends one byte every
+# 400 ms, before each timeout, while a DIFFERENT client presses Stop. Each
+# bodyless route must bound that abuse without changing its empty-body API.
 #
 # repro: ...::test_c_an_unread_declared_body_cannot_park_the_worker -q -s
 # ---------------------------------------------------------------------------
@@ -213,35 +251,79 @@ def test_b_program_stop_zeroes_a_manually_commanded_belt(qemu):
 def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
     s = armed(qemu)
 
-    def probe():
+    def probe_stop(timeout=8):
         t0 = time.monotonic()
         try:
-            http(s, "GET", "/api/status", timeout=30)
+            http(s, "POST", "/api/program/stop", timeout=timeout)
             return time.monotonic() - t0, "ok"
         except Exception as e:  # noqa: BLE001
             return time.monotonic() - t0, repr(e)
 
-    base, r0 = probe()
+    base, r0 = probe_stop()
     assert r0 == "ok", r0
+    assert http(s, "POST", "/api/speed", {"value": 3.0})[0] == 200
+    s.wait_tx_contains(WIRE_3, timeout=60)
 
-    raw = socket.create_connection(("127.0.0.1", s.http_port), timeout=10)
-    tls = httpc.tls_context().wrap_socket(raw, server_hostname="esp32tap")
-    try:
-        tls.sendall(b"POST /api/program/stop HTTP/1.1\r\nHost: x\r\n" b"Content-Length: 1000000\r\n\r\nX")
-        held, r1 = probe()
-        print(f"\nATTACK C: baseline={base:.2f}s  with 1MB-declared dribbler={held:.2f}s ({r1})")
-    finally:
-        try:
-            tls.close()
-        except (OSError, ssl.SSLError):
-            pass
-
-    assert r1 == "ok", f"an unread declared body made the server unreachable: {r1}"
-    assert held < base + 3.0, (
-        f"one client declaring a body nobody reads parked the single httpd "
-        f"worker for {held:.1f}s (baseline {base:.1f}s) — the Stop button is on "
-        "this worker"
+    bodyless_or_ignored_body_posts = (
+        "/api/profile/select",
+        "/api/program/stop",
+        "/api/program/pause",
+        "/api/program/skip",
+        "/api/program/prev",
+        "/api/programs/history/missing/load",
+        "/api/programs/history/missing/resume",
+        "/api/workouts/missing/load",
+        # Already uses respond_and_close; kept in the inventory so that working
+        # reference cannot silently regress while the other routes converge.
+        "/api/hrm/forget",
+        "/api/hrm/scan",
     )
+    outcomes = []
+    for path in bodyless_or_ignored_body_posts:
+        raw = socket.create_connection(("127.0.0.1", s.http_port), timeout=10)
+        tls = httpc.tls_context().wrap_socket(raw, server_hostname="esp32tap")
+        stopped = threading.Event()
+        sender_errors = []
+
+        def keep_each_receive_alive():
+            next_send = time.monotonic() + 0.4
+            while not stopped.wait(max(0.0, next_send - time.monotonic())):
+                try:
+                    tls.sendall(b"X")
+                except (OSError, ssl.SSLError) as e:
+                    sender_errors.append(repr(e))
+                    return
+                next_send += 0.4
+
+        try:
+            tls.sendall(
+                f"POST {path} HTTP/1.1\r\nHost: x\r\n"
+                "Content-Length: 1000000\r\n\r\nX".encode()
+            )
+            sender = threading.Thread(target=keep_each_receive_alive, daemon=True)
+            sender.start()
+            held, result = probe_stop()
+            outcomes.append((path, held, result, list(sender_errors)))
+        finally:
+            stopped.set()
+            try:
+                tls.close()
+            except (OSError, ssl.SSLError):
+                pass
+            if "sender" in locals():
+                sender.join(timeout=2)
+                del sender
+
+        assert result == "ok", (
+            f"{path} let an unread declared body make Stop unreachable: {result}; "
+            f"sender={sender_errors}"
+        )
+        assert held < base + 3.0, (
+            f"{path} let a 400ms-byte dribbler park the sole HTTP worker for "
+            f"{held:.1f}s (Stop baseline {base:.1f}s)"
+        )
+
+    print(f"\nATTACK C: timeout-refreshing dribbler outcomes={outcomes}")
     s.stop_pacer()
 
 
@@ -304,7 +386,8 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     # Observe 25 s of GUEST time — more than two complete 10 s intervals,
     # even though QEMU wall time is elastic. Poll throughout so a forbidden
     # audit event cannot roll out of the fixed-size ring under console traffic.
-    target_uptime = s.guest_uptime() + 25
+    takeover_t_us = s.state()["t_us"]
+    observed_t_us = takeover_t_us
     deadline = time.monotonic() + 180
     next_audit = takeover_idx + 1
     observed_events = [(takeover_idx, "emergency:console_takeover")]
@@ -312,12 +395,13 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     sampled_second = -1
     forbidden = []
     reclaimed = None
-    while s.guest_uptime() < target_uptime:
+    while observed_t_us - takeover_t_us < 25_000_000:
         st = status(s)
         if st["mode"] != "proxy" or st["relay"] is not False:
             reclaimed = st
             break
         hw = s.state()
+        observed_t_us = hw["t_us"]
         guest_second = hw["t_us"] // 1_000_000
         if guest_second > sampled_second:
             sampled_second = guest_second
@@ -345,6 +429,7 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
         time.sleep(0.2)
 
     after = program(s)
+    assert observed_t_us - takeover_t_us >= 25_000_000
     post_takeover_wire = s.tx_bytes()[tx0:]
     nonzero_motor = [
         token
@@ -357,6 +442,7 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     print(f"          nonzero motor frames={nonzero_motor}")
     print(f"          indexed audit={observed_events}")
     print(f"          guest samples={samples}")
+    print(f"          guest monotonic delta_us={observed_t_us - takeover_t_us}")
     assert reclaimed is None, f"the running program took the belt back: {reclaimed}"
     assert after["running"] is True and after["paused"] is True, after
     assert (
@@ -473,18 +559,12 @@ def test_f_unhealthy_recovery_requests_keep_the_fault_latched(qemu):
 
 
 # ---------------------------------------------------------------------------
-# ATTACK G — INTEGER OVERFLOW IN THE INCLINE CONVERSION.
+# ATTACK G — INCLINE CONVERSION IS TOTAL AND REJECTION IS ATOMIC.
 #
-# `net/api.rs::motion_handler` does `InclineHalfPct::new(hundredths * 2 / 100)`.
-# `parse_value_hundredths` bounds `hundredths` to +-i32::MAX, so `* 2` overflows
-# i32. `[profile.release]` in esp32tap/Cargo.toml sets no `overflow-checks`, so
-# release wraps (and a build that ever turned them ON would PANIC -> abort ->
-# reboot -> relay drop mid-run).
-#
-# -21474835.98 -> hundredths = -2147483598 -> *2 wraps to +100 -> /100 = 1 ->
-# 0.5% incline. A request asking for a wildly out-of-range NEGATIVE incline is
-# answered 200 and MOVES THE INCLINE, instead of being rejected 409 by the
-# controller's 0..=30 half-percent clamp.
+# The edge converts parsed hundredths to half-percent units with total `/ 50`
+# arithmetic, then leaves range enforcement to the safety controller. A
+# rejected extreme value must be atomic: 409, unchanged status, and no wire
+# frame carrying any newly derived incline.
 #
 # repro: ...::test_g_incline_conversion_does_not_wrap -q -s
 # ---------------------------------------------------------------------------
@@ -495,14 +575,22 @@ def test_g_incline_conversion_does_not_wrap(qemu):
     assert http(s, "POST", "/api/speed", {"value": 3.0})[0] == 200
     s.wait_tx_contains(WIRE_3, timeout=60)
     assert http(s, "POST", "/api/incline", {"value": 5.0})[0] == 200
+    s.wait_tx_contains(WIRE_INC_5, timeout=30)
     before = status(s)
 
+    tx_from = len(s.tx_bytes())
     st, body = http(s, "POST", "/api/incline", {"value": -21474835.98})
     after = status(s)
+    wait_guest_time_delta(s, 1_000_000, timeout=60)
+    post_rejection = s.tx_bytes()[tx_from:]
+    incline_tokens = re.findall(rb"\[inc:([0-9A-F]+)\]", post_rejection)
     print(f"\nATTACK G: reply={st} body={body}")
     print(f"          before={before['incline']}  after={after['incline']}")
-    assert st == 409, (
-        "an out-of-range incline was ACCEPTED after the i32 conversion wrapped: "
-        f"{st} {body}; incline {before['incline']} -> {after['incline']}"
+    print(f"          post-rejection incline wire={incline_tokens}")
+    assert st == 409, (st, body)
+    assert after["incline"] == before["incline"], (before, after)
+    assert incline_tokens, "no post-rejection motor cycle was captured"
+    assert set(incline_tokens) == {b"A"}, (
+        f"rejected incline changed the motor wire: {incline_tokens}"
     )
     s.stop_pacer()
