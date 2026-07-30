@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import os
 import shutil
@@ -16,6 +18,20 @@ from pathlib import Path, PurePosixPath
 
 
 _ESP32_RS = PurePosixPath("hardware/Esp32Tap/firmware/esp32_rs")
+_ESP32_REFERENCE = PurePosixPath("hardware/Esp32Tap/firmware/esp32")
+_CAPTURE_FIXTURES = PurePosixPath("cpp/captures")
+_TRACKED_INPUT_PREFIXES = (_ESP32_RS, _ESP32_REFERENCE, _CAPTURE_FIXTURES)
+_TRACKED_INPUT_FILES = frozenset(
+    {
+        PurePosixPath("hardware/Esp32Tap/tools/design.py"),
+        PurePosixPath("hardware/Esp32Tap/tests/test_firmware_safety_model.py"),
+        PurePosixPath("hardware/Esp32Tap/firmware/PLAN.md"),
+        PurePosixPath("hardware/Esp32Tap/firmware/safety_model.py"),
+        PurePosixPath("hardware/Esp32Tap/firmware/safety_manifest.schema.json"),
+        PurePosixPath("hardware/Esp32Tap/firmware/build_safety_manifest.py"),
+        PurePosixPath("deploy/treadmill.avahi-service"),
+    }
+)
 _GENERATED_PREFIXES = (
     _ESP32_RS / "build",
     _ESP32_RS / "build_qemu_test",
@@ -41,6 +57,7 @@ _SECRET_NAMES = frozenset(
         "secrets.toml",
         "secrets.yaml",
         "secrets.yml",
+        "token.json",
     }
 )
 _SECRET_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx"})
@@ -170,6 +187,13 @@ def _relevant_untracked(relative: str) -> bool:
     return path.suffix.lower() in _UNTRACKED_INPUT_SUFFIXES
 
 
+def _in_tracked_build_scope(relative: str) -> bool:
+    path = PurePosixPath(relative)
+    return path in _TRACKED_INPUT_FILES or any(
+        _under(path, prefix) for prefix in _TRACKED_INPUT_PREFIXES
+    )
+
+
 def _safe_symlink_target(root: Path, relative: str) -> str:
     link = root / relative
     target_text = os.readlink(link)
@@ -210,7 +234,10 @@ def _collect_paths(root: Path) -> tuple[str, ...]:
         relative
         for relative in candidates
         if not _always_excluded(relative)
-        and (relative in tracked or _relevant_untracked(relative))
+        and (
+            (relative in tracked and _in_tracked_build_scope(relative))
+            or _relevant_untracked(relative)
+        )
         and os.path.lexists(root / relative)
     }
 
@@ -242,24 +269,62 @@ def declared_inputs(repo_root: Path) -> tuple[str, ...]:
     return _collect_paths(_validated_repo_root(repo_root))
 
 
-def _record(hasher: object, relative: str, kind: bytes, content: bytes) -> None:
+def _record(
+    hasher: object,
+    relative: str,
+    kind: bytes,
+    permissions: int,
+    content: bytes,
+) -> None:
     path_bytes = os.fsencode(relative)
+    mode_bytes = f"{permissions:04o}".encode("ascii")
     hasher.update(struct.pack(">Q", len(path_bytes)))
     hasher.update(path_bytes)
     hasher.update(kind)
+    hasher.update(struct.pack(">Q", len(mode_bytes)))
+    hasher.update(mode_bytes)
     hasher.update(struct.pack(">Q", len(content)))
     hasher.update(content)
 
 
-def _read_input(root: Path, relative: str) -> tuple[bytes, bytes, int]:
+def _read_input(
+    root: Path, relative: str, selected: frozenset[str]
+) -> tuple[bytes, bytes, int]:
     path = root / relative
     before = path.lstat()
     if stat.S_ISLNK(before.st_mode):
+        target_relative = _safe_symlink_target(root, relative)
+        if target_relative not in selected:
+            raise RuntimeError(
+                f"symlink target was not selected as a build input: "
+                f"{relative} -> {target_relative}"
+            )
         content = os.fsencode(os.readlink(path))
         kind = b"L"
+        permissions = 0
     elif stat.S_ISREG(before.st_mode):
-        content = path.read_bytes()
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_mode,
+            ) != (
+                before.st_dev,
+                before.st_ino,
+                before.st_mode,
+            ):
+                raise RuntimeError(
+                    f"build input changed before it could be read safely: {relative}"
+                )
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                content = stream.read()
+        finally:
+            os.close(descriptor)
         kind = b"F"
+        permissions = stat.S_IMODE(before.st_mode)
     else:
         raise ValueError(f"build input is not a regular file or symlink: {relative}")
     after = path.lstat()
@@ -269,6 +334,7 @@ def _read_input(root: Path, relative: str) -> tuple[bytes, bytes, int]:
         before.st_mode,
         before.st_size,
         before.st_mtime_ns,
+        before.st_ctime_ns,
     )
     identity_after = (
         after.st_dev,
@@ -276,10 +342,11 @@ def _read_input(root: Path, relative: str) -> tuple[bytes, bytes, int]:
         after.st_mode,
         after.st_size,
         after.st_mtime_ns,
+        after.st_ctime_ns,
     )
     if identity_before != identity_after:
         raise RuntimeError(f"build input changed while it was being read: {relative}")
-    return kind, content, stat.S_IMODE(before.st_mode)
+    return kind, content, permissions
 
 
 def working_digest(repo_root: Path) -> str:
@@ -287,9 +354,11 @@ def working_digest(repo_root: Path) -> str:
 
     root = _validated_repo_root(repo_root)
     hasher = hashlib.sha256()
-    for relative in _collect_paths(root):
-        kind, content, _ = _read_input(root, relative)
-        _record(hasher, relative, kind, content)
+    paths = _collect_paths(root)
+    selected = frozenset(paths)
+    for relative in paths:
+        kind, content, permissions = _read_input(root, relative, selected)
+        _record(hasher, relative, kind, permissions, content)
     return hasher.hexdigest()
 
 
@@ -328,14 +397,107 @@ def _set_input_mtime(path: Path, mtime_ns: int) -> None:
         os.utime(path, ns=(mtime_ns, mtime_ns))
 
 
+def _seal_snapshot_tree(root: Path) -> None:
+    for directory, dirnames, filenames in os.walk(
+        root, topdown=False, followlinks=False
+    ):
+        base = Path(directory)
+        for name in filenames:
+            path = base / name
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) & 0o555)
+        for name in dirnames:
+            path = base / name
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) & 0o555)
+        base.chmod(stat.S_IMODE(base.stat().st_mode) & 0o555)
+
+
+def _restore_staging_write(root: Path, expected_parent: Path) -> None:
+    root = root.absolute()
+    expected_parent = expected_parent.resolve(strict=True)
+    if root.parent.resolve(strict=True) != expected_parent or root == expected_parent:
+        raise ValueError(
+            f"refusing broad staging cleanup outside {expected_parent}: {root}"
+        )
+    if not os.path.lexists(root) or root.is_symlink():
+        return
+    for directory, dirnames, filenames in os.walk(
+        root, topdown=False, followlinks=False
+    ):
+        base = Path(directory)
+        for name in filenames:
+            path = base / name
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
+        for name in dirnames:
+            path = base / name
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
+        base.chmod(stat.S_IMODE(base.stat().st_mode) | stat.S_IWUSR)
+
+
+def _publish_no_replace(staging: Path, destination: Path) -> None:
+    if sys.platform != "linux":
+        raise RuntimeError(
+            "atomic no-replace snapshot publication requires Linux renameat2"
+        )
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = library.renameat2
+    except AttributeError as exc:
+        raise RuntimeError(
+            "atomic no-replace snapshot publication is unsupported: "
+            "libc has no renameat2"
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    at_fdcwd = -100
+    rename_noreplace = 1
+    result = renameat2(
+        at_fdcwd,
+        os.fsencode(staging),
+        at_fdcwd,
+        os.fsencode(destination),
+        rename_noreplace,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in (errno.EEXIST, errno.ENOTEMPTY):
+        raise FileExistsError(
+            error,
+            f"snapshot destination already exists: {destination}",
+            destination,
+        )
+    if error in (errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP):
+        raise RuntimeError(
+            f"atomic no-replace snapshot publication is unsupported for "
+            f"{destination.parent}: {os.strerror(error)}"
+        )
+    raise OSError(error, os.strerror(error), destination)
+
+
 def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> Snapshot:
     """Copy one coherent set of declared bytes to a new snapshot directory."""
 
     root = _validated_repo_root(repo_root)
-    destination = Path(destination).absolute()
-    if os.path.lexists(destination):
-        raise FileExistsError(f"snapshot destination already exists: {destination}")
+    requested_destination = Path(destination).absolute()
+    if os.path.lexists(requested_destination):
+        raise FileExistsError(
+            f"snapshot destination already exists: {requested_destination}"
+        )
+    destination = requested_destination.resolve(strict=False)
+    if destination.is_relative_to(root):
+        raise ValueError(f"snapshot destination must not be inside repo: {destination}")
     paths = _collect_paths(root)
+    selected = frozenset(paths)
     newest_target = _newest_mtime_ns(Path(target_cache))
     snapshot_mtime = max(time.time_ns(), newest_target + 1)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -345,7 +507,7 @@ def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> S
     hasher = hashlib.sha256()
     try:
         for relative in paths:
-            kind, content, permissions = _read_input(root, relative)
+            kind, content, permissions = _read_input(root, relative, selected)
             output = staging / relative
             output.parent.mkdir(parents=True, exist_ok=True)
             if kind == b"L":
@@ -358,10 +520,13 @@ def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> S
                 raise RuntimeError(
                     f"filesystem could not set snapshot input newer than target cache: {relative}"
                 )
-            _record(hasher, relative, kind, content)
-        staging.rename(destination)
+            _record(hasher, relative, kind, permissions, content)
+        _seal_snapshot_tree(staging)
+        _publish_no_replace(staging, destination)
     except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
+        _restore_staging_write(staging, destination.parent)
+        if os.path.lexists(staging):
+            shutil.rmtree(staging)
         raise
     return Snapshot(
         root=destination,
@@ -383,7 +548,14 @@ def verify_gate_input_completeness(snapshot_root: Path) -> None:
         "LC_ALL": os.environ.get("LC_ALL", ""),
         "PATH": os.defpath,
         "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONSAFEPATH": "1",
     }
+    bootstrap = (
+        "import runpy, sys; "
+        "sys.path.insert(0, sys.argv[1]); "
+        "runpy.run_path(sys.argv[2], run_name='__main__')"
+    )
     for gate in _GATES:
         script = tools / gate
         if not script.is_file():
@@ -391,7 +563,14 @@ def verify_gate_input_completeness(snapshot_root: Path) -> None:
                 f"gate input completeness failed: missing gate {script.relative_to(root)}"
             )
         result = subprocess.run(
-            [sys.executable, str(script)],
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                bootstrap,
+                str(script.parent),
+                str(script),
+            ],
             cwd=root,
             env=environment,
             stdout=subprocess.PIPE,

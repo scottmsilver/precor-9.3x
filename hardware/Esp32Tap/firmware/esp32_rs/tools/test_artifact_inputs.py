@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
+import stat
 import subprocess
 from pathlib import Path
 
 import pytest
 
+import artifact_inputs
 from artifact_inputs import (
     create_snapshot,
     declared_inputs,
@@ -55,6 +59,50 @@ def commit_all(root: Path) -> None:
     git(root, "commit", "-qm", "fixture")
 
 
+def restore_test_tree_write(root: Path, expected_parent: Path) -> None:
+    """Make one explicit pytest-temp child removable without following links."""
+
+    root = root.absolute()
+    expected_parent = expected_parent.resolve(strict=True)
+    if root.parent.resolve(strict=True) != expected_parent or root == expected_parent:
+        raise ValueError(
+            f"refusing broad test cleanup outside {expected_parent}: {root}"
+        )
+    if not os.path.lexists(root) or root.is_symlink():
+        return
+    for directory, dirnames, filenames in os.walk(
+        root, topdown=False, followlinks=False
+    ):
+        base = Path(directory)
+        for name in filenames:
+            path = base / name
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
+        for name in dirnames:
+            path = base / name
+            if not path.is_symlink():
+                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
+        base.chmod(stat.S_IMODE(base.stat().st_mode) | stat.S_IWUSR)
+
+
+def remove_test_tree(root: Path, expected_parent: Path) -> None:
+    restore_test_tree_write(root, expected_parent)
+    if not os.path.lexists(root):
+        return
+    if root.is_symlink():
+        root.unlink()
+    else:
+        shutil.rmtree(root)
+
+
+@pytest.fixture(autouse=True)
+def cleanup_sealed_snapshots(tmp_path: Path):
+    yield
+    for child in tmp_path.iterdir():
+        if child.name.startswith("snapshot"):
+            remove_test_tree(child, tmp_path)
+
+
 def test_digest_ignores_mtime_but_not_same_size_content(repo: Path) -> None:
     source = write(repo, RS / "esp32tap/src/main.rs", "aaaa")
     commit_all(repo)
@@ -66,6 +114,29 @@ def test_digest_ignores_mtime_but_not_same_size_content(repo: Path) -> None:
 
     source.write_text("bbbb", encoding="utf-8")
     assert working_digest(repo) != original
+
+
+def test_chmod_only_change_changes_working_and_snapshot_digests(
+    repo: Path, tmp_path: Path
+) -> None:
+    source = write(repo, RS / "esp32tap/src/main.rs", "same bytes")
+    source.chmod(0o644)
+    commit_all(repo)
+    digest_0644 = working_digest(repo)
+    snapshot_0644 = create_snapshot(
+        repo, tmp_path / "snapshot-0644", tmp_path / "target"
+    )
+
+    source.chmod(0o755)
+    digest_0755 = working_digest(repo)
+    snapshot_0755 = create_snapshot(
+        repo, tmp_path / "snapshot-0755", tmp_path / "target"
+    )
+
+    assert digest_0755 != digest_0644
+    assert snapshot_0644.digest == digest_0644
+    assert snapshot_0755.digest == digest_0755
+    assert snapshot_0755.digest != snapshot_0644.digest
 
 
 def test_snapshot_is_immutable_against_later_live_edit(
@@ -81,6 +152,32 @@ def test_snapshot_is_immutable_against_later_live_edit(
         encoding="utf-8"
     ) == "before"
     assert snapshot.digest != working_digest(repo)
+
+
+def test_published_snapshot_files_and_directories_are_sealed(
+    repo: Path, tmp_path: Path
+) -> None:
+    source = write(repo, RS / "esp32tap/src/main.rs", "sealed")
+    source.chmod(0o755)
+    commit_all(repo)
+    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
+    copied = snapshot.root / source.relative_to(repo)
+    original_digest = snapshot.digest
+
+    assert stat.S_IMODE(copied.stat().st_mode) == 0o555
+    assert not stat.S_IMODE(snapshot.root.stat().st_mode) & 0o222
+    assert all(
+        not stat.S_IMODE(path.stat().st_mode) & 0o222
+        for path in snapshot.root.rglob("*")
+        if path.is_dir()
+    )
+    with pytest.raises(PermissionError):
+        copied.write_text("mutated", encoding="utf-8")
+    replacement = write(tmp_path, "replacement", "replacement")
+    with pytest.raises(PermissionError):
+        replacement.replace(copied)
+    assert copied.read_text(encoding="utf-8") == "sealed"
+    assert snapshot.digest == original_digest
 
 
 def test_dirty_tracked_and_relevant_untracked_inputs_are_included(repo: Path) -> None:
@@ -148,6 +245,32 @@ def test_internal_symlink_is_preserved_and_target_is_added_transitively(
     assert target.relative_to(repo).as_posix() in snapshot.paths
 
 
+def test_internal_symlink_chain_is_preserved_and_complete(
+    repo: Path, tmp_path: Path
+) -> None:
+    target = write(repo, "shared/target.py", "chain target")
+    middle = repo / "shared/middle.py"
+    middle.symlink_to("target.py")
+    link = repo / RS / "tools/check_pins.py"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(os.path.relpath(middle, link.parent))
+    git(repo, "add", link.relative_to(repo).as_posix())
+    git(repo, "commit", "-qm", "fixture symlink chain")
+
+    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
+
+    copied_link = snapshot.root / link.relative_to(repo)
+    copied_middle = snapshot.root / middle.relative_to(repo)
+    assert copied_link.is_symlink()
+    assert copied_middle.is_symlink()
+    assert copied_link.resolve().is_relative_to(snapshot.root.resolve())
+    assert copied_link.read_text(encoding="utf-8") == "chain target"
+    assert {
+        target.relative_to(repo).as_posix(),
+        middle.relative_to(repo).as_posix(),
+    }.issubset(snapshot.paths)
+
+
 @pytest.mark.parametrize(
     ("link_target", "message"),
     [
@@ -166,6 +289,25 @@ def test_unsafe_symlinks_are_rejected(
 
     with pytest.raises(ValueError, match=message):
         declared_inputs(repo)
+
+
+def test_symlink_swap_after_enumeration_is_revalidated(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = write(repo, RS / "esp32tap/src/main.rs", "safe")
+    commit_all(repo)
+    original_collect = artifact_inputs._collect_paths
+
+    def collect_then_swap(root: Path) -> tuple[str, ...]:
+        paths = original_collect(root)
+        source.unlink()
+        source.symlink_to("/etc/passwd")
+        return paths
+
+    monkeypatch.setattr(artifact_inputs, "_collect_paths", collect_then_swap)
+
+    with pytest.raises(ValueError, match="absolute symlink"):
+        working_digest(repo)
 
 
 def test_generated_outputs_are_excluded_by_exact_directory_name(repo: Path) -> None:
@@ -224,6 +366,53 @@ def test_unrelated_untracked_files_caches_and_secrets_are_excluded(repo: Path) -
     assert not paths.intersection(unrelated)
 
 
+def test_tracked_inputs_are_limited_to_explicit_build_scope(repo: Path) -> None:
+    included = (
+        RS / "esp32tap/src/main.rs",
+        Path("hardware/Esp32Tap/firmware/esp32/components/esp_hal/pins.hpp"),
+        Path("hardware/Esp32Tap/tools/design.py"),
+        Path("hardware/Esp32Tap/tests/test_firmware_safety_model.py"),
+        Path("hardware/Esp32Tap/firmware/PLAN.md"),
+        Path("hardware/Esp32Tap/firmware/safety_model.py"),
+        Path("hardware/Esp32Tap/firmware/safety_manifest.schema.json"),
+        Path("hardware/Esp32Tap/firmware/build_safety_manifest.py"),
+        Path("cpp/captures/try3.csv"),
+        Path("deploy/treadmill.avahi-service"),
+    )
+    unrelated = (
+        Path("README.md"),
+        Path("docs/build_notes.md"),
+        Path("app/src/main.rs"),
+        Path("scratch/config.json"),
+        Path("token.json"),
+        Path("hardware/Esp32Tap/REPORT.md"),
+        Path("hardware/Esp32Tap/tools/unrelated.py"),
+        Path("hardware/Esp32Tap/tests/unrelated.py"),
+        Path("hardware/Esp32Tap/firmware/unrelated.md"),
+        RS / ".env.production",
+        RS / "token.json",
+    )
+    for path in included + unrelated:
+        write(repo, path)
+    commit_all(repo)
+
+    paths = set(declared_inputs(repo))
+
+    assert paths.issuperset(path.as_posix() for path in included)
+    assert not paths.intersection(path.as_posix() for path in unrelated)
+
+
+def test_unusual_git_path_with_newline_is_nul_safe(repo: Path, tmp_path: Path) -> None:
+    unusual = write(repo, RS / "esp32tap/src/line\nbreak.rs", "unusual")
+    commit_all(repo)
+
+    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
+
+    relative = unusual.relative_to(repo).as_posix()
+    assert relative in snapshot.paths
+    assert (snapshot.root / relative).read_text(encoding="utf-8") == "unusual"
+
+
 def test_target_cache_uses_physical_worktree_and_separates_kinds(
     repo: Path, tmp_path: Path
 ) -> None:
@@ -275,8 +464,11 @@ def make_gate_fixture(repo: Path) -> None:
     for gate in GATES:
         script = (
             "from pathlib import Path\n"
-            "import subprocess\n"
+            "import os, site, subprocess, sys\n"
             "from gate_helper import VALUE\n"
+            "assert sys.flags.isolated == 1\n"
+            "assert site.ENABLE_USER_SITE is False\n"
+            "assert os.environ['PYTHONNOUSERSITE'] == '1'\n"
             "root = Path(__file__).resolve().parents[5]\n"
             f"assert (root / {str(data.relative_to(repo))!r}).read_text().strip() == VALUE\n"
             f"subprocess.run([str(root / {str(native.relative_to(repo))!r})], check=True)\n"
@@ -300,6 +492,41 @@ def test_completeness_runs_all_four_gates_from_snapshot(
         verify_gate_input_completeness(snapshot.root)
     finally:
         unavailable.rename(repo)
+
+
+def test_completeness_ignores_user_site_pth_and_sitecustomize(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_gate_fixture(repo)
+    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
+    marker = tmp_path / "user-site-loaded"
+    user_base = tmp_path / "user-base"
+    version = f"python{os.sys.version_info.major}.{os.sys.version_info.minor}"
+    site_packages = user_base / "lib" / version / "site-packages"
+    write(
+        site_packages,
+        "influence.pth",
+        f"import pathlib; pathlib.Path({str(marker)!r}).write_text('pth')\n",
+    )
+    write(
+        site_packages,
+        "sitecustomize.py",
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('sitecustomize')\n",
+    )
+    real_python = artifact_inputs.sys.executable
+    wrapper = write(
+        tmp_path,
+        "python-with-user-site",
+        "#!/bin/sh\n"
+        f"export PYTHONUSERBASE={shlex.quote(str(user_base))}\n"
+        f'exec {shlex.quote(real_python)} "$@"\n',
+    )
+    wrapper.chmod(0o755)
+    monkeypatch.setattr(artifact_inputs.sys, "executable", str(wrapper))
+
+    verify_gate_input_completeness(snapshot.root)
+
+    assert not marker.exists()
 
 
 def test_completeness_exposes_absolute_fallback_to_live_source(
@@ -337,6 +564,7 @@ def test_completeness_fails_for_missing_transitive_input(
 ) -> None:
     make_gate_fixture(repo)
     snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
+    restore_test_tree_write(snapshot.root, tmp_path)
     matches = list(snapshot.root.rglob(missing))
     assert len(matches) == 1
     matches[0].unlink()
@@ -355,6 +583,55 @@ def test_snapshot_rejects_existing_destination(repo: Path, tmp_path: Path) -> No
         create_snapshot(repo, destination, tmp_path / "target")
 
 
+@pytest.mark.parametrize("through_symlink", [False, True])
+def test_snapshot_rejects_destination_inside_repo(
+    repo: Path, tmp_path: Path, through_symlink: bool
+) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    if through_symlink:
+        parent = tmp_path / "repo-alias"
+        parent.symlink_to(repo, target_is_directory=True)
+    else:
+        parent = repo
+    destination = parent / "snapshot"
+    physical_destination = repo / "snapshot"
+
+    try:
+        with pytest.raises(ValueError, match="inside repo"):
+            create_snapshot(repo, destination, tmp_path / "target")
+    finally:
+        remove_test_tree(physical_destination, repo)
+
+
+def test_destination_race_does_not_replace_empty_directory(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    destination = tmp_path / "snapshot"
+    staging_path: list[Path] = []
+    attacker_inode: list[int] = []
+    original_mkdtemp = artifact_inputs.tempfile.mkdtemp
+
+    def race_destination(*args, **kwargs) -> str:
+        result = Path(original_mkdtemp(*args, **kwargs))
+        staging_path.append(result)
+        destination.mkdir()
+        attacker_inode.append(destination.stat().st_ino)
+        return str(result)
+
+    monkeypatch.setattr(artifact_inputs.tempfile, "mkdtemp", race_destination)
+
+    with pytest.raises(FileExistsError):
+        create_snapshot(repo, destination, tmp_path / "target")
+
+    assert destination.is_dir()
+    assert destination.stat().st_ino == attacker_inode[0]
+    assert not list(destination.iterdir())
+    assert not staging_path[0].exists()
+
+
 def test_real_repository_declares_build_inputs_and_safe_pin_symlink(
     tmp_path: Path,
 ) -> None:
@@ -370,6 +647,8 @@ def test_real_repository_declares_build_inputs_and_safe_pin_symlink(
     }
 
     assert paths.issuperset(required)
+    assert "README.md" not in paths
+    assert "hardware/Esp32Tap/REPORT.md" not in paths
     snapshot = create_snapshot(repo_root, tmp_path / "snapshot", tmp_path / "target")
     copied = snapshot.root / RS / "tools/check_pins.py"
     assert copied.is_symlink()
