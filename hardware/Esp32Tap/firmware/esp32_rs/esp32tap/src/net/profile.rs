@@ -362,7 +362,7 @@ fn update_impl(req: *mut sys::httpd_req_t, uri: &str) -> sys::esp_err_t {
         .map(|r| r.split('/').next().unwrap_or(""))
         .unwrap_or("");
     if id != "local" {
-        return respond(
+        return respond_and_close(
             req,
             c"404 Not Found",
             br#"{"ok":false,"error":"Not found"}"#,

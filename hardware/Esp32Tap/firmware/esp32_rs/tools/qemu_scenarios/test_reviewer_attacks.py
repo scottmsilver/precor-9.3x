@@ -56,6 +56,9 @@ EXIT_SEQUENCE = [
 
 ROUTE_SOURCE_FILES = ("http.rs", "api.rs", "program.rs", "profile.rs", "records.rs", "hrm.rs", "coach.rs")
 BODY_READER_ROUTES = {
+    # Wildcard registrations need branch-level coverage too: a route can have
+    # a legitimate body on its valid shape while an invalid suffix/id returns
+    # before reaching that reader. Attack C names those early-return branches.
     ("POST", "/api/speed"),
     ("POST", "/api/incline"),
     ("POST", "/api/program/load"),
@@ -362,6 +365,14 @@ def test_c_an_unread_declared_body_cannot_park_the_worker(qemu):
         ("POST", "/api/workouts/missing/load", 1_000_000, 0.4, "workout load"),
         ("GET", "/api/status", 1_000_000, 0.4, "representative GET"),
         ("DELETE", "/api/workouts/missing", 1_000_000, 0.4, "workout delete"),
+        ("PUT", "/api/profiles/non-local", 1_000_000, 0.4, "unknown profile update"),
+        (
+            "PUT",
+            "/api/workouts/missing/invalid-suffix",
+            1_000_000,
+            0.4,
+            "invalid workout update suffix",
+        ),
         ("POST", "/api/workouts", 1_000_000, 0.4, "workout oversized rejection"),
         # Let the first records receive time out, then refresh IDF's unread
         # body purge. This reaches read_slot_body's short-read exit rather than

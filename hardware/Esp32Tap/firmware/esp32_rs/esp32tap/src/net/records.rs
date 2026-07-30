@@ -676,7 +676,7 @@ fn mutate_impl(
     // `POST /api/programs/history/h1/delete` load a program and
     // `DELETE /api/workouts/w1/load` DELETE a workout. Anything not listed
     // here is 404, which is what a client that mistyped a URL should get.
-    let not_found = |req| respond(req, c"404 Not Found", NOT_FOUND);
+    let not_found = |req| crate::net::api::respond_and_close(req, c"404 Not Found", NOT_FOUND);
     match verb {
         V_HIST_LOAD => match split_id_action(uri, "/api/programs/history/") {
             Some((id, "load")) | Some((id, "")) => history_load(req, id, false),
