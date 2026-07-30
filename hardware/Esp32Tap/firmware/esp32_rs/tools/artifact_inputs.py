@@ -413,7 +413,7 @@ def _seal_snapshot_tree(root: Path) -> None:
         base.chmod(stat.S_IMODE(base.stat().st_mode) & 0o555)
 
 
-def _restore_staging_write(root: Path, expected_parent: Path) -> None:
+def _restore_tree_owner_write(root: Path, expected_parent: Path) -> None:
     root = root.absolute()
     expected_parent = expected_parent.resolve(strict=True)
     if root.parent.resolve(strict=True) != expected_parent or root == expected_parent:
@@ -435,6 +435,71 @@ def _restore_staging_write(root: Path, expected_parent: Path) -> None:
             if not path.is_symlink():
                 path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
         base.chmod(stat.S_IMODE(base.stat().st_mode) | stat.S_IWUSR)
+
+
+def _validated_cleanup_paths(
+    snapshot_root: Path, expected_parent: Path
+) -> tuple[Path, Path]:
+    try:
+        parent = Path(expected_parent).absolute().resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(
+            f"snapshot cleanup parent cannot be resolved: {expected_parent}"
+        ) from exc
+    if not parent.is_dir():
+        raise ValueError(f"snapshot cleanup parent is not a directory: {parent}")
+    anchor = Path(parent.anchor)
+    home = Path.home().resolve(strict=True)
+    if (
+        parent == anchor
+        or len(parent.parts) < 3
+        or parent == home
+        or os.path.lexists(parent / ".git")
+    ):
+        raise ValueError(
+            f"refusing broad or worktree snapshot cleanup parent: {parent}"
+        )
+
+    root = Path(snapshot_root).absolute()
+    if root.resolve(strict=False) == parent:
+        raise ValueError("snapshot root must not equal its cleanup parent")
+    try:
+        root_parent = root.parent.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(
+            f"snapshot root parent cannot be resolved: {root.parent}"
+        ) from exc
+    if root_parent != parent:
+        raise ValueError(
+            f"snapshot root must be an exact direct child of cleanup parent "
+            f"{parent}: {root}"
+        )
+    if os.path.lexists(root):
+        if root.is_symlink():
+            raise ValueError(f"snapshot root must not be a symlink: {root}")
+        if not root.is_dir():
+            raise ValueError(f"snapshot root is not a directory: {root}")
+        if root.resolve(strict=True).parent != parent:
+            raise ValueError(f"snapshot root resolves outside cleanup parent: {root}")
+    return root, parent
+
+
+def remove_snapshot(snapshot_root: Path, expected_parent: Path) -> None:
+    """Safely remove one sealed snapshot.
+
+    ``expected_parent`` must resolve to the snapshot's exact, non-broad direct
+    parent. A missing snapshot is an idempotent success, but only after all
+    parent and path validations have passed. Symlink roots are rejected, and
+    internal symlinks are unlinked without following their targets.
+    """
+
+    root, parent = _validated_cleanup_paths(snapshot_root, expected_parent)
+    if not os.path.lexists(root):
+        return
+    _restore_tree_owner_write(root, parent)
+    if root.is_symlink():
+        raise ValueError(f"snapshot root became a symlink during cleanup: {root}")
+    shutil.rmtree(root)
 
 
 def _publish_no_replace(staging: Path, destination: Path) -> None:
@@ -524,7 +589,7 @@ def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> S
         _seal_snapshot_tree(staging)
         _publish_no_replace(staging, destination)
     except BaseException:
-        _restore_staging_write(staging, destination.parent)
+        _restore_tree_owner_write(staging, destination.parent)
         if os.path.lexists(staging):
             shutil.rmtree(staging)
         raise

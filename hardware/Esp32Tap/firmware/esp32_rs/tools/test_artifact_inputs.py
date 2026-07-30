@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -13,6 +12,7 @@ import artifact_inputs
 from artifact_inputs import (
     create_snapshot,
     declared_inputs,
+    remove_snapshot,
     target_cache,
     verify_gate_input_completeness,
     working_digest,
@@ -59,48 +59,12 @@ def commit_all(root: Path) -> None:
     git(root, "commit", "-qm", "fixture")
 
 
-def restore_test_tree_write(root: Path, expected_parent: Path) -> None:
-    """Make one explicit pytest-temp child removable without following links."""
-
-    root = root.absolute()
-    expected_parent = expected_parent.resolve(strict=True)
-    if root.parent.resolve(strict=True) != expected_parent or root == expected_parent:
-        raise ValueError(
-            f"refusing broad test cleanup outside {expected_parent}: {root}"
-        )
-    if not os.path.lexists(root) or root.is_symlink():
-        return
-    for directory, dirnames, filenames in os.walk(
-        root, topdown=False, followlinks=False
-    ):
-        base = Path(directory)
-        for name in filenames:
-            path = base / name
-            if not path.is_symlink():
-                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
-        for name in dirnames:
-            path = base / name
-            if not path.is_symlink():
-                path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
-        base.chmod(stat.S_IMODE(base.stat().st_mode) | stat.S_IWUSR)
-
-
-def remove_test_tree(root: Path, expected_parent: Path) -> None:
-    restore_test_tree_write(root, expected_parent)
-    if not os.path.lexists(root):
-        return
-    if root.is_symlink():
-        root.unlink()
-    else:
-        shutil.rmtree(root)
-
-
 @pytest.fixture(autouse=True)
 def cleanup_sealed_snapshots(tmp_path: Path):
     yield
     for child in tmp_path.iterdir():
         if child.name.startswith("snapshot"):
-            remove_test_tree(child, tmp_path)
+            remove_snapshot(child, tmp_path)
 
 
 def test_digest_ignores_mtime_but_not_same_size_content(repo: Path) -> None:
@@ -563,11 +527,10 @@ def test_completeness_fails_for_missing_transitive_input(
     repo: Path, tmp_path: Path, missing: str
 ) -> None:
     make_gate_fixture(repo)
-    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
-    restore_test_tree_write(snapshot.root, tmp_path)
-    matches = list(snapshot.root.rglob(missing))
+    matches = list(repo.rglob(missing))
     assert len(matches) == 1
     matches[0].unlink()
+    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
 
     with pytest.raises(RuntimeError, match="gate.*failed"):
         verify_gate_input_completeness(snapshot.root)
@@ -583,6 +546,101 @@ def test_snapshot_rejects_existing_destination(repo: Path, tmp_path: Path) -> No
         create_snapshot(repo, destination, tmp_path / "target")
 
 
+def test_remove_snapshot_removes_sealed_tree_and_is_idempotent(
+    repo: Path, tmp_path: Path
+) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    parent = tmp_path / "snapshots"
+    parent.mkdir()
+    snapshot = create_snapshot(repo, parent / "snapshot", tmp_path / "target")
+
+    artifact_inputs.remove_snapshot(snapshot.root, parent)
+
+    assert not os.path.lexists(snapshot.root)
+    artifact_inputs.remove_snapshot(snapshot.root, parent)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "root",
+        "home",
+        "worktree",
+        "same",
+        "wrong",
+        "outside",
+        "missing_parent",
+        "outside_missing",
+    ],
+)
+def test_remove_snapshot_rejects_broad_or_wrong_parent(
+    repo: Path, tmp_path: Path, case: str
+) -> None:
+    safe_parent = tmp_path / "snapshots"
+    safe_parent.mkdir()
+    wrong_parent = tmp_path / "wrong-parent"
+    wrong_parent.mkdir()
+    if case == "root":
+        snapshot_root = Path("/task2-missing-snapshot")
+        expected_parent = Path("/")
+    elif case == "home":
+        snapshot_root = Path.home() / "task2-missing-snapshot"
+        expected_parent = Path.home()
+    elif case == "worktree":
+        snapshot_root = repo / "task2-missing-snapshot"
+        expected_parent = repo
+    elif case == "same":
+        snapshot_root = safe_parent
+        expected_parent = safe_parent
+    elif case == "wrong":
+        snapshot_root = safe_parent / "snapshot"
+        expected_parent = wrong_parent
+    elif case == "outside":
+        snapshot_root = tmp_path / "outside"
+        expected_parent = safe_parent
+    elif case == "missing_parent":
+        snapshot_root = tmp_path / "missing-parent" / "snapshot"
+        expected_parent = tmp_path / "missing-parent"
+    else:
+        snapshot_root = tmp_path / "missing-outside" / "snapshot"
+        expected_parent = safe_parent
+
+    with pytest.raises(ValueError, match="parent|broad|worktree"):
+        artifact_inputs.remove_snapshot(snapshot_root, expected_parent)
+
+
+def test_remove_snapshot_rejects_symlink_root(repo: Path, tmp_path: Path) -> None:
+    parent = tmp_path / "snapshots"
+    parent.mkdir()
+    outside = tmp_path / "outside"
+    marker = write(outside, "marker", "untouched")
+    snapshot_link = parent / "snapshot"
+    snapshot_link.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="symlink"):
+        artifact_inputs.remove_snapshot(snapshot_link, parent)
+
+    assert snapshot_link.is_symlink()
+    assert marker.read_text(encoding="utf-8") == "untouched"
+
+
+def test_remove_snapshot_never_follows_internal_symlink(tmp_path: Path) -> None:
+    parent = tmp_path / "snapshots"
+    snapshot_root = parent / "snapshot"
+    snapshot_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    marker = write(outside, "marker", "untouched")
+    (snapshot_root / "outside-link").symlink_to(outside, target_is_directory=True)
+    write(snapshot_root, "sealed.txt", "sealed").chmod(0o444)
+    snapshot_root.chmod(0o555)
+
+    artifact_inputs.remove_snapshot(snapshot_root, parent)
+
+    assert not os.path.lexists(snapshot_root)
+    assert marker.read_text(encoding="utf-8") == "untouched"
+
+
 @pytest.mark.parametrize("through_symlink", [False, True])
 def test_snapshot_rejects_destination_inside_repo(
     repo: Path, tmp_path: Path, through_symlink: bool
@@ -595,13 +653,9 @@ def test_snapshot_rejects_destination_inside_repo(
     else:
         parent = repo
     destination = parent / "snapshot"
-    physical_destination = repo / "snapshot"
 
-    try:
-        with pytest.raises(ValueError, match="inside repo"):
-            create_snapshot(repo, destination, tmp_path / "target")
-    finally:
-        remove_test_tree(physical_destination, repo)
+    with pytest.raises(ValueError, match="inside repo"):
+        create_snapshot(repo, destination, tmp_path / "target")
 
 
 def test_destination_race_does_not_replace_empty_directory(
