@@ -143,10 +143,10 @@ if [ -n "${DEEP:-}" ]; then
   # test_reviewer_attacks.py is DELIBERATELY NOT RUN HERE, and that is not the
   # same hole test_store_persistence.py was in. It is RED BY DESIGN: each of
   # its tests asserts the SAFE behaviour of a defect that is still open in the
-  # safety/control tier (the 4 s manual lease deadman; STOP not zeroing a
-  # manually commanded belt; a running program taking the belt back from the
-  # physical console; an unrecoverable latched fault), and its own comments
-  # derive why the device fails them. 4 of 7 fail on an untouched tree. Wiring
+  # safety/control tier (the 4 s manual lease deadman; a running program taking
+  # the belt back from the physical console; an unrecoverable latched fault),
+  # and its own comments derive why the device fails them. 3 of 7 fail at
+  # e50b31a. Wiring
   # it in as a gate would make the sweep permanently red and train everyone to
   # ignore it. Run it deliberately:
   #   env -C tools/qemu_scenarios python3 -m pytest test_reviewer_attacks.py -q

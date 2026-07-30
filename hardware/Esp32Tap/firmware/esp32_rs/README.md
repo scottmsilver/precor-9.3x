@@ -1,11 +1,23 @@
-# Esp32Tap — Rust safety core
+# Esp32Tap — Rust firmware
 
-Rust port of the Esp32Tap ESP32-S3 **safety core**. The committed C++ core in
-`../esp32/` is untouched and remains the reference and fallback; this tree is a
-sibling, not a replacement-in-place.
+Rust port of the Esp32Tap ESP32-S3 safety core plus an in-progress standalone
+application tier.
 
-The network/application tier is **out of scope** here. `../esp32/`'s
-uncommitted net tier keeps building exactly as before.
+There are currently two build products, and they must not be confused:
+
+* `build/` is the production/default **safety-controller image**. It is built
+  without the Cargo features `net` and `ble`, so it contains no HTTPS server,
+  `/api/*`, `/ws`, mDNS, FTMS peripheral, or HRM central.
+* `build_qemu_test/` enables `qemu-test,net,ble`. It exercises the application
+  tier under esp-QEMU, but it also contains the test shim and prints
+  `never flash to hardware`.
+
+Consequently, this tree does **not yet produce a flashable standalone
+Pi-replacement image**. The application tier also currently brings up QEMU's
+OpenETH MAC/DP83848 path only; real-board WiFi station bring-up and provisioning
+are not implemented. See
+[`2026-07-30-independent-firmware-audit.md`](2026-07-30-independent-firmware-audit.md)
+for the independent build, source, API-contract, and QEMU evidence.
 
 ---
 
@@ -59,17 +71,17 @@ Split, each crate gets its own `.cargo/config.toml` and its own `Cargo.lock`.
 # Host — no Docker, no espup, plain stable rustc. The 148 ported cases.
 cd safety_core && cargo test
 
-# Host — the interval executor (67 cases) and the request budget. Sub-second;
+# Host — the interval executor (86 cases) and the request budget. Sub-second;
 # this is the fast inner loop when working on program logic.
 cargo test --manifest-path program_core/Cargo.toml
 cargo test --manifest-path reqbudget/Cargo.toml
 
-# Host — the BLE protocol tier (89 cases, ~1 s). Every vector is the Pi
+# Host — the BLE protocol tier (92 cases, ~1 s). Every vector is the Pi
 # daemon's, ported byte for byte. This is where nearly all the real BLE
 # behaviour is verifiable; the radio is not (see "BLE" below).
 cargo test --manifest-path ble_core/Cargo.toml
 
-# Host — the AI coach's judgement (41 cases, ~0 s): the bounded streaming reply
+# Host — the AI coach's judgement (49 cases, ~0 s): the bounded streaming reply
 # extractor, the clamps applied to a model's tool call, the truncation salvage.
 # The fixtures are the shapes that BREAK things (a reply delivered one byte at a
 # time, one cut off mid-argument, one 100x the buffer, an HTTP error envelope, an
@@ -287,16 +299,14 @@ Not proven, and not claimed:
   127.0.0.1, and `espressif/mdns` drops any packet whose source is outside the
   interface's subnet before parsing it. The capture proves the announcement;
   the query/response path needs a real L2 network.
-* **The QEMU-test image is 838,560 bytes of the 1 MB factory partition (79%).**
+* **At `e50b31a`, a clean rebuild produced a QEMU-test image of 1,299,008
+  bytes in the 2 MiB factory partition (61%).**
   TLS (mbedtls X.509 write + PEM + ECDSA) and mDNS are what moved it and the
-  headroom is not comfortable; the 8 MB N8R8 layout is the answer when it runs
-  out, not a harness edit. `tools/build.sh` now parses the GENERATED partition
-  table and fails the build if the image does not fit — the old hard-coded
-  "factory partition = 2097152" label was wrong by 2x (the custom 8 MB table
-  does not apply under esp-idf-sys, so the stock 2 MB single-app table with a
-  1 MB factory partition is what is actually flashed), so every headroom figure
-  derived from it was half the real utilisation. The **production image is
-  454,176 bytes (43%)** and contains neither feature: `net` is off there, and
+  headroom is not comfortable. `tools/build.sh` parses the generated partition
+  table and fails the build if the image does not fit. The custom 8 MB flash
+  layout has a 2 MiB factory partition plus a 1 MiB storage partition. The
+  **production image rebuilt at 473,520 bytes (22%)** and contains neither
+  feature: `net` and `ble` are off there, and
   `xtensa-esp32s3-elf-nm` on the two ELFs finds `httpd_ssl_start`, `mdns_init`
   and `mdns_service_add` in the qemu-test binary and **none of them** in the
   production one — `--gc-sections` drops them.
@@ -564,9 +574,9 @@ was committed, passing, and invoked by NOTHING — the same hole
 `verify_harness_copy.py` was in — and it is the only gate that proves a record
 reaches real flash and survives a real SoC reset.
 `test_reviewer_attacks.py` is deliberately still not a gate, and the reason is
-written at the site: it is RED BY DESIGN (4 of its 7 fail on an untouched
-tree), a record of open defects in the safety/control tier rather than a
-regression check, and gating on it would train everyone to ignore the sweep.
+written at the site: it is RED BY DESIGN (**3 of its 7 fail at `e50b31a`**), a
+record of open defects in the safety/control tier rather than a regression
+check, and gating on it would train everyone to ignore the sweep.
 
 Not proven, and not claimed:
 
@@ -798,8 +808,9 @@ it needs a physical board, which does not exist yet.
 
 ## Dependencies
 
-**Device runtime — 3 direct, all Espressif:** `esp-idf-hal` 0.46.2,
-`esp-idf-sys` 0.37.2, plus our own `safety_core`. Build-dep `embuild` 0.33.
+**Device runtime:** Espressif's `esp-idf-hal` 0.46.2 and `esp-idf-sys` 0.37.2,
+plus the five local crates `safety_core`, `reqbudget`, `program_core`,
+`ble_core`, and `coach_core`. Build-dep `embuild` 0.33.
 
 **`esp-idf-svc` is deliberately excluded** — it drags in `serde`,
 `embedded-svc` and their tails, and its latest release pins `esp-idf-hal` ^0.45
@@ -807,10 +818,11 @@ it needs a physical board, which does not exist yet.
 (only one crate may link `esp_idf_hal`). Verified absent from the target graph.
 NVS, TLS and mDNS are all called directly through `esp-idf-sys`.
 
-**One managed (remote) ESP-IDF component: `espressif/mdns` ~1.8.0**, declared as
-a `[[package.metadata.esp-idf-sys.extra_components]] remote_component` in
-`esp32tap/Cargo.toml`. mDNS is not part of base ESP-IDF; the component manager
-resolves it (1.8.2 today, recorded in the generated `components_esp32s3.lock`).
+**Two managed (remote) ESP-IDF components:** `espressif/mdns` ~1.8.0 and
+`joltwallet/littlefs` ^1.14, each declared as an
+`[[package.metadata.esp-idf-sys.extra_components]] remote_component` in
+`esp32tap/Cargo.toml`. The generated `components_esp32s3.lock` currently pins
+them to 1.8.2 and 1.22.3 respectively.
 
 ### How the bindings decide what exists (read this before "the symbol is missing")
 

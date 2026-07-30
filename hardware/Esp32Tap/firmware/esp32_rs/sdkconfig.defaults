@@ -60,20 +60,15 @@ CONFIG_ESP_BROWNOUT_DET=y
 # but "the certificate writer needed 4 KB".
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
-# --- Flash layout: the ESP-IDF STOCK 2 MB / single-app table.
+# --- Flash layout: custom 8 MB N8 table.
 #
-# This is deliberate, and it is what the committed QEMU harness assumes.
-# `qemu_session.py` merges the flash with `--fill-flash-size 2MB` and
-# `qemu_smoke.sh` does the same; an image whose partition table places a
-# partition above 2 MB cannot be booted by that harness AT ALL, and the only
-# way to run it would be to edit the harness — which is exactly what this
-# port must not need. The safety core is 447 KB / 461 KB, i.e. 43-44% of the
-# stock 1 MB factory partition, and it owns no data partition (no LittleFS,
-# no TLS identity, no history stores), so nothing here wants the larger
-# table. If the port ever grows a data partition, the 8 MB N8 layout comes
-# back in a QEMU-only sdkconfig fragment, never in a harness edit.
+# The application tier now owns a LittleFS storage partition, so both build
+# variants use the custom table selected below: a 2 MiB factory partition plus
+# 1 MiB of storage on an 8 MB part. The QEMU harness reads the generated
+# `flash_args` and pads its emulated flash to the size declared by the image;
+# it no longer assumes 2 MB.
 #
-# (Retained for that day — the sharp edge that cost an afternoon: a RELATIVE
+# Sharp edge: a RELATIVE
 # CONFIG_PARTITION_TABLE_CUSTOM_FILENAME does NOT work under esp-idf-sys.
 # idf.py resolves it against the project dir; esp-idf-sys generates its own
 # CMake project under target/.../esp-idf-sys-<HASH>/out/ and resolves against

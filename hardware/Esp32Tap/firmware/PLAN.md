@@ -1,10 +1,18 @@
-# Esp32Tap firmware plan (ESP-IDF port of cpp/protocol + cpp/engine)
+# Esp32Tap firmware plan (historical architecture plus normative safety rules)
 
-**Status: HOLD.** `safety_model.py` is an executable host reference contract,
-not production ESP-IDF firmware. No Emulate-capable binary exists yet, and no
-repository test substitutes for contact-measured bench evidence. Do not submit
-an order, pay, connect this board to the treadmill, or represent it as safe to
-operate on the strength of the host model.
+**Status: SUPERSEDED IN PART, STILL HOLD FOR TREADMILL CONTACT.** The platform
+and ON-MCU/OFF-DEVICE split below describe the earlier C++ design. The active
+implementation is Rust under `esp32_rs/`; its full application tier currently
+runs only in the QEMU-test build, while the production/default build is the
+safety controller without `net` or `ble`. The safety envelope, relay ordering,
+watchdog requirements, and bench-evidence requirements in this document remain
+normative.
+
+No repository test substitutes for contact-measured bench evidence. Do not
+connect this board to a treadmill or represent it as safe to operate until the
+open safety attacks and the hardware gates are closed. See
+`esp32_rs/2026-07-30-independent-firmware-audit.md` for the current
+implementation/build status.
 
 Platform: **ESP-IDF 5.x, C++20, `-fno-exceptions -fno-rtti`** — matching the
 existing `cpp/` style so `kv_protocol`, `mode_state` and `emulation_engine`
