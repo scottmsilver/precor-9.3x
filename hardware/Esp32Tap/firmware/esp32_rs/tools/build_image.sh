@@ -11,6 +11,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ESP32_RS="$(cd "$HERE/.." && pwd -P)"
 IMAGE="${RUST_IMAGE:-esp32tap-rust:build}"
 DOCKER_TIMEOUT="${BUILD_IMAGE_DOCKER_TIMEOUT:-1800}"
+PROBE_TIMEOUT="${BUILD_IMAGE_PROBE_COMMAND_TIMEOUT:-30}"
 MAX_OUTPUT_BYTES=1048576
 RECIPE_LABEL="org.treddy.esp32tap.recipe-sha256"
 TOOLCHAIN_LABEL="org.treddy.esp32tap.toolchain-json"
@@ -23,6 +24,10 @@ usage() {
 case "$DOCKER_TIMEOUT" in
     ''|*[!0-9]*) echo "build_image.sh: BUILD_IMAGE_DOCKER_TIMEOUT must be a positive integer" >&2; exit 2 ;;
     0) echo "build_image.sh: BUILD_IMAGE_DOCKER_TIMEOUT must be positive" >&2; exit 2 ;;
+esac
+case "$PROBE_TIMEOUT" in
+    ''|*[!0-9]*) echo "build_image.sh: BUILD_IMAGE_PROBE_COMMAND_TIMEOUT must be a positive integer" >&2; exit 2 ;;
+    0) echo "build_image.sh: BUILD_IMAGE_PROBE_COMMAND_TIMEOUT must be positive" >&2; exit 2 ;;
 esac
 case "$IMAGE" in
     [A-Za-z0-9]*) ;;
@@ -178,63 +183,6 @@ bounded_docker() {
     fi
 }
 
-validate_probe() {
-    local probe_path="$1"
-    local component_sha="$2"
-    local attestation_path="$3"
-    python3 - "$probe_path" "$component_sha" "$attestation_path" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-
-source, component_sha, destination = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
-if source.stat().st_size > 1024 * 1024:
-    raise SystemExit("build_image.sh: toolchain probe output exceeds its size limit")
-try:
-    text = source.read_text(encoding="utf-8")
-    value = json.loads(text)
-except (UnicodeError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"build_image.sh: malformed toolchain probe JSON: {exc}")
-keys = {
-    "schema_version",
-    "idf_commit",
-    "rustc_verbose",
-    "target",
-    "linker_version",
-    "esptool_version",
-}
-if not isinstance(value, dict) or set(value) != keys:
-    raise SystemExit("build_image.sh: toolchain probe fields do not match schema")
-if type(value["schema_version"]) is not int or value["schema_version"] != 1:
-    raise SystemExit("build_image.sh: unsupported toolchain probe schema")
-for key in keys - {"schema_version"}:
-    item = value[key]
-    if (
-        not isinstance(item, str)
-        or not item
-        or item != item.strip()
-        or "\0" in item
-        or len(item) > 16384
-    ):
-        raise SystemExit(f"build_image.sh: invalid toolchain probe field {key}")
-if not re.fullmatch(r"[0-9a-f]{40,64}", value["idf_commit"]):
-    raise SystemExit("build_image.sh: invalid IDF commit")
-if value["target"] != "xtensa-esp32s3-espidf":
-    raise SystemExit("build_image.sh: unexpected Rust target")
-canonical_probe = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-if text != canonical_probe:
-    raise SystemExit("build_image.sh: toolchain probe JSON is not canonical")
-if not re.fullmatch(r"[0-9a-f]{64}", component_sha):
-    raise SystemExit("build_image.sh: invalid component-lock digest")
-value["component_lock_sha256"] = component_sha
-destination.write_text(
-    json.dumps(value, sort_keys=True, separators=(",", ":")),
-    encoding="utf-8",
-)
-PY
-}
-
 check_image() (
     local kind="$1"
     local recipe component_sha check_tmp inspect_out inspect_err
@@ -364,94 +312,585 @@ if [ "$#" -ne 0 ]; then
     usage
 fi
 
-recipe="$(recipe_sha256)"
-component_sha="$(component_lock_sha256)"
-task_tmp="$(mktemp -d /tmp/esp32tap-image-build.XXXXXX)"
-token="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-stage_image="esp32tap-rust-stage:$token"
-container="esp32tap-rust-probe-$token"
-stage_created=0
-container_created=0
-
-cleanup() {
-    local status=$?
-    trap - EXIT INT TERM HUP
-    if [ "$container_created" -eq 1 ]; then
-        timeout --kill-after=2 "$DOCKER_TIMEOUT" docker rm -f "$container" \
-            >/dev/null 2>&1 || true
-    fi
-    if [ "$stage_created" -eq 1 ]; then
-        timeout --kill-after=2 "$DOCKER_TIMEOUT" docker image rm "$stage_image" \
-            >/dev/null 2>&1 || true
-    fi
-    rm -rf "$task_tmp"
-    exit "$status"
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
-
-bounded_docker "$task_tmp/build.out" "$task_tmp/build.err" \
-    build --tag "$stage_image" "$ESP32_RS"
-stage_created=1
-
-read -r -d '' PROBE_PY <<'PY' || true
+python3 - \
+    "$ESP32_RS" "$IMAGE" "$DOCKER_TIMEOUT" "$PROBE_TIMEOUT" \
+    "$RECIPE_LABEL" "$TOOLCHAIN_LABEL" <<'PY'
+import contextlib
+import fcntl
+import hashlib
 import json
+import os
+import re
+import secrets
+import selectors
+import shutil
+import signal
+import stat
+import struct
 import subprocess
 import sys
+import time
+from pathlib import Path
+
+(
+    root_text,
+    image_tag,
+    docker_timeout_text,
+    probe_timeout_text,
+    recipe_label,
+    toolchain_label,
+) = sys.argv[1:]
+root = Path(root_text).resolve(strict=True)
+docker_timeout = float(docker_timeout_text)
+probe_timeout = float(probe_timeout_text)
+max_docker_output = 1024 * 1024
+recipe_limits = {"Dockerfile": 1024 * 1024, ".dockerignore": 64 * 1024}
+component_limit = 4 * 1024 * 1024
+
+
+class BuildImageError(Exception):
+    pass
+
+
+def clean_excepthook(
+    exception_type: type[BaseException],
+    exception: BaseException,
+    traceback: object,
+) -> None:
+    if issubclass(exception_type, BuildImageError):
+        print(f"build_image.sh: {exception}", file=sys.stderr)
+    else:
+        sys.__excepthook__(exception_type, exception, traceback)
+
+
+sys.excepthook = clean_excepthook
+
+
+def stop_group(process: subprocess.Popen[bytes]) -> None:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+        if sig == signal.SIGTERM:
+            time.sleep(0.05)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=1)
+
+
+def run_bounded(
+    argv: list[str],
+    *,
+    timeout: float = docker_timeout,
+    max_output: int = max_docker_output,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise BuildImageError(f"cannot execute {argv[0]}: {exc}") from exc
+    assert process.stdout is not None
+    assert process.stderr is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    deadline = time.monotonic() + timeout
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stop_group(process)
+                raise BuildImageError(
+                    f"command timed out after {timeout:g}s: {' '.join(argv[:3])}"
+                )
+            for key, _ in selector.select(min(remaining, 0.05)):
+                block = os.read(key.fd, 64 * 1024)
+                if not block:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                destination = output[key.data]
+                destination.extend(block)
+                if len(destination) > max_output:
+                    stop_group(process)
+                    raise BuildImageError(
+                        f"command output exceeds {max_output} bytes: {' '.join(argv[:3])}"
+                    )
+        try:
+            returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as exc:
+            stop_group(process)
+            raise BuildImageError(
+                f"command timed out after {timeout:g}s: {' '.join(argv[:3])}"
+            ) from exc
+    finally:
+        selector.close()
+        for pipe in (process.stdout, process.stderr):
+            with contextlib.suppress(Exception):
+                pipe.close()
+        if process.poll() is None:
+            stop_group(process)
+    try:
+        stdout = output["stdout"].decode("utf-8")
+        stderr = output["stderr"].decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BuildImageError(f"command output is not UTF-8: {' '.join(argv[:3])}") from exc
+    completed = subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+    if check and returncode != 0:
+        detail = stderr.strip()
+        suffix = f": {detail}" if detail else ""
+        raise BuildImageError(f"command failed ({returncode}): {' '.join(argv[:3])}{suffix}")
+    return completed
+
+
+def docker(*argv: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return run_bounded(["docker", *argv], check=check)
+
+
+def safe_read(path: Path, limit: int, label: str) -> tuple[bytes, int]:
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise BuildImageError(f"cannot inspect {label}: {exc}") from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_size > limit
+    ):
+        raise BuildImageError(f"{label} must be a bounded single-link regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise BuildImageError(f"cannot safely open {label}: {exc}") from exc
+    digest_data = bytearray()
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise BuildImageError(f"{label} changed while opening")
+        while block := os.read(fd, min(1024 * 1024, limit - len(digest_data) + 1)):
+            digest_data.extend(block)
+            if len(digest_data) > limit:
+                raise BuildImageError(f"{label} exceeds its size limit")
+        after = os.fstat(fd)
+        identity = lambda value: (
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+            value.st_mode,
+            value.st_nlink,
+        )
+        if len(digest_data) != opened.st_size or identity(opened) != identity(after):
+            raise BuildImageError(f"{label} changed while reading")
+        return bytes(digest_data), stat.S_IMODE(opened.st_mode)
+    finally:
+        os.close(fd)
+
+
+def recipe_from(values: dict[str, tuple[bytes, int]]) -> str:
+    digest = hashlib.sha256(b"esp32tap-docker-recipe-v1\0")
+    for relative in sorted(values):
+        data, mode = values[relative]
+        encoded = relative.encode("utf-8")
+        digest.update(struct.pack(">Q", len(encoded)))
+        digest.update(encoded)
+        digest.update(struct.pack(">I", mode))
+        digest.update(struct.pack(">Q", len(data)))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def read_recipe(directory: Path) -> tuple[dict[str, tuple[bytes, int]], str]:
+    values = {
+        relative: safe_read(directory / relative, limit, relative)
+        for relative, limit in recipe_limits.items()
+    }
+    return values, recipe_from(values)
+
+
+def component_digest(directory: Path) -> str:
+    data, _ = safe_read(
+        directory / "esp32tap" / "components_esp32s3.lock",
+        component_limit,
+        "component lock",
+    )
+    return hashlib.sha256(data).hexdigest()
+
+
+def write_snapshot(context: Path, values: dict[str, tuple[bytes, int]]) -> None:
+    context.mkdir(mode=0o700)
+    for relative, (data, mode) in values.items():
+        destination = context / relative
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(destination, flags, mode)
+        try:
+            view = memoryview(data)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+            os.fsync(fd)
+            os.fchmod(fd, mode)
+        finally:
+            os.close(fd)
+    directory_fd = os.open(context, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+PROBE_PROGRAM = r'''
+import contextlib
+import json
+import os
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+LIMIT = 64 * 1024
+TIMEOUT = float(os.environ.get("ESP32TAP_PROBE_COMMAND_TIMEOUT", "30"))
+
+def stop(process):
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+        if sig == signal.SIGTERM:
+            time.sleep(.05)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=1)
 
 def probe(argv):
-    completed = subprocess.run(
+    process = subprocess.Popen(
         argv,
-        check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        timeout=30,
+        start_new_session=True,
     )
-    value = completed.stdout.strip()
-    if not value or "\0" in value or len(value) > 16384:
+    selector = selectors.DefaultSelector()
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    assert process.stdout is not None and process.stderr is not None
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    deadline = time.monotonic() + TIMEOUT
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stop(process)
+                raise SystemExit("toolchain probe timed out")
+            for key, _ in selector.select(min(remaining, .05)):
+                block = os.read(key.fd, 8192)
+                if not block:
+                    selector.unregister(key.fileobj)
+                    key.fileobj.close()
+                    continue
+                output[key.data].extend(block)
+                if len(output[key.data]) > LIMIT:
+                    stop(process)
+                    raise SystemExit("toolchain probe output exceeds its size limit")
+        try:
+            returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            stop(process)
+            raise SystemExit("toolchain probe timed out")
+    finally:
+        selector.close()
+        for pipe in (process.stdout, process.stderr):
+            with contextlib.suppress(Exception):
+                pipe.close()
+        if process.poll() is None:
+            stop(process)
+    try:
+        stdout = output["stdout"].decode("utf-8").strip()
+        stderr = output["stderr"].decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise SystemExit("toolchain probe output is not UTF-8")
+    if returncode != 0:
+        raise SystemExit(f"toolchain probe failed: {stderr}")
+    if not stdout or "\0" in stdout or len(stdout) > 16384:
         raise SystemExit("invalid toolchain probe output")
-    return value
+    return stdout
 
 value = {
     "schema_version": 1,
     "idf_commit": probe(["git", "-C", "/opt/esp/idf", "rev-parse", "--verify", "HEAD"]),
     "rustc_verbose": probe(["rustc", "+esp", "--version", "--verbose"]),
     "target": "xtensa-esp32s3-espidf",
-    # Cargo invokes the pinned ldproxy shim; this is the linker identity that
-    # the configured Rust build actually selects.
     "linker_version": probe(["ldproxy", "--version"]),
     "esptool_version": probe([sys.executable, "-m", "esptool", "version"]),
 }
 print(json.dumps(value, sort_keys=True, separators=(",", ":")))
+'''
+
+
+def validate_probe(text: str, component_sha: str) -> str:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise BuildImageError(f"malformed toolchain probe JSON: {exc}") from exc
+    keys = {
+        "schema_version",
+        "idf_commit",
+        "rustc_verbose",
+        "target",
+        "linker_version",
+        "esptool_version",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise BuildImageError("toolchain probe fields do not match schema")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise BuildImageError("unsupported toolchain probe schema")
+    for key in keys - {"schema_version"}:
+        item = value[key]
+        if (
+            not isinstance(item, str)
+            or not item
+            or item != item.strip()
+            or "\0" in item
+            or len(item) > 16384
+        ):
+            raise BuildImageError(f"invalid toolchain probe field {key}")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", value["idf_commit"]):
+        raise BuildImageError("invalid IDF commit")
+    if value["target"] != "xtensa-esp32s3-espidf":
+        raise BuildImageError("unexpected Rust target")
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    if text != canonical:
+        raise BuildImageError("toolchain probe JSON is not canonical")
+    value["component_lock_sha256"] = component_sha
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def label_change(key: str, value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+    return f'LABEL "{key}"="{escaped}"'
+
+
+def inspect_image(reference: str, *, missing_ok: bool = False) -> dict | None:
+    completed = docker("image", "inspect", reference, check=False)
+    if completed.returncode != 0:
+        if missing_ok and "No such image" in completed.stderr:
+            return None
+        raise BuildImageError(
+            f"cannot inspect Docker image {reference}: {completed.stderr.strip()}"
+        )
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise BuildImageError(f"malformed docker inspect JSON: {exc}") from exc
+    if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
+        raise BuildImageError("docker inspect must return exactly one image")
+    return value[0]
+
+
+def immutable_id(image: dict) -> str:
+    value = image.get("Id")
+    if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        raise BuildImageError("Docker image lacks an immutable SHA-256 ID")
+    return value
+
+
+def validate_candidate(image: dict, recipe: str, attestation: str) -> str:
+    image_id = immutable_id(image)
+    config = image.get("Config")
+    labels = config.get("Labels") if isinstance(config, dict) else None
+    if not isinstance(labels, dict):
+        raise BuildImageError("candidate image has no labels")
+    if labels.get(recipe_label) != recipe:
+        raise BuildImageError("candidate image recipe label mismatch")
+    if labels.get(toolchain_label) != attestation:
+        raise BuildImageError("candidate image toolchain label mismatch")
+    return image_id
+
+
+@contextlib.contextmanager
+def publication_lock():
+    key = hashlib.sha256(
+        (str(root) + "\0" + image_tag).encode("utf-8")
+    ).hexdigest()[:24]
+    path = Path("/tmp") / f"esp32tap-image-publish-{key}.lock"
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    previous_umask = os.umask(0o077)
+    try:
+        try:
+            fd = os.open(path, flags, 0o600)
+        except OSError as exc:
+            raise BuildImageError(f"cannot safely open image publication lock: {exc}") from exc
+    finally:
+        os.umask(previous_umask)
+    try:
+        opened = os.fstat(fd)
+        def validate_named_lock() -> None:
+            try:
+                named = path.lstat()
+            except OSError as exc:
+                raise BuildImageError(f"cannot revalidate image publication lock: {exc}") from exc
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or opened.st_uid != os.getuid()
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+            ):
+                raise BuildImageError("unsafe image publication lock")
+        validate_named_lock()
+        deadline = time.monotonic() + docker_timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise BuildImageError("timed out waiting for image publication lock")
+                time.sleep(0.05)
+        validate_named_lock()
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def verify_reference(reference: str, expected_id: str) -> None:
+    image = inspect_image(reference)
+    if image is None:
+        raise BuildImageError(f"Docker reference {reference} is missing")
+    if immutable_id(image) != expected_id:
+        raise BuildImageError(
+            f"Docker reference {reference} did not resolve to promoted image"
+        )
+
+
+def restore_final(prior_id: str | None) -> None:
+    if prior_id is None:
+        with contextlib.suppress(BuildImageError):
+            docker("image", "rm", image_tag, check=False)
+        if inspect_image(image_tag, missing_ok=True) is not None:
+            raise BuildImageError("could not restore absent final image reference")
+    else:
+        with contextlib.suppress(BuildImageError):
+            docker("tag", prior_id, image_tag)
+        verify_reference(image_tag, prior_id)
+
+
+token = secrets.token_hex(32)
+task_root = Path("/tmp") / f"esp32tap-image-build.{token}"
+try:
+    task_root.mkdir(mode=0o700)
+except OSError as exc:
+    raise BuildImageError(f"cannot create private image-build directory: {exc}") from exc
+context = task_root / "context"
+stage = f"esp32tap-rust-stage:{token}"
+candidate = f"esp32tap-rust-candidate:{token}"
+container = f"esp32tap-rust-probe-{token}"
+container_possible = False
+stage_possible = False
+candidate_possible = False
+try:
+    recipe_values, recipe = read_recipe(root)
+    component_sha = component_digest(root)
+    write_snapshot(context, recipe_values)
+    if read_recipe(context)[1] != recipe:
+        raise BuildImageError("private Docker recipe snapshot changed")
+
+    stage_possible = True
+    docker("build", "--tag", stage, str(context))
+    container_possible = True
+    probe = docker(
+        "run",
+        "--name",
+        container,
+        "-e",
+        f"ESP32TAP_PROBE_COMMAND_TIMEOUT={probe_timeout:g}",
+        stage,
+        "python3",
+        "-c",
+        PROBE_PROGRAM,
+    )
+    attestation = validate_probe(probe.stdout, component_sha)
+    if read_recipe(context)[1] != recipe:
+        raise BuildImageError("private Docker recipe snapshot changed during build")
+
+    candidate_possible = True
+    docker(
+        "commit",
+        "--change",
+        label_change(recipe_label, recipe),
+        "--change",
+        label_change(toolchain_label, attestation),
+        container,
+        candidate,
+    )
+    candidate_image = inspect_image(candidate)
+    if candidate_image is None:
+        raise BuildImageError("candidate image is missing after commit")
+    candidate_id = validate_candidate(candidate_image, recipe, attestation)
+
+    with publication_lock():
+        prior = inspect_image(image_tag, missing_ok=True)
+        prior_id = None if prior is None else immutable_id(prior)
+        if read_recipe(root)[1] != recipe or component_digest(root) != component_sha:
+            raise BuildImageError(
+                "recipe or component lock changed during image build"
+            )
+        mutation_possible = True
+        try:
+            docker("tag", candidate_id, image_tag)
+            verify_reference(image_tag, candidate_id)
+            mutation_possible = False
+        except Exception as promotion_error:
+            if mutation_possible:
+                try:
+                    restore_final(prior_id)
+                except Exception as restore_error:
+                    raise BuildImageError(
+                        f"promotion failed ({promotion_error}); rollback failed ({restore_error})"
+                    ) from restore_error
+            raise
+finally:
+    cleanup_errors = []
+    if container_possible:
+        try:
+            completed = docker("rm", "-f", container, check=False)
+            if completed.returncode != 0:
+                cleanup_errors.append(f"cannot remove probe container: {completed.stderr.strip()}")
+        except Exception as exc:
+            cleanup_errors.append(str(exc))
+    for reference, possible in ((candidate, candidate_possible), (stage, stage_possible)):
+        if possible:
+            try:
+                completed = docker("image", "rm", reference, check=False)
+                if completed.returncode != 0:
+                    cleanup_errors.append(
+                        f"cannot remove temporary image {reference}: {completed.stderr.strip()}"
+                    )
+            except Exception as exc:
+                cleanup_errors.append(str(exc))
+    try:
+        shutil.rmtree(task_root)
+    except OSError as exc:
+        cleanup_errors.append(f"cannot remove private build context: {exc}")
+    if cleanup_errors:
+        if sys.exc_info()[0] is None:
+            raise BuildImageError("; ".join(cleanup_errors))
+        print(
+            "build_image.sh: cleanup also failed: " + "; ".join(cleanup_errors),
+            file=sys.stderr,
+        )
+
+print(f"built {image_tag}")
 PY
-
-container_created=1
-bounded_docker "$task_tmp/probe.json" "$task_tmp/probe.err" \
-    run --name "$container" "$stage_image" python3 -c "$PROBE_PY"
-validate_probe "$task_tmp/probe.json" "$component_sha" "$task_tmp/attestation.json"
-attestation="$(<"$task_tmp/attestation.json")"
-if [ "$(recipe_sha256)" != "$recipe" ] ||
-   [ "$(component_lock_sha256)" != "$component_sha" ]; then
-    echo "build_image.sh: recipe or component lock changed during image build" >&2
-    exit 1
-fi
-
-recipe_change="LABEL \"$RECIPE_LABEL\"=\"$recipe\""
-attestation_change="$(
-    python3 - "$TOOLCHAIN_LABEL" "$attestation" <<'PY'
-import sys
-key, value = sys.argv[1:]
-escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
-print(f'LABEL "{key}"="{escaped}"')
-PY
-)"
-bounded_docker "$task_tmp/commit.out" "$task_tmp/commit.err" \
-    commit \
-    --change "$recipe_change" \
-    --change "$attestation_change" \
-    "$container" "$IMAGE"
-
-echo "built $IMAGE"

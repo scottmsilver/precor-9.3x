@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -67,9 +68,13 @@ def fake_docker(tmp_path: Path) -> tuple[Path, Path]:
     docker = fake_bin / "docker"
     docker.write_text(
         """#!/usr/bin/env python3
+import fcntl
+import hashlib
 import json
 import os
+import subprocess
 import sys
+import time
 
 with open(os.environ["FAKE_DOCKER_LOG"], "a", encoding="utf-8") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\\n")
@@ -79,28 +84,163 @@ if fail and argv and argv[0] == fail:
     print("forced fake-docker failure", file=sys.stderr)
     raise SystemExit(17)
 if argv and argv[0] == "build" and os.environ.get("FAKE_DOCKER_MUTATE_CONTEXT"):
-    with open(os.path.join(argv[-1], "Dockerfile"), "a", encoding="utf-8") as stream:
+    with open(os.path.join(os.environ["FAKE_LIVE_CONTEXT"], "Dockerfile"), "a", encoding="utf-8") as stream:
         stream.write("# concurrent edit\\n")
+if argv and argv[0] == "build" and os.environ.get("FAKE_DOCKER_EDIT_RESTORE_LIVE"):
+    live = os.path.join(os.environ["FAKE_LIVE_CONTEXT"], "Dockerfile")
+    with open(live, encoding="utf-8") as stream:
+        original = stream.read()
+    with open(live, "w", encoding="utf-8") as stream:
+        stream.write(original + "# transient edit\\n")
+    with open(live, "w", encoding="utf-8") as stream:
+        stream.write(original)
+if argv and argv[0] == "build" and os.environ.get("FAKE_BUILD_BARRIER"):
+    barrier = os.environ["FAKE_BUILD_BARRIER"]
+    with open(barrier + ".ready", "w", encoding="utf-8") as stream:
+        stream.write("ready")
+    while not os.path.exists(barrier + ".release"):
+        time.sleep(0.01)
+
+state_path = os.environ["FAKE_DOCKER_STATE"]
+
+def mutate(callback):
+    with open(state_path + ".lock", "a+", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(state_path, encoding="utf-8") as stream:
+                state = json.load(stream)
+        except FileNotFoundError:
+            state = {"refs": {}, "events": {}}
+        result = callback(state)
+        temporary = state_path + "." + str(os.getpid())
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(state, stream, sort_keys=True)
+        os.replace(temporary, state_path)
+        return result
+
+def image_for(state, reference):
+    if reference in state["refs"]:
+        return state["refs"][reference]
+    for image in state["refs"].values():
+        if image["Id"] == reference:
+            return image
+    default = json.loads(os.environ["FAKE_DOCKER_INSPECT"])[0]
+    if (
+        reference == os.environ["RUST_IMAGE"]
+        and os.environ.get("FAKE_DOCKER_FINAL_MISSING")
+    ):
+        return None
+    if reference == os.environ["RUST_IMAGE"] or reference == default["Id"]:
+        return default
+    return None
+
 if argv[:2] == ["image", "inspect"]:
-    print(os.environ["FAKE_DOCKER_INSPECT"])
+    reference = argv[2]
+    image = mutate(lambda state: image_for(state, reference))
+    if image is None:
+        print("No such image", file=sys.stderr)
+        raise SystemExit(1)
+    print(json.dumps([image], sort_keys=True, separators=(",", ":")))
 elif argv and argv[0] == "run":
+    if os.environ.get("FAKE_DOCKER_EXEC_PROBE"):
+        child_env = os.environ.copy()
+        for index, value in enumerate(argv):
+            if value == "-e" and index + 1 < len(argv):
+                key, setting = argv[index + 1].split("=", 1)
+                child_env[key] = setting
+        completed = subprocess.run(
+            [sys.executable, "-c", argv[-1]],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=child_env,
+            check=False,
+        )
+        sys.stdout.write(completed.stdout)
+        sys.stderr.write(completed.stderr)
+        raise SystemExit(completed.returncode)
     print(os.environ.get("FAKE_DOCKER_PROBE", "{}"))
 elif argv and argv[0] == "commit":
-    print("sha256:" + "d" * 64)
+    candidate = argv[-1]
+    candidate_id = "sha256:" + hashlib.sha256(candidate.encode()).hexdigest()
+    labels = {} if os.environ.get("FAKE_DOCKER_LABEL_NOOP") else {
+        "org.treddy.esp32tap.recipe-sha256": os.environ["FAKE_EXPECT_RECIPE"],
+        "org.treddy.esp32tap.toolchain-json": os.environ["FAKE_EXPECT_ATTESTATION"],
+    }
+    image = {"Id": candidate_id, "Config": {"Labels": labels}}
+    mutate(lambda state: state["refs"].__setitem__(candidate, image))
+    if os.environ.get("FAKE_DOCKER_COMMIT_TIMEOUT"):
+        time.sleep(30)
+    print(candidate_id)
+elif argv and argv[0] == "tag":
+    source, destination = argv[1:]
+    def promote(state):
+        image = image_for(state, source)
+        if image is None:
+            raise SystemExit(1)
+        state["refs"][destination] = image
+        first = not state["events"].get("tagged")
+        state["events"]["tagged"] = True
+        return first
+    first = mutate(promote)
+    if first and os.environ.get("FAKE_DOCKER_TAG_TIMEOUT"):
+        time.sleep(30)
+    delay = float(os.environ.get("FAKE_DOCKER_TAG_DELAY", "0"))
+    if delay:
+        def enter(state):
+            if state["events"].get("tag_active"):
+                state["events"]["tag_overlap"] = True
+            state["events"]["tag_active"] = True
+        mutate(enter)
+        time.sleep(delay)
+        mutate(lambda state: state["events"].__setitem__("tag_active", False))
+elif argv[:2] == ["image", "rm"]:
+    for reference in argv[2:]:
+        mutate(lambda state, ref=reference: state["refs"].pop(ref, None))
 """,
         encoding="utf-8",
     )
     docker.chmod(0o755)
+    probe_tool = fake_bin / "probe-tool"
+    probe_tool.write_text(
+        """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+
+name = os.path.basename(sys.argv[0])
+attack = os.environ.get("FAKE_PROBE_ATTACK", "")
+if name == "git" and attack == "noisy":
+    os.write(1, b"x" * (2 * 1024 * 1024))
+    raise SystemExit(0)
+if name == "git" and attack == "closed-fd-sleeper":
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    print("b" * 40)
+    raise SystemExit(0)
+values = {
+    "git": "b" * 40,
+    "rustc": "rustc 1.90.0-dev\\\\nbinary: rustc\\\\ncommit-hash: " + "c" * 40,
+    "ldproxy": "ldproxy 0.3.4",
+}
+print(values[name])
+""",
+        encoding="utf-8",
+    )
+    probe_tool.chmod(0o755)
+    for name in ("git", "rustc", "ldproxy"):
+        (fake_bin / name).symlink_to(probe_tool)
+    (fake_bin / "esptool.py").write_text(
+        'print("esptool.py v4.9.0")\n', encoding="utf-8"
+    )
     return fake_bin, log
 
 
-def run(
+def run_environment(
     context: Path,
     fake_docker: tuple[Path, Path],
-    *args: str,
     labels: dict[str, str] | None = None,
     extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
+) -> dict[str, str]:
     fake_bin, log = fake_docker
     inspect = [
         {
@@ -117,16 +257,32 @@ def run(
             },
         }
     ]
-    env = {
+    return {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_DOCKER_LOG": str(log),
+        "FAKE_DOCKER_STATE": str(log.with_name("docker-state.json")),
         "FAKE_DOCKER_INSPECT": canonical(inspect),
         "FAKE_DOCKER_PROBE": canonical(COMMON),
+        "FAKE_LIVE_CONTEXT": str(context),
+        "FAKE_EXPECT_RECIPE": recipe(context),
+        "FAKE_EXPECT_ATTESTATION": canonical(attestation(context)),
         "RUST_IMAGE": IMAGE_TAG,
         "BUILD_IMAGE_DOCKER_TIMEOUT": "5",
+        "BUILD_IMAGE_PROBE_COMMAND_TIMEOUT": "1",
+        "PYTHONPATH": f"{fake_bin}:{os.environ.get('PYTHONPATH', '')}",
         **(extra_env or {}),
     }
+
+
+def run(
+    context: Path,
+    fake_docker: tuple[Path, Path],
+    *args: str,
+    labels: dict[str, str] | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = run_environment(context, fake_docker, labels, extra_env)
     return subprocess.run(
         [str(context / "tools" / "build_image.sh"), *args],
         cwd=context,
@@ -157,6 +313,22 @@ def docker_calls(log: Path) -> list[list[str]]:
         for line in log.read_text(encoding="utf-8").splitlines()
         if line
     ]
+
+
+def docker_state(log: Path) -> dict:
+    state = log.with_name("docker-state.json")
+    if not state.exists():
+        return {"refs": {}, "events": {}}
+    return json.loads(state.read_text(encoding="utf-8"))
+
+
+def wait_for(path: Path, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {path}")
 
 
 def test_recipe_frames_allowed_path_mode_and_content(context: Path) -> None:
@@ -381,7 +553,21 @@ def test_default_build_probes_once_then_commits_labels(
     assert [call[0] for call in calls].count("build") == 1
     commits = [call for call in calls if call[0] == "commit"]
     assert len(commits) == 1
-    assert commits[0][-1] == IMAGE_TAG
+    candidate_tag = commits[0][-1]
+    assert candidate_tag != IMAGE_TAG
+    promotions = [call for call in calls if call[0] == "tag"]
+    assert len(promotions) == 1
+    assert promotions[0][-1] == IMAGE_TAG
+    assert promotions[0][-2].startswith("sha256:")
+    candidate_inspects = [
+        call for call in calls if call[:2] == ["image", "inspect"] and call[2] == candidate_tag
+    ]
+    assert len(candidate_inspects) == 1
+    removals = [call for call in calls if call[:2] == ["image", "rm"]]
+    assert any(candidate_tag in call for call in removals)
+    build_call = next(call for call in calls if call[0] == "build")
+    stage_tag = build_call[build_call.index("--tag") + 1]
+    assert any(stage_tag in call for call in removals)
     changes = [
         commits[0][index + 1]
         for index, value in enumerate(commits[0])
@@ -402,6 +588,56 @@ def test_default_build_probes_once_then_commits_labels(
     )
 
 
+def test_build_uses_private_exact_context(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(context, fake_docker)
+    assert completed.returncode == 0, completed.stderr
+    build = next(call for call in docker_calls(fake_docker[1]) if call[0] == "build")
+    assert Path(build[-1]).resolve() != context.resolve()
+    assert "esp32tap-image-build." in build[-1]
+
+
+def test_transient_live_edit_and_restore_cannot_enter_private_context(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    before = recipe(context)
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_EDIT_RESTORE_LIVE": "1"},
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert recipe(context) == before
+    final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+    assert final["Config"]["Labels"][
+        "org.treddy.esp32tap.recipe-sha256"
+    ] == before
+
+
+@pytest.mark.parametrize("attack", ["noisy", "closed-fd-sleeper"])
+def test_probe_bounds_output_and_reaps_pipe_holding_descendants(
+    context: Path,
+    fake_docker: tuple[Path, Path],
+    attack: str,
+) -> None:
+    started = time.monotonic()
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={
+            "FAKE_DOCKER_EXEC_PROBE": "1",
+            "FAKE_PROBE_ATTACK": attack,
+            "BUILD_IMAGE_PROBE_COMMAND_TIMEOUT": "1",
+        },
+    )
+    elapsed = time.monotonic() - started
+    assert completed.returncode != 0
+    assert elapsed < 3
+    assert "toolchain probe" in completed.stderr
+    assert "exceeds" in completed.stderr or "timed out" in completed.stderr
+
+
 def test_failed_probe_does_not_commit_over_final_tag(
     context: Path, fake_docker: tuple[Path, Path]
 ) -> None:
@@ -415,6 +651,95 @@ def test_failed_probe_does_not_commit_over_final_tag(
     assert not any(call[0] == "commit" for call in calls)
     assert any(call[:2] == ["rm", "-f"] for call in calls)
     assert any(call[:2] == ["image", "rm"] for call in calls)
+
+
+def test_commit_daemon_success_after_client_timeout_cleans_candidate_and_preserves_final(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={
+            "FAKE_DOCKER_COMMIT_TIMEOUT": "1",
+            "BUILD_IMAGE_DOCKER_TIMEOUT": "1",
+        },
+    )
+    assert completed.returncode != 0
+    state = docker_state(fake_docker[1])
+    assert state["refs"].get(IMAGE_TAG, {"Id": IMAGE_ID})["Id"] == IMAGE_ID
+    assert not any("candidate" in reference for reference in state["refs"])
+
+
+def test_commit_that_ignores_labels_never_promotes_candidate(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_LABEL_NOOP": "1"},
+    )
+    assert completed.returncode != 0
+    calls = docker_calls(fake_docker[1])
+    assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
+    assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
+
+
+def test_ambiguous_promotion_timeout_restores_prior_final_id(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={
+            "FAKE_DOCKER_TAG_TIMEOUT": "1",
+            "BUILD_IMAGE_DOCKER_TIMEOUT": "1",
+        },
+    )
+    assert completed.returncode != 0
+    assert docker_state(fake_docker[1])["refs"][IMAGE_TAG]["Id"] == IMAGE_ID
+    promotions = [
+        call
+        for call in docker_calls(fake_docker[1])
+        if call[0] == "tag" and call[-1] == IMAGE_TAG
+    ]
+    assert len(promotions) >= 2
+
+
+def test_ambiguous_first_promotion_removes_final_when_no_prior_tag(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={
+            "FAKE_DOCKER_FINAL_MISSING": "1",
+            "FAKE_DOCKER_TAG_TIMEOUT": "1",
+            "BUILD_IMAGE_DOCKER_TIMEOUT": "1",
+        },
+    )
+    assert completed.returncode != 0
+    assert IMAGE_TAG not in docker_state(fake_docker[1])["refs"]
+
+
+def test_publication_refuses_preplaced_symlink_lock(
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
+) -> None:
+    key = hashlib.sha256(
+        (str(context.resolve()) + "\0" + IMAGE_TAG).encode("utf-8")
+    ).hexdigest()[:24]
+    lock = Path("/tmp") / f"esp32tap-image-publish-{key}.lock"
+    target = tmp_path / "attacker-target"
+    target.write_text("", encoding="utf-8")
+    lock.symlink_to(target)
+    try:
+        completed = run(context, fake_docker)
+        assert completed.returncode != 0
+        assert not any(
+            call[0] == "tag" and call[-1] == IMAGE_TAG
+            for call in docker_calls(fake_docker[1])
+        )
+    finally:
+        lock.unlink()
 
 
 def test_boolean_probe_schema_version_never_reaches_final_tag(
@@ -443,7 +768,8 @@ def test_context_mutation_during_candidate_build_prevents_publication(
     assert completed.returncode != 0
     assert "changed during image build" in completed.stderr
     calls = docker_calls(fake_docker[1])
-    assert not any(call[0] == "commit" for call in calls)
+    assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
+    assert not any("candidate" in reference for reference in docker_state(fake_docker[1])["refs"])
 
 
 def test_consecutive_builds_use_unique_candidate_resources(
@@ -456,6 +782,68 @@ def test_consecutive_builds_use_unique_candidate_resources(
     runs = [call for call in calls if call[0] == "run"]
     assert builds[0][builds[0].index("--tag") + 1] != builds[1][builds[1].index("--tag") + 1]
     assert runs[0][runs[0].index("--name") + 1] != runs[1][runs[1].index("--name") + 1]
+
+
+def test_older_concurrent_snapshot_cannot_overwrite_new_recipe(
+    context: Path, fake_docker: tuple[Path, Path], tmp_path: Path
+) -> None:
+    barrier = tmp_path / "old-build"
+    old_env = run_environment(
+        context,
+        fake_docker,
+        extra_env={"FAKE_BUILD_BARRIER": str(barrier)},
+    )
+    old = subprocess.Popen(
+        [str(context / "tools" / "build_image.sh")],
+        cwd=context,
+        env=old_env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        wait_for(Path(str(barrier) + ".ready"))
+        (context / "Dockerfile").write_text(
+            "FROM scratch\n# newer recipe\n", encoding="utf-8"
+        )
+        newer = run(context, fake_docker)
+        assert newer.returncode == 0, newer.stderr
+        Path(str(barrier) + ".release").write_text("go", encoding="utf-8")
+        _, old_stderr = old.communicate(timeout=8)
+        assert old.returncode != 0
+        assert "changed" in old_stderr or "stale" in old_stderr
+        final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+        assert final["Config"]["Labels"][
+            "org.treddy.esp32tap.recipe-sha256"
+        ] == recipe(context)
+    finally:
+        old.kill()
+        old.wait()
+
+
+def test_publication_lock_serializes_same_image_promotions(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    env = run_environment(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_TAG_DELAY": "0.3"},
+    )
+    processes = [
+        subprocess.Popen(
+            [str(context / "tools" / "build_image.sh")],
+            cwd=context,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        for _ in range(2)
+    ]
+    results = [process.communicate(timeout=10) for process in processes]
+    assert [process.returncode for process in processes] == [0, 0], results
+    state = docker_state(fake_docker[1])
+    assert not state["events"].get("tag_overlap", False)
 
 
 def test_script_is_executable_and_tracked_as_100755() -> None:
