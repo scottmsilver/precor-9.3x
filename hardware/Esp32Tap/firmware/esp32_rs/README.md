@@ -117,6 +117,9 @@ tools/check_log_contract.sh
 IDF_IMAGE=esp32tap-rust:build tools/qemu_smoke.sh
 tools/run_harness.sh            # S8 (below) + -m "not net": S1-S7 + S6 x2 + encoders = 15
 
+# Mandatory normal-sweep Pi-parity reviewer gate (attacks A-G).
+env -C tools/qemu_scenarios python3 -m pytest test_reviewer_attacks.py -q -n 3
+
 # S8 alone — PLAN normal exit, on target. Lives OUTSIDE the committed harness
 # (which stays byte-identical to HEAD) and imports it as a library.
 cd tools/qemu_scenarios && python3 -m pytest . -v
@@ -568,15 +571,16 @@ rewrites per 3-hour session, ~1.6 erases per block per session across the
 partition's 256 blocks — rather than left defaulted inside a block that claims to
 state every cost.
 
-`tools/sweep.sh` gained `records`, `storepers` and `storetorn`.
+`tools/sweep.sh` gained `records`, `storepers`, `storetorn`, and the mandatory
+`reviewer` gate.
 `test_store_persistence.py`
 was committed, passing, and invoked by NOTHING — the same hole
 `verify_harness_copy.py` was in — and it is the only gate that proves a record
 reaches real flash and survives a real SoC reset.
-`test_reviewer_attacks.py` is deliberately still not a gate, and the reason is
-written at the site: it is RED BY DESIGN (**3 of its 7 fail at `e50b31a`**), a
-record of open defects in the safety/control tier rather than a regression
-check, and gating on it would train everyone to ignore the sweep.
+`test_reviewer_attacks.py` is also a normal, mandatory sweep gate. Its seven
+Pi-parity attacks cover persistent manual motion, Stop, bounded request-body
+handling, sticky physical-console takeover plus explicit resume, health-gated
+latched-fault recovery and rejection, and total incline conversion.
 
 Not proven, and not claimed:
 

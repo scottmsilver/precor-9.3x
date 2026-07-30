@@ -30,6 +30,17 @@ WIRE_3 = b"[hmph:12C]"  # 3.00 mph
 WIRE_2 = b"[hmph:C8]"  # 2.00 mph
 WIRE_0 = b"[hmph:0]"
 
+ENTRY_SEQUENCE = [
+    "command_zero",
+    "configure_inverted_uart",
+    "verify_physical_idle_low",
+    "tx_enable_on",
+    "wait_entry_gap",
+    "relay_cmd_on",
+    "feedback_candidate",
+    "feedback_emulate_stable",
+]
+
 
 def http(s, method, path, body=None, timeout=20):
     try:
@@ -75,16 +86,47 @@ def wait_program(s, predicate, what: str, timeout: float = 90.0):
     raise AssertionError(f"never observed {what}; last state was {last!r}")
 
 
+def assert_proxy_fault_stop(s):
+    belt = status(s)
+    assert belt["mode"] == "proxy", belt
+    assert belt["relay"] is False, belt
+    assert belt["speed"] == 0.0, belt
+    assert belt["incline"] == 0.0, belt
+    assert belt["fault"] is True, belt
+
+    hardware = s.state()
+    assert hardware["mode"] == "PROXY", hardware
+    assert hardware["relay"] == 0 and hardware["io_relay"] == 0, hardware
+    assert hardware["tx"] == 0 and hardware["io_tx"] == 0, hardware
+    assert hardware["speed"] == 0 and hardware["incline"] == 0, hardware
+    assert hardware["fault"] == 1, hardware
+
+
+def inject_relay_feedback_fault(s):
+    """Pin K1 to Bypass while Emulating and observe the fail-closed result."""
+    assert http(s, "POST", "/api/speed", {"value": 3.0})[0] == 200
+    s.wait_tx_contains(WIRE_3, timeout=60)
+    idx0 = s.audit_events()[-1][0] + 1
+    s.cmd_ok("QT k1 bypass")
+    fault_idx = s.wait_audit("emergency:relay_feedback_invalid", since=idx0, timeout=30)
+    assert_proxy_fault_stop(s)
+    return fault_idx
+
+
+def wait_for_qualified_bypass(s):
+    """Restore the relay model, then give Bypass a measured guest-time hold."""
+    s.cmd_ok("QT k1 auto")
+    frame_from = s.audit_events()[-1][0] + 1
+    s.wait_guest_uptime_delta(1, timeout=60)
+    s.wait_audit("complete_console_frame", since=frame_from, timeout=15)
+
+
 # ---------------------------------------------------------------------------
-# ATTACK A — THE MANUAL LEASE DEADMAN.
+# ATTACK A — A MANUAL COMMAND PERSISTS WITHOUT CLIENT TRAFFIC.
 #
-# `SafetyController::acquire` gives a non-Executor transport
-# `LeaseExpiry::Manual(now + MANUAL_LEASE_US)` = 4 s, renewed only by an
-# ACCEPTED `command_motion` or by `heartbeat()`. Nothing in the firmware calls
-# `heartbeat` (grep: zero call sites outside safety_core). So a single
-# `POST /api/speed` should hold the belt for four seconds and then have the
-# lease expire underneath it — `emergency:lease_expired`, relay open, mode
-# PROXY — with no request having gone wrong and no client having disconnected.
+# The Pi keeps a manual speed until the user changes or stops it. The device
+# must do the same: silence from an HTTP client is not a treadmill fault and
+# must not manufacture an emergency stop.
 #
 # repro: env -C tools/qemu_scenarios python3 -m pytest \
 #          test_reviewer_attacks.py::test_a_manual_speed_command_survives_ten_seconds -q -s
@@ -99,19 +141,20 @@ def test_a_manual_speed_command_survives_ten_seconds(qemu):
     assert status(s)["mode"] == "emulate"
     n0 = len(s.audit_events())
 
-    # Do NOTHING for ten seconds. A user who set a speed and started walking
-    # sends no further request.
+    # Do NOTHING for ten seconds of the GUEST clock. A user who set a speed and
+    # started walking sends no further request. The wait observes the same
+    # monotonic clock that drives the controller; it sends nothing to the guest.
     t0 = time.monotonic()
-    time.sleep(10.0)
+    s.wait_guest_uptime_delta(10, timeout=90)
 
     after = status(s)
     events = [t for _, t in s.audit_events()[n0:] if t != "complete_console_frame"]
     expired = [e for e in events if "lease_expired" in e]
-    print(f"\nATTACK A: {time.monotonic()-t0:.1f}s idle -> status={after}")
+    print(f"\nATTACK A: 10 guest seconds ({time.monotonic()-t0:.1f}s wall) idle -> status={after}")
     print(f"          audit(non-frame): {events[:40]}")
     assert not expired, (
-        "the belt was emergency-stopped by the 4 s manual lease deadman with no "
-        f"client fault: {expired}; status={after}"
+        "the belt was emergency-stopped while the client was legitimately "
+        f"idle: {expired}; status={after}"
     )
     assert after["mode"] == "emulate", after
     assert after["speed"] == 3.0, after
@@ -264,6 +307,9 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     target_uptime = s.guest_uptime() + 25
     deadline = time.monotonic() + 180
     next_audit = takeover_idx + 1
+    observed_events = [(takeover_idx, "emergency:console_takeover")]
+    samples = []
+    sampled_second = -1
     forbidden = []
     reclaimed = None
     while s.guest_uptime() < target_uptime:
@@ -271,9 +317,27 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
         if st["mode"] != "proxy" or st["relay"] is not False:
             reclaimed = st
             break
+        hw = s.state()
+        guest_second = hw["t_us"] // 1_000_000
+        if guest_second > sampled_second:
+            sampled_second = guest_second
+            p = program(s)
+            samples.append(
+                (
+                    guest_second,
+                    st["mode"],
+                    st["relay"],
+                    p["paused"],
+                    p["current_interval"],
+                    p["interval_elapsed"],
+                    p["total_elapsed"],
+                )
+            )
         for idx, text in s.audit_events():
             if idx >= next_audit:
                 next_audit = idx + 1
+                if text != "complete_console_frame":
+                    observed_events.append((idx, text))
                 if text.startswith("lease_acquired:EXECUTOR") or text == "relay_cmd_on":
                     forbidden.append((idx, text))
         if time.monotonic() > deadline:
@@ -291,6 +355,8 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     print(f"          program={after}")
     print(f"          forbidden audit={forbidden}")
     print(f"          nonzero motor frames={nonzero_motor}")
+    print(f"          indexed audit={observed_events}")
+    print(f"          guest samples={samples}")
     assert reclaimed is None, f"the running program took the belt back: {reclaimed}"
     assert after["running"] is True and after["paused"] is True, after
     assert (
@@ -303,23 +369,43 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
     )
     assert not forbidden, f"executor reacquired control after takeover: {forbidden}"
     assert not nonzero_motor, f"nonzero motor frames after takeover: {nonzero_motor}"
+
+    # Restoring healthy console intent is still insufficient by itself. The
+    # one user action below is the explicit Resume (pause is a toggle), and it
+    # must continue from the exact safety-paused position.
+    s.set_pacer_payload(synth.console_cycle_bytes(0, 0))
+    frame_from = s.audit_events()[-1][0] + 1
+    s.wait_audit("complete_console_frame", since=frame_from, timeout=15)
+    entry_from = s.audit_events()[-1][0] + 1
+    tx1 = len(s.tx_bytes())
+    st, resumed = http(s, "POST", "/api/program/pause")
+    assert st == 200 and resumed["paused"] is False, resumed
+    assert (
+        resumed["current_interval"],
+        resumed["interval_elapsed"],
+        resumed["total_elapsed"],
+    ) == held, (
+        f"explicit Resume changed the held position: {held} -> "
+        f"{(resumed['current_interval'], resumed['interval_elapsed'], resumed['total_elapsed'])}"
+    )
+    s.wait_audit_sequence(ENTRY_SEQUENCE, since=entry_from, timeout=45)
+    requested_speed = workout["intervals"][held[0]]["speed"]
+    requested_wire = f"[hmph:{int(requested_speed * 100):X}]".encode()
+    assert requested_wire != WIRE_0
+    s.wait_tx_contains(requested_wire, timeout=45, offset=tx1)
+    resumed_belt = status(s)
+    assert resumed_belt["mode"] == "emulate" and resumed_belt["relay"] is True, resumed_belt
+    assert resumed_belt["speed"] == requested_speed, resumed_belt
     s.stop_pacer()
 
 
 # ---------------------------------------------------------------------------
-# ATTACK E — IS THE LATCHED FAULT PERMANENT?
+# ATTACK E — EXPLICIT, HEALTH-GATED FAULT RECOVERY.
 #
-# `fault_latched` is set in eight places and cleared in NONE (grep
-# `fault_latched` in safety/controller.rs: one `= false`, in `new()`).
-# `request_emulate` refuses while it is set (`entry_rejected:fault_latched`).
-# There is no `/api/reset` route on this device.
-#
-# ATTACK A showed that letting the 4 s manual lease expire produces
-# `emergency:lease_expired` immediately followed by `proxy_feedback_invalid` —
-# the relay contacts have not released by the time the mode is already PROXY —
-# which latches the fault. If that latch is permanent, ONE ordinary user action
-# (set a speed, walk away) permanently removes the device's ability to drive
-# the belt until it is power-cycled, and every later command still answers 200.
+# Force a real relay-feedback fault while the bridge is live. Restoring the
+# physical prerequisites must not move the belt by itself; one fresh positive
+# speed request is the acknowledgement allowed to clear the latch and perform
+# the complete normal entry choreography.
 #
 # repro: ...::test_e_a_latched_fault_is_recoverable -q -s
 # ---------------------------------------------------------------------------
@@ -327,63 +413,63 @@ def test_d_console_takeover_is_not_undone_by_the_running_program(qemu):
 
 def test_e_a_latched_fault_is_recoverable(qemu):
     s = armed(qemu)
-    st, body = http(s, "POST", "/api/speed", {"value": 3.0})
-    assert st == 200, body
-    s.wait_tx_contains(WIRE_3, timeout=60)
-
-    time.sleep(6.0)  # let the 4 s manual lease expire
-    latched = status(s)
-    if latched["fault"] is not True:
-        import pytest as _p
-
-        _p.skip(f"no fault was latched on this run: {latched}")
-
-    # Now try to use the treadmill again, exactly as the app would.
+    fault_idx = inject_relay_feedback_fault(s)
     tx0 = len(s.tx_bytes())
-    idx0 = s.audit_events()[-1][0]
+    wait_for_qualified_bypass(s)
+    assert_proxy_fault_stop(s)
+    s.assert_no_audit(
+        lambda text: text == "fault_recovery_accepted" or text == "relay_cmd_on",
+        since=fault_idx + 1,
+        label="before an explicit recovery request",
+    )
+
+    entry_from = s.audit_events()[-1][0] + 1
     st, body = http(s, "POST", "/api/speed", {"value": 2.0})
+    assert st == 200 and body["ok"] is True, (st, body)
+    recovery_sequence = ["fault_recovery_accepted", *ENTRY_SEQUENCE]
+    s.wait_audit_sequence(recovery_sequence, since=entry_from, timeout=45)
+    s.wait_tx_contains(WIRE_2, timeout=45, offset=tx0)
     after = status(s)
-    moved = False
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        if WIRE_2 in s.tx_bytes()[tx0:]:
-            moved = True
-            break
-        time.sleep(0.25)
-    events = [t for i, t in s.audit_events() if i > idx0 and t != "complete_console_frame"]
     print(f"\nATTACK E: reply={st} {body}")
     print(f"          status={after}")
-    print(f"          audit(non-frame)={events[:30]}")
-
-    assert moved, (
-        "after a latched fault the device answered the next speed command "
-        f"{st} but 2.0 mph never reached the motor wire; status={after}; "
-        f"audit={events[:30]}"
-    )
+    assert after["mode"] == "emulate" and after["relay"] is True, after
+    assert after["speed"] == 2.0 and after["fault"] is False, after
     s.stop_pacer()
 
 
 # ---------------------------------------------------------------------------
-# ATTACK F — determinism of the lease-expiry fault latch. Three runs.
-# An intermittent here would be worse than a hard failure.
+# ATTACK F — UNHEALTHY EXPLICIT RECOVERY NEVER CLEARS THE LATCH.
+#
+# A recovery request is an attempt, not a reset button. With TREAD_OK held low,
+# every new positive request must fail truthfully, keep the bridge in Proxy at
+# zero with relay/TX off, and leave the original relay-feedback fault latched.
 # ---------------------------------------------------------------------------
 
 
-def test_f_lease_expiry_fault_latch_is_deterministic(qemu):
-    outcomes = []
-    for _ in range(3):
-        s = armed(qemu)
-        assert http(s, "POST", "/api/speed", {"value": 3.0})[0] == 200
-        s.wait_tx_contains(WIRE_3, timeout=60)
-        time.sleep(6.0)
-        st = status(s)
-        ev = [t for _, t in s.audit_events() if t not in ("complete_console_frame",)]
-        outcomes.append(
-            (st["mode"], st["fault"], "emergency:lease_expired" in ev, "proxy_feedback_invalid" in ev)
-        )
-        s.stop_pacer()
-    print(f"\nATTACK F: (mode, fault, lease_expired, proxy_feedback_invalid) x3 = {outcomes}")
-    assert len(set(outcomes)) == 1, f"NON-DETERMINISTIC outcome across 3 runs: {outcomes}"
+def test_f_unhealthy_recovery_requests_keep_the_fault_latched(qemu):
+    s = armed(qemu)
+    fault_idx = inject_relay_feedback_fault(s)
+    tx0 = len(s.tx_bytes())
+    s.cmd_ok("QT k1 auto")
+    s.cmd_ok("QT tread 0")
+
+    rejected = []
+    for attempt in range(3):
+        request_from = s.audit_events()[-1][0] + 1
+        st, body = http(s, "POST", "/api/speed", {"value": 2.0})
+        rejected.append((st, body))
+        assert st == 409 and body["ok"] is False, (attempt, st, body)
+        s.wait_audit("recovery_rejected:tread_not_ok", since=request_from, timeout=15)
+        assert_proxy_fault_stop(s)
+
+    s.assert_no_audit(
+        lambda text: text == "fault_recovery_accepted" or text == "relay_cmd_on",
+        since=fault_idx + 1,
+        label="across unhealthy explicit recovery requests",
+    )
+    assert WIRE_2 not in s.tx_bytes()[tx0:]
+    print(f"\nATTACK F: rejected explicit recoveries={rejected}")
+    s.stop_pacer()
 
 
 # ---------------------------------------------------------------------------

@@ -54,6 +54,9 @@ run normalexit env -C tools/qemu_scenarios python3 -m pytest test_normal_exit.py
 run httpentry  env -C tools/qemu_scenarios python3 -m pytest test_http_entry.py -q
 run profiles   env -C tools/qemu_scenarios python3 -m pytest test_profiles.py -q -n 4
 run program    env -C tools/qemu_scenarios python3 -m pytest test_program.py -q -n 4
+# Mandatory Pi-parity adversarial gate: all attacks A-G, including deliberate
+# relay fault injection/recovery and sticky physical-console takeover.
+run reviewer   env -C tools/qemu_scenarios python3 -m pytest test_reviewer_attacks.py -q -n 3
 run records    env -C tools/qemu_scenarios python3 -m pytest test_records.py -q -n 4
 # test_store_persistence.py was committed and passing and NOTHING RAN IT — the
 # same hole verify_harness_copy.py and check_log_contract.sh were in. It is the
@@ -140,16 +143,6 @@ if [ -n "${DEEP:-}" ]; then
   # test_store_persistence.py was in and which the block below is careful not
   # to be. Measured green 7/7 in 59 s before wiring in.
   run coachrev   env -C tools/qemu_scenarios python3 -m pytest test_coach_review.py -q -n 2
-  # test_reviewer_attacks.py is DELIBERATELY NOT RUN HERE, and that is not the
-  # same hole test_store_persistence.py was in. It is RED BY DESIGN: each of
-  # its tests asserts the SAFE behaviour of a defect that is still open in the
-  # safety/control tier (the 4 s manual lease deadman; a running program taking
-  # the belt back from the physical console; an unrecoverable latched fault),
-  # and its own comments derive why the device fails them. 3 of 7 fail at
-  # e50b31a. Wiring
-  # it in as a gate would make the sweep permanently red and train everyone to
-  # ignore it. Run it deliberately:
-  #   env -C tools/qemu_scenarios python3 -m pytest test_reviewer_attacks.py -q
 fi
 echo "SWEEP: $(( $(date +%s)-S ))s  $([ $fail -eq 0 ] && echo ALL GREEN || echo HAS FAILURES)"
 exit $fail
