@@ -1,234 +1,500 @@
 #!/usr/bin/env bash
-# build.sh — reproducible containerized Rust build for the Esp32Tap ESP32-S3
-# safety core.
+# Build production and QEMU flash bundles from one immutable, gated snapshot.
 #
-# Produces, under esp32_rs/build/ and esp32_rs/build_qemu_test/ — the EXACT
-# layout tools/qemu_smoke.sh and tools/qemu_harness/ expect, at the same
-# nesting depth as the C++ tree, so both gates run completely unmodified:
-#   esp32tap.bin        the app image
-#   bootloader.bin      IDF second-stage bootloader
-#   partition-table.bin generated from partitions_esp32tap.csv
-#   flash_args          esptool merge_bin argfile
-#
-# The repo is ALWAYS bind-mounted at /project so the absolute
-# CONFIG_PARTITION_TABLE_CUSTOM_FILENAME in sdkconfig.defaults resolves.
-#
-# The prod and qemu-test images use SEPARATE CARGO_TARGET_DIRs so flipping the
-# feature does not invalidate the other image.
+# The shell is intentionally only a stable entry point. Python owns the secure
+# worktree lock, snapshot lifecycle, container invocation, provenance manifest,
+# and atomic publication so every failure follows one cleanup path.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-ESP32_RS="$(cd "$HERE/.." && pwd)"
-REPO_ROOT="$(cd "$ESP32_RS/../../../.." && pwd)"
-REL="${ESP32_RS#"$REPO_ROOT"/}/esp32tap"
-IMAGE="${RUST_IMAGE:-esp32tap-rust:build}"
-CARGO_CACHE="${CARGO_CACHE:-/tmp/rustcargo}"
-PROFILE="${PROFILE:-release}"
-# ONLY=prod or ONLY=qemu to build a single image.
-ONLY="${ONLY:-both}"
-
-# EXCLUSIVE BUILD LOCK. Sessions in tools/qemu_harness/qemu_session.py read
-# build_qemu_test/ off the bind-mounted repo to merge their flash images, and
-# they hold this same file SHARED for their lifetime. Without this a rebuild
-# could rewrite the directory a running guest was booting from — which happened
-# on 2026-07-29 and cost two wrong diagnoses (a firmware bug, then a QEMU clock
-# artifact) before the real cause, a second concurrent builder, was found.
-#
-# HELD ON AN FD, NOT VIA `exec flock`. The first version re-exec'd itself under
-# flock with a `|| { echo ...; exit 4; }` fallback — which codex proved
-# UNREACHABLE: once exec succeeds the shell is gone, so a lock timeout returned
-# status 1 with no message. A silent 30-minute wait ending in an unexplained
-# failure is precisely what the diagnostic was there to prevent. Holding fd 9
-# keeps this shell alive to report, needs no re-exec and no env-var guard, and
-# the kernel releases the lock when the script exits by any path.
-#
-# The key must match _BUILD_LOCK in qemu_session.py, which derives it from a
-# RESOLVED path — so use `pwd -P`. A logical path from a symlinked checkout
-# hashes differently and would disable the interlock with no error at all.
-_lock="/tmp/esp32tap-build-$(printf '%s' "$(cd "$ESP32_RS" && pwd -P)" | md5sum | cut -c1-12).lock"
-exec 9>"$_lock"
-# Overridable ONLY so the timeout path is testable in place. It was unreachable
-# in the first version and nobody could have noticed without exercising it.
-if ! flock -x -w "${BUILD_LOCK_WAIT:-1800}" 9; then
-  echo "build.sh: could not acquire $_lock within ${BUILD_LOCK_WAIT:-1800}s." >&2
-  echo "  A QEMU session holds it SHARED for its lifetime, or another build holds it." >&2
-  echo "  Inspect with: fuser -v $_lock" >&2
-  exit 4
+case "${ONLY:-both}" in
+    prod|qemu|both) ;;
+    *)
+        echo "build.sh: ONLY must be prod, qemu, or both" >&2
+        exit 2
+        ;;
+esac
+if [ -n "${PROFILE:-}" ]; then
+    echo "build.sh: PROFILE is fixed to release and must not be overridden" >&2
+    exit 2
+fi
+if [ -n "${NET_FEATURE:-}" ]; then
+    echo "build.sh: NET_FEATURE is fixed by artifact kind and must not be overridden" >&2
+    exit 2
 fi
 
-mkdir -p "$CARGO_CACHE"
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+exec python3 - "$HERE" "${ONLY:-both}" <<'PY'
+from __future__ import annotations
 
-# --- host-side source gates (fail BEFORE spending 10 min in the container) ---
-#
-# check_unsafe_budget.py is the REAL enforcement of the unsafe containment.
-# `#![deny(unsafe_code)]` at the crate root is a lint level any module can lift
-# for itself with an inner `#[allow(unsafe_code)]`, so it never enforced the
-# claimed containment (proven by counterexample: qemu_test/ does contain
-# unsafe). safety_core and the unsafe-free firmware modules now use `forbid`,
-# which the compiler does enforce; this script covers what `forbid` cannot —
-# the allowlist of unsafe-bearing files, the allowlist of `allow` sites, a
-# SAFETY comment on every unsafe block, and the exact line budget.
-echo "== host gates =="
-python3 "$HERE/check_unsafe_budget.py"
-python3 "$HERE/check_case_parity.py"
-python3 "$HERE/check_pins.py"
-python3 "$HERE/check_wdt_chain.py"
+import fcntl
+import hashlib
+import json
+import os
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from pathlib import Path
 
-docker run --rm \
-    -v "$REPO_ROOT":/project \
-    -v "$CARGO_CACHE":/cargo \
-    -e CARGO_HOME=/cargo \
-    -e PROFILE="$PROFILE" \
-    -e NET_FEATURE="${NET_FEATURE:-}" \
-    -e ONLY="$ONLY" \
-    -w "/project/$REL" \
-    "$IMAGE" bash -lc '
+tools = Path(sys.argv[1]).resolve(strict=True)
+only = sys.argv[2]
+esp32_rs = tools.parent
+repo_root = Path(
+    subprocess.run(
+        ["git", "-C", str(esp32_rs), "rev-parse", "--show-toplevel"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+).resolve(strict=True)
+sys.path.insert(0, str(tools))
+
+from artifact_inputs import (  # noqa: E402
+    _read_input,
+    _record,
+    create_snapshot,
+    remove_snapshot,
+    target_cache,
+    verify_gate_input_completeness,
+    working_digest,
+)
+from artifact_provenance import (  # noqa: E402
+    BUNDLE_MEMBERS,
+    Toolchain,
+    _current_toolchain,
+    lock_path,
+    make_manifest,
+    publish_generation_atomic,
+)
+
+
+class BuildError(RuntimeError):
+    pass
+
+
+class BuildCancelled(SystemExit):
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        super().__init__(128 + signum)
+
+
+pending_signal: int | None = None
+cleanup_in_progress = False
+
+
+def request_cancellation(signum: int, _frame: object) -> None:
+    global pending_signal
+    if pending_signal is None:
+        pending_signal = signum
+    if not cleanup_in_progress:
+        raise BuildCancelled(pending_signal)
+
+
+for watched_signal in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(watched_signal, request_cancellation)
+
+
+def acquire_worktree_lock() -> None:
+    """Securely open the physical-worktree lock, then retain it on fd 9."""
+
+    path = lock_path(repo_root, "production")
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        lock_fd = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise BuildError(f"cannot open build lock {path}: {exc}") from exc
+    try:
+        opened = os.fstat(lock_fd)
+        lexical = path.lstat()
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(lexical.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or (opened.st_dev, opened.st_ino)
+            != (lexical.st_dev, lexical.st_ino)
+        ):
+            raise BuildError(
+                f"build lock must be one owned regular file at its exact path: {path}"
+            )
+        if stat.S_IMODE(opened.st_mode) != 0o600:
+            os.fchmod(lock_fd, 0o600)
+        os.dup2(lock_fd, 9, inheritable=True)
+    finally:
+        if lock_fd != 9:
+            os.close(lock_fd)
+
+    wait_text = os.environ.get("BUILD_LOCK_WAIT", "1800")
+    try:
+        wait_seconds = float(wait_text)
+    except ValueError as exc:
+        raise BuildError("BUILD_LOCK_WAIT must be a positive number") from exc
+    if wait_seconds <= 0:
+        raise BuildError("BUILD_LOCK_WAIT must be a positive number")
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise BuildError(
+                    f"could not acquire {path} within {wait_seconds:g}s; "
+                    "a QEMU reader or another build still holds it"
+                )
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+    os.set_inheritable(9, True)
+    locked = os.fstat(9)
+    current = path.lstat()
+    if (
+        locked.st_nlink != 1
+        or locked.st_uid != os.geteuid()
+        or stat.S_IMODE(locked.st_mode) != 0o600
+        or (locked.st_dev, locked.st_ino) != (current.st_dev, current.st_ino)
+    ):
+        raise BuildError(f"build lock changed while it was acquired: {path}")
+
+
+def requested_kinds() -> tuple[tuple[str, str], ...]:
+    selected: list[tuple[str, str]] = []
+    if only != "qemu":
+        selected.append(("production", "prod"))
+    if only != "prod":
+        selected.append(("qemu-test", "qemu"))
+    return tuple(selected)
+
+
+def secure_cache_dir(path: Path) -> Path:
+    """Create or validate one owned, non-symlink physical cache directory."""
+
+    absolute = path.absolute()
+    if absolute == Path("/tmp") or Path("/tmp") not in absolute.parents:
+        raise BuildError(f"cache path is outside the fixed /tmp namespace: {absolute}")
+    try:
+        absolute.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    try:
+        info = absolute.lstat()
+    except OSError as exc:
+        raise BuildError(f"cannot inspect cache path {absolute}: {exc}") from exc
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or absolute.resolve(strict=True) != absolute
+    ):
+        raise BuildError(
+            f"cache path must be an owned physical directory: {absolute}"
+        )
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        absolute.chmod(0o700)
+    return absolute
+
+
+def sealed_snapshot_digest(snapshot_root: Path, paths: tuple[str, ...]) -> str:
+    """Rehash snapshot-local bytes and modes without consulting live Git."""
+
+    digest = hashlib.sha256()
+    selected = frozenset(paths)
+    for relative in paths:
+        kind, content, permissions = _read_input(
+            snapshot_root, relative, selected
+        )
+        _record(digest, relative, kind, permissions, content)
+    return digest.hexdigest()
+
+
+def cleanup_staging(path: Path) -> None:
+    """Remove only this invocation's direct-child staging directory."""
+
+    absolute = path.absolute()
+    if (
+        absolute.parent.resolve(strict=True) != esp32_rs
+        or not absolute.name.startswith(".snapshot-build-")
+        or not os.path.lexists(absolute)
+    ):
+        return
+    if absolute.is_symlink() or not absolute.is_dir():
+        raise BuildError(f"refusing unsafe staging cleanup: {absolute}")
+    for directory, dirnames, _ in os.walk(
+        absolute, topdown=False, followlinks=False
+    ):
+        base = Path(directory)
+        for name in dirnames:
+            child = base / name
+            if not child.is_symlink():
+                child.chmod(stat.S_IMODE(child.stat().st_mode) | stat.S_IWUSR)
+        base.chmod(stat.S_IMODE(base.stat().st_mode) | stat.S_IWUSR)
+    shutil.rmtree(absolute)
+
+
+def live_digest_without_staging_sdkconfigs(
+    stagings: list[Path], task_root: Path
+) -> str:
+    """Hide the one output name that the input policy conservatively selects."""
+
+    held: list[tuple[Path, Path]] = []
+    try:
+        for index, staging in enumerate(stagings):
+            source = staging / "sdkconfig"
+            destination = task_root / f"output-sdkconfig-{index}"
+            os.rename(source, destination)
+            held.append((source, destination))
+        return working_digest(repo_root)
+    finally:
+        for source, destination in reversed(held):
+            if os.path.lexists(destination):
+                os.rename(destination, source)
+
+
+def run_docker(
+    snapshot_root: Path,
+    staging: Path,
+    target: Path,
+    cargo_cache: Path,
+    kind: str,
+    cache_kind: str,
+    toolchain: Toolchain,
+) -> None:
+    features = () if kind == "production" else ("qemu-test", "net", "ble")
+    feature_text = ",".join(features)
+    command = r'''
 set -euo pipefail
 source /opt/rust/esp-export.sh >/dev/null 2>&1
-source /opt/esp/idf/export.sh  >/dev/null 2>&1
-
-# Pinning IDF to v5.5.4 moves qemu-xtensa off the exported PATH. The
-# esp_develop_9.2.2_20260417 build the C++ gate uses is still on disk — put it
-# back so BOTH gates run the same emulator.
+source /opt/esp/idf/export.sh >/dev/null 2>&1
 export PATH="$PATH:$(dirname "$(ls /opt/esp/tools/qemu-xtensa/*/qemu/bin/qemu-system-xtensa | head -1)")"
 
-echo "== toolchain =="
-echo "idf       $(git -C /opt/esp/idf describe --tags)"
-echo "rustc     $(rustc +esp --version)"
-echo "qemu      $(qemu-system-xtensa --version | head -1)"
+RS_DIR=/project/hardware/Esp32Tap/firmware/esp32_rs
+CRATE="$RS_DIR/esp32tap"
+SDK="$RS_DIR/sdkconfig.defaults"
+if [ "$ARTIFACT_KIND" = qemu-test ]; then
+    SDK="$SDK;$RS_DIR/sdkconfig.defaults.qemu"
+fi
 
-build_one() {
-    local outdir="$1"; shift
-    local tgtdir="$1"; shift
-    local extra=("$@")
+args=()
+if [ -n "$BUILD_FEATURES" ]; then
+    args=(--features "$BUILD_FEATURES")
+fi
+echo "== cargo release build: $ARTIFACT_KIND =="
+ESP_IDF_SDKCONFIG_DEFAULTS="$SDK" \
+    cargo +esp build --manifest-path "$CRATE/Cargo.toml" --release "${args[@]}" 2>&1 \
+    | grep -vE "^[[:space:]]+(Compiling|Downloaded|Checking) " | tail -80
 
-    echo "== cargo build ${extra[*]:-（prod)} -> $outdir =="
-    # The TEST image additionally applies sdkconfig.defaults.qemu, exactly as
-    # the C++ run.sh does with
-    #   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.qemu".
-    # It enables the OpenCores MAC, disables interrupt-driven hardware MPI
-    # (which Guru-Meditates under this QEMU), and turns SILENT_REBOOT into
-    # PANIC_PRINT_REBOOT so a harness dump shows WHY a guest died. Production
-    # never sees these keys.
-    local RS_DIR=/project/hardware/Esp32Tap/firmware/esp32_rs
-    local SDK="$RS_DIR/sdkconfig.defaults"
-    if [ "$outdir" = "../build_qemu_test" ]; then
-        SDK="$SDK;$RS_DIR/sdkconfig.defaults.qemu"
-    fi
-    ESP_IDF_SDKCONFIG_DEFAULTS="$SDK" \
-    CARGO_TARGET_DIR="$tgtdir" cargo +esp build --profile "$PROFILE" "${extra[@]}" 2>&1 \
-        | grep -vE "^\s+(Compiling|Downloaded|Checking) " | tail -80
+T="$CARGO_TARGET_DIR/xtensa-esp32s3-espidf/release"
+sdk="$(find "$CARGO_TARGET_DIR" -type f -name sdkconfig -path "*esp-idf-sys*" -print -quit)"
+[ -n "$sdk" ] || { echo "FATAL: generated sdkconfig not found" >&2; exit 1; }
+FLASH_SIZE="$(grep -E '^CONFIG_ESPTOOLPY_FLASHSIZE=' "$sdk" | head -1 | cut -d\" -f2)"
+[ -n "$FLASH_SIZE" ] || { echo "FATAL: flash size missing from sdkconfig" >&2; exit 1; }
 
-    local T="$tgtdir/xtensa-esp32s3-espidf/$PROFILE"
-
-    # The mandated hard gate on the generated sdkconfig. Located BEFORE
-    # elf2image because the image header flash size is derived from it.
-    local sdk
-    sdk="$(ls -d "$tgtdir"/xtensa-esp32s3-espidf/"$PROFILE"/build/../../../*/out/sdkconfig 2>/dev/null | head -1 || true)"
-    if [ -z "$sdk" ]; then
-        sdk="$(find "$tgtdir" -name sdkconfig -path "*esp-idf-sys*" | head -1 || true)"
-    fi
-    [ -n "$sdk" ] || { echo "FATAL: generated sdkconfig not found; the mandated gate cannot run"; exit 1; }
-
-    # SINGLE SOURCE OF TRUTH for the flash size. It was hard-coded to 8MB
-    # while esp-idf-sys generated CONFIG_ESPTOOLPY_FLASHSIZE="2MB" (the
-    # custom partition table does not apply under esp-idf-sys, so the build
-    # is a 2MB single-app one). A header that claims MORE flash than the part
-    # actually has makes IDF spi_flash init abort and reboot forever
-    # ("Detected size(2048k) smaller than the size in the binary image
-    # header(8192k). Probe failed.") — which is exactly the boot loop this
-    # image had. Derive it, never assume it.
-    local FLASH_SIZE
-    FLASH_SIZE="$(grep -E ^CONFIG_ESPTOOLPY_FLASHSIZE= "$sdk" | head -1 | cut -d\" -f2)"
-    [ -n "$FLASH_SIZE" ] || { echo "FATAL: CONFIG_ESPTOOLPY_FLASHSIZE missing from $sdk"; exit 1; }
-    echo "flash size (from generated sdkconfig): $FLASH_SIZE"
-
-    rm -rf "$outdir"; mkdir -p "$outdir"
-    cp "$T/bootloader.bin"      "$outdir/bootloader.bin"
-    cp "$T/partition-table.bin" "$outdir/partition-table.bin"
-    python -m esptool --chip esp32s3 elf2image \
-        --flash_mode dio --flash_freq 80m --flash_size "$FLASH_SIZE" \
-        -o "$outdir/esp32tap.bin" "$T/esp32tap"
-
-    cat > "$outdir/flash_args" <<ARGS
+cp "$T/bootloader.bin" /output/bootloader.bin
+cp "$T/partition-table.bin" /output/partition-table.bin
+python -m esptool --chip esp32s3 elf2image \
+    --flash_mode dio --flash_freq 80m --flash_size "$FLASH_SIZE" \
+    -o /output/esp32tap.bin "$T/esp32tap"
+cat > /output/flash_args <<EOF
 --flash_mode dio --flash_freq 80m --flash_size $FLASH_SIZE
 0x0 bootloader.bin
 0x8000 partition-table.bin
 0x10000 esp32tap.bin
-ARGS
+EOF
+python -m esptool --chip esp32s3 image_info --version 2 /output/esp32tap.bin 2>/dev/null \
+    | grep -qi "^Flash size: *$FLASH_SIZE$" \
+    || { echo "FATAL: image header flash size mismatch" >&2; exit 1; }
 
-    # Prove the header we just wrote agrees with the configured part, so a
-    # future divergence fails the BUILD instead of silently boot-looping in
-    # QEMU (or, worse, only on the bench).
-    python -m esptool --chip esp32s3 image_info --version 2 "$outdir/esp32tap.bin" 2>/dev/null \
-        | grep -qi "^Flash size: *$FLASH_SIZE\$" \
-        || { echo "FATAL: $outdir/esp32tap.bin header flash size != $FLASH_SIZE"; exit 1; }
+grep -q "CONFIG_ESP_TASK_WDT_PANIC=y" "$sdk"
+grep -q "CONFIG_FREERTOS_HZ=1000" "$sdk"
+qemu_flag=()
+if [ "$ARTIFACT_KIND" = qemu-test ]; then qemu_flag=(--allow-qemu); fi
+python3 "$RS_DIR/tools/check_sdkconfig.py" "$sdk" \
+    --label "$ARTIFACT_KIND" "${qemu_flag[@]}"
+cp "$sdk" /output/sdkconfig
 
-    echo "-- $outdir --"
-    ls -l "$outdir"
-    # FACTORY PARTITION FIT — a real gate, not a label.
-    #
-    # This line used to print a HARD-CODED "factory partition = 2097152",
-    # which was wrong: the custom 8 MB table does not apply under esp-idf-sys,
-    # so the generated table is the stock 2 MB single-app one whose factory
-    # partition is 1 MB. Every headroom figure derived from the old number was
-    # out by 2x. Parse the table we just wrote instead, and FAIL rather than
-    # produce an image that cannot be flashed — the qemu-test image is at 80%
-    # and this is now the binding constraint.
-    python - "$outdir" <<'"'"'PYFIT'"'"'
+python3 - /output <<'PYFIT'
 import pathlib, struct, sys
 d = pathlib.Path(sys.argv[1])
-tbl = d.joinpath("partition-table.bin").read_bytes()
+table = d.joinpath("partition-table.bin").read_bytes()
 factory = None
-for i in range(0, len(tbl), 32):
-    e = tbl[i:i+32]
-    if e[:2] != b"\xaa\x50":
+for index in range(0, len(table), 32):
+    entry = table[index:index + 32]
+    if entry[:2] != b"\xaa\x50":
         continue
-    _, ptype, _, _, size = struct.unpack("<HBBII", e[:12])
-    if ptype == 0:  # app
+    _, partition_type, _, _, size = struct.unpack("<HBBII", entry[:12])
+    if partition_type == 0:
         factory = size
         break
 if factory is None:
-    sys.exit("FATAL: no app partition in the generated partition table")
-img = d.joinpath("esp32tap.bin").stat().st_size
-print(f"app image: {img} bytes / {factory} factory partition ({img*100//factory}%)")
-if img > factory:
-    sys.exit(f"FATAL: image does not fit the factory partition ({img} > {factory})")
+    raise SystemExit("FATAL: no app partition")
+image = d.joinpath("esp32tap.bin").stat().st_size
+print(f"app image: {image} bytes / {factory} factory partition ({image * 100 // factory}%)")
+if image > factory:
+    raise SystemExit(f"FATAL: image does not fit factory partition ({image} > {factory})")
 PYFIT
+'''
+    arguments = [
+        "docker", "run",
+        "--rm",
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "-v", f"{snapshot_root}:/project:ro",
+        "-v", f"{staging}:/output",
+        "-v", f"{target}:/target/{cache_kind}",
+        "-v", f"{cargo_cache}:/cargo",
+        "-e", "CARGO_HOME=/cargo",
+        "-e", f"CARGO_TARGET_DIR=/target/{cache_kind}",
+        "-e",
+        "CARGO_WORKSPACE_DIR=/project/hardware/Esp32Tap/firmware/"
+        "esp32_rs/esp32tap",
+        "-e", "PROFILE=release",
+        "-e", f"ARTIFACT_KIND={kind}",
+        "-e", f"BUILD_FEATURES={feature_text}",
+        "-w", "/project/hardware/Esp32Tap/firmware/esp32_rs/esp32tap",
+        "--entrypoint", "bash",
+        toolchain.image_id,
+        "-lc", command,
+    ]
+    timeout_text = os.environ.get("ESP32TAP_BUILD_TIMEOUT", "3600")
+    try:
+        timeout = float(timeout_text)
+    except ValueError as exc:
+        raise BuildError("ESP32TAP_BUILD_TIMEOUT must be a positive number") from exc
+    if timeout <= 0:
+        raise BuildError("ESP32TAP_BUILD_TIMEOUT must be a positive number")
+    process = subprocess.Popen(arguments, start_new_session=True)
+    try:
+        returncode = process.wait(timeout=timeout)
+    except BaseException:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        raise
+    if returncode != 0:
+        raise BuildError(f"Docker {kind} build failed with status {returncode}")
 
-    {
-        # The mandated grep, kept verbatim as the first line of defence...
-        grep -q "CONFIG_ESP_TASK_WDT_PANIC=y" "$sdk" \
-            || { echo "FATAL: CONFIG_ESP_TASK_WDT_PANIC=y missing from $sdk"; exit 1; }
-        grep -q "CONFIG_FREERTOS_HZ=1000" "$sdk" \
-            || { echo "FATAL: CONFIG_FREERTOS_HZ=1000 missing from $sdk"; exit 1; }
-        # ...and then the REAL gate: build_safety_manifest.py'"'"'s own
-        # REQUIRED / FORBIDDEN / selector rules, imported (not duplicated) by
-        # tools/check_sdkconfig.py. Two hand-picked greps are a SUBSET of the
-        # mandated gate and the subset has a hole: CONFIG_ESP_DEBUG_OCDAWARE
-        # defaults to =y and is PLAN-forbidden in an Emulate-capable build.
-        local qemu_flag=()
-        [ "$outdir" = "../build_qemu_test" ] && qemu_flag=(--allow-qemu)
-        python3 "$RS_DIR/tools/check_sdkconfig.py" "$sdk" \
-            --label "$(basename "$outdir")" "${qemu_flag[@]}" \
-            || { echo "FATAL: generated sdkconfig fails the safety-manifest rules"; exit 1; }
-        cp "$sdk" "$outdir/sdkconfig"
-    }
-}
 
-if [ "$ONLY" != "qemu" ]; then
-    build_one ../build target/prod
-fi
-if [ "$ONLY" != "prod" ]; then
-    # The QEMU-test image ALWAYS carries `net`: Slice 1/2 are network work and
-    # the scenarios drive the device over HTTP. Production never enables it
-    # until the tier is signed off, which is what keeps the safety image and
-    # its gates unaffected.
-    # ...and `ble`, for the same reason and with the same honesty: QEMU has no
-    # BLE radio, so carrying the feature here is what makes every gate below
-    # run against a device whose radio FAILED TO COME UP. That is the one BLE
-    # property this environment can actually prove, and proving it on every
-    # scenario rather than in one test is the strongest form of it.
-    build_one ../build_qemu_test target/qemu --features qemu-test,net,ble
-fi
-'
+import contextlib  # kept after the embedded container script for readability
+
+
+def main() -> None:
+    global cleanup_in_progress
+    acquire_worktree_lock()
+    kinds = requested_kinds()
+    cache_root = target_cache(repo_root, "prod").parent
+    secure_cache_dir(cache_root)
+    task_root: Path | None = None
+    snapshot = None
+    stagings: list[Path] = []
+    try:
+        task_root = Path(
+            tempfile.mkdtemp(prefix="esp32tap-snapshot-build.", dir="/tmp")
+        )
+        snapshot = create_snapshot(repo_root, task_root / "source", cache_root)
+        print(f"== immutable source {snapshot.digest} ==")
+        sealed_baseline = sealed_snapshot_digest(snapshot.root, snapshot.paths)
+
+        # Recipe/toolchain validation deliberately precedes every host gate.
+        toolchains = {
+            kind: _current_toolchain(snapshot.root, kind)
+            for kind, _ in kinds
+        }
+        verify_gate_input_completeness(snapshot.root)
+        if sealed_snapshot_digest(snapshot.root, snapshot.paths) != sealed_baseline:
+            raise BuildError("sealed source snapshot changed while gates were running")
+
+        cargo_cache = secure_cache_dir(
+            Path("/tmp") / f"esp32tap-cargo-{snapshot.worktree_key}"
+        )
+        manifests: dict[str, dict] = {}
+        for kind, cache_kind in kinds:
+            secure_cache_dir(cache_root)
+            target = secure_cache_dir(target_cache(repo_root, cache_kind))
+            staging = esp32_rs / (
+                f".snapshot-build-{os.getpid()}-{uuid.uuid4().hex}-{cache_kind}"
+            )
+            staging.mkdir(mode=0o700)
+            stagings.append(staging)
+            run_docker(
+                snapshot.root,
+                staging,
+                target,
+                cargo_cache,
+                kind,
+                cache_kind,
+                toolchains[kind],
+            )
+            names = {entry.name for entry in os.scandir(staging)}
+            if names != set(BUNDLE_MEMBERS):
+                raise BuildError(
+                    f"{kind} build emitted {sorted(names)}, expected "
+                    f"{list(BUNDLE_MEMBERS)}"
+                )
+            manifests[kind] = make_manifest(
+                staging, kind, snapshot.digest, toolchains[kind]
+            )
+
+        if sealed_snapshot_digest(snapshot.root, snapshot.paths) != sealed_baseline:
+            raise BuildError("sealed source snapshot changed while builds were running")
+        if snapshot.digest != live_digest_without_staging_sdkconfigs(
+            stagings, task_root
+        ):
+            raise BuildError(
+                "source inputs changed while the snapshot build was running; "
+                "nothing was published"
+            )
+
+        # Each public link is an independent atomic commit. If the process
+        # crashes between kinds, readers can see a valid old/new mix; neither
+        # link is ever absent or partial, and current verification detects it.
+        watched = {signal.SIGHUP, signal.SIGINT, signal.SIGTERM}
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+        try:
+            for (kind, _), staging in zip(kinds, stagings, strict=True):
+                public_name = (
+                    "build" if kind == "production" else "build_qemu_test"
+                )
+                publish_generation_atomic(
+                    staging,
+                    esp32_rs / public_name,
+                    manifests[kind],
+                    lock_fd=9,
+                )
+                identity = manifests[kind]["manifest_sha256"]
+                print(f"published {kind}: {identity}")
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        if only == "both":
+            print("ONLY=both published both manifests")
+    finally:
+        cleanup_in_progress = True
+        for staging in reversed(stagings):
+            cleanup_staging(staging)
+        if snapshot is not None and task_root is not None:
+            remove_snapshot(snapshot.root, task_root)
+        if task_root is not None:
+            try:
+                task_root.rmdir()
+            except FileNotFoundError:
+                pass
+        if pending_signal is not None:
+            raise BuildCancelled(pending_signal)
+
+
+try:
+    main()
+except BuildError as exc:
+    print(f"build.sh: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
