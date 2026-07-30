@@ -194,12 +194,23 @@ def test_owner_disconnect_is_immediate_but_non_owner_disconnect_is_ignored() -> 
     controller = connected_controller(owner)
     assert controller.connect(other)
     enter_emulate(controller, owner)
+    assert controller.command_motion(
+        owner,
+        speed_tenths=30,
+        incline_half_percent=4,
+        now=0.2,
+    )
 
     assert not controller.disconnect(other, now=0.5)
     assert controller.mode is Mode.EMULATING
+    assert controller.owner == owner
+    assert controller.speed_tenths == 30
+    assert controller.incline_half_percent == 4
     assert controller.disconnect(owner, now=0.6)
     assert controller.mode is Mode.PROXY
     assert controller.owner is None
+    assert controller.speed_tenths == 0
+    assert controller.incline_half_percent == 0
     assert not controller.relay_cmd
     assert not controller.tx_enable
     assert controller.events[-1] == "emergency:owner_disconnect"
@@ -303,6 +314,12 @@ def test_reset_and_watchdog_matrix_always_returns_hardware_to_proxy(
     owner = identity(source, handle)
     controller = connected_controller(owner)
     enter_emulate(controller, owner)
+    assert controller.command_motion(
+        owner,
+        speed_tenths=30,
+        incline_half_percent=4,
+        now=0.5,
+    )
 
     if failure == "reset":
         controller.reset(now=1.0, reason="brownout")
@@ -311,6 +328,8 @@ def test_reset_and_watchdog_matrix_always_returns_hardware_to_proxy(
 
     assert controller.mode is Mode.PROXY
     assert controller.owner is None
+    assert controller.speed_tenths == 0
+    assert controller.incline_half_percent == 0
     assert not controller.relay_cmd
     assert not controller.tx_enable
 
@@ -915,11 +934,20 @@ def test_emergency_paths_never_wait_for_a_gap(reason: str) -> None:
     owner = identity()
     controller = connected_controller(owner)
     enter_emulate(controller, owner)
+    assert controller.command_motion(
+        owner,
+        speed_tenths=30,
+        incline_half_percent=4,
+        now=0.2,
+    )
     before = len(controller.events)
 
     controller.emergency_stop(reason=reason, now=0.5)
 
     assert controller.mode is Mode.PROXY
+    assert controller.owner is None
+    assert controller.speed_tenths == 0
+    assert controller.incline_half_percent == 0
     assert not controller.relay_cmd
     assert not controller.tx_enable
     assert not any(

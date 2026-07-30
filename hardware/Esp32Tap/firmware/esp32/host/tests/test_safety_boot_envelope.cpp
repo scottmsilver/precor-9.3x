@@ -295,9 +295,16 @@ TEST_CASE("3-hour timeout zeroes the authoritative controller too (task iteratio
     CHECK(h.b.controller.speed_tenths() == 0);
     CHECK(h.b.controller.incline_half_percent() == 0);
     CHECK(h.controller_has_event("safety_timeout_zero_motion"));
-    // Timeout does not change mode/lease/relay: still emulating at zero
+    // Timeout does not change mode/lease/relay/TX: still emulating at zero
     // (Pi parity: cpp/ stays in emulate with zeroed motion).
+    auto owner = ConnectionIdentity{Transport::EXECUTOR, 3, 1};
+    REQUIRE(h.b.controller.owner().has_value());
+    CHECK(*h.b.controller.owner() == owner);
     CHECK(h.b.controller.mode() == SafeMode::EMULATING);
+    CHECK(h.b.controller.relay_cmd());
+    CHECK(h.b.controller.tx_enable());
+    CHECK(h.b.io.relay_cmd);
+    CHECK(h.b.io.tx_en);
 
     // The wire only ever carries zero motion from now on.
     for (int i = 0; i < 5; i++) {

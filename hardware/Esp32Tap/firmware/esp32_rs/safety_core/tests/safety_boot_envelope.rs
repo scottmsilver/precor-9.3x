@@ -337,8 +337,14 @@ fn three_hour_timeout_zeroes_the_authoritative_controller_too_task_iteration_ord
     assert_eq!(h.b.controller.speed_tenths(), tenths(0));
     assert_eq!(h.b.controller.incline_half_percent(), half(0));
     assert!(h.controller_has_event("safety_timeout_zero_motion"));
-    // The timeout does not change mode/lease/relay: still emulating at zero.
+    // The timeout does not change mode/lease/relay/TX: still emulating at zero.
+    let owner = identity(Transport::Executor, 3, 1);
+    assert_eq!(h.b.controller.owner(), Some(owner));
     assert_eq!(h.b.controller.mode(), SafeMode::Emulating);
+    assert!(h.b.controller.relay_cmd().get());
+    assert!(h.b.controller.tx_enable().get());
+    assert!(h.b.io.relay_cmd);
+    assert!(h.b.io.tx_en);
 
     // The wire only ever carries zero motion from now on.
     for _ in 0..5 {

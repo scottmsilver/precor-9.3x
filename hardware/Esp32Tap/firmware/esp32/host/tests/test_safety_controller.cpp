@@ -159,12 +159,19 @@ TEST_CASE("owner disconnect immediate, non-owner disconnect ignored") {
     auto c = connected_controller(owner);
     REQUIRE(c.connect(other));
     enter_emulate(c, owner);
+    REQUIRE(c.command_motion(owner, 30, 4, 200 * MS));
 
     CHECK_FALSE(c.disconnect(other, 500 * MS));
     CHECK(c.mode() == SafeMode::EMULATING);
+    REQUIRE(c.owner().has_value());
+    CHECK(*c.owner() == owner);
+    CHECK(c.speed_tenths() == 30);
+    CHECK(c.incline_half_percent() == 4);
     CHECK(c.disconnect(owner, 600 * MS));
     CHECK(c.mode() == SafeMode::PROXY);
     CHECK_FALSE(c.owner().has_value());
+    CHECK(c.speed_tenths() == 0);
+    CHECK(c.incline_half_percent() == 0);
     CHECK_FALSE(c.relay_cmd());
     CHECK_FALSE(c.tx_enable());
     CHECK(last_event(c) == "emergency:owner_disconnect");
@@ -270,6 +277,7 @@ TEST_CASE("reset and watchdog matrix always returns hardware to proxy") {
             auto owner = identity(source, 17, 1);
             auto c = connected_controller(owner);
             enter_emulate(c, owner);
+            REQUIRE(c.command_motion(owner, 30, 4, 500 * MS));
 
             if (watchdog) {
                 c.watchdog_stall(1 * S);
@@ -279,6 +287,8 @@ TEST_CASE("reset and watchdog matrix always returns hardware to proxy") {
 
             CHECK(c.mode() == SafeMode::PROXY);
             CHECK_FALSE(c.owner().has_value());
+            CHECK(c.speed_tenths() == 0);
+            CHECK(c.incline_half_percent() == 0);
             CHECK_FALSE(c.relay_cmd());
             CHECK_FALSE(c.tx_enable());
         }
@@ -942,11 +952,15 @@ TEST_CASE("emergency paths never wait for a gap") {
         auto owner = identity();
         auto c = connected_controller(owner);
         enter_emulate(c, owner);
+        REQUIRE(c.command_motion(owner, 30, 4, 200 * MS));
         uint64_t before = c.event_count();
 
         c.emergency_stop(reason, 500 * MS);
 
         CHECK(c.mode() == SafeMode::PROXY);
+        CHECK_FALSE(c.owner().has_value());
+        CHECK(c.speed_tenths() == 0);
+        CHECK(c.incline_half_percent() == 0);
         CHECK_FALSE(c.relay_cmd());
         CHECK_FALSE(c.tx_enable());
         for (uint64_t i = before; i < c.event_count(); i++) {

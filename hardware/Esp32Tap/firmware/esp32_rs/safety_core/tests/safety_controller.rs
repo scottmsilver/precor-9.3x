@@ -100,12 +100,18 @@ fn owner_disconnect_immediate_non_owner_disconnect_ignored() {
     let mut c = connected_controller(&owner);
     assert!(c.connect(&other));
     enter_emulate(&mut c, &owner, Micros::ZERO);
+    assert!(c.command_motion(&owner, tenths(30), half(4), ms(200)));
 
     assert!(!c.disconnect(&other, ms(500)));
     assert_eq!(c.mode(), SafeMode::Emulating);
+    assert_eq!(c.owner(), Some(owner));
+    assert_eq!(c.speed_tenths(), tenths(30));
+    assert_eq!(c.incline_half_percent(), half(4));
     assert!(c.disconnect(&owner, ms(600)));
     assert_eq!(c.mode(), SafeMode::Proxy);
     assert!(c.owner().is_none());
+    assert_eq!(c.speed_tenths(), tenths(0));
+    assert_eq!(c.incline_half_percent(), half(0));
     assert!(!c.relay_cmd().get());
     assert!(!c.tx_enable().get());
     assert_eq!(last_event(&c), "emergency:owner_disconnect");
@@ -214,6 +220,7 @@ fn reset_and_watchdog_matrix_always_returns_hardware_to_proxy() {
             let owner = identity(source, 17, 1);
             let mut c = connected_controller(&owner);
             enter_emulate(&mut c, &owner, Micros::ZERO);
+            assert!(c.command_motion(&owner, tenths(30), half(4), ms(500)));
 
             if watchdog {
                 c.watchdog_stall(us(S));
@@ -223,6 +230,8 @@ fn reset_and_watchdog_matrix_always_returns_hardware_to_proxy() {
 
             assert_eq!(c.mode(), SafeMode::Proxy);
             assert!(c.owner().is_none());
+            assert_eq!(c.speed_tenths(), tenths(0));
+            assert_eq!(c.incline_half_percent(), half(0));
             assert!(!c.relay_cmd().get());
             assert!(!c.tx_enable().get());
         }
@@ -918,11 +927,15 @@ fn emergency_paths_never_wait_for_a_gap() {
         let owner = default_identity();
         let mut c = connected_controller(&owner);
         enter_emulate(&mut c, &owner, Micros::ZERO);
+        assert!(c.command_motion(&owner, tenths(30), half(4), ms(200)));
         let before = c.event_count();
 
         c.emergency_stop(reason, ms(500));
 
         assert_eq!(c.mode(), SafeMode::Proxy);
+        assert!(c.owner().is_none());
+        assert_eq!(c.speed_tenths(), tenths(0));
+        assert_eq!(c.incline_half_percent(), half(0));
         assert!(!c.relay_cmd().get());
         assert!(!c.tx_enable().get());
         for i in before..c.event_count() {
