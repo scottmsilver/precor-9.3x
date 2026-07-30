@@ -127,16 +127,25 @@ declared input set includes:
 Dirty and untracked source files are hashed from the working tree, not from
 `HEAD`. Git timestamps and output-directory timestamps are never inputs.
 
-The build captures this input digest while holding the existing exclusive
-build lock, before invoking Cargo against the live bind mount. It recomputes
-the digest after the image and bundle members are produced but before
-publishing any output or manifest. If the two snapshots differ, the temporary
-bundle is discarded and the build fails. A manifest can therefore never
-certify source edits that the compiler may not have consumed.
+The build creates an immutable temporary snapshot of the declared working-tree
+inputs while holding the existing exclusive build lock. The snapshot includes
+tracked, dirty, and relevant untracked files with their repository-relative
+paths; Cargo and ESP-IDF compile only that snapshot, never the live bind mount.
+Its content digest is the manifest input digest. After the bundle is produced
+but before publication, the builder recomputes the live working-tree digest
+and requires it to equal the snapshot digest. A later live edit therefore
+invalidates publication, while a transient edit-and-revert during compilation
+cannot affect the artifact because the compiler cannot see the live tree.
+Temporary snapshots and unpublished bundles are removed on every exit.
 
-The verifier recomputes the current build-image recipe fingerprint and
-resolves the configured local image to its immutable Docker image ID. Both
-must match the manifest. A mutable tag alone is never accepted as toolchain
+The build image is created through a tracked wrapper which fingerprints the
+Dockerfile plus its declared build context and writes that fingerprint into an
+OCI image label. Before Cargo starts, `build.sh` requires the configured image
+to carry the current recipe label; a changed recipe with an old local image is
+rejected with the image-rebuild command. The verifier recomputes the recipe
+fingerprint, resolves the configured local image to its immutable Docker image
+ID, and verifies both the label binding and the manifest values. A mutable tag
+alone, or an unlabeled/mislabeled image, is never accepted as toolchain
 identity.
 
 ### Fixture enforcement
@@ -153,14 +162,17 @@ every Rust QEMU entry point will:
    `ONLY=qemu bash tools/build.sh` or `ONLY=prod bash tools/build.sh`.
 
 This enforcement covers both pytest families:
-`tools/qemu_scenarios` and the byte-locked `tools/qemu_harness`. A Rust-owned
-parent pytest plugin will run the preflight before either local fixture is
-eligible to acquire ports; this preserves the byte-identical shared harness
-files. The Rust `qemu_smoke.sh` entry becomes a checked wrapper around the
-read-only shared smoke implementation, and `verify_harness_copy.py` continues
-to verify that underlying shared implementation rather than treating the
-wrapper as a divergent copy. The normal sweep verifies the production bundle
-before its smoke launch and the QEMU bundle before pytest.
+`tools/qemu_scenarios` and `tools/qemu_harness`. The committed
+`qemu_session.py` is strengthened to invoke the Rust provenance checker before
+its first `_lease()` call, so the local `qemu_harness/pytest.ini` root cannot
+bypass preflight. The change is committed as part of the verified harness
+rather than hidden as a dirty local edit, and `verify_harness_copy.py` keeps
+enforcing the repository's harness-copy contract. Scenario fixtures may also
+preflight at session scope for a faster error, but the session constructor is
+the non-bypassable boundary. The Rust `qemu_smoke.sh` entry becomes a checked
+wrapper around the read-only shared smoke implementation. The normal sweep
+verifies the production bundle before its smoke launch and the QEMU bundle
+before pytest.
 
 Verification and flash assembly hold the existing shared/read build lease
 continuously, including under xdist, so an exclusive build cannot replace a
@@ -177,9 +189,10 @@ selector. With no revision arguments it inspects the union of staged,
 unstaged, and untracked working-tree changes. For committed work it accepts an
 authoritative `--base REV` or `--range REV1..REV2` and derives NUL-delimited
 Git name/status records, including both sides of renames and deleted paths.
-Explicit paths may be added, but are unioned with detected changes and never
-replace them. A clean tree with no revision range or explicit path is an error,
-not an empty successful gate.
+Explicit paths may augment a nonempty authoritative working-tree or
+revision-derived set, but never replace it. A clean tree requires
+`--base`/`--range`; explicit paths alone are rejected for committed work. A
+zero-change selection is always an error, not an empty successful gate.
 
 The selector maps paths to named gate groups, for example:
 
@@ -249,8 +262,10 @@ Host tests will prove:
 - atomic/incomplete manifests are rejected;
 - bootloader, partition table, flash arguments, sdkconfig, or member-set
   changes invalidate the bundle;
-- a working-tree mutation during the build prevents manifest publication;
-- mutable image tags cannot conceal a Docker image/recipe change;
+- a working-tree mutation during the build prevents manifest publication, and
+  a transient edit-and-revert cannot enter the immutable build snapshot;
+- mutable image tags cannot conceal a Docker image/recipe change, and an image
+  without the current recipe label is rejected before compilation;
 - every tracked workspace path is classified or forces broad fallback;
 - multiple changed paths produce the union of their gates;
 - revision ranges handle clean trees, deletions, and renames without trusting
