@@ -559,13 +559,21 @@ def probe_board(
         raise BenchError("expected MAC must be lowercase canonical form")
     prefix = [ESPTOOL, "--chip", "esp32s3", "--port", serial_path]
     chip = runner([*prefix, "chip-id"], timeout=30)
-    if not re.search(r"(?mi)^Chip is ESP32-S3(?:\s|$)", chip):
+    if not re.search(
+        r"(?m)^(?:Chip is[ \t]+|Chip type:[ \t]+)ESP32-S3(?:[ \t(]|$)", chip
+    ):
         raise BenchError("connected chip is not ESP32-S3")
     mac_output = runner([*prefix, "read-mac"], timeout=30)
-    matches = re.findall(
-        r"(?mi)^MAC:\s*([0-9a-f]{2}(?::[0-9a-f]{2}){5})\s*$", mac_output
-    )
-    if matches != [expected_mac]:
+    mac_lines = [line for line in mac_output.splitlines() if line.startswith("MAC:")]
+    matches = [
+        re.fullmatch(r"MAC:[ \t]*([0-9a-f]{2}(?::[0-9a-f]{2}){5})[ \t]*", line)
+        for line in mac_lines
+    ]
+    if (
+        not matches
+        or any(match is None for match in matches)
+        or any(match.group(1) != expected_mac for match in matches if match is not None)
+    ):
         raise BenchError("connected board MAC does not match authorization")
     flash = runner([*prefix, "flash-id"], timeout=30)
     sizes = re.findall(r"(?mi)^Detected flash size:\s*([^\s]+)\s*$", flash)

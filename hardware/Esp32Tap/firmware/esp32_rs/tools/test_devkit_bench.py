@@ -256,6 +256,39 @@ def test_board_probe_rejects_wrong_chip_mac_or_flash(
     assert all(isinstance(call, list) for call in runner.calls)
 
 
+def test_board_probe_accepts_exact_esptool_5_3_1_transcript() -> None:
+    def runner(argv: list[str], *, timeout: float) -> str:
+        assert timeout == 30
+        if argv[-1] == "chip-id":
+            return (
+                "esptool v5.3.1\n"
+                "Connected to ESP32-S3 on /dev/ttyUSB0:\n"
+                "Chip type:          ESP32-S3 (QFN56) (revision v0.2)\n"
+                f"MAC:                {MAC}\n"
+            )
+        if argv[-1] == "read-mac":
+            return (
+                f"MAC:                {MAC}\n"
+                "Stub flasher running.\n"
+                f"MAC:                {MAC}\n"
+            )
+        return "Detected flash size: 8MB\n"
+
+    bench.probe_board(SERIAL, MAC, runner=runner)
+
+
+def test_board_probe_rejects_any_conflicting_duplicate_mac() -> None:
+    def runner(argv: list[str], *, timeout: float) -> str:
+        if argv[-1] == "chip-id":
+            return "Chip type: ESP32-S3 (QFN56) (revision v0.2)\n"
+        if argv[-1] == "read-mac":
+            return f"MAC: {MAC}\nMAC: 00:11:22:33:44:55\n"
+        return "Detected flash size: 8MB\n"
+
+    with pytest.raises(bench.BenchError, match="MAC"):
+        bench.probe_board(SERIAL, MAC, runner=runner)
+
+
 def secure_dir(path: Path) -> None:
     path.mkdir(mode=0o700)
     path.chmod(0o700)
