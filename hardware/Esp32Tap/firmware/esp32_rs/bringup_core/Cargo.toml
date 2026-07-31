@@ -1,0 +1,13 @@
+[package]
+name = "bringup_core"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75"
+
+[dependencies]
+
+[dev-dependencies]
+
+[lib]
+name = "bringup_core"
+path = "src/lib.rs"
