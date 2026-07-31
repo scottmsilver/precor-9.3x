@@ -293,15 +293,18 @@ def classify_path(value: str) -> tuple[str, str | None]:
     return "broad", "broad-policy-path"
 
 
+def _git_environment() -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("GIT_")
+    }
+    environment["LC_ALL"] = "C"
+    environment["LANG"] = "C"
+    return environment
+
+
 def _run_git(root: Path, args: tuple[str, ...]) -> bytes:
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_TERMINAL_PROMPT": "0",
-            "LC_ALL": "C",
-        }
-    )
     process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
@@ -309,7 +312,7 @@ def _run_git(root: Path, args: tuple[str, ...]) -> bytes:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=environment,
+            env=_git_environment(),
             start_new_session=True,
         )
         assert process.stdout is not None

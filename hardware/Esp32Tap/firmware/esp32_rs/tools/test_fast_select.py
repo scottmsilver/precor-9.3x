@@ -63,6 +63,19 @@ DOCS_HOST = (
 )
 BROAD_HOST = ("env", "-C", RS, "bash", "tools/sweep.sh")
 QEMU = ("env", "-C", f"{RS}/tools/qemu_scenarios", "python3", "-m", "pytest")
+HOSTILE_GIT_ENV = {
+    "GIT_DIR": ".git",
+    "GIT_WORK_TREE": ".",
+    "GIT_INDEX_FILE": ".git/index",
+    "GIT_OBJECT_DIRECTORY": ".git/objects",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES": ".git/objects",
+    "GIT_COMMON_DIR": ".git",
+    "GIT_NAMESPACE": "hostile",
+    "GIT_REPLACE_REF_BASE": "refs/hostile-replace/",
+    "GIT_CONFIG_COUNT": "1",
+    "GIT_CONFIG_KEY_0": "core.worktree",
+    "GIT_CONFIG_VALUE_0": ".",
+}
 
 
 def git(root: Path, *args: str) -> bytes:
@@ -94,6 +107,19 @@ def write(root: Path, relative: str, content: str = "content\n") -> Path:
 def commit_all(root: Path, message: str = "fixture") -> None:
     git(root, "add", "-A")
     git(root, "commit", "-qm", message)
+
+
+def set_hostile_git_environment(
+    monkeypatch: pytest.MonkeyPatch, hostile_repo: Path
+) -> None:
+    replacements = {
+        ".": os.fspath(hostile_repo),
+        ".git": os.fspath(hostile_repo / ".git"),
+        ".git/index": os.fspath(hostile_repo / ".git/index"),
+        ".git/objects": os.fspath(hostile_repo / ".git/objects"),
+    }
+    for key, value in HOSTILE_GIT_ENV.items():
+        monkeypatch.setenv(key, replacements.get(value, value))
 
 
 def selection_for(repo: Path, relative: str) -> fast_select.Selection:
@@ -550,6 +576,124 @@ def test_git_process_failure_fails_closed_to_broad(monkeypatch, tmp_path: Path) 
 
     assert selected.policies == ("broad",)
     assert selected.broad_reason == "git-enumeration-failed"
+
+
+def test_every_git_argv_receives_environment_without_inherited_git_overrides(
+    monkeypatch, tmp_path: Path
+) -> None:
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    log = tmp_path / "git-log.jsonl"
+    fake_git = binary / "git"
+    fake_git.write_text(
+        "#!/usr/bin/python3\n"
+        "import json, os, sys\n"
+        "record = {'argv': sys.argv[1:], 'env': dict(os.environ)}\n"
+        "with open(os.environ['SELECTOR_TEST_LOG'], 'a', encoding='utf-8') as out:\n"
+        "    out.write(json.dumps(record, sort_keys=True) + '\\n')\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    original_path = os.environ["PATH"]
+    expected_path = f"{binary}{os.pathsep}{original_path}"
+    monkeypatch.setenv("PATH", expected_path)
+    monkeypatch.setenv("HOME", "/selector-safe-home")
+    monkeypatch.setenv("SELECTOR_TEST_LOG", os.fspath(log))
+    for key, value in HOSTILE_GIT_ENV.items():
+        monkeypatch.setenv(key, value)
+    commands = (
+        ("rev-parse", "--show-toplevel"),
+        ("diff", "-M", "--name-status", "-z", "--"),
+        ("diff", "-M", "--cached", "--name-status", "-z", "--"),
+        ("ls-files", "--others", "--exclude-standard", "-z", "--"),
+        ("diff", "-M", "--name-status", "-z", "HEAD~1", "--"),
+        ("diff", "-M", "--name-status", "-z", "main..topic", "--"),
+        ("diff", "--no-ext-diff", "--no-textconv", "-U0", "--"),
+        (
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-U0",
+            "--cached",
+            "--",
+        ),
+        (
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-U0",
+            "HEAD~1",
+            "--",
+        ),
+        (
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "-U0",
+            "main..topic",
+            "--",
+        ),
+    )
+
+    for command in commands:
+        assert fast_select._run_git(tmp_path, command) == b""
+
+    records = [
+        json.loads(line)
+        for line in log.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [record["argv"] for record in records] == [
+        ["-C", os.fspath(tmp_path), *command] for command in commands
+    ]
+    for record in records:
+        environment = record["env"]
+        assert not any(key.startswith("GIT_") for key in environment)
+        assert environment["LC_ALL"] == "C"
+        assert environment["LANG"] == "C"
+        assert environment["PATH"] == expected_path
+        assert environment["HOME"] == "/selector-safe-home"
+        assert environment["SELECTOR_TEST_LOG"] == os.fspath(log)
+
+
+def test_root_discovery_ignores_hostile_second_repository_environment(
+    repo: Path, tmp_path: Path, monkeypatch
+) -> None:
+    script = write(repo, f"{RS}/tools/fast_select.py", "placeholder\n")
+    commit_all(repo)
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    git(hostile, "init", "-q")
+    git(hostile, "config", "user.email", "hostile@example.invalid")
+    git(hostile, "config", "user.name", "Hostile Repo")
+    write(hostile, "docs/hostile.md")
+    commit_all(hostile, "hostile")
+    set_hostile_git_environment(monkeypatch, hostile)
+
+    assert fast_select.discover_repo_root(script) == repo.resolve()
+
+
+def test_selection_ignores_hostile_git_object_index_and_config_environment(
+    repo: Path, tmp_path: Path, monkeypatch
+) -> None:
+    script = write(repo, f"{RS}/tools/fast_select.py", "placeholder\n")
+    actual = write(repo, "docs/actual.md", "before\n")
+    commit_all(repo)
+    actual.write_text("after\n", encoding="utf-8")
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    git(hostile, "init", "-q")
+    git(hostile, "config", "user.email", "hostile@example.invalid")
+    git(hostile, "config", "user.name", "Hostile Repo")
+    write(hostile, "docs/hostile.md")
+    commit_all(hostile, "hostile")
+    set_hostile_git_environment(monkeypatch, hostile)
+
+    discovered = fast_select.discover_repo_root(script)
+    selected = fast_select.select(discovered)
+
+    assert discovered == repo.resolve()
+    assert selected.paths == ("docs/actual.md",)
+    assert selected.policies == ("docs",)
 
 
 def test_git_output_limit_terminates_producer_before_timeout(
