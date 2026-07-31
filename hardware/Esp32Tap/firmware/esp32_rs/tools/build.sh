@@ -63,6 +63,7 @@ from artifact_inputs import (  # noqa: E402
     create_snapshot,
     remove_snapshot,
     target_cache,
+    verify_snapshot_matches_commit,
     verify_gate_input_completeness,
     working_digest,
 )
@@ -369,6 +370,26 @@ def live_digest_without_staging_sdkconfigs(
                 held.pop()
                 raise
         return working_digest(repo_root)
+    finally:
+        for source, destination in reversed(held):
+            if os.path.lexists(destination):
+                os.rename(destination, source)
+
+
+def clean_commit_without_stagings(stagings: list[Path], task_root: Path) -> str:
+    """Hide owned build outputs while checking the complete live worktree."""
+
+    held: list[tuple[Path, Path]] = []
+    try:
+        for index, source in enumerate(stagings):
+            destination = task_root / f"status-staging-{index}"
+            held.append((source, destination))
+            try:
+                os.rename(source, destination)
+            except BaseException:
+                held.pop()
+                raise
+        return clean_git_commit()
     finally:
         for source, destination in reversed(held):
             if os.path.lexists(destination):
@@ -889,6 +910,15 @@ def main() -> None:
         raise_pending_cancellation()
         print(f"== immutable source {snapshot.digest} ==")
         validate_snapshot_identity(snapshot)
+        if devkit_commit is not None:
+            try:
+                verify_snapshot_matches_commit(snapshot, repo_root, devkit_commit)
+            except (ValueError, RuntimeError) as exc:
+                raise BuildError(
+                    f"immutable snapshot does not match claimed Git commit: {exc}"
+                ) from exc
+            if clean_git_commit() != devkit_commit:
+                raise BuildError("Git commit changed while snapshot was captured")
         sealed_baseline = sealed_snapshot_digest(snapshot.root, snapshot.paths)
 
         # Recipe/toolchain validation deliberately precedes every host gate.
@@ -983,14 +1013,7 @@ def main() -> None:
                 "nothing was published"
             )
         if devkit_commit is not None:
-            current_commit = subprocess.run(
-                ["git", "-C", str(repo_root), "rev-parse", "--verify", "HEAD"],
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            ).stdout.strip()
-            if current_commit != devkit_commit:
+            if clean_commit_without_stagings(stagings, task_root) != devkit_commit:
                 raise BuildError("Git commit changed while DevKit build was running")
 
         # Each public link is an independent atomic commit. If the process

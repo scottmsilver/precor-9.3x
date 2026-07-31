@@ -104,6 +104,121 @@ class Snapshot:
     worktree_key: str
 
 
+def _commit_tree(root: Path, commit: str) -> dict[str, tuple[str, str, bytes]]:
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise ValueError("snapshot commit must be exactly 40 lowercase hex characters")
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "ls-tree", "-rz", "--full-tree", commit],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"could not read claimed Git commit {commit}") from exc
+    records: dict[str, tuple[str, str, bytes]] = {}
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        try:
+            header, raw_path = raw.split(b"\t", 1)
+            mode_bytes, kind_bytes, oid_bytes = header.split(b" ", 2)
+            mode = mode_bytes.decode("ascii")
+            kind = kind_bytes.decode("ascii")
+            oid = oid_bytes.decode("ascii")
+            relative = _normalise_relative(os.fsdecode(raw_path))
+        except (ValueError, UnicodeError) as exc:
+            raise RuntimeError(
+                "Git commit tree contains malformed input metadata"
+            ) from exc
+        if relative in records or re.fullmatch(r"[0-9a-f]{40,64}", oid) is None:
+            raise RuntimeError("Git commit tree contains ambiguous input metadata")
+        records[relative] = (mode, kind, oid_bytes)
+    return records
+
+
+def _commit_blob(root: Path, oid: bytes, relative: str) -> bytes:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(root), "cat-file", "blob", oid.decode("ascii")],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        ).stdout
+    except (OSError, UnicodeError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(f"could not read claimed Git blob for {relative}") from exc
+
+
+def verify_snapshot_matches_commit(
+    snapshot: Snapshot, repo_root: Path, commit: str
+) -> None:
+    """Bind one sealed selected-input snapshot to an immutable Git commit."""
+
+    root = _validated_repo_root(repo_root)
+    records = _commit_tree(root, commit)
+    selected = {
+        relative
+        for relative in records
+        if not _always_excluded(relative) and _in_tracked_build_scope(relative)
+    }
+    blobs: dict[str, bytes] = {}
+
+    def blob(relative: str) -> bytes:
+        if relative not in blobs:
+            blobs[relative] = _commit_blob(root, records[relative][2], relative)
+        return blobs[relative]
+
+    pending = list(selected)
+    while pending:
+        relative = pending.pop()
+        mode, kind, _ = records[relative]
+        if kind != "blob" or mode not in {"100644", "100755", "120000"}:
+            raise ValueError(
+                f"claimed Git input has unsupported type or mode: {relative}"
+            )
+        if mode != "120000":
+            continue
+        target_text = os.fsdecode(blob(relative))
+        if os.path.isabs(target_text):
+            raise ValueError(f"claimed Git input has absolute symlink: {relative}")
+        lexical = os.path.normpath(os.path.join(os.path.dirname(relative), target_text))
+        if lexical == ".." or lexical.startswith("../") or os.path.isabs(lexical):
+            raise ValueError(f"claimed Git input symlink escapes repo: {relative}")
+        target = _normalise_relative(PurePosixPath(lexical).as_posix())
+        if target not in records:
+            raise ValueError(f"claimed Git input symlink target is absent: {relative}")
+        if target not in selected:
+            selected.add(target)
+            pending.append(target)
+
+    expected_paths = tuple(sorted(selected, key=os.fsencode))
+    if snapshot.paths != expected_paths:
+        raise ValueError("snapshot input set does not match claimed Git commit")
+    selected_frozen = frozenset(expected_paths)
+    for relative in expected_paths:
+        mode, kind, _ = records[relative]
+        if kind != "blob" or mode not in {"100644", "100755", "120000"}:
+            raise ValueError(
+                f"claimed Git input has unsupported type or mode: {relative}"
+            )
+        snapshot_kind, content, permissions = _read_input(
+            snapshot.root, relative, selected_frozen
+        )
+        expected_kind = b"L" if mode == "120000" else b"F"
+        expected_executable = mode == "100755"
+        if (
+            snapshot_kind != expected_kind
+            or content != blob(relative)
+            or (
+                snapshot_kind == b"F"
+                and bool(permissions & 0o111) != expected_executable
+            )
+        ):
+            raise ValueError(
+                f"snapshot input does not match claimed Git commit: {relative}"
+            )
+
+
 def _validated_repo_root(repo_root: Path) -> Path:
     root = Path(repo_root).resolve(strict=True)
     if not root.is_dir():

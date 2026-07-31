@@ -155,7 +155,17 @@ _real_create_snapshot_for_seam_test = create_snapshot
 
 
 def create_snapshot(*args, **kwargs):
-    result = _real_create_snapshot_for_seam_test(*args, **kwargs)
+    mutation_path = os.environ.get("FAKE_SNAPSHOT_MUTATE_REVERT")
+    if mutation_path:
+        mutation = Path(mutation_path)
+        original = mutation.read_bytes()
+        mutation.write_bytes(b"B" + original[1:])
+        try:
+            result = _real_create_snapshot_for_seam_test(*args, **kwargs)
+        finally:
+            mutation.write_bytes(original)
+    else:
+        result = _real_create_snapshot_for_seam_test(*args, **kwargs)
     seam = os.environ.get("FAKE_RESOURCE_SEAM")
     if seam in ("snapshot_return", "snapshot_exception"):
         Path(os.environ["FAKE_RESOURCE_PATH"]).write_text(
@@ -246,6 +256,12 @@ def publish_generation_atomic(*args, **kwargs):
     )
     _write(rs / "Dockerfile", "FROM scratch\n")
     _write(rs / ".dockerignore", "*\n")
+    _write(
+        root / ".gitignore",
+        "hardware/Esp32Tap/firmware/esp32_rs/.artifacts/\n"
+        "hardware/Esp32Tap/firmware/esp32_rs/.snapshot-build-*\n"
+        "hardware/Esp32Tap/firmware/esp32_rs/build*\n",
+    )
     _write(rs / "esp32tap" / "components_esp32s3.lock", "lock\n")
     _write(rs / "bringup_core" / "src" / "lib.rs", "pub const SAFE: bool = true;\n")
     _write(rs / "devkit_bringup" / "Cargo.toml", "[package]\nname='devkit_bringup'\n")
@@ -618,6 +634,30 @@ def test_devkit_refuses_dirty_live_tree_before_docker(
     assert completed.returncode != 0
     assert "clean Git worktree" in completed.stderr
     assert not docker_log.exists()
+
+
+def test_devkit_rejects_mutate_capture_revert_snapshot_race_before_docker(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, docker_log, _ = fake_worktree
+    source_path = (
+        root / "hardware/Esp32Tap/firmware/esp32_rs/devkit_bringup/src/main.rs"
+    )
+    original = source_path.read_bytes()
+
+    completed = _run(
+        fake_worktree,
+        only="devkit",
+        extra_env={"FAKE_SNAPSHOT_MUTATE_REVERT": str(source_path)},
+    )
+
+    assert completed.returncode != 0
+    assert "claimed Git commit" in completed.stderr
+    assert source_path.read_bytes() == original
+    assert not docker_log.exists()
+    assert not (
+        root / "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup"
+    ).exists()
 
 
 @pytest.mark.parametrize(

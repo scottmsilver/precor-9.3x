@@ -15,6 +15,7 @@ from artifact_inputs import (
     remove_snapshot,
     target_cache,
     verify_gate_input_completeness,
+    verify_snapshot_matches_commit,
     working_digest,
 )
 
@@ -128,6 +129,60 @@ def test_snapshot_is_immutable_against_later_live_edit(
         encoding="utf-8"
     ) == "before"
     assert snapshot.digest != working_digest(repo)
+
+
+@pytest.mark.parametrize("mutation", ["content", "mode", "deletion", "addition"])
+def test_snapshot_commit_binding_rejects_every_tracked_input_difference(
+    repo: Path, tmp_path: Path, mutation: str
+) -> None:
+    source = write(repo, RS / "devkit_bringup/src/main.rs", "fn main() {}\n")
+    source.chmod(0o644)
+    commit_all(repo)
+    commit = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+
+    if mutation == "content":
+        source.write_text("fn main() { panic!(); }\n", encoding="utf-8")
+    elif mutation == "mode":
+        source.chmod(0o755)
+    elif mutation == "deletion":
+        source.unlink()
+    else:
+        write(repo, RS / "devkit_bringup/src/untracked.rs", "pub const NEW: u8 = 1;\n")
+
+    snapshot = create_snapshot(
+        repo, tmp_path / f"snapshot-{mutation}", tmp_path / "target"
+    )
+
+    with pytest.raises(ValueError, match="claimed Git commit"):
+        verify_snapshot_matches_commit(snapshot, repo, commit)
+
+
+def test_snapshot_commit_binding_accepts_exact_commit_and_excludes_ignored_generated(
+    repo: Path, tmp_path: Path
+) -> None:
+    source = write(repo, RS / "devkit_bringup/src/main.rs", "fn main() {}\n")
+    write(repo, ".gitignore", f"/{RS}/devkit_bringup/src/local.rs\n")
+    commit_all(repo)
+    commit = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    ignored = write(repo, RS / "devkit_bringup/src/local.rs", "ignored\n")
+    generated = write(repo, RS / "build_devkit_bringup/esp32tap.bin", "generated\n")
+
+    snapshot = create_snapshot(repo, tmp_path / "snapshot", tmp_path / "target")
+
+    verify_snapshot_matches_commit(snapshot, repo, commit)
+    assert source.relative_to(repo).as_posix() in snapshot.paths
+    assert ignored.relative_to(repo).as_posix() not in snapshot.paths
+    assert generated.relative_to(repo).as_posix() not in snapshot.paths
 
 
 def test_published_snapshot_files_and_directories_are_sealed(
