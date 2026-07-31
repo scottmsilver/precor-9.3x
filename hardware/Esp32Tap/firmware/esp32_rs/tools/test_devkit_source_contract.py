@@ -8,10 +8,23 @@ artifact gate performs the real cross-build and also leaves a generated
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
 from pathlib import Path
 
+import pytest
+
+
+# Source-only verification (works in a clean checkout):
+#   python3 -m pytest -q tools/test_devkit_source_contract.py
+#
+# Mandatory post-cross-build verification (fails closed if either path is
+# absent, missing, or stale enough to violate the asserted contents):
+#   DEVKIT_VERIFY_GENERATED=1 \
+#   DEVKIT_GENERATED_SDKCONFIG=/absolute/path/to/generated/sdkconfig \
+#   DEVKIT_FIRMWARE_ELF=/absolute/path/to/devkit_bringup \
+#   python3 -m pytest -q tools/test_devkit_source_contract.py
 
 ESP32_RS = Path(__file__).resolve().parent.parent
 DEVKIT = ESP32_RS / "devkit_bringup"
@@ -88,13 +101,18 @@ def _parse_kconfig(path: Path) -> dict[str, str]:
     return values
 
 
-def _config_inputs() -> list[Path]:
-    generated = sorted(
-        path
-        for path in DEVKIT.glob("target/**/sdkconfig")
-        if any(part.startswith("esp-idf-sys-") for part in path.parts)
-    )
-    return [DEFAULTS, *generated]
+def _generated_artifacts() -> tuple[Path, Path]:
+    if os.environ.get("DEVKIT_VERIFY_GENERATED") != "1":
+        pytest.skip("set DEVKIT_VERIFY_GENERATED=1 after the pinned cross-build")
+    sdkconfig_value = os.environ.get("DEVKIT_GENERATED_SDKCONFIG")
+    elf_value = os.environ.get("DEVKIT_FIRMWARE_ELF")
+    assert sdkconfig_value, "DEVKIT_GENERATED_SDKCONFIG is required in generated mode"
+    assert elf_value, "DEVKIT_FIRMWARE_ELF is required in generated mode"
+    sdkconfig = Path(sdkconfig_value)
+    elf = Path(elf_value)
+    assert sdkconfig.is_file(), f"generated sdkconfig not found: {sdkconfig}"
+    assert elf.is_file(), f"DevKit ELF not found: {elf}"
+    return sdkconfig, elf
 
 
 def test_all_isolated_firmware_files_exist() -> None:
@@ -287,46 +305,61 @@ def test_terminal_result_is_single_shot_and_halt_cannot_restart() -> None:
     assert fail_body and fail_body.group(0).count("write_line(") == 1
 
 
+def test_post_pass_gpio_and_uart_failures_emit_one_best_effort_failure() -> None:
+    main = _read(SRC / "main.rs")
+    handle = re.search(r"fn handle_command\(.*?\n\}", main, re.DOTALL)
+    command_error = re.search(r"fn write_command_error\(.*?\n\}", main, re.DOTALL)
+    assert handle and command_error
+    assert "Err(_) => fail_and_halt(FailureCode::GpioRead)" in handle.group(0)
+    assert "fail_and_halt(FailureCode::UartWrite)" in handle.group(0)
+    assert "fail_and_halt(FailureCode::UartWrite)" in command_error.group(0)
+    assert "Best effort, exactly once" in main
+
+
 def test_standalone_sdkconfig_is_n8r8_uart_and_halt_only() -> None:
-    for path in _config_inputs():
-        config = _parse_kconfig(path)
-        assert config.get("CONFIG_IDF_TARGET") == "esp32s3"
-        assert config.get("CONFIG_IDF_TARGET_ESP32S3") == "y"
-        assert config.get("CONFIG_ESPTOOLPY_FLASHSIZE_8MB") == "y"
-        assert config.get("CONFIG_PARTITION_TABLE_CUSTOM") == "y"
-        assert config.get("CONFIG_PARTITION_TABLE_CUSTOM_FILENAME") == (
-            "/project/hardware/Esp32Tap/firmware/esp32_rs/partitions_esp32tap.csv"
-        )
-        assert config.get("CONFIG_SPIRAM") == "y"
-        assert config.get("CONFIG_SPIRAM_MODE_OCT") == "y"
-        assert config.get("CONFIG_SPIRAM_BOOT_HW_INIT") == "y"
-        assert config.get("CONFIG_SPIRAM_BOOT_INIT") == "y"
-        assert config.get("CONFIG_SPIRAM_USE_CAPS_ALLOC") == "y"
-        assert config.get("CONFIG_ESP_CONSOLE_UART_DEFAULT") == "y"
-        assert config.get("CONFIG_ESP_CONSOLE_UART") == "y"
-        assert config.get("CONFIG_ESP_CONSOLE_SECONDARY_NONE") == "y"
-        assert config.get("CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT") == "y"
-
-        forbidden_enabled = {
-            "CONFIG_ETH_USE_OPENETH",
-            "CONFIG_BT_ENABLED",
-            "CONFIG_ESP_CONSOLE_USB_CDC",
-            "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG",
-            "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG",
-            "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED",
-            "CONFIG_ESP_DEBUG_OCDAWARE",
-            "CONFIG_ESP_DEBUG_INCLUDE_OCD_STUB_BINS",
-            "CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT",
-            "CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT",
-            "CONFIG_ESP_SYSTEM_PANIC_GDBSTUB",
-            "CONFIG_ESP_TASK_WDT_INIT",
-        }
-        assert not {key for key in forbidden_enabled if config.get(key) == "y"}
-        if path == DEFAULTS:
-            assert config.get("CONFIG_ESP_WIFI_ENABLED") == "n"
+    config = _parse_kconfig(DEFAULTS)
+    _assert_n8r8_uart_halt_config(config)
+    assert config.get("CONFIG_ESP_WIFI_ENABLED") == "n"
 
 
-def test_cross_built_image_has_no_radio_or_network_entrypoints() -> None:
+def _assert_n8r8_uart_halt_config(config: dict[str, str]) -> None:
+    assert config.get("CONFIG_IDF_TARGET") == "esp32s3"
+    assert config.get("CONFIG_IDF_TARGET_ESP32S3") == "y"
+    assert config.get("CONFIG_ESPTOOLPY_FLASHSIZE_8MB") == "y"
+    assert config.get("CONFIG_PARTITION_TABLE_CUSTOM") == "y"
+    assert config.get("CONFIG_PARTITION_TABLE_CUSTOM_FILENAME") == (
+        "/project/hardware/Esp32Tap/firmware/esp32_rs/partitions_esp32tap.csv"
+    )
+    assert config.get("CONFIG_SPIRAM") == "y"
+    assert config.get("CONFIG_SPIRAM_MODE_OCT") == "y"
+    assert config.get("CONFIG_SPIRAM_BOOT_HW_INIT") == "y"
+    assert config.get("CONFIG_SPIRAM_BOOT_INIT") == "y"
+    assert config.get("CONFIG_SPIRAM_USE_CAPS_ALLOC") == "y"
+    assert config.get("CONFIG_ESP_CONSOLE_UART_DEFAULT") == "y"
+    assert config.get("CONFIG_ESP_CONSOLE_UART") == "y"
+    assert config.get("CONFIG_ESP_CONSOLE_SECONDARY_NONE") == "y"
+    assert config.get("CONFIG_USJ_ENABLE_USB_SERIAL_JTAG") == "n"
+    assert config.get("CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT") == "y"
+
+    forbidden_enabled = {
+        "CONFIG_ETH_USE_OPENETH",
+        "CONFIG_BT_ENABLED",
+        "CONFIG_USJ_ENABLE_USB_SERIAL_JTAG",
+        "CONFIG_ESP_CONSOLE_USB_CDC",
+        "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG",
+        "CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG",
+        "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED",
+        "CONFIG_ESP_DEBUG_OCDAWARE",
+        "CONFIG_ESP_DEBUG_INCLUDE_OCD_STUB_BINS",
+        "CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT",
+        "CONFIG_ESP_SYSTEM_PANIC_SILENT_REBOOT",
+        "CONFIG_ESP_SYSTEM_PANIC_GDBSTUB",
+        "CONFIG_ESP_TASK_WDT_INIT",
+    }
+    assert not {key for key in forbidden_enabled if config.get(key) == "y"}
+
+
+def test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode() -> None:
     """Check semantics, not IDF's hidden always-y Wi-Fi capability symbol.
 
     ESP_WIFI_ENABLED has no prompt on ESP32-S3 and Kconfig forces it to y even
@@ -334,15 +367,23 @@ def test_cross_built_image_has_no_radio_or_network_entrypoints() -> None:
     neither references nor links a radio/network initialization entry point.
     """
 
-    binaries = sorted(DEVKIT.glob("target/**/release/devkit_bringup"))
-    for binary in binaries:
-        image = binary.read_bytes()
-        for symbol in (
-            b"esp_wifi_init",
-            b"nimble_port_init",
-            b"esp_eth_driver_install",
-        ):
-            assert symbol not in image
+    sdkconfig, elf = _generated_artifacts()
+    config = _parse_kconfig(sdkconfig)
+    _assert_n8r8_uart_halt_config(config)
+    # ESP_WIFI_ENABLED is an invisible capability symbol forced on for an S3
+    # by IDF 5.5.4.  Prove operational radio absence from the linked image.
+    assert config.get("CONFIG_ESP_WIFI_ENABLED") in {"n", "y"}
+    image = elf.read_bytes()
+    for symbol in (
+        b"esp_wifi_init",
+        b"esp_wifi_start",
+        b"esp_wifi_connect",
+        b"esp_wifi_set_mode",
+        b"esp_wifi_set_config",
+        b"nimble_port_init",
+        b"esp_eth_driver_install",
+    ):
+        assert symbol not in image
 
 
 def test_no_output_pull_hold_or_protected_output_mask_exists() -> None:

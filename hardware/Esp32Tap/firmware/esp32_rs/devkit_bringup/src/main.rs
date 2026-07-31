@@ -117,6 +117,8 @@ fn write_startup_report() -> Result<(), FailureCode> {
 }
 
 fn fail_and_halt(code: FailureCode) -> ! {
+    // Best effort, exactly once: a broken UART may lose this one attempt, but
+    // the permanent halt below never retries or emits a duplicate record.
     let _ = write_line(format_args!("BRINGUP FAIL code={}", code.text()));
     hardware::halt()
 }
@@ -158,8 +160,9 @@ fn handle_command(bytes: &[u8]) {
         write_command_error();
         return;
     };
-    let Ok(pins) = Pins::read() else {
-        hardware::halt();
+    let pins = match Pins::read() {
+        Ok(pins) => pins,
+        Err(_) => fail_and_halt(FailureCode::GpioRead),
     };
     let sample = PinSample {
         sequence,
@@ -172,19 +175,21 @@ fn handle_command(bytes: &[u8]) {
         gpio21_is_input: pins.gpio21.direction.is_input(),
     };
     let mut output = OutputBuffer::<MAX_RESPONSE_LINE_BYTES>::new();
-    if format_input_sample(&sample, &mut output).is_err()
-        || write_protocol_line(output.as_bytes()).is_err()
-    {
-        hardware::halt();
+    if format_input_sample(&sample, &mut output).is_err() {
+        fail_and_halt(FailureCode::UartWrite);
+    }
+    if write_protocol_line(output.as_bytes()).is_err() {
+        fail_and_halt(FailureCode::UartWrite);
     }
 }
 
 fn write_command_error() {
     let mut output = OutputBuffer::<MAX_RESPONSE_LINE_BYTES>::new();
-    if format_error(DiagnosticErrorCode::BadCommand, &mut output).is_err()
-        || write_protocol_line(output.as_bytes()).is_err()
-    {
-        hardware::halt();
+    if format_error(DiagnosticErrorCode::BadCommand, &mut output).is_err() {
+        fail_and_halt(FailureCode::UartWrite);
+    }
+    if write_protocol_line(output.as_bytes()).is_err() {
+        fail_and_halt(FailureCode::UartWrite);
     }
 }
 
