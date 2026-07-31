@@ -270,3 +270,21 @@ def test_meter_checks_and_unpowered_handoff_are_complete_and_independent():
     assert "5v" not in lowered_model
     assert "native usb" not in lowered_model
     assert "treadmill" not in lowered_model
+
+
+def test_self_contained_view_exposes_required_bench_controls_and_labels():
+    html = HTML_PATH.read_text(encoding="utf-8")
+    for element_id in (
+        "board-svg", "step-title", "step-copy", "confirmations", "previous-step",
+        "next-step", "zoom-in", "zoom-out", "reset-progress", "netlist-panel",
+        "truth-table", "photo-handoff",
+    ):
+        assert f'id="{element_id}"' in html
+    for css_class in (".item-complete", ".item-active", ".item-future"):
+        assert css_class in html
+    for warning in ("NO 5V", "UART USB UNPLUGGED", "NO NATIVE USB", "NO TREADMILL"):
+        assert warning in html
+    for label in (">A<", ">K<", ">3V3<", ">GND<"):
+        assert label in html
+    assert "http://" not in html
+    assert "https://" not in html

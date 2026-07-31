@@ -4,13 +4,247 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Esp32Tap Breadboard Wizard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f3f7f5;
+      --muted: #9bb0aa;
+      --panel: #13201d;
+      --panel-2: #192b27;
+      --line: #335049;
+      --mint: #58e0ad;
+      --amber: #ffc867;
+      --danger: #ff786f;
+      --rail-red: #ef6c70;
+      --rail-blue: #66a9ff;
+      --future: #6e7e79;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #09110f;
+      color: var(--ink);
+      font: 16px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input { font: inherit; }
+    button { touch-action: manipulation; }
+    .app-header {
+      padding: 18px clamp(16px, 3vw, 42px);
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(120deg, #142822, #0d1816 70%);
+    }
+    .title-row { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+    h1 { margin: 0; font-size: clamp(1.35rem, 2.7vw, 2.2rem); letter-spacing: -.035em; }
+    .eyebrow { margin: 0 0 4px; color: var(--mint); font-size: .75rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    .power-state { color: var(--amber); font-weight: 800; text-align: right; }
+    .warning-strip { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+    .warning-strip span {
+      padding: 5px 9px;
+      border: 1px solid #8d4e49;
+      border-radius: 999px;
+      background: #2b1716;
+      color: #ffd6d2;
+      font-size: .72rem;
+      font-weight: 900;
+      letter-spacing: .07em;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(290px, 360px);
+      gap: 18px;
+      max-width: 1700px;
+      margin: 0 auto;
+      padding: 18px;
+    }
+    .main-column, .reference-column { min-width: 0; }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--panel);
+      box-shadow: 0 12px 35px rgba(0, 0, 0, .18);
+      overflow: hidden;
+    }
+    .diagram-toolbar { display: flex; justify-content: space-between; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+    .diagram-toolbar strong { color: var(--mint); }
+    .zoom-controls { display: flex; align-items: center; gap: 7px; }
+    .icon-button, .secondary, .primary {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #1d332d;
+      color: var(--ink);
+      cursor: pointer;
+      font-weight: 750;
+      min-height: 42px;
+      padding: 8px 13px;
+    }
+    .icon-button { min-width: 42px; padding: 6px; }
+    button:hover:not(:disabled) { border-color: var(--mint); }
+    button:focus-visible, input:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
+    button:disabled { cursor: not-allowed; opacity: .38; }
+    .diagram-scroll { overflow: auto; background: #e9e4d8; }
+    #board-svg { display: block; width: 100%; min-width: 780px; height: auto; transition: width .18s ease; }
+    #board-svg text { font-family: ui-sans-serif, system-ui, sans-serif; }
+    .board-hole { fill: #253431; stroke: #fff; stroke-width: 1; }
+    .hole-label { fill: #465651; font-size: 9px; }
+    .rail-red { stroke: var(--rail-red); }
+    .rail-blue { stroke: var(--rail-blue); }
+    .endpoint-label { fill: #27322f; font-size: 8.5px; font-weight: 700; paint-order: stroke; stroke: #f1ede4; stroke-width: 3px; }
+    .item-line { fill: none; stroke: #4e665f; stroke-width: 4; stroke-linecap: round; }
+    .item-complete { opacity: .48; }
+    .item-complete .item-line { stroke: #477c6c; }
+    .item-active { opacity: 1; filter: drop-shadow(0 0 5px rgba(240, 151, 54, .7)); }
+    .item-active .item-line { stroke: #e2691e; stroke-width: 7; }
+    .item-active .component-body { stroke: #e2691e; stroke-width: 4; }
+    .item-future { opacity: .17; }
+    .component-body { fill: #fff8df; stroke: #493e2d; stroke-width: 2; }
+    .component-label { fill: #1f2926; font-size: 10px; font-weight: 900; text-anchor: middle; }
+    .step-card { margin-top: 16px; padding: clamp(18px, 3vw, 28px); }
+    .phase-line { display: flex; align-items: center; gap: 10px; color: var(--mint); font-size: .78rem; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+    .progress-track { flex: 1; height: 5px; overflow: hidden; border-radius: 99px; background: #29413b; }
+    #progress-bar { height: 100%; background: var(--mint); }
+    #step-title { margin: 14px 0 7px; font-size: clamp(1.3rem, 2.4vw, 2rem); }
+    #step-copy { margin: 0; font-size: clamp(1rem, 1.7vw, 1.18rem); }
+    #step-purpose { color: var(--muted); margin: 9px 0 0; }
+    #confirmations { display: grid; gap: 9px; margin: 20px 0; }
+    .confirmation {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      padding: 13px;
+      border: 1px solid #47665e;
+      border-radius: 11px;
+      background: var(--panel-2);
+      cursor: pointer;
+    }
+    .confirmation input { width: 22px; height: 22px; flex: 0 0 auto; accent-color: var(--mint); }
+    .step-actions { display: flex; gap: 10px; justify-content: space-between; }
+    .primary { min-width: 150px; background: var(--mint); color: #052218; border-color: var(--mint); }
+    .reference-column { display: grid; gap: 12px; align-content: start; }
+    details.card > summary { cursor: pointer; padding: 14px 16px; font-weight: 850; color: var(--mint); }
+    .panel-body { padding: 0 16px 16px; color: #d7e2de; }
+    .panel-body p:first-child { margin-top: 0; }
+    .compact-list { margin: 0; padding-left: 20px; }
+    .compact-list li + li { margin-top: 5px; }
+    .data-list { display: grid; gap: 7px; margin: 0; }
+    .data-row { display: grid; grid-template-columns: minmax(68px, auto) 1fr; gap: 10px; padding-bottom: 7px; border-bottom: 1px solid #29423b; }
+    .data-row dt { color: var(--amber); font-weight: 800; }
+    .data-row dd { margin: 0; color: #cfdbd7; overflow-wrap: anywhere; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    th, td { padding: 7px 5px; border-bottom: 1px solid #2d4841; text-align: left; white-space: nowrap; }
+    th { color: var(--amber); }
+    .callout { padding: 12px; border-left: 4px solid var(--amber); border-radius: 8px; background: #2a2517; }
+    #photo-handoff { display: none; margin-top: 14px; padding: 16px; border: 2px solid var(--amber); border-radius: 11px; background: #2a2417; }
+    #photo-handoff.visible { display: block; }
+    #photo-handoff strong { color: var(--amber); }
+    .reset { width: 100%; color: #ffc0ba; border-color: #72453f; background: transparent; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .reference-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .reference-column > .reset { grid-column: 1 / -1; }
+    }
+    @media (max-width: 620px) {
+      .app-header { padding: 14px; }
+      .title-row { align-items: start; flex-direction: column; gap: 6px; }
+      .power-state { text-align: left; font-size: .85rem; }
+      .layout { padding: 10px; gap: 10px; }
+      .reference-column { grid-template-columns: 1fr; }
+      .diagram-toolbar { position: sticky; left: 0; }
+      .step-card { margin-top: 10px; padding: 16px; }
+      .step-actions { position: sticky; bottom: 0; margin: 0 -16px -16px; padding: 11px 16px; background: rgba(19, 32, 29, .96); }
+      .primary { min-width: 130px; }
+    }
+  </style>
 </head>
 <body>
-  <main>
-    <h1>Esp32Tap breadboard wizard</h1>
-    <p>Powered testing is deferred until the overhead photo is reviewed.</p>
-    <p>Keep UART USB unplugged. Take one sharp photo directly overhead with every rail, resistor band, switch lug, LED lead, and DevKit label visible. Attach that photo in this chat and wait for approval before applying power.</p>
-    <label><input type="checkbox"> I attached the overhead photo in this chat</label>
+  <header class="app-header">
+    <div class="title-row">
+      <div>
+        <p class="eyebrow">Unpowered bench build</p>
+        <h1>Esp32Tap breadboard wizard</h1>
+      </div>
+      <div class="power-state">Powered testing is deferred until the overhead photo is reviewed.</div>
+    </div>
+    <div class="warning-strip" role="alert">
+      <span>UART USB UNPLUGGED</span><span>NO 5V</span><span>NO NATIVE USB</span><span>NO TREADMILL</span>
+    </div>
+  </header>
+  <main class="layout">
+    <section class="main-column">
+      <div class="card">
+        <div class="diagram-toolbar">
+          <strong>Persistent wiring overview</strong>
+          <div class="zoom-controls" aria-label="Diagram zoom">
+            <button class="icon-button" id="zoom-out" type="button" aria-label="Zoom out">−</button>
+            <span id="zoom-level">100%</span>
+            <button class="icon-button" id="zoom-in" type="button" aria-label="Zoom in">+</button>
+          </div>
+        </div>
+        <div class="diagram-scroll">
+          <svg id="board-svg" viewBox="0 0 1280 680" role="img" aria-labelledby="board-title board-description">
+            <title id="board-title">Esp32Tap breadboard wiring overview</title>
+            <desc id="board-description">A 30-column breadboard with selected rails, exact tie groups, off-board DPDT, and printed-name DevKit pads.</desc>
+            <g id="board-content"></g>
+            <g aria-label="Polarity key" transform="translate(1160 615)">
+              <text x="0" y="0">A</text><text x="22" y="0">K</text><text x="0" y="22">3V3</text><text x="48" y="22">GND</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+
+      <article class="card step-card" aria-live="polite">
+        <div class="phase-line">
+          <span id="phase-name">Prepare</span>
+          <div class="progress-track" aria-hidden="true"><div id="progress-bar"></div></div>
+          <span id="progress-label"></span>
+        </div>
+        <h2 id="step-title"></h2>
+        <p id="step-copy"></p>
+        <p id="step-purpose"></p>
+        <div id="photo-handoff">
+          <strong>Photo review handoff</strong>
+          <p id="photo-instruction"></p>
+        </div>
+        <div id="confirmations"></div>
+        <div class="step-actions">
+          <button class="secondary" id="previous-step" type="button">← Back</button>
+          <button class="primary" id="next-step" type="button" disabled>Next →</button>
+        </div>
+      </article>
+    </section>
+
+    <aside class="reference-column" aria-label="Persistent build reference">
+      <details class="card" open>
+        <summary>Safety &amp; final inspection</summary>
+        <div class="panel-body">
+          <p class="callout">DPDT lug arrangements vary. Meter-identify both independent common/throw pairs; never infer contacts from physical position.</p>
+          <p>If either rail is split or fails continuity, replace it with one verified continuous rail segment. Do not assume continuity and do not bridge it.</p>
+          <ul class="compact-list">
+            <li>Confirm no 5V, native USB, or treadmill connection.</li>
+            <li id="empty-pin-warning"></li>
+            <li>Verify every resistor value and both LED A/K polarities.</li>
+            <li>Baseline: DPDT ungrounded, GPIO6 open, GPIO7 open.</li>
+          </ul>
+        </div>
+      </details>
+      <details class="card" open>
+        <summary>Exact BOM</summary>
+        <div class="panel-body"><dl class="data-list" id="bom-list"></dl></div>
+      </details>
+      <details class="card" open>
+        <summary>Netlist</summary>
+        <div class="panel-body"><dl class="data-list" id="netlist-panel"></dl></div>
+      </details>
+      <details class="card">
+        <summary>Unpowered meter checks</summary>
+        <div class="panel-body" id="meter-checks"></div>
+      </details>
+      <details class="card" open>
+        <summary>Eight-state truth table</summary>
+        <div class="panel-body table-wrap"><table id="truth-table"></table></div>
+      </details>
+      <button class="secondary reset" id="reset-progress" type="button">Reset progress</button>
+    </aside>
   </main>
   <script id="wiring-data" type="application/json">
 {
@@ -170,6 +404,421 @@
   },
   "photo_instruction": "Keep UART USB unplugged. Take one sharp photo directly overhead with every rail, resistor band, switch lug, LED lead, and DevKit label visible. Attach that photo in this chat and wait for approval before applying power."
 }
+  </script>
+  <script id="wizard-controller">
+  (function (global) {
+    'use strict';
+
+    global.createBreadboardController = function createBreadboardController(options) {
+      var model = options.model;
+      var storage = options.storage;
+      var confirmReset = options.confirmReset;
+      var storageKey = model.storage_key;
+      var state = { index: 0, confirmations: {}, zoom: 1 };
+      var saved = storage.getItem(storageKey);
+
+      if (saved) {
+        try {
+          var parsed = JSON.parse(saved);
+          if (Number.isInteger(parsed.index) && parsed.index >= 0 && parsed.index < model.steps.length) {
+            state.index = parsed.index;
+          }
+          if (parsed.confirmations && typeof parsed.confirmations === 'object') {
+            state.confirmations = Object.assign({}, parsed.confirmations);
+          }
+          if (typeof parsed.zoom === 'number' && Number.isFinite(parsed.zoom)) {
+            state.zoom = Math.max(0.7, Math.min(2, parsed.zoom));
+          }
+        } catch (_error) {
+          state = { index: 0, confirmations: {}, zoom: 1 };
+        }
+      }
+
+      function persist() {
+        storage.setItem(storageKey, JSON.stringify(state));
+      }
+
+      function currentStep() {
+        return model.steps[state.index];
+      }
+
+      function canNext() {
+        return currentStep().confirmation_ids.every(function (id) {
+          return state.confirmations[id] === true;
+        });
+      }
+
+      function setZoom(value) {
+        state.zoom = Math.round(Math.max(0.7, Math.min(2, value)) * 10) / 10;
+        persist();
+        return state.zoom;
+      }
+
+      return {
+        index: function () { return state.index; },
+        currentStep: currentStep,
+        canNext: canNext,
+        isConfirmed: function (id) { return state.confirmations[id] === true; },
+        setConfirmation: function (id, checked) {
+          state.confirmations[id] = checked === true;
+          persist();
+          return canNext();
+        },
+        next: function () {
+          if (canNext() && state.index < model.steps.length - 1) {
+            state.index += 1;
+            persist();
+          }
+          return currentStep();
+        },
+        back: function () {
+          if (state.index > 0) {
+            state.index -= 1;
+            persist();
+          }
+          return currentStep();
+        },
+        zoom: function () { return state.zoom; },
+        zoomIn: function () { return setZoom(state.zoom + 0.1); },
+        zoomOut: function () { return setZoom(state.zoom - 0.1); },
+        reset: function () {
+          if (!confirmReset()) return false;
+          storage.removeItem(storageKey);
+          state = { index: 0, confirmations: {}, zoom: 1 };
+          return true;
+        }
+      };
+    };
+  }(window));
+  </script>
+  <script id="wizard-view">
+  (function () {
+    'use strict';
+
+    var model = JSON.parse(document.getElementById('wiring-data').textContent);
+    var controller = window.createBreadboardController({
+      model: model,
+      storage: window.localStorage,
+      confirmReset: function () {
+        return window.confirm('Reset all progress for this breadboard wizard?');
+      }
+    });
+    var svgNamespace = 'http:' + String.fromCharCode(47, 47) + 'www.w3.org/2000/svg';
+    var board = document.getElementById('board-content');
+    var stepIndexes = {};
+    model.steps.forEach(function (step, index) { stepIndexes[step.id] = index; });
+    var devkitNodes = Object.keys(model.nodes).filter(function (key) {
+      return model.nodes[key].indexOf('DevKit printed ') === 0;
+    });
+
+    function svgElement(name, attributes, content) {
+      var element = document.createElementNS(svgNamespace, name);
+      Object.keys(attributes || {}).forEach(function (key) {
+        element.setAttribute(key, attributes[key]);
+      });
+      if (content !== undefined) element.textContent = content;
+      return element;
+    }
+
+    function append(parent, name, attributes, content) {
+      var child = svgElement(name, attributes, content);
+      parent.appendChild(child);
+      return child;
+    }
+
+    function tiePoint(description) {
+      var match = description.match(/^([a-j])(\d+)-([a-j])(\d+)$/);
+      if (!match) return null;
+      var column = Number(match[2]);
+      var upper = match[1] < 'f';
+      return { x: 90 + (column - 1) * 28, y: upper ? 190 : 340 };
+    }
+
+    function offBoardPoint(description) {
+      var pole = / A$/.test(description) ? 0 : 1;
+      if (description.indexOf('common') !== -1) return { x: 930, y: 474 + pole * 84 };
+      if (description.indexOf('grounded') !== -1) return { x: 1090, y: 454 + pole * 84 };
+      return { x: 1090, y: 494 + pole * 84 };
+    }
+
+    function nodePoint(key, otherKey) {
+      var description = model.nodes[key];
+      var tie = tiePoint(description);
+      if (tie) return tie;
+      if (description.indexOf('rail columns') !== -1) {
+        var other = otherKey ? nodePoint(otherKey) : null;
+        return { x: other ? Math.max(90, Math.min(818, other.x)) : 90, y: description.indexOf('red rail') === 0 ? 64 : 98 };
+      }
+      if (description.indexOf('off-board') === 0) return offBoardPoint(description);
+      if (description.indexOf('DevKit printed ') === 0) {
+        return { x: 1190, y: 150 + devkitNodes.indexOf(key) * 48 };
+      }
+      return { x: 0, y: 0 };
+    }
+
+    function itemPoint(item, endpoint) {
+      var otherEndpoint = endpoint === 'from' ? 'to' : 'from';
+      return nodePoint(item[endpoint], item[otherEndpoint]);
+    }
+
+    function stateClass(item) {
+      var activeStep = controller.currentStep();
+      if (activeStep.highlight === item.id) return 'item-active';
+      return stepIndexes[item.step] < controller.index() ? 'item-complete' : 'item-future';
+    }
+
+    function renderBase() {
+      append(board, 'rect', { x: 42, y: 34, width: 875, height: 410, rx: 22, fill: '#f6f1e7', stroke: '#b8b1a3', 'stroke-width': 3 });
+      append(board, 'rect', { x: 56, y: 249, width: 845, height: 34, fill: '#d8d1c4' });
+      append(board, 'text', { x: 58, y: 270, class: 'hole-label' }, 'CENTER TRENCH — upper and lower groups are not connected');
+
+      append(board, 'line', { x1: 90, y1: 64, x2: 818, y2: 64, class: 'rail-red', 'stroke-width': 7, 'stroke-linecap': 'round' });
+      append(board, 'line', { x1: 90, y1: 98, x2: 818, y2: 98, class: 'rail-blue', 'stroke-width': 7, 'stroke-linecap': 'round' });
+      append(board, 'line', { x1: 846, y1: 64, x2: 902, y2: 64, stroke: '#a9a59c', 'stroke-width': 4, 'stroke-dasharray': '5 5' });
+      append(board, 'line', { x1: 846, y1: 98, x2: 902, y2: 98, stroke: '#a9a59c', 'stroke-width': 4, 'stroke-dasharray': '5 5' });
+      append(board, 'text', { x: 52, y: 69, fill: '#aa3038', 'font-size': 13, 'font-weight': 900 }, '3V3');
+      append(board, 'text', { x: 52, y: 103, fill: '#1f69bb', 'font-size': 13, 'font-weight': 900 }, 'GND');
+      append(board, 'text', { x: 692, y: 47, fill: '#8d3338', 'font-size': 10, 'font-weight': 800 }, 'VERIFIED CONTINUOUS 1–27');
+
+      var rows = [
+        ['a', 150], ['b', 170], ['c', 190], ['d', 210], ['e', 230],
+        ['f', 300], ['g', 320], ['h', 340], ['i', 360], ['j', 380]
+      ];
+      for (var column = 1; column <= 30; column += 1) {
+        var x = 90 + (column - 1) * 28;
+        append(board, 'text', { x: x, y: 132, class: 'hole-label', 'text-anchor': 'middle' }, String(column));
+        append(board, 'text', { x: x, y: 405, class: 'hole-label', 'text-anchor': 'middle' }, String(column));
+        rows.forEach(function (row) {
+          append(board, 'circle', { cx: x, cy: row[1], r: 4.2, class: 'board-hole' });
+        });
+      }
+      rows.forEach(function (row) {
+        append(board, 'text', { x: 65, y: row[1] + 3, class: 'hole-label', 'text-anchor': 'middle' }, row[0]);
+      });
+
+      append(board, 'rect', { x: 1120, y: 104, width: 130, height: 420, rx: 14, fill: '#173c43', stroke: '#326d75', 'stroke-width': 3 });
+      append(board, 'text', { x: 1185, y: 128, fill: '#b8f3ea', 'font-size': 13, 'font-weight': 900, 'text-anchor': 'middle' }, 'ESP32-S3 DEVKIT');
+      devkitNodes.forEach(function (key) {
+        var point = nodePoint(key);
+        append(board, 'circle', { cx: point.x, cy: point.y, r: 7, fill: '#efc45b', stroke: '#241d0d', 'stroke-width': 2 });
+        append(board, 'text', { x: point.x - 14, y: point.y + 4, fill: '#e8fffa', 'font-size': 11, 'font-weight': 800, 'text-anchor': 'end' }, model.nodes[key].replace('DevKit printed ', ''));
+      });
+      append(board, 'text', { x: 1185, y: 548, fill: '#7f918d', 'font-size': 10, 'text-anchor': 'middle' }, 'Follow printed names — never row position');
+
+      append(board, 'rect', { x: 890, y: 420, width: 220, height: 174, rx: 14, fill: '#dfd7c6', stroke: '#807765', 'stroke-width': 3 });
+      append(board, 'text', { x: 1000, y: 443, fill: '#282e2c', 'font-size': 12, 'font-weight': 900, 'text-anchor': 'middle' }, 'DPDT — METER IDENTIFY BOTH POLES');
+    }
+
+    function renderDpdt(item) {
+      var group = append(board, 'g', { class: stateClass(item), 'data-item': item.id });
+      Object.keys(item.terminals).forEach(function (terminal) {
+        var key = item.terminals[terminal];
+        var point = nodePoint(key);
+        append(group, 'circle', { cx: point.x, cy: point.y, r: 7, class: 'component-body' });
+        append(group, 'text', {
+          x: point.x + (point.x < 1000 ? -10 : 10), y: point.y + 3,
+          class: 'endpoint-label', 'text-anchor': point.x < 1000 ? 'end' : 'start'
+        }, model.nodes[key].replace('off-board ', ''));
+      });
+      item.contacts.forEach(function (contact) {
+        var common = nodePoint(contact.common);
+        var grounded = nodePoint(contact.grounded);
+        append(group, 'line', { x1: common.x, y1: common.y, x2: grounded.x - 22, y2: grounded.y, class: 'item-line' });
+      });
+      append(group, 'text', { x: 1000, y: 615, fill: '#653f21', 'font-size': 11, 'font-weight': 900, 'text-anchor': 'middle' }, 'UNUSED A + UNUSED B: INSULATED, DISCONNECTED');
+    }
+
+    function renderTwoTerminalItem(item) {
+      var start = itemPoint(item, 'from');
+      var end = itemPoint(item, 'to');
+      var group = append(board, 'g', { class: stateClass(item), 'data-item': item.id });
+      append(group, 'line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'item-line' });
+      append(group, 'circle', { cx: start.x, cy: start.y, r: 5, fill: '#fff', stroke: '#233a34', 'stroke-width': 2 });
+      append(group, 'circle', { cx: end.x, cy: end.y, r: 5, fill: '#fff', stroke: '#233a34', 'stroke-width': 2 });
+
+      var midX = (start.x + end.x) / 2;
+      var midY = (start.y + end.y) / 2;
+      if (item.type === 'resistor') {
+        append(group, 'rect', { x: midX - 24, y: midY - 10, width: 48, height: 20, rx: 7, class: 'component-body' });
+        append(group, 'text', { x: midX, y: midY + 4, class: 'component-label' }, item.value);
+      } else if (item.type === 'led') {
+        append(group, 'circle', { cx: midX, cy: midY, r: 13, fill: item.value, stroke: '#292c27', 'stroke-width': 3 });
+        append(group, 'text', { x: start.x - 8, y: start.y - 9, class: 'component-label' }, 'A');
+        append(group, 'text', { x: end.x + 8, y: end.y - 9, class: 'component-label' }, 'K');
+      } else if (item.type === 'switch') {
+        append(group, 'circle', { cx: start.x, cy: start.y, r: 8, class: 'component-body' });
+        append(group, 'circle', { cx: end.x, cy: end.y, r: 8, class: 'component-body' });
+        append(group, 'line', { x1: start.x + 6, y1: start.y - 5, x2: end.x - 10, y2: end.y - 15, stroke: '#302c24', 'stroke-width': 4 });
+      }
+      append(group, 'text', { x: start.x, y: start.y - 11, class: 'endpoint-label', 'text-anchor': 'middle' }, model.nodes[item.from]);
+      append(group, 'text', { x: end.x, y: end.y + 18, class: 'endpoint-label', 'text-anchor': 'middle' }, model.nodes[item.to]);
+      append(group, 'text', { x: midX, y: midY - 16, class: 'endpoint-label', 'text-anchor': 'middle' }, item.id + (item.value ? ' · ' + item.value : ''));
+    }
+
+    function renderBoard() {
+      board.replaceChildren();
+      renderBase();
+      model.items.forEach(function (item) {
+        if (item.id === 'dpdt') renderDpdt(item);
+        else renderTwoTerminalItem(item);
+      });
+      document.getElementById('board-svg').style.width = Math.round(controller.zoom() * 100) + '%';
+      document.getElementById('zoom-level').textContent = Math.round(controller.zoom() * 100) + '%';
+    }
+
+    function titleFor(step) {
+      if (step.id === 'photo') return 'Stop here: photograph for review';
+      if (step.id === 'precheck') return 'Pre-DevKit unpowered checks';
+      return step.id.replaceAll('_', ' ').replace(/\b\w/g, function (letter) { return letter.toUpperCase(); });
+    }
+
+    function confirmationLabel(step, id) {
+      if (step.id === 'photo') return 'I attached the overhead photo in this chat';
+      if (id === 'placed') return 'I placed the DPDT and kept all lugs accessible.';
+      if (id === 'both_pole_pairs_meter_identified') return 'I meter-identified both independent common/throw pairs.';
+      if (step.id.indexOf('check_') === 0) return 'I completed this individual check and recorded a passing result.';
+      if (step.id === 'precheck') return 'I completed every listed pre-DevKit meter check with UART USB unplugged.';
+      return 'I completed this atomic step exactly as shown.';
+    }
+
+    function renderStep() {
+      var step = controller.currentStep();
+      document.getElementById('phase-name').textContent = step.phase;
+      document.getElementById('progress-label').textContent = (controller.index() + 1) + ' / ' + model.steps.length;
+      document.getElementById('progress-bar').style.width = ((controller.index() + 1) / model.steps.length * 100) + '%';
+      document.getElementById('step-title').textContent = titleFor(step);
+      document.getElementById('step-copy').textContent = step.instruction;
+      document.getElementById('step-purpose').textContent = 'Why: ' + step.purpose;
+      var photo = document.getElementById('photo-handoff');
+      photo.classList.toggle('visible', step.id === 'photo');
+      document.getElementById('photo-instruction').textContent = model.photo_instruction;
+
+      var confirmations = document.getElementById('confirmations');
+      confirmations.replaceChildren();
+      step.confirmation_ids.forEach(function (id) {
+        var label = document.createElement('label');
+        label.className = 'confirmation';
+        var input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = controller.isConfirmed(id);
+        input.addEventListener('change', function () {
+          controller.setConfirmation(id, input.checked);
+          updateButtons();
+        });
+        var text = document.createElement('span');
+        text.textContent = confirmationLabel(step, id);
+        label.append(input, text);
+        confirmations.appendChild(label);
+      });
+      updateButtons();
+    }
+
+    function updateButtons() {
+      var next = document.getElementById('next-step');
+      document.getElementById('previous-step').disabled = controller.index() === 0;
+      next.disabled = !controller.canNext();
+      next.textContent = controller.currentStep().id === 'photo' ? 'Record handoff' : 'Next →';
+    }
+
+    function addDataRow(list, term, description) {
+      var wrapper = document.createElement('div');
+      wrapper.className = 'data-row';
+      var dt = document.createElement('dt');
+      dt.textContent = term;
+      var dd = document.createElement('dd');
+      dd.textContent = description;
+      wrapper.append(dt, dd);
+      list.appendChild(wrapper);
+    }
+
+    function renderReferences() {
+      var bom = document.getElementById('bom-list');
+      Object.entries(model.bom).forEach(function (entry) {
+        addDataRow(bom, entry[0], 'quantity ' + entry[1]);
+      });
+      document.getElementById('empty-pin-warning').textContent = 'Keep GPIO' + model.disconnected_pins.join(', GPIO') + ' empty and disconnected.';
+
+      var netlist = document.getElementById('netlist-panel');
+      model.items.forEach(function (item) {
+        if (item.contacts) {
+          var poles = item.contacts.map(function (contact) {
+            return model.nodes[contact.common] + ' ↔ ' + model.nodes[contact.grounded] + '; ' + model.nodes[contact.unused] + ' insulated';
+          }).join(' | ');
+          addDataRow(netlist, item.id, poles);
+        } else {
+          addDataRow(netlist, item.id + (item.value ? ' · ' + item.value : ''), model.nodes[item.from] + ' → ' + model.nodes[item.to]);
+        }
+      });
+
+      var meters = document.getElementById('meter-checks');
+      var semantics = document.createElement('p');
+      semantics.className = 'callout';
+      semantics.textContent = 'Continuity pass: ' + model.meter_checks.semantics.continuity_pass + '. Short failure: ' + model.meter_checks.semantics.short_fail + '.';
+      meters.appendChild(semantics);
+      [['Before DevKit jumpers', model.meter_checks.pre], ['After all jumpers', model.meter_checks.post]].forEach(function (section) {
+        var heading = document.createElement('h3');
+        heading.textContent = section[0];
+        var list = document.createElement('ol');
+        list.className = 'compact-list';
+        section[1].forEach(function (check) {
+          var item = document.createElement('li');
+          item.textContent = check.check;
+          list.appendChild(item);
+        });
+        meters.append(heading, list);
+      });
+
+      var table = document.getElementById('truth-table');
+      var head = document.createElement('thead');
+      var headingRow = document.createElement('tr');
+      ['DPDT', 'GPIO6', 'GPIO7', 'GPIO4,5,6,7'].forEach(function (label) {
+        var th = document.createElement('th');
+        th.textContent = label;
+        headingRow.appendChild(th);
+      });
+      head.appendChild(headingRow);
+      var body = document.createElement('tbody');
+      model.truth_table.forEach(function (row) {
+        var tr = document.createElement('tr');
+        [row.dpdt, row.gpio6, row.gpio7, row.levels.join(',')].forEach(function (value) {
+          var td = document.createElement('td');
+          td.textContent = value;
+          tr.appendChild(td);
+        });
+        body.appendChild(tr);
+      });
+      table.append(head, body);
+    }
+
+    function render() {
+      renderBoard();
+      renderStep();
+      document.querySelector('.step-card').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    document.getElementById('previous-step').addEventListener('click', function () {
+      controller.back();
+      render();
+    });
+    document.getElementById('next-step').addEventListener('click', function () {
+      controller.next();
+      render();
+    });
+    document.getElementById('zoom-in').addEventListener('click', function () {
+      controller.zoomIn();
+      renderBoard();
+    });
+    document.getElementById('zoom-out').addEventListener('click', function () {
+      controller.zoomOut();
+      renderBoard();
+    });
+    document.getElementById('reset-progress').addEventListener('click', function () {
+      if (controller.reset()) render();
+    });
+
+    renderReferences();
+    render();
+  }());
   </script>
 </body>
 </html>
