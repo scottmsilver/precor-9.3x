@@ -154,9 +154,10 @@ GPIO16, GPIO17, GPIO18, GPIO38, native USB, every treadmill wire, and the 5 V ra
 2. The full 8 MB original flash backup completes, has the exact byte count, and receives a SHA-256 record.
 3. Flashing succeeds only after Pi-side manifest verification.
 4. The post-flash reset emits one complete startup report ending in `BRINGUP STAGE0 PASS`; this reset is useful evidence but does not count as a cold boot.
-5. USB power is then physically removed and restored twice, manually or through a proven per-port power switch. Each independent power-on must report a power-on reset reason and end in `BRINGUP STAGE0 PASS` without BOOT-button intervention.
-6. With Stage 1 installed, the operator sets the eight-state matrix `DPDT={BYPASS,EMULATE} × S2={OPEN,CLOSED} × S3={OPEN,CLOSED}`. For each state, the Pi sends a unique `SAMPLE <sequence>` and verifies the returned GPIO4/5/6/7 tuple and input direction on GPIO15/17/21.
-7. LED1 and LED2 remain dark through both cold boots, all eight switch states, reset, and a five-minute observation window.
+5. After that first Stage 0 pass, USB power is removed and the approved Stage 1 sidecar is installed and inspected before power returns.
+6. USB power is restored, then physically removed and restored once more, manually or through a proven per-port power switch. These are two independent power-on boots; each must report a power-on reset reason, end in `BRINGUP STAGE0 PASS` without BOOT-button intervention, and leave LED1 and LED2 dark.
+7. The operator sets the eight-state matrix `DPDT={BYPASS,EMULATE} × S2={OPEN,CLOSED} × S3={OPEN,CLOSED}`. For each state, the Pi sends a unique `SAMPLE <sequence>` and verifies the returned GPIO4/5/6/7 tuple and input direction on GPIO15/17/21.
+8. LED1 and LED2 remain dark through both cold boots, all eight switch states, reset, and a five-minute observation window.
 
 ## Relationship to other work
 
