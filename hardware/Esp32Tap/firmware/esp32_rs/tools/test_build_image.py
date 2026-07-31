@@ -473,14 +473,16 @@ def run_environment(
         {
             "Id": IMAGE_ID,
             "Config": {
-                "Labels": labels
-                if labels is not None
-                else {
-                    "org.treddy.esp32tap.recipe-sha256": recipe(context),
-                    "org.treddy.esp32tap.toolchain-json": canonical(
-                        attestation(context)
-                    ),
-                }
+                "Labels": (
+                    labels
+                    if labels is not None
+                    else {
+                        "org.treddy.esp32tap.recipe-sha256": recipe(context),
+                        "org.treddy.esp32tap.toolchain-json": canonical(
+                            attestation(context)
+                        ),
+                    }
+                )
             },
         }
     ]
@@ -694,6 +696,24 @@ def test_check_emits_kind_specific_qemu_toolchain(
     assert docker_calls(fake_docker[1]) == [["image", "inspect", IMAGE_TAG]]
 
 
+def test_check_emits_devkit_toolchain_without_production_or_qemu_features(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        "--check",
+        "--kind",
+        "devkit-bringup",
+    )
+    assert completed.returncode == 0, completed.stderr
+    value = json.loads(completed.stdout)
+    assert value["profile"] == "release"
+    assert value["features"] == []
+    assert value["target"] == "xtensa-esp32s3-espidf"
+    assert docker_calls(fake_docker[1]) == [["image", "inspect", IMAGE_TAG]]
+
+
 @pytest.mark.parametrize(
     "image_tag",
     [".bad", "_bad", "/bad", ":bad", "@bad", "+bad", "-" + "bad", "a" * 16385],
@@ -740,9 +760,11 @@ def test_check_rejects_missing_stale_malformed_or_noncanonical_labels(
         key: (
             recipe(context)
             if value == "CURRENT"
-            else json.dumps(attestation(context), indent=2)
-            if value == "PRETTY"
-            else value
+            else (
+                json.dumps(attestation(context), indent=2)
+                if value == "PRETTY"
+                else value
+            )
         )
         for key, value in labels.items()
     }
@@ -768,9 +790,7 @@ def test_check_rejects_mutable_id_or_invalid_attestation(
         "Config": {
             "Labels": {
                 "org.treddy.esp32tap.recipe-sha256": recipe(context),
-                "org.treddy.esp32tap.toolchain-json": canonical(
-                    attestation(context)
-                ),
+                "org.treddy.esp32tap.toolchain-json": canonical(attestation(context)),
             }
         },
     }
@@ -782,8 +802,8 @@ def test_check_rejects_mutable_id_or_invalid_attestation(
             changed["unexpected"] = "field"
         else:
             changed["idf_commit"] = "not-a-commit"
-        value["Config"]["Labels"]["org.treddy.esp32tap.toolchain-json"] = (
-            canonical(changed)
+        value["Config"]["Labels"]["org.treddy.esp32tap.toolchain-json"] = canonical(
+            changed
         )
     completed = run(
         context,
@@ -848,7 +868,9 @@ def test_default_build_probes_once_then_commits_labels(
     assert promotions[0][-1] == IMAGE_TAG
     assert promotions[0][-2].startswith("sha256:")
     candidate_inspects = [
-        call for call in calls if call[:2] == ["image", "inspect"] and call[2] == candidate_tag
+        call
+        for call in calls
+        if call[:2] == ["image", "inspect"] and call[2] == candidate_tag
     ]
     assert len(candidate_inspects) == 1
     removals = [call for call in calls if call[:2] == ["image", "rm"]]
@@ -862,8 +884,7 @@ def test_default_build_probes_once_then_commits_labels(
         if value == "--change"
     ]
     assert any(
-        "org.treddy.esp32tap.recipe-sha256" in value
-        and recipe(context) in value
+        "org.treddy.esp32tap.recipe-sha256" in value and recipe(context) in value
         for value in changes
     )
     assert any(
@@ -886,9 +907,7 @@ def test_published_image_preserves_stage_runtime_config(
     assert len(probe_calls) == 1
     probe_name = probe_calls[0][probe_calls[0].index("--name") + 1]
     stage = next(
-        value
-        for value in probe_calls[0]
-        if value.startswith("esp32tap-rust-stage:")
+        value for value in probe_calls[0] if value.startswith("esp32tap-rust-stage:")
     )
     creates = [call for call in calls if call[0] == "create"]
     assert len(creates) == 1
@@ -948,9 +967,7 @@ def test_transient_live_edit_and_restore_cannot_enter_private_context(
     assert completed.returncode == 0, completed.stderr
     assert recipe(context) == before
     final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
-    assert final["Config"]["Labels"][
-        "org.treddy.esp32tap.recipe-sha256"
-    ] == before
+    assert final["Config"]["Labels"]["org.treddy.esp32tap.recipe-sha256"] == before
 
 
 @pytest.mark.parametrize("attack", ["noisy", "closed-fd-sleeper"])
@@ -1003,9 +1020,7 @@ def test_probe_attests_cargo_metadata_without_invoking_ldproxy(
     assert probe_stdout.endswith("\n")
     assert probe_stdout == canonical(json.loads(probe_stdout)) + "\n"
     final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
-    label = json.loads(
-        final["Config"]["Labels"]["org.treddy.esp32tap.toolchain-json"]
-    )
+    label = json.loads(final["Config"]["Labels"]["org.treddy.esp32tap.toolchain-json"])
     assert label["linker_version"] == COMMON["linker_version"]
 
 
@@ -1326,7 +1341,9 @@ def test_context_mutation_during_candidate_build_prevents_publication(
     assert "changed during image build" in completed.stderr
     calls = docker_calls(fake_docker[1])
     assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
-    assert not any("candidate" in reference for reference in docker_state(fake_docker[1])["refs"])
+    assert not any(
+        "candidate" in reference for reference in docker_state(fake_docker[1])["refs"]
+    )
 
 
 def test_consecutive_builds_use_unique_candidate_resources(
@@ -1337,7 +1354,10 @@ def test_consecutive_builds_use_unique_candidate_resources(
     calls = docker_calls(fake_docker[1])
     builds = [call for call in calls if call[0] == "build"]
     runs = [call for call in calls if call[0] == "run"]
-    assert builds[0][builds[0].index("--tag") + 1] != builds[1][builds[1].index("--tag") + 1]
+    assert (
+        builds[0][builds[0].index("--tag") + 1]
+        != builds[1][builds[1].index("--tag") + 1]
+    )
     assert runs[0][runs[0].index("--name") + 1] != runs[1][runs[1].index("--name") + 1]
 
 
@@ -1387,9 +1407,9 @@ def test_image_lock_orders_complete_cross_worktree_build_lifecycles(
         newer_result = newer_process.communicate(timeout=8)
         assert newer_process.returncode == 0, newer_result
         final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
-        assert final["Config"]["Labels"][
-            "org.treddy.esp32tap.recipe-sha256"
-        ] == recipe(newer)
+        assert final["Config"]["Labels"]["org.treddy.esp32tap.recipe-sha256"] == recipe(
+            newer
+        )
     finally:
         Path(str(barrier) + ".release").write_text("cleanup", encoding="utf-8")
         old.kill()
@@ -1461,9 +1481,9 @@ def test_ambiguous_older_rollback_cannot_clobber_newer_worktree_publication(
         old.communicate(timeout=8)
         assert old.returncode != 0
         final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
-        assert final["Config"]["Labels"][
-            "org.treddy.esp32tap.recipe-sha256"
-        ] == recipe(newer)
+        assert final["Config"]["Labels"]["org.treddy.esp32tap.recipe-sha256"] == recipe(
+            newer
+        )
     finally:
         old.kill()
         old.wait()
@@ -1529,9 +1549,9 @@ def test_equivalent_aliases_share_lifecycle_lock_and_cannot_clobber_publication(
 
         state = docker_state(fake_docker[1])
         final = state["refs"][short]
-        assert final["Config"]["Labels"][
-            "org.treddy.esp32tap.recipe-sha256"
-        ] == recipe(newer)
+        assert final["Config"]["Labels"]["org.treddy.esp32tap.recipe-sha256"] == recipe(
+            newer
+        )
     finally:
         old.kill()
         old.wait()
@@ -1585,7 +1605,9 @@ def test_termination_during_build_or_probe_reaps_child_and_preserves_final(
         build_call = next(call for call in calls if call[0] == "build")
         assert not Path(build_call[-1]).exists()
         assert any(call[:2] == ["image", "rm"] for call in calls)
-        assert any(call[:2] == ["rm", "-f"] for call in calls) is expects_container_cleanup
+        assert (
+            any(call[:2] == ["rm", "-f"] for call in calls) is expects_container_cleanup
+        )
         assert not any(call[0] == "commit" for call in calls)
         assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
         assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
@@ -1669,9 +1691,9 @@ def test_termination_is_deferred_across_verified_promotion_then_releases_lock(
         assert process.returncode == 128 + signal.SIGTERM, result
         wait_process_gone(child_pid)
         final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
-        assert final["Config"]["Labels"][
-            "org.treddy.esp32tap.recipe-sha256"
-        ] == recipe(context)
+        assert final["Config"]["Labels"]["org.treddy.esp32tap.recipe-sha256"] == recipe(
+            context
+        )
         followup = run(context, fake_docker)
         assert followup.returncode == 0, followup.stderr
     finally:
@@ -1698,11 +1720,7 @@ def test_termination_during_cleanup_finishes_cleanup_then_releases_lock(
             fake_docker,
             extra_env={
                 "FAKE_CANDIDATE_RM_SIGNAL_BARRIER": str(barrier),
-                **(
-                    {"FAKE_DOCKER_FAIL_CANDIDATE_RM": "1"}
-                    if cleanup_fails
-                    else {}
-                ),
+                **({"FAKE_DOCKER_FAIL_CANDIDATE_RM": "1"} if cleanup_fails else {}),
             },
         ),
         text=True,
@@ -1739,9 +1757,9 @@ def test_termination_during_cleanup_finishes_cleanup_then_releases_lock(
         )
         assert candidate_remains is cleanup_fails
         final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
-        assert final["Config"]["Labels"][
-            "org.treddy.esp32tap.recipe-sha256"
-        ] == recipe(context)
+        assert final["Config"]["Labels"]["org.treddy.esp32tap.recipe-sha256"] == recipe(
+            context
+        )
 
         followup = run(context, fake_docker)
         assert followup.returncode == 0, followup.stderr
@@ -1817,9 +1835,7 @@ def test_termination_after_cleanup_and_lock_release_interrupts_final_output(
         assert not Path(build_call[-1]).exists()
         assert any(call[:2] == ["rm", "-f"] for call in calls)
         state = docker_state(fake_docker[1])
-        assert not any(
-            "candidate" in ref or "stage" in ref for ref in state["refs"]
-        )
+        assert not any("candidate" in ref or "stage" in ref for ref in state["refs"])
         assert state["refs"][IMAGE_TAG]["Config"]["Labels"][
             "org.treddy.esp32tap.recipe-sha256"
         ] == recipe(context)
@@ -1853,10 +1869,15 @@ def test_readme_documents_tracked_partition_and_attested_image_workflow() -> Non
         "`build_qemu_test/` remains a tracked legacy bundle until the clean-build"
         in prose
     )
-    assert "tools/build_image.sh              # build and label the pinned image" in text
+    assert (
+        "tools/build_image.sh              # build and label the pinned image" in text
+    )
     assert "tools/build_image.sh --check --kind production" in text
     assert "tools/build_image.sh --check --kind qemu-test" in text
-    assert "`--check` performs one `docker image inspect` and never starts a container" in text
+    assert (
+        "`--check` performs one `docker image inspect` and never starts a container"
+        in text
+    )
     assert "the recipe SHA-256 is not the Docker image ID" in text
     assert "`ldproxy` has no version-reporting CLI mode" in text
     assert "`$CARGO_HOME/.crates2.json`" in text

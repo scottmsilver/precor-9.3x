@@ -116,7 +116,14 @@ def publish(
     kind: str = "production",
 ) -> tuple[Path, dict]:
     _, rs, staging = layout
-    public = rs / ("build" if kind == "production" else "build_qemu_test")
+    public = (
+        rs
+        / {
+            "production": "build",
+            "qemu-test": "build_qemu_test",
+            "devkit-bringup": "build_devkit_bringup",
+        }[kind]
+    )
     manifest = manifest_for(staging, toolchain, kind=kind)
     publish_generation_atomic(staging, public, manifest)
     return public, manifest
@@ -171,6 +178,197 @@ def test_manifest_round_trip_is_exact_canonical_and_deterministic(
         == manifest
     )
     assert tuple(entry["name"] for entry in manifest["members"]) == BUNDLE_MEMBERS
+
+
+DEVKIT_SERIAL = (
+    "/dev/serial/by-id/"
+    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
+    "4cd513f253bff0119bc5c57948e9de0f-if00-port0"
+)
+DEVKIT_GEOMETRY = {
+    "chip": "esp32s3",
+    "size": 8_388_608,
+    "offsets": [0, 32_768, 65_536],
+}
+
+
+def devkit_manifest_for(
+    staging: Path,
+    toolchain: Toolchain,
+    *,
+    digest: str = "a" * 64,
+    git_commit: str = "5" * 40,
+    geometry: dict | None = None,
+) -> dict:
+    selected = replace(toolchain, features=(), profile="release")
+    recipe_id = provenance.make_recipe_id(
+        git_commit=git_commit,
+        kind="devkit-bringup",
+        profile="release",
+        input_digest=digest,
+        toolchain=selected,
+    )
+    return make_manifest(
+        staging,
+        "devkit-bringup",
+        digest,
+        selected,
+        git_commit=git_commit,
+        dirty_state="clean",
+        profile="release",
+        required_serial_device=DEVKIT_SERIAL,
+        flash_geometry=geometry or DEVKIT_GEOMETRY,
+        recipe_id=recipe_id,
+    )
+
+
+def test_devkit_kind_layout_and_manifest_schema_are_exact(
+    layout: tuple[Path, Path, Path], toolchain: Toolchain
+) -> None:
+    _, _, staging = layout
+    assert provenance._KIND_LAYOUT["devkit-bringup"] == (
+        "build_devkit_bringup",
+        "devkit",
+    )
+    manifest = devkit_manifest_for(staging, toolchain)
+    assert set(manifest) == {
+        "schema_version",
+        "kind",
+        "input_digest",
+        "toolchain",
+        "members",
+        "manifest_sha256",
+        "git_commit",
+        "dirty_state",
+        "profile",
+        "required_serial_device",
+        "flash_geometry",
+        "recipe_id",
+    }
+    assert manifest["git_commit"] == "5" * 40
+    assert manifest["dirty_state"] == "clean"
+    assert manifest["profile"] == "release"
+    assert manifest["required_serial_device"] == DEVKIT_SERIAL
+    assert manifest["flash_geometry"] == DEVKIT_GEOMETRY
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("git_commit", "A" * 40),
+        ("git_commit", "5" * 39),
+        ("dirty_state", "dirty"),
+        ("profile", "debug"),
+        ("required_serial_device", "/dev/ttyUSB0"),
+        ("flash_geometry", {**DEVKIT_GEOMETRY, "extra": 1}),
+        ("flash_geometry", {**DEVKIT_GEOMETRY, "size": True}),
+        ("flash_geometry", {**DEVKIT_GEOMETRY, "offsets": [0, 32768, 65537]}),
+        ("recipe_id", "F" * 64),
+    ],
+)
+def test_devkit_manifest_fields_are_canonical_and_recipe_bound(
+    layout: tuple[Path, Path, Path],
+    toolchain: Toolchain,
+    field: str,
+    value: object,
+) -> None:
+    _, _, staging = layout
+    manifest = devkit_manifest_for(staging, toolchain)
+    manifest[field] = value
+    unsigned = dict(manifest)
+    unsigned.pop("manifest_sha256")
+    manifest["manifest_sha256"] = hashlib.sha256(manifest_bytes(unsigned)).hexdigest()
+    with pytest.raises(provenance.InvalidError):
+        provenance._validate_manifest_object(manifest, expected_kind="devkit-bringup")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("git_commit", "6" * 40),
+        ("kind", "production"),
+        ("profile", "diagnostic"),
+        ("input_digest", "b" * 64),
+        ("image_id", "sha256:" + "9" * 64),
+        ("recipe_sha256", "8" * 64),
+        ("image_tag", "other/image:tag"),
+        ("idf_commit", "7" * 40),
+        ("rustc_verbose", "rustc changed"),
+        ("target", "changed-target"),
+        ("linker_version", "changed-linker"),
+        ("esptool_version", "changed-esptool"),
+        ("component_lock_sha256", "6" * 64),
+        ("toolchain_profile", "debug"),
+        ("features", ("unexpected",)),
+    ],
+)
+def test_devkit_recipe_changes_for_every_prebuild_identity_fact(
+    toolchain: Toolchain, field: str, value: object
+) -> None:
+    base_toolchain = replace(toolchain, features=(), profile="release")
+    arguments = {
+        "git_commit": "5" * 40,
+        "kind": "devkit-bringup",
+        "profile": "release",
+        "input_digest": "a" * 64,
+        "toolchain": base_toolchain,
+    }
+    original = provenance.make_recipe_id(**arguments)
+    if field == "toolchain_profile":
+        arguments["toolchain"] = replace(base_toolchain, profile=value)
+    elif field in base_toolchain.__dict__:
+        arguments["toolchain"] = replace(base_toolchain, **{field: value})
+    else:
+        arguments[field] = value
+    assert provenance.make_recipe_id(**arguments) != original
+
+
+def test_devkit_final_bytes_change_manifest_but_not_prebuild_recipe(
+    layout: tuple[Path, Path, Path], toolchain: Toolchain
+) -> None:
+    _, _, staging = layout
+    first = devkit_manifest_for(staging, toolchain)
+    (staging / "esp32tap.bin").write_bytes(b"different final linked image\n")
+    second = devkit_manifest_for(staging, toolchain)
+    assert first["recipe_id"] == second["recipe_id"]
+    assert first["members"] != second["members"]
+    assert first["manifest_sha256"] != second["manifest_sha256"]
+
+
+def test_devkit_publication_is_independent_sealed_stale_and_exact_kind(
+    layout: tuple[Path, Path, Path], toolchain: Toolchain
+) -> None:
+    _, rs, staging = layout
+    public = rs / "build_devkit_bringup"
+    manifest = devkit_manifest_for(staging, toolchain)
+    publish_generation_atomic(staging, public, manifest)
+    assert os.readlink(public).startswith(".artifacts/devkit/")
+    assert not (rs / "build").exists()
+    assert not (rs / "build_qemu_test").exists()
+    assert stat.S_IMODE(public.resolve().stat().st_mode) == 0o555
+    assert all(
+        stat.S_IMODE(path.stat().st_mode) == 0o444
+        for path in public.resolve().iterdir()
+    )
+    expected = replace(toolchain, features=(), profile="release")
+    assert verify_locked(public, expected, "a" * 64).ok
+    assert verify_locked(public, expected, "b" * 64).code == EXIT_STALE
+
+    renamed = rs / "build"
+    public.rename(renamed)
+    assert verify_locked(renamed, expected, "a" * 64).code == EXIT_INVALID
+
+
+@pytest.mark.parametrize("source_kind", ["production", "qemu-test"])
+def test_devkit_name_rejects_copied_or_renamed_other_kind_bundle(
+    layout: tuple[Path, Path, Path], toolchain: Toolchain, source_kind: str
+) -> None:
+    source, _ = publish(layout, toolchain, kind=source_kind)
+    _, rs, _ = layout
+    devkit = rs / "build_devkit_bringup"
+    devkit.symlink_to(os.readlink(source))
+    expected = replace(toolchain, features=(), profile="release")
+    assert verify_locked(devkit, expected, "a" * 64).code == EXIT_INVALID
 
 
 @pytest.mark.parametrize(

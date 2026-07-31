@@ -413,9 +413,8 @@ def test_close_attempts_all_resources_and_releases_bundle_last(monkeypatch):
     monkeypatch.setattr(
         module.subprocess,
         "run",
-        lambda *_args, **_kwargs: events.append("docker") or (_ for _ in ()).throw(
-            RuntimeError("docker")
-        ),
+        lambda *_args, **_kwargs: events.append("docker")
+        or (_ for _ in ()).throw(RuntimeError("docker")),
     )
 
     with pytest.raises(RuntimeError, match="pacer"):
@@ -506,6 +505,70 @@ def test_exec_many_holds_two_inheritable_lock_descriptors(monkeypatch):
         )
 
 
+def test_devkit_cli_kind_dispatches_only_through_provenance_exec() -> None:
+    calls: list[tuple[Path, str, list[str]]] = []
+
+    def intercept(root: Path, kind: str, argv: list[str]) -> None:
+        calls.append((root, kind, argv))
+        raise provenance._ExecIntercept
+
+    with pytest.raises(provenance._ExecIntercept):
+        provenance.main(
+            [
+                "--repo-root",
+                str(REPO_ROOT),
+                "exec",
+                "--kind",
+                "devkit-bringup",
+                "--",
+                "true",
+            ],
+            exec_one=intercept,
+        )
+    assert calls == [(REPO_ROOT, "devkit-bringup", ["true"])]
+
+
+def test_devkit_direct_verification_refuses_dirty_tree_before_toolchain_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repo"
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    rs.mkdir(parents=True)
+    source = rs / "devkit_bringup.rs"
+    source.write_text("clean\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+    source.write_text("dirty\n", encoding="utf-8")
+    monkeypatch.setattr(
+        provenance,
+        "_current_toolchain",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Docker-backed toolchain check ran before dirty refusal"
+        ),
+    )
+
+    result = provenance._verify_current(
+        root, "devkit-bringup", rs / "build_devkit_bringup"
+    )
+    assert result.code == provenance.EXIT_INVALID
+    assert "clean Git worktree" in result.message
+
+
 @pytest.mark.parametrize(
     ("relative", "operation", "kinds"),
     (
@@ -530,7 +593,7 @@ def test_shell_entrypoint_verifies_before_delegating(
     log = tmp_path / "python.log"
     fake_python = fake_bin / "python3"
     fake_python.write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$TASK7_LOG\"\nexit 21\n",
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$TASK7_LOG"\nexit 21\n',
         encoding="utf-8",
     )
     fake_python.chmod(0o755)
@@ -577,12 +640,7 @@ def _directory_snapshot(path: Path) -> tuple[tuple[str, int, str], ...]:
 def _smoke_fixture(tmp_path: Path):
     fixture_root = tmp_path / "fixture root"
     rust_tools = (
-        fixture_root
-        / "hardware"
-        / "Esp32Tap"
-        / "firmware"
-        / "esp32_rs"
-        / "tools"
+        fixture_root / "hardware" / "Esp32Tap" / "firmware" / "esp32_rs" / "tools"
     )
     cpp_tools = rust_tools.parent.parent / "esp32" / "tools"
     rust_tools.mkdir(parents=True)
@@ -596,9 +654,7 @@ def _smoke_fixture(tmp_path: Path):
     )
     rust_build = rust_tools.parent / ".artifacts" / "prod" / ("a" * 64)
     rust_build.mkdir(parents=True)
-    (rust_tools.parent / "build").symlink_to(
-        Path(".artifacts") / "prod" / ("a" * 64)
-    )
+    (rust_tools.parent / "build").symlink_to(Path(".artifacts") / "prod" / ("a" * 64))
     for index, member in enumerate(MEMBERS):
         artifact = rust_build / member
         artifact.write_bytes(f"{member}:{index}\n".encode())
@@ -696,7 +752,9 @@ def test_concurrent_smokes_use_distinct_private_builds_and_clean_them(
     roots = []
     for stdout, stderr in results:
         assert stderr == ""
-        line = next(line for line in stdout.splitlines() if line.startswith("esp32_dir="))
+        line = next(
+            line for line in stdout.splitlines() if line.startswith("esp32_dir=")
+        )
         roots.append(Path(line.split("=", 1)[1]))
     assert roots[0] != roots[1]
     assert all(root.parent == firmware_dir.resolve() for root in roots)
@@ -740,9 +798,10 @@ def test_strengthened_harness_and_smoke_are_exactly_sha_pinned():
     verifier = _load("task7_verify_harness", TOOLS / "verify_harness_copy.py")
     for name in ("conftest.py", "qemu_session.py", "run.sh"):
         pinned, reason = verifier.ALLOWED_STRENGTHENING[name]
-        assert pinned == hashlib.sha256(
-            (TOOLS / "qemu_harness" / name).read_bytes()
-        ).hexdigest()
+        assert (
+            pinned
+            == hashlib.sha256((TOOLS / "qemu_harness" / name).read_bytes()).hexdigest()
+        )
         assert "provenance" in reason.lower()
     pinned, reason = verifier.SMOKE_STRENGTHENING
     assert pinned == hashlib.sha256((TOOLS / "qemu_smoke.sh").read_bytes()).hexdigest()
@@ -857,7 +916,9 @@ def test_harness_verifier_rejects_type_and_mode_before_hashing(
     real_sha = verifier._sha
 
     def forbid_target_hash(data: bytes) -> str:
-        assert data != original, f"{target_name} bytes were hashed before type/mode rejection"
+        assert (
+            data != original
+        ), f"{target_name} bytes were hashed before type/mode rejection"
         return real_sha(data)
 
     monkeypatch.setattr(verifier, "_sha", forbid_target_hash)

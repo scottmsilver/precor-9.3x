@@ -17,7 +17,7 @@ RECIPE_LABEL="org.treddy.esp32tap.recipe-sha256"
 TOOLCHAIN_LABEL="org.treddy.esp32tap.toolchain-json"
 
 usage() {
-    echo "usage: tools/build_image.sh [--recipe | --check --kind production|qemu-test]" >&2
+    echo "usage: tools/build_image.sh [--recipe | --check --kind production|qemu-test|devkit-bringup]" >&2
     exit 2
 }
 
@@ -273,7 +273,7 @@ if attestation["component_lock_sha256"] != component_sha:
     raise SystemExit("build_image.sh: component lock changed; run tools/build_image.sh")
 if attestation["target"] != "xtensa-esp32s3-espidf":
     raise SystemExit("build_image.sh: unexpected attested Rust target")
-if kind == "production":
+if kind in ("production", "devkit-bringup"):
     features = []
 elif kind == "qemu-test":
     features = ["ble", "net", "qemu-test"]
@@ -302,7 +302,7 @@ fi
 
 if [ "$#" -eq 3 ] && [ "$1" = "--check" ] && [ "$2" = "--kind" ]; then
     case "$3" in
-        production|qemu-test) check_image "$3" ;;
+        production|qemu-test|devkit-bringup) check_image "$3" ;;
         *) usage ;;
     esac
     exit 0

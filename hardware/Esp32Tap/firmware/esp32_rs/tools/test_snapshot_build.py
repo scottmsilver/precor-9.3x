@@ -43,7 +43,7 @@ def test_rejects_unknown_kind_before_docker() -> None:
         check=False,
     )
     assert completed.returncode == 2
-    assert "ONLY must be prod, qemu, or both" in completed.stderr
+    assert "ONLY must be prod, qemu, devkit, or both" in completed.stderr
 
 
 def test_exact_snapshot_gate_build_publish_order_is_explicit() -> None:
@@ -77,6 +77,37 @@ def test_release_kinds_and_exact_members_are_fixed() -> None:
     assert '("qemu-test", "net", "ble")' in text
     assert "BUNDLE_MEMBERS" in text
     assert "ONLY=both" in text
+
+
+def test_devkit_build_uses_isolated_crate_config_and_final_linked_elf() -> None:
+    text = source()
+    assert '("devkit-bringup", "devkit")' in text
+    assert 'cp -a "$RS_DIR/devkit_bringup" "$DEVKIT_BUILD_ROOT/devkit_bringup"' in text
+    assert 'CRATE="$DEVKIT_BUILD_ROOT/devkit_bringup"' in text
+    assert 'SDK="$RS_DIR/sdkconfig.defaults.devkit"' in text
+    assert "ESP32TAP_RECIPE_ID" in text
+    assert "ESP32TAP_GIT_COMMIT" in text
+    assert "APP_NAME=devkit_bringup" in text
+    assert '"$T/$APP_NAME"' in text
+    assert "libespidf.bin" not in text
+    assert "/project/.esp32tap-snapshot-v1" in text
+    assert "CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y" in text
+    assert "CONFIG_SPIRAM_MODE_OCT=y" in text
+    assert "CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y" in text
+    assert "CONFIG_ESP_CONSOLE_UART_DEFAULT=y" in text
+    assert "esp_wifi_init" in text
+    assert "nimble_port_init" in text
+    assert "image > factory" in text
+    assert "DEVKIT_BUILD_ROOT=/tmp/esp32tap-devkit-source" in text
+    assert 'cp -f "$RS_DIR/esp32tap/Cargo.lock" "$CRATE/Cargo.lock"' in text
+    assert 'chmod u+w "$CRATE/Cargo.lock"' in text
+    assert (
+        'cargo +esp metadata --manifest-path "$CRATE/Cargo.toml" '
+        '--format-version=1 >"$metadata"' in text
+    )
+    assert "derived DevKit Cargo lock contains an unpinned external package" in text
+    assert 'cargo +esp build --manifest-path "$CRATE/Cargo.toml" --release' in text
+    assert '--message-format=json-render-diagnostics "${args[@]}"' in text
 
 
 def test_physical_worktree_keys_lock_targets_and_cache() -> None:
@@ -216,6 +247,15 @@ def publish_generation_atomic(*args, **kwargs):
     _write(rs / "Dockerfile", "FROM scratch\n")
     _write(rs / ".dockerignore", "*\n")
     _write(rs / "esp32tap" / "components_esp32s3.lock", "lock\n")
+    _write(rs / "bringup_core" / "src" / "lib.rs", "pub const SAFE: bool = true;\n")
+    _write(rs / "devkit_bringup" / "Cargo.toml", "[package]\nname='devkit_bringup'\n")
+    _write(rs / "devkit_bringup" / "src" / "main.rs", "fn main() {}\n")
+    _write(
+        rs / "sdkconfig.defaults.devkit",
+        'CONFIG_IDF_TARGET="esp32s3"\n'
+        "CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y\n"
+        "CONFIG_SPIRAM_MODE_OCT=y\n",
+    )
     source_file = rs / "esp32tap" / "src" / "lib.rs"
     _write(source_file, "A\n")
 
@@ -340,7 +380,7 @@ shutil.rmtree = seam_rmtree
     _write(
         fake_bin / "docker",
         """#!/usr/bin/env python3
-import json, os, signal, sys, time
+import json, os, signal, struct, sys, time
 from pathlib import Path
 argv = sys.argv[1:]
 with Path(os.environ["FAKE_DOCKER_LOG"]).open("a", encoding="utf-8") as stream:
@@ -367,9 +407,61 @@ if os.environ.get("FAKE_DOCKER_FAIL"):
     raise SystemExit(17)
 mounts = [argv[index + 1] for index, value in enumerate(argv) if value == "-v"]
 output = Path(next(value.split(":", 1)[0] for value in mounts if value.endswith(":/output")))
-for name in ("esp32tap.bin", "bootloader.bin", "partition-table.bin", "sdkconfig"):
-    output.joinpath(name).write_bytes((name + "\\n").encode())
-output.joinpath("flash_args").write_text("0x0 bootloader.bin\\n", encoding="utf-8")
+settings = {}
+for index, value in enumerate(argv):
+    if value == "-e" and index + 1 < len(argv) and "=" in argv[index + 1]:
+        key, setting = argv[index + 1].split("=", 1)
+        settings[key] = setting
+kind = settings.get("ARTIFACT_KIND")
+image = b"esp32tap.bin\\n"
+sdkconfig = b"sdkconfig\\n"
+partition = b"partition-table.bin\\n"
+if kind == "devkit-bringup":
+    image = (
+        settings["ESP32TAP_RECIPE_ID"].encode()
+        + settings["ESP32TAP_GIT_COMMIT"].encode()
+        + "ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS".encode()
+    )
+    sdkconfig = (
+        b'CONFIG_IDF_TARGET="esp32s3"\\n'
+        b'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y\\n'
+        b'CONFIG_SPIRAM=y\\nCONFIG_SPIRAM_MODE_OCT=y\\n'
+        b'CONFIG_ESP_CONSOLE_UART_DEFAULT=y\\n'
+        b'CONFIG_ESP_CONSOLE_UART=y\\n'
+        b'CONFIG_ESP_CONSOLE_SECONDARY_NONE=y\\n'
+        b'# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set\\n'
+        b'# CONFIG_BT_ENABLED is not set\\n'
+    )
+    entry = struct.pack("<HBBII16sI", 0x50AA, 0, 0, 0x10000, 0x200000, b"factory", 0)
+    partition = entry + b"\\xff" * (32 - len(entry)) + b"\\xff" * 32
+    corruption = os.environ.get("FAKE_DEVKIT_CORRUPTION", "")
+    if corruption == "embedded-recipe":
+        image = b"0" * 64 + image[64:]
+    elif corruption == "flash-size":
+        sdkconfig = sdkconfig.replace(b"FLASHSIZE_8MB", b"FLASHSIZE_4MB")
+    elif corruption == "octal-psram":
+        sdkconfig = sdkconfig.replace(b"CONFIG_SPIRAM_MODE_OCT=y\\n", b"")
+    elif corruption == "usb-jtag":
+        sdkconfig += b"CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y\\n"
+    elif corruption == "uart-default":
+        sdkconfig = sdkconfig.replace(b"CONFIG_ESP_CONSOLE_UART_DEFAULT=y\\n", b"")
+    elif corruption == "qemu-identity":
+        image += b"esp32tap QEMU-TEST build"
+    elif corruption == "partition-overflow":
+        entry = struct.pack("<HBBII16sI", 0x50AA, 0, 0, 0x10000, 1, b"factory", 0)
+        partition = entry + b"\\xff" * (32 - len(entry)) + b"\\xff" * 32
+    elif corruption == "production-copy":
+        image = b"esp32tap production image"
+        sdkconfig = b"sdkconfig production\\n"
+output.joinpath("esp32tap.bin").write_bytes(image)
+output.joinpath("bootloader.bin").write_bytes(b"bootloader.bin\\n")
+output.joinpath("partition-table.bin").write_bytes(partition)
+output.joinpath("sdkconfig").write_bytes(sdkconfig)
+output.joinpath("flash_args").write_text(
+    "--flash_mode qio --flash_freq 80m --flash_size 8MB\\n"
+    "0x0 bootloader.bin\\n0x8000 partition-table.bin\\n0x10000 esp32tap.bin\\n",
+    encoding="utf-8",
+)
 """,
         executable=True,
     )
@@ -473,6 +565,87 @@ def test_fake_build_uses_snapshot_order_mounts_uid_and_manifest(
     }
     assert tuple(member["name"] for member in manifest["members"]) == MEMBERS
     assert not list(rs.glob(".snapshot-build-*"))
+
+
+def test_fake_devkit_build_publishes_independent_identity_bound_manifest(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, event_log, docker_log, _ = fake_worktree
+    completed = _run(fake_worktree, only="devkit")
+    assert completed.returncode == 0, completed.stderr
+    events = _events(event_log)
+    assert events[0] == {
+        "event": "check",
+        "kind": "devkit-bringup",
+        "path": events[0]["path"],
+    }
+    docker = _events(docker_log)[0]
+    settings = {
+        docker[index + 1].split("=", 1)[0]: docker[index + 1].split("=", 1)[1]
+        for index, value in enumerate(docker)
+        if value == "-e" and "=" in docker[index + 1]
+    }
+    assert settings["ARTIFACT_KIND"] == "devkit-bringup"
+    assert len(settings["ESP32TAP_RECIPE_ID"]) == 64
+    assert len(settings["ESP32TAP_GIT_COMMIT"]) == 40
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    public = rs / "build_devkit_bringup"
+    assert public.is_symlink()
+    assert os.readlink(public).startswith(".artifacts/devkit/")
+    assert not (rs / "build").exists()
+    assert not (rs / "build_qemu_test").exists()
+    manifest = json.loads((public / "artifact-manifest.json").read_text())
+    assert manifest["kind"] == "devkit-bringup"
+    assert manifest["input_digest"] != manifest["recipe_id"]
+    assert manifest["recipe_id"] == settings["ESP32TAP_RECIPE_ID"]
+    assert manifest["git_commit"] == settings["ESP32TAP_GIT_COMMIT"]
+    assert manifest["dirty_state"] == "clean"
+    assert manifest["profile"] == "release"
+    assert manifest["flash_geometry"] == {
+        "chip": "esp32s3",
+        "size": 8_388_608,
+        "offsets": [0, 32_768, 65_536],
+    }
+
+
+def test_devkit_refuses_dirty_live_tree_before_docker(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, docker_log, _ = fake_worktree
+    live = root / "hardware/Esp32Tap/firmware/esp32_rs/devkit_bringup/src/main.rs"
+    live.write_text("fn main() { panic!(); }\n", encoding="utf-8")
+    completed = _run(fake_worktree, only="devkit")
+    assert completed.returncode != 0
+    assert "clean Git worktree" in completed.stderr
+    assert not docker_log.exists()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "embedded-recipe",
+        "flash-size",
+        "octal-psram",
+        "usb-jtag",
+        "uart-default",
+        "qemu-identity",
+        "partition-overflow",
+        "production-copy",
+    ],
+)
+def test_devkit_rejects_wrong_identity_geometry_and_partition_fit(
+    fake_worktree: tuple[Path, Path, Path, Path], corruption: str
+) -> None:
+    root, _, _, _ = fake_worktree
+    completed = _run(
+        fake_worktree,
+        only="devkit",
+        extra_env={"FAKE_DEVKIT_CORRUPTION": corruption},
+    )
+    assert completed.returncode != 0
+    assert not (
+        root / "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup"
+    ).exists()
 
 
 def test_same_size_edit_rebuilds_and_live_mutation_preserves_old(

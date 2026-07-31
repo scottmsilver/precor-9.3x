@@ -290,6 +290,7 @@ def test_generated_outputs_are_excluded_by_exact_directory_name(repo: Path) -> N
     excluded = (
         RS / "build/output.bin",
         RS / "build_qemu_test/output.bin",
+        RS / "build_devkit_bringup/output.bin",
         RS / ".artifacts/report.json",
         RS / "esp32tap/target/debug/app",
         RS / "esp32tap/__pycache__/cache.pyc",
@@ -392,36 +393,20 @@ def test_exact_untracked_legacy_swap_trees_do_not_change_digest(repo: Path) -> N
 @pytest.mark.parametrize(
     "child",
     [
-        RS
-        / f".artifact-provenance-legacy-build-{'C' * 64}.swap"
-        / "sdkconfig",
-        RS
-        / f".artifact-provenance-legacy-build-{'c' * 63}.swap"
-        / "sdkconfig",
-        RS
-        / f".artifact-provenance-legacy-build-{'c' * 65}.swap"
-        / "sdkconfig",
-        RS
-        / f".artifact-provenance-legacy-build_debug-{'c' * 64}.swap"
-        / "sdkconfig",
-        RS
-        / f"x.artifact-provenance-legacy-build-{'c' * 64}.swap"
-        / "sdkconfig",
-        RS
-        / f".artifact-provenance-legacy-build-{'c' * 64}.swap-extra"
-        / "sdkconfig",
+        RS / f".artifact-provenance-legacy-build-{'C' * 64}.swap" / "sdkconfig",
+        RS / f".artifact-provenance-legacy-build-{'c' * 63}.swap" / "sdkconfig",
+        RS / f".artifact-provenance-legacy-build-{'c' * 65}.swap" / "sdkconfig",
+        RS / f".artifact-provenance-legacy-build_debug-{'c' * 64}.swap" / "sdkconfig",
+        RS / f"x.artifact-provenance-legacy-build-{'c' * 64}.swap" / "sdkconfig",
+        RS / f".artifact-provenance-legacy-build-{'c' * 64}.swap-extra" / "sdkconfig",
         RS
         / "nested"
         / f".artifact-provenance-legacy-build-{'c' * 64}.swap"
         / "sdkconfig",
-        RS
-        / f".artifact_provenance-legacy-build-{'c' * 64}.swap"
-        / "sdkconfig",
+        RS / f".artifact_provenance-legacy-build-{'c' * 64}.swap" / "sdkconfig",
     ],
 )
-def test_legacy_swap_tree_lookalikes_remain_inputs(
-    repo: Path, child: Path
-) -> None:
+def test_legacy_swap_tree_lookalikes_remain_inputs(repo: Path, child: Path) -> None:
     write(repo, RS / "esp32tap/src/main.rs")
     commit_all(repo)
     original = working_digest(repo)
@@ -437,11 +422,7 @@ def test_tracked_exact_legacy_swap_tree_descendant_remains_an_input(
     write(repo, RS / "esp32tap/src/main.rs")
     commit_all(repo)
     original = working_digest(repo)
-    child = (
-        RS
-        / f".artifact-provenance-legacy-build-{'d' * 64}.swap"
-        / "sdkconfig"
-    )
+    child = RS / f".artifact-provenance-legacy-build-{'d' * 64}.swap" / "sdkconfig"
     write(repo, child, "tracked transaction-shaped source\n")
     commit_all(repo)
 
@@ -544,6 +525,49 @@ def test_target_cache_uses_physical_worktree_and_separates_kinds(
     assert len(prod.parent.name.removeprefix("esp32tap-target-")) == 12
     with pytest.raises(ValueError, match="kind"):
         target_cache(repo, "debug")
+
+
+def test_devkit_target_cache_is_separate_and_generated_bytes_are_ignored(
+    repo: Path,
+) -> None:
+    source = write(repo, RS / "devkit_bringup/src/main.rs", "fn main() {}\n")
+    write(repo, RS / "bringup_core/src/lib.rs", "pub const SAFE: bool = true;\n")
+    write(repo, RS / "sdkconfig.defaults.devkit", 'CONFIG_IDF_TARGET="esp32s3"\n')
+    commit_all(repo)
+    original = working_digest(repo)
+
+    generated = write(repo, RS / "build_devkit_bringup/esp32tap.bin", "generated\n")
+    target = write(repo, RS / "devkit_bringup/target/release/devkit_bringup", "elf\n")
+
+    assert source.relative_to(repo).as_posix() in declared_inputs(repo)
+    assert generated.relative_to(repo).as_posix() not in declared_inputs(repo)
+    assert target.relative_to(repo).as_posix() not in declared_inputs(repo)
+    assert working_digest(repo) == original
+    assert target_cache(repo, "devkit") not in {
+        target_cache(repo, "prod"),
+        target_cache(repo, "qemu"),
+    }
+
+
+def test_devkit_sources_config_builders_and_planned_bench_gates_are_inputs(
+    repo: Path,
+) -> None:
+    required = (
+        RS / "bringup_core/src/lib.rs",
+        RS / "devkit_bringup/src/main.rs",
+        RS / "sdkconfig.defaults.devkit",
+        RS / "tools/build.sh",
+        RS / "tools/build_image.sh",
+        RS / "tools/devkit_bench.py",
+        RS / "tools/test_devkit_bench.py",
+        RS / "tools/test_devkit_source_contract.py",
+    )
+    for path in required:
+        write(repo, path, f"input {path.name}\n")
+    commit_all(repo)
+
+    paths = set(declared_inputs(repo))
+    assert paths.issuperset(path.as_posix() for path in required)
 
 
 def test_snapshot_mtimes_are_newer_than_newest_prior_target_output(

@@ -37,6 +37,7 @@ _TRACKED_INPUT_FILES = frozenset(
 _GENERATED_PREFIXES = (
     _ESP32_RS / "build",
     _ESP32_RS / "build_qemu_test",
+    _ESP32_RS / "build_devkit_bringup",
     _ESP32_RS / ".artifacts",
 )
 _CACHE_PARTS = frozenset(
@@ -191,11 +192,15 @@ def _relevant_untracked(relative: str) -> bool:
 
 def _generated_legacy_provenance_marker(relative: str) -> bool:
     path = PurePosixPath(relative)
-    return path.parent == _ESP32_RS and re.fullmatch(
-        r"\.artifact-provenance-legacy-(?:build|build_qemu_test)-"
-        r"[0-9a-f]{64}\.json",
-        path.name,
-    ) is not None
+    return (
+        path.parent == _ESP32_RS
+        and re.fullmatch(
+            r"\.artifact-provenance-legacy-(?:build|build_qemu_test|build_devkit_bringup)-"
+            r"[0-9a-f]{64}\.json",
+            path.name,
+        )
+        is not None
+    )
 
 
 def _generated_legacy_provenance_swap(relative: str) -> bool:
@@ -204,11 +209,15 @@ def _generated_legacy_provenance_swap(relative: str) -> bool:
         below_root = path.relative_to(_ESP32_RS)
     except ValueError:
         return False
-    return bool(below_root.parts) and re.fullmatch(
-        r"\.artifact-provenance-legacy-(?:build|build_qemu_test)-"
-        r"[0-9a-f]{64}\.swap",
-        below_root.parts[0],
-    ) is not None
+    return (
+        bool(below_root.parts)
+        and re.fullmatch(
+            r"\.artifact-provenance-legacy-(?:build|build_qemu_test|build_devkit_bringup)-"
+            r"[0-9a-f]{64}\.swap",
+            below_root.parts[0],
+        )
+        is not None
+    )
 
 
 def _in_tracked_build_scope(relative: str) -> bool:
@@ -420,9 +429,9 @@ def _worktree_key(root: Path) -> str:
 def target_cache(repo_root: Path, kind: str) -> Path:
     """Return the physical-worktree-specific Cargo target cache."""
 
-    if kind not in ("prod", "qemu"):
+    if kind not in ("prod", "qemu", "devkit"):
         raise ValueError(
-            f"unknown target cache kind {kind!r}; expected 'prod' or 'qemu'"
+            f"unknown target cache kind {kind!r}; expected 'prod', 'qemu', or 'devkit'"
         )
     root = _validated_repo_root(repo_root)
     return Path("/tmp") / f"esp32tap-target-{_worktree_key(root)}" / kind

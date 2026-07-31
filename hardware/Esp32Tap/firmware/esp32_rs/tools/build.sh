@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build production and QEMU flash bundles from one immutable, gated snapshot.
+# Build production, QEMU, or DevKit flash bundles from one immutable snapshot.
 #
 # The shell is intentionally only a stable entry point. Python owns the secure
 # worktree lock, snapshot lifecycle, container invocation, provenance manifest,
@@ -7,9 +7,9 @@
 set -euo pipefail
 
 case "${ONLY:-both}" in
-    prod|qemu|both) ;;
+    prod|qemu|devkit|both) ;;
     *)
-        echo "build.sh: ONLY must be prod, qemu, or both" >&2
+        echo "build.sh: ONLY must be prod, qemu, devkit, or both" >&2
         exit 2
         ;;
 esac
@@ -23,6 +23,7 @@ if [ -n "${NET_FEATURE:-}" ]; then
 fi
 
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
+export PYTHONDONTWRITEBYTECODE=1
 exec python3 - "$HERE" "${ONLY:-both}" <<'PY'
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ import re
 import shutil
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -66,10 +68,12 @@ from artifact_inputs import (  # noqa: E402
 )
 from artifact_provenance import (  # noqa: E402
     BUNDLE_MEMBERS,
+    DEVKIT_REQUIRED_SERIAL_DEVICE,
     Toolchain,
     _current_toolchain,
     lock_path,
     make_manifest,
+    make_recipe_id,
     publish_generation_atomic,
 )
 
@@ -174,12 +178,64 @@ def acquire_worktree_lock() -> None:
 
 
 def requested_kinds() -> tuple[tuple[str, str], ...]:
+    if only == "devkit":
+        return (("devkit-bringup", "devkit"),)
     selected: list[tuple[str, str]] = []
     if only != "qemu":
         selected.append(("production", "prod"))
     if only != "prod":
         selected.append(("qemu-test", "qemu"))
     return tuple(selected)
+
+
+def clean_git_commit() -> str:
+    """Return one canonical commit only when the live worktree is pristine."""
+
+    status = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout
+    if status:
+        raise BuildError("devkit-bringup requires a clean Git worktree")
+    commit = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "--verify", "HEAD"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise BuildError("devkit-bringup requires a canonical 40-hex Git commit")
+    return commit
+
+
+def validate_snapshot_identity(snapshot: object) -> None:
+    """Fail closed unless the builder received artifact_inputs' sealed snapshot."""
+
+    marker = snapshot.root / ".esp32tap-snapshot-v1"
+    try:
+        info = marker.lstat()
+        payload = marker.read_text(encoding="ascii")
+    except OSError as exc:
+        raise BuildError(f"immutable snapshot marker is unavailable: {exc}") from exc
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) != 0o444
+        or f"digest={snapshot.digest}\n" not in payload
+        or f"worktree_key={snapshot.worktree_key}\n" not in payload
+    ):
+        raise BuildError("immutable snapshot marker is invalid or incomplete")
 
 
 def secure_cache_dir(path: Path) -> Path:
@@ -327,9 +383,14 @@ def run_docker(
     kind: str,
     cache_kind: str,
     toolchain: Toolchain,
+    source_digest: str,
+    recipe_id: str | None,
+    git_commit: str | None,
 ) -> None:
     global cancellation_deferred
-    features = () if kind == "production" else ("qemu-test", "net", "ble")
+    features = (
+        ("qemu-test", "net", "ble") if kind == "qemu-test" else ()
+    )
     feature_text = ",".join(features)
     command = r'''
 set -euo pipefail
@@ -340,8 +401,29 @@ export PATH="$PATH:$(dirname "$(ls /opt/esp/tools/qemu-xtensa/*/qemu/bin/qemu-sy
 RS_DIR=/project/hardware/Esp32Tap/firmware/esp32_rs
 CRATE="$RS_DIR/esp32tap"
 SDK="$RS_DIR/sdkconfig.defaults"
+APP_NAME=esp32tap
 if [ "$ARTIFACT_KIND" = qemu-test ]; then
     SDK="$SDK;$RS_DIR/sdkconfig.defaults.qemu"
+fi
+if [ "$ARTIFACT_KIND" = devkit-bringup ]; then
+    [ -f /project/.esp32tap-snapshot-v1 ] || {
+        echo "FATAL: direct DevKit build requires a valid immutable snapshot" >&2
+        exit 1
+    }
+    grep -qx "digest=$SOURCE_INPUT_DIGEST" /project/.esp32tap-snapshot-v1 || {
+        echo "FATAL: immutable snapshot digest mismatch" >&2
+        exit 1
+    }
+    DEVKIT_BUILD_ROOT=/tmp/esp32tap-devkit-source
+    mkdir "$DEVKIT_BUILD_ROOT"
+    cp -a "$RS_DIR/devkit_bringup" "$DEVKIT_BUILD_ROOT/devkit_bringup"
+    cp -a "$RS_DIR/bringup_core" "$DEVKIT_BUILD_ROOT/bringup_core"
+    chmod -R u+w "$DEVKIT_BUILD_ROOT"
+    CRATE="$DEVKIT_BUILD_ROOT/devkit_bringup"
+    cp -f "$RS_DIR/esp32tap/Cargo.lock" "$CRATE/Cargo.lock"
+    chmod u+w "$CRATE/Cargo.lock"
+    SDK="$RS_DIR/sdkconfig.defaults.devkit"
+    APP_NAME=devkit_bringup
 fi
 
 args=()
@@ -351,8 +433,53 @@ fi
 echo "== cargo release build: $ARTIFACT_KIND =="
 metadata="$(mktemp /tmp/esp32tap-cargo-metadata.XXXXXX)"
 messages="$(mktemp /tmp/esp32tap-cargo-messages.XXXXXX)"
-cargo +esp metadata --format-version=1 --locked \
-    --filter-platform xtensa-esp32s3-espidf >"$metadata"
+if [ "$ARTIFACT_KIND" = devkit-bringup ]; then
+    cargo +esp metadata --manifest-path "$CRATE/Cargo.toml" --format-version=1 >"$metadata"
+    python3 - "$RS_DIR/esp32tap/Cargo.lock" "$CRATE/Cargo.lock" <<'PYLOCK'
+import sys
+import tomllib
+from pathlib import Path
+
+seed = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+derived = tomllib.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+
+def external_identity(package):
+    source = package.get("source")
+    if source is None:
+        return None
+    return (
+        package.get("name"),
+        package.get("version"),
+        source,
+        package.get("checksum"),
+    )
+
+seed_external = {
+    identity
+    for package in seed.get("package", [])
+    if (identity := external_identity(package)) is not None
+}
+derived_packages = derived.get("package", [])
+if not isinstance(derived_packages, list):
+    raise SystemExit("FATAL: derived DevKit Cargo lock has invalid package schema")
+local_names = {
+    package.get("name")
+    for package in derived_packages
+    if external_identity(package) is None
+}
+if local_names != {"bringup_core", "devkit_bringup"}:
+    raise SystemExit("FATAL: derived DevKit Cargo lock has unexpected local packages")
+for package in derived_packages:
+    identity = external_identity(package)
+    if identity is not None and identity not in seed_external:
+        raise SystemExit(
+            "FATAL: derived DevKit Cargo lock contains an unpinned external package"
+        )
+PYLOCK
+else
+    cargo +esp metadata --manifest-path "$CRATE/Cargo.toml" --format-version=1 --locked \
+        --filter-platform xtensa-esp32s3-espidf >"$metadata"
+fi
 esp_idf_sys_package="$(
 python3 - "$metadata" <<'PYMETA'
 import json
@@ -375,6 +502,8 @@ PYMETA
 )"
 set +e
 ESP_IDF_SDKCONFIG_DEFAULTS="$SDK" \
+    ESP32TAP_RECIPE_ID="$ESP32TAP_RECIPE_ID" \
+    ESP32TAP_GIT_COMMIT="$ESP32TAP_GIT_COMMIT" \
     cargo +esp build --manifest-path "$CRATE/Cargo.toml" --release \
     --message-format=json-render-diagnostics "${args[@]}" >"$messages"
 cargo_status=$?
@@ -485,13 +614,15 @@ PYSDK
 FLASH_SIZE="$(grep -E '^CONFIG_ESPTOOLPY_FLASHSIZE=' "$sdk" | head -1 | cut -d\" -f2)"
 [ -n "$FLASH_SIZE" ] || { echo "FATAL: flash size missing from sdkconfig" >&2; exit 1; }
 
-cp "$T/bootloader.bin" /output/bootloader.bin
-cp "$T/partition-table.bin" /output/partition-table.bin
+cp -f "$T/bootloader.bin" /output/bootloader.bin
+cp -f "$T/partition-table.bin" /output/partition-table.bin
+FLASH_MODE=dio
+if [ "$ARTIFACT_KIND" = devkit-bringup ]; then FLASH_MODE=qio; fi
 python -m esptool --chip esp32s3 elf2image \
-    --flash_mode dio --flash_freq 80m --flash_size "$FLASH_SIZE" \
-    -o /output/esp32tap.bin "$T/esp32tap"
+    --flash_mode "$FLASH_MODE" --flash_freq 80m --flash_size "$FLASH_SIZE" \
+    -o /output/esp32tap.bin "$T/$APP_NAME"
 cat > /output/flash_args <<EOF
---flash_mode dio --flash_freq 80m --flash_size $FLASH_SIZE
+--flash_mode $FLASH_MODE --flash_freq 80m --flash_size $FLASH_SIZE
 0x0 bootloader.bin
 0x8000 partition-table.bin
 0x10000 esp32tap.bin
@@ -500,13 +631,54 @@ python -m esptool --chip esp32s3 image_info --version 2 /output/esp32tap.bin 2>/
     | grep -qi "^Flash size: *$FLASH_SIZE$" \
     || { echo "FATAL: image header flash size mismatch" >&2; exit 1; }
 
-grep -q "CONFIG_ESP_TASK_WDT_PANIC=y" "$sdk"
-grep -q "CONFIG_FREERTOS_HZ=1000" "$sdk"
-qemu_flag=()
-if [ "$ARTIFACT_KIND" = qemu-test ]; then qemu_flag=(--allow-qemu); fi
-python3 "$RS_DIR/tools/check_sdkconfig.py" "$sdk" \
-    --label "$ARTIFACT_KIND" "${qemu_flag[@]}"
-cp "$sdk" /output/sdkconfig
+if [ "$ARTIFACT_KIND" = devkit-bringup ]; then
+    grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y$' "$sdk"
+    grep -q '^CONFIG_SPIRAM=y$' "$sdk"
+    grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' "$sdk"
+    grep -q '^CONFIG_ESP_CONSOLE_UART_DEFAULT=y$' "$sdk"
+    grep -q '^CONFIG_ESP_CONSOLE_UART=y$' "$sdk"
+    grep -q '^CONFIG_ESP_CONSOLE_SECONDARY_NONE=y$' "$sdk"
+    if grep -Eq '^CONFIG_(ESP_CONSOLE_USB_CDC|ESP_CONSOLE_USB_SERIAL_JTAG|ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG|ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED|USJ_ENABLE_USB_SERIAL_JTAG)=y$' "$sdk"; then
+        echo "FATAL: USB Serial/JTAG console is enabled" >&2
+        exit 1
+    fi
+    if grep -q '^CONFIG_BT_ENABLED=y$' "$sdk"; then
+        echo "FATAL: Bluetooth identity is enabled" >&2
+        exit 1
+    fi
+    python3 - "$T/$APP_NAME" "$ESP32TAP_RECIPE_ID" "$ESP32TAP_GIT_COMMIT" <<'PYIDENTITY'
+import sys
+from pathlib import Path
+
+elf = Path(sys.argv[1]).read_bytes()
+identity = (
+    sys.argv[2].encode()
+    + sys.argv[3].encode()
+    + "ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS".encode()
+)
+if elf.count(identity) != 1:
+    raise SystemExit("FATAL: linked DevKit ELF has embedded recipe mismatch")
+for forbidden in (
+    b"esp32tap QEMU-TEST build",
+    b"qemu-test",
+    b"esp_wifi_init",
+    b"esp_wifi_start",
+    b"esp_wifi_connect",
+    b"nimble_port_init",
+    b"esp_eth_driver_install",
+):
+    if forbidden in elf:
+        raise SystemExit(f"FATAL: linked DevKit ELF contains forbidden identity {forbidden!r}")
+PYIDENTITY
+else
+    grep -q "CONFIG_ESP_TASK_WDT_PANIC=y" "$sdk"
+    grep -q "CONFIG_FREERTOS_HZ=1000" "$sdk"
+    qemu_flag=()
+    if [ "$ARTIFACT_KIND" = qemu-test ]; then qemu_flag=(--allow-qemu); fi
+    python3 "$RS_DIR/tools/check_sdkconfig.py" "$sdk" \
+        --label "$ARTIFACT_KIND" "${qemu_flag[@]}"
+fi
+cp -f "$sdk" /output/sdkconfig
 
 python3 - /output <<'PYFIT'
 import pathlib, struct, sys
@@ -540,12 +712,23 @@ PYFIT
         "-e", "CARGO_HOME=/cargo",
         "-e", f"CARGO_TARGET_DIR=/target/{cache_kind}",
         "-e",
-        "CARGO_WORKSPACE_DIR=/project/hardware/Esp32Tap/firmware/"
-        "esp32_rs/esp32tap",
+        (
+            "CARGO_WORKSPACE_DIR=/tmp/esp32tap-devkit-source/devkit_bringup"
+            if kind == "devkit-bringup"
+            else "CARGO_WORKSPACE_DIR=/project/hardware/Esp32Tap/firmware/"
+            "esp32_rs/esp32tap"
+        ),
         "-e", "PROFILE=release",
         "-e", f"ARTIFACT_KIND={kind}",
         "-e", f"BUILD_FEATURES={feature_text}",
-        "-w", "/project/hardware/Esp32Tap/firmware/esp32_rs/esp32tap",
+        "-e", f"SOURCE_INPUT_DIGEST={source_digest}",
+        "-e", f"ESP32TAP_RECIPE_ID={recipe_id or ''}",
+        "-e", f"ESP32TAP_GIT_COMMIT={git_commit or ''}",
+        "-w", (
+            "/project/hardware/Esp32Tap/firmware/esp32_rs/devkit_bringup"
+            if kind == "devkit-bringup"
+            else "/project/hardware/Esp32Tap/firmware/esp32_rs/esp32tap"
+        ),
         "--entrypoint", "bash",
         toolchain.image_id,
         "-lc", command,
@@ -583,6 +766,92 @@ PYFIT
         raise BuildError(f"Docker {kind} build failed with status {returncode}")
 
 
+def validate_devkit_outputs(
+    staging: Path, recipe_id: str, git_commit: str
+) -> dict[str, object]:
+    """Validate final flash bytes and return post-build geometry."""
+
+    flash_args = (staging / "flash_args").read_text(encoding="ascii")
+    lines = flash_args.splitlines()
+    if (
+        lines != [
+            "--flash_mode qio --flash_freq 80m --flash_size 8MB",
+            "0x0 bootloader.bin",
+            "0x8000 partition-table.bin",
+            "0x10000 esp32tap.bin",
+        ]
+    ):
+        raise BuildError("DevKit flash arguments do not match exact 8 MB geometry")
+
+    sdkconfig = (staging / "sdkconfig").read_bytes()
+    for required in (
+        b"CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y\n",
+        b"CONFIG_SPIRAM=y\n",
+        b"CONFIG_SPIRAM_MODE_OCT=y\n",
+        b"CONFIG_ESP_CONSOLE_UART_DEFAULT=y\n",
+        b"CONFIG_ESP_CONSOLE_UART=y\n",
+        b"CONFIG_ESP_CONSOLE_SECONDARY_NONE=y\n",
+    ):
+        if required not in sdkconfig:
+            raise BuildError(f"DevKit sdkconfig is missing {required.strip()!r}")
+    for forbidden in (
+        b"CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y\n",
+        b"CONFIG_ESP_CONSOLE_USB_CDC=y\n",
+        b"CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y\n",
+        b"CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y\n",
+        b"CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y\n",
+        b"CONFIG_BT_ENABLED=y\n",
+        b"CONFIG_ETH_USE_OPENETH=y\n",
+    ):
+        if forbidden in sdkconfig:
+            raise BuildError(f"DevKit sdkconfig enables forbidden identity {forbidden.strip()!r}")
+
+    image = (staging / "esp32tap.bin").read_bytes()
+    identity = (
+        recipe_id.encode()
+        + git_commit.encode()
+        + "ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS".encode()
+    )
+    if image.count(identity) != 1:
+        raise BuildError("final DevKit app image has embedded recipe mismatch")
+    for forbidden in (
+        b"esp32tap QEMU-TEST build",
+        b"qemu-test",
+        b"esp_wifi_init",
+        b"esp_wifi_start",
+        b"esp_wifi_connect",
+        b"nimble_port_init",
+        b"esp_eth_driver_install",
+    ):
+        if forbidden in image:
+            raise BuildError(
+                f"final DevKit app image contains forbidden identity {forbidden!r}"
+            )
+
+    table = (staging / "partition-table.bin").read_bytes()
+    factory: tuple[int, int] | None = None
+    for index in range(0, len(table) - 31, 32):
+        entry = table[index : index + 32]
+        if entry[:2] != b"\xaa\x50":
+            continue
+        _, partition_type, _, offset, size = struct.unpack("<HBBII", entry[:12])
+        if partition_type == 0:
+            if factory is not None:
+                raise BuildError("DevKit partition table has multiple app partitions")
+            factory = (offset, size)
+    if factory is None or factory[0] != 65_536:
+        raise BuildError("DevKit partition table lacks the exact factory app offset")
+    if len(image) > factory[1]:
+        raise BuildError(
+            f"DevKit app image exceeds factory partition ({len(image)} > {factory[1]})"
+        )
+    return {
+        "chip": "esp32s3",
+        "size": 8_388_608,
+        "offsets": [0, 32_768, 65_536],
+    }
+
+
 import contextlib  # kept after the embedded container script for readability
 
 
@@ -590,6 +859,11 @@ def main() -> None:
     global cancellation_deferred, cleanup_in_progress
     acquire_worktree_lock()
     kinds = requested_kinds()
+    devkit_commit = (
+        clean_git_commit()
+        if any(kind == "devkit-bringup" for kind, _ in kinds)
+        else None
+    )
     cache_root = target_cache(repo_root, "prod").parent
     secure_cache_dir(cache_root)
     task_root: Path | None = None
@@ -614,11 +888,26 @@ def main() -> None:
             cancellation_deferred = False
         raise_pending_cancellation()
         print(f"== immutable source {snapshot.digest} ==")
+        validate_snapshot_identity(snapshot)
         sealed_baseline = sealed_snapshot_digest(snapshot.root, snapshot.paths)
 
         # Recipe/toolchain validation deliberately precedes every host gate.
         toolchains = {
             kind: _current_toolchain(snapshot.root, kind)
+            for kind, _ in kinds
+        }
+        recipes = {
+            kind: (
+                make_recipe_id(
+                    git_commit=devkit_commit,
+                    kind=kind,
+                    profile="release",
+                    input_digest=snapshot.digest,
+                    toolchain=toolchains[kind],
+                )
+                if kind == "devkit-bringup" and devkit_commit is not None
+                else None
+            )
             for kind, _ in kinds
         }
         verify_gate_input_completeness(snapshot.root)
@@ -651,6 +940,9 @@ def main() -> None:
                 kind,
                 cache_kind,
                 toolchains[kind],
+                snapshot.digest,
+                recipes[kind],
+                devkit_commit if kind == "devkit-bringup" else None,
             )
             names = {entry.name for entry in os.scandir(staging)}
             if names != set(BUNDLE_MEMBERS):
@@ -658,9 +950,28 @@ def main() -> None:
                     f"{kind} build emitted {sorted(names)}, expected "
                     f"{list(BUNDLE_MEMBERS)}"
                 )
-            manifests[kind] = make_manifest(
-                staging, kind, snapshot.digest, toolchains[kind]
-            )
+            if kind == "devkit-bringup":
+                if recipes[kind] is None or devkit_commit is None:
+                    raise BuildError("DevKit pre-build identity is incomplete")
+                geometry = validate_devkit_outputs(
+                    staging, recipes[kind], devkit_commit
+                )
+                manifests[kind] = make_manifest(
+                    staging,
+                    kind,
+                    snapshot.digest,
+                    toolchains[kind],
+                    git_commit=devkit_commit,
+                    dirty_state="clean",
+                    profile="release",
+                    required_serial_device=DEVKIT_REQUIRED_SERIAL_DEVICE,
+                    flash_geometry=geometry,
+                    recipe_id=recipes[kind],
+                )
+            else:
+                manifests[kind] = make_manifest(
+                    staging, kind, snapshot.digest, toolchains[kind]
+                )
 
         if sealed_snapshot_digest(snapshot.root, snapshot.paths) != sealed_baseline:
             raise BuildError("sealed source snapshot changed while builds were running")
@@ -671,6 +982,16 @@ def main() -> None:
                 "source inputs changed while the snapshot build was running; "
                 "nothing was published"
             )
+        if devkit_commit is not None:
+            current_commit = subprocess.run(
+                ["git", "-C", str(repo_root), "rev-parse", "--verify", "HEAD"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ).stdout.strip()
+            if current_commit != devkit_commit:
+                raise BuildError("Git commit changed while DevKit build was running")
 
         # Each public link is an independent atomic commit. If the process
         # crashes between kinds, readers can see a valid old/new mix; neither
@@ -678,9 +999,11 @@ def main() -> None:
         cancellation_deferred = True
         try:
             for (kind, _), staging in zip(kinds, stagings, strict=True):
-                public_name = (
-                    "build" if kind == "production" else "build_qemu_test"
-                )
+                public_name = {
+                    "production": "build",
+                    "qemu-test": "build_qemu_test",
+                    "devkit-bringup": "build_devkit_bringup",
+                }[kind]
                 publish_generation_atomic(
                     staging,
                     esp32_rs / public_name,

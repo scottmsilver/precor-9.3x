@@ -70,9 +70,11 @@ LEGACY_MARKER_SCHEMA_VERSION = 1
 _KIND_LAYOUT = {
     "production": ("build", "prod"),
     "qemu-test": ("build_qemu_test", "qemu"),
+    "devkit-bringup": ("build_devkit_bringup", "devkit"),
 }
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40,64}\Z")
+_GIT_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _FEATURE = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _IMAGE_TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]*\Z")
@@ -89,6 +91,24 @@ _TOOLCHAIN_KEYS = (
     "profile",
     "features",
 )
+DEVKIT_REQUIRED_SERIAL_DEVICE = (
+    "/dev/serial/by-id/"
+    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
+    "4cd513f253bff0119bc5c57948e9de0f-if00-port0"
+)
+DEVKIT_FLASH_GEOMETRY = {
+    "chip": "esp32s3",
+    "size": 8_388_608,
+    "offsets": [0, 32_768, 65_536],
+}
+_DEVKIT_MANIFEST_KEYS = {
+    "git_commit",
+    "dirty_state",
+    "profile",
+    "required_serial_device",
+    "flash_geometry",
+    "recipe_id",
+}
 
 
 class ArtifactError(Exception):
@@ -243,6 +263,76 @@ def _toolchain_from_dict(value: object) -> Toolchain:
     return toolchain
 
 
+def make_recipe_id(
+    *,
+    git_commit: str,
+    kind: str,
+    profile: str,
+    input_digest: str,
+    toolchain: Toolchain,
+) -> str:
+    """Hash only complete pre-build identity, never generated image geometry."""
+    _kind(kind)
+    if not isinstance(git_commit, str) or not _GIT_COMMIT.fullmatch(git_commit):
+        raise InvalidError("git_commit must be exactly 40 lowercase hex characters")
+    if (
+        not isinstance(profile, str)
+        or not profile
+        or profile != profile.strip()
+        or "\x00" in profile
+    ):
+        raise InvalidError("profile must be a non-empty canonical string")
+    digest = _validate_digest(input_digest, "input_digest")
+    if not isinstance(toolchain, Toolchain):
+        raise InvalidError("toolchain must be a validated Toolchain")
+    recipe = {
+        "git_commit": git_commit,
+        "input_digest": digest,
+        "kind": kind,
+        "profile": profile,
+        "toolchain": _toolchain_dict(toolchain),
+    }
+    return hashlib.sha256(manifest_bytes(recipe)).hexdigest()
+
+
+def _validate_devkit_manifest_fields(value: dict, toolchain: Toolchain) -> None:
+    git_commit = value.get("git_commit")
+    if not isinstance(git_commit, str) or not _GIT_COMMIT.fullmatch(git_commit):
+        raise InvalidError(
+            "manifest git_commit must be exactly 40 lowercase hex characters"
+        )
+    if value.get("dirty_state") != "clean":
+        raise InvalidError("manifest dirty_state must be exactly clean")
+    if value.get("profile") != "release":
+        raise InvalidError("manifest profile must be exactly release")
+    if toolchain.profile != value["profile"]:
+        raise InvalidError("manifest profile does not match toolchain profile")
+    if value.get("required_serial_device") != DEVKIT_REQUIRED_SERIAL_DEVICE:
+        raise InvalidError("manifest required_serial_device does not match DevKit")
+    geometry = value.get("flash_geometry")
+    if (
+        not isinstance(geometry, dict)
+        or set(geometry) != {"chip", "size", "offsets"}
+        or geometry.get("chip") != "esp32s3"
+        or type(geometry.get("size")) is not int
+        or geometry["size"] != 8_388_608
+        or not isinstance(geometry.get("offsets"), list)
+        or any(type(offset) is not int for offset in geometry["offsets"])
+        or geometry["offsets"] != [0, 32_768, 65_536]
+    ):
+        raise InvalidError("manifest flash_geometry is not the exact DevKit geometry")
+    recipe_id = _validate_digest(value.get("recipe_id"), "manifest recipe_id")
+    expected_recipe = make_recipe_id(
+        git_commit=git_commit,
+        kind=value["kind"],
+        profile=value["profile"],
+        input_digest=value["input_digest"],
+        toolchain=toolchain,
+    )
+    if not _constant_time_equal(recipe_id, expected_recipe):
+        raise InvalidError("manifest recipe_id does not match pre-build identity")
+
+
 def _safe_file(path: Path, label: str) -> os.stat_result:
     try:
         info = path.lstat()
@@ -370,6 +460,13 @@ def make_manifest(
     kind: str,
     input_digest: str,
     toolchain: Toolchain,
+    *,
+    git_commit: str | None = None,
+    dirty_state: str | None = None,
+    profile: str | None = None,
+    required_serial_device: str | None = None,
+    flash_geometry: dict | None = None,
+    recipe_id: str | None = None,
 ) -> dict:
     """Build a complete, self-identifying manifest for a staging directory."""
     _kind(kind)
@@ -392,6 +489,19 @@ def make_manifest(
         "schema_version": SCHEMA_VERSION,
         "toolchain": _toolchain_dict(toolchain),
     }
+    metadata = {
+        "git_commit": git_commit,
+        "dirty_state": dirty_state,
+        "profile": profile,
+        "required_serial_device": required_serial_device,
+        "flash_geometry": flash_geometry,
+        "recipe_id": recipe_id,
+    }
+    if kind == "devkit-bringup":
+        unsigned.update(metadata)
+        _validate_devkit_manifest_fields(unsigned, toolchain)
+    elif any(item is not None for item in metadata.values()):
+        raise InvalidError("DevKit manifest fields are forbidden for this kind")
     result = dict(unsigned)
     result["manifest_sha256"] = hashlib.sha256(manifest_bytes(unsigned)).hexdigest()
     return result
@@ -410,7 +520,7 @@ def _validate_manifest_object(
         "members",
         "manifest_sha256",
     }
-    if not isinstance(value, dict) or set(value) != required:
+    if not isinstance(value, dict) or not required.issubset(value):
         raise InvalidError("manifest fields do not match schema")
     if (
         type(value["schema_version"]) is not int
@@ -418,6 +528,10 @@ def _validate_manifest_object(
     ):
         raise InvalidError("unsupported manifest schema")
     _kind(value["kind"])
+    if value["kind"] == "devkit-bringup":
+        required |= _DEVKIT_MANIFEST_KEYS
+    if set(value) != required:
+        raise InvalidError("manifest fields do not match schema")
     if expected_kind is not None and value["kind"] != expected_kind:
         raise InvalidError("manifest kind does not match public bundle")
     _validate_digest(value["input_digest"], "manifest input_digest")
@@ -445,6 +559,8 @@ def _validate_manifest_object(
     if not _constant_time_equal(actual_identity, identity):
         raise InvalidError("manifest identity does not match its contents")
     toolchain = _toolchain_from_dict(value["toolchain"])
+    if value["kind"] == "devkit-bringup":
+        _validate_devkit_manifest_fields(value, toolchain)
     return value, toolchain
 
 
@@ -1243,6 +1359,47 @@ def _current_input_digest(repo_root: Path) -> str:
         raise InternalError(f"cannot compute live input digest: {exc}") from exc
 
 
+def _current_clean_git_commit(repo_root: Path) -> str:
+    try:
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=CHECK_TIMEOUT_SECONDS,
+        )
+        if status.stdout:
+            raise InvalidError("devkit-bringup requires a clean Git worktree")
+        commit = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--verify", "HEAD"],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=CHECK_TIMEOUT_SECONDS,
+        ).stdout.strip()
+    except InvalidError:
+        raise
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise InternalError(f"cannot establish clean Git commit: {exc}") from exc
+    if _GIT_COMMIT.fullmatch(commit) is None:
+        raise InvalidError("current Git commit is not canonical 40 lowercase hex")
+    return commit
+
+
+def _validate_current_devkit_commit(manifest: dict, commit: str) -> None:
+    if manifest.get("git_commit") != commit:
+        raise StaleError("artifact Git commit is stale")
+
+
 def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
@@ -1411,9 +1568,15 @@ def _verify_current(repo_root: Path, kind: str, bundle: Path) -> Result:
         return Result(EXIT_INVALID, "bundle does not match requested kind")
     fd = _open_locked(_lock_for_esp32_rs(esp32_rs), fcntl.LOCK_SH, False)
     try:
+        commit = (
+            _current_clean_git_commit(repo_root) if kind == "devkit-bringup" else None
+        )
         expected = _current_toolchain(repo_root, kind)
         input_digest = _current_input_digest(repo_root)
-        return verify_locked(expected_bundle, expected, input_digest)
+        result = verify_locked(expected_bundle, expected, input_digest)
+        if result.ok and commit is not None and result.manifest is not None:
+            _validate_current_devkit_commit(result.manifest, commit)
+        return result
     except ArtifactError as exc:
         return Result(exc.code, str(exc))
     except Exception as exc:
@@ -1462,11 +1625,17 @@ def _locked_exec_many(
         raise InvalidError("exec command must not be empty")
     _, held = _acquire_exec_locks(repo_root, kinds)
     try:
+        devkit_commit = (
+            _current_clean_git_commit(repo_root) if "devkit-bringup" in kinds else None
+        )
         live_digest = _current_input_digest(repo_root)
         for kind, _, bundle in held:
             expected = _current_toolchain(repo_root, kind)
             result = verify_locked(bundle, expected, live_digest)
             _raise_result(result)
+            if kind == "devkit-bringup" and devkit_commit is not None:
+                assert result.manifest is not None
+                _validate_current_devkit_commit(result.manifest, devkit_commit)
         os.execvp(argv[0], argv)
         raise InternalError("execvp returned unexpectedly")
     finally:
