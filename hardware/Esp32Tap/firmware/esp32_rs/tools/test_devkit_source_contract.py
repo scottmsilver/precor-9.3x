@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+import struct
 import tomllib
 from pathlib import Path
 
@@ -137,16 +138,107 @@ def _validate_generated_sdkconfig(path: Path) -> None:
 
 def _read_xtensa_elf(path: Path) -> bytes:
     image = path.read_bytes()
-    assert len(image) >= 20, f"ELF header is truncated or empty: {path}"
+    assert len(image) >= 52, f"ELF header is truncated or empty: {path}"
     assert image[:4] == b"\x7fELF", f"ELF magic is missing: {path}"
     assert image[4] == 1, f"ELF is not 32-bit: {path}"
     assert image[5] == 1, f"ELF is not little-endian: {path}"
     assert image[6] == 1, f"ELF header version is invalid: {path}"
-    assert int.from_bytes(image[16:18], "little") == 2, f"ELF is not executable: {path}"
+    assert image[7:16] == b"\0" * 9, f"ELF ident metadata is invalid: {path}"
+    (
+        elf_type,
+        machine,
+        version,
+        entry,
+        phoff,
+        shoff,
+        _flags,
+        ehsize,
+        phentsize,
+        phnum,
+        shentsize,
+        shnum,
+        shstrndx,
+    ) = struct.unpack_from("<HHIIIIIHHHHHH", image, 16)
+    assert elf_type == 2, f"ELF is not executable: {path}"
+    assert machine == 94, f"ELF machine is not Xtensa: {path}"
+    assert version == 1, f"ELF version is not current: {path}"
+    assert entry != 0, f"ELF entry point is zero: {path}"
+    assert ehsize == 52, f"ELF header size is not 52: {path}"
+    assert phentsize == 32 and phnum > 0, f"ELF program header shape is invalid: {path}"
+    assert shentsize == 40 and shnum > 0, f"ELF section header shape is invalid: {path}"
+    assert phoff >= ehsize, f"ELF program header offset overlaps its header: {path}"
+    assert shoff >= ehsize, f"ELF section header offset overlaps its header: {path}"
+    _bounded_table(phoff, phentsize, phnum, len(image), "program header table", path)
+    _bounded_table(shoff, shentsize, shnum, len(image), "section header table", path)
+
+    has_nonempty_load = False
+    for index in range(phnum):
+        start = phoff + index * phentsize
+        program = struct.unpack_from("<IIIIIIII", image, start)
+        program_type, file_offset, _, _, file_size, memory_size, _, _ = program
+        assert file_size <= memory_size, f"ELF segment filesz exceeds memsz: {path}"
+        if file_size:
+            _bounded_range(
+                file_offset, file_size, len(image), "segment file range", path
+            )
+        if program_type == 1 and file_size > 0:
+            has_nonempty_load = True
+    assert has_nonempty_load, f"ELF has no nonempty PT_LOAD segment: {path}"
+
+    assert 0 < shstrndx < shnum, f"ELF shstrndx is invalid: {path}"
+    sections = [
+        struct.unpack_from("<IIIIIIIIII", image, shoff + index * shentsize)
+        for index in range(shnum)
+    ]
+    for section in sections:
+        _, section_type, _, _, file_offset, file_size, _, _, _, _ = section
+        if section_type != 8 and file_size:
+            _bounded_range(
+                file_offset, file_size, len(image), "section file range", path
+            )
+
+    shstr = sections[shstrndx]
+    assert shstr[1] == 3 and shstr[5] > 1, f"ELF section-name table is invalid: {path}"
+    shstr_bytes = image[shstr[4] : shstr[4] + shstr[5]]
+    section_names: set[str] = set()
+    for section in sections:
+        name_offset = section[0]
+        assert name_offset < len(
+            shstr_bytes
+        ), f"ELF section name offset is invalid: {path}"
+        name_end = shstr_bytes.find(b"\0", name_offset)
+        assert name_end >= 0, f"ELF section name is unterminated: {path}"
+        section_names.add(shstr_bytes[name_offset:name_end].decode("ascii"))
+        if section[1] == 2:
+            assert (
+                section[6] < shnum and sections[section[6]][1] == 3
+            ), f"ELF symbol table has no linked string table: {path}"
+
+    required_sections = {
+        ".flash.text",
+        ".flash.rodata",
+        ".symtab",
+        ".strtab",
+        ".shstrtab",
+    }
     assert (
-        int.from_bytes(image[18:20], "little") == 94
-    ), f"ELF machine is not Xtensa: {path}"
+        required_sections <= section_names
+    ), f"ELF required sections are missing: {sorted(required_sections - section_names)}"
     return image
+
+
+def _bounded_table(
+    offset: int, entry_size: int, count: int, total: int, label: str, path: Path
+) -> None:
+    assert (
+        offset <= total and count <= (total - offset) // entry_size
+    ), f"ELF {label} exceeds file bounds: {path}"
+
+
+def _bounded_range(offset: int, size: int, total: int, label: str, path: Path) -> None:
+    assert (
+        offset <= total and size <= total - offset
+    ), f"ELF {label} exceeds file bounds: {path}"
 
 
 def _generated_sdkconfig_fixture() -> bytes:
@@ -159,9 +251,76 @@ def _generated_sdkconfig_fixture() -> bytes:
     return (header + _read(DEFAULTS)).encode()
 
 
-def _xtensa_elf_fixture() -> bytes:
-    # ELF32, little-endian, current ELF version, ET_EXEC, EM_XTENSA (94).
+def _pseudo_xtensa_elf_fixture() -> bytes:
     return b"\x7fELF\x01\x01\x01" + b"\x00" * 9 + b"\x02\x00\x5e\x00"
+
+
+def _structural_xtensa_elf_fixture() -> bytes:
+    """Small coherent ELF32 used only to corrupt individual structures."""
+
+    phoff = 52
+    text_offset = 0x100
+    rodata_offset = 0x104
+    symtab_offset = 0x108
+    strtab_offset = 0x118
+    shstrtab_offset = 0x120
+    shoff = 0x180
+    shnum = 6
+    shstrtab = b"\0.flash.text\0.flash.rodata\0.symtab\0.strtab\0.shstrtab\0"
+    names = {
+        name: shstrtab.index(name.encode())
+        for name in (".flash.text", ".flash.rodata", ".symtab", ".strtab", ".shstrtab")
+    }
+    image = bytearray(shoff + shnum * 40)
+    ident = b"\x7fELF\x01\x01\x01" + b"\x00" * 9
+    image[:52] = ident + struct.pack(
+        "<HHIIIIIHHHHHH",
+        2,
+        94,
+        1,
+        0x4037_4000,
+        phoff,
+        shoff,
+        0,
+        52,
+        32,
+        1,
+        40,
+        shnum,
+        5,
+    )
+    image[phoff : phoff + 32] = struct.pack(
+        "<IIIIIIII", 1, text_offset, 0x4200_0000, 0x4200_0000, 4, 4, 5, 4
+    )
+    image[text_offset : text_offset + 4] = b"TEXT"
+    image[rodata_offset : rodata_offset + 4] = b"DATA"
+    image[symtab_offset : symtab_offset + 16] = b"\0" * 16
+    image[strtab_offset : strtab_offset + 8] = b"\0symbol\0"
+    image[shstrtab_offset : shstrtab_offset + len(shstrtab)] = shstrtab
+
+    sections = (
+        (0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        (names[".flash.text"], 1, 6, 0x4200_0000, text_offset, 4, 0, 0, 4, 0),
+        (names[".flash.rodata"], 1, 2, 0x3C04_0000, rodata_offset, 4, 0, 0, 4, 0),
+        (names[".symtab"], 2, 0, 0, symtab_offset, 16, 4, 0, 4, 16),
+        (names[".strtab"], 3, 0, 0, strtab_offset, 8, 0, 0, 1, 0),
+        (
+            names[".shstrtab"],
+            3,
+            0,
+            0,
+            shstrtab_offset,
+            len(shstrtab),
+            0,
+            0,
+            1,
+            0,
+        ),
+    )
+    for index, section in enumerate(sections):
+        start = shoff + index * 40
+        image[start : start + 40] = struct.pack("<IIIIIIIIII", *section)
+    return bytes(image)
 
 
 def _invoke_generated_verifier(
@@ -449,7 +608,7 @@ def test_generated_verifier_rejects_relative_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "sdkconfig").write_bytes(_generated_sdkconfig_fixture())
-    (tmp_path / "firmware.elf").write_bytes(_xtensa_elf_fixture())
+    (tmp_path / "firmware.elf").write_bytes(_structural_xtensa_elf_fixture())
     monkeypatch.chdir(tmp_path)
     with pytest.raises(AssertionError, match="absolute"):
         _invoke_generated_verifier(monkeypatch, "sdkconfig", "firmware.elf")
@@ -461,7 +620,7 @@ def test_generated_verifier_rejects_symlinks(
     sdkconfig = tmp_path / "real-sdkconfig"
     elf = tmp_path / "real.elf"
     sdkconfig.write_bytes(_generated_sdkconfig_fixture())
-    elf.write_bytes(_xtensa_elf_fixture())
+    elf.write_bytes(_structural_xtensa_elf_fixture())
     sdk_link = tmp_path / "sdkconfig"
     elf_link = tmp_path / "firmware.elf"
     sdk_link.symlink_to(sdkconfig)
@@ -476,7 +635,7 @@ def test_generated_verifier_rejects_defaults_and_text_as_artifacts(
     valid_sdkconfig = tmp_path / "sdkconfig"
     valid_elf = tmp_path / "firmware.elf"
     valid_sdkconfig.write_bytes(_generated_sdkconfig_fixture())
-    valid_elf.write_bytes(_xtensa_elf_fixture())
+    valid_elf.write_bytes(_structural_xtensa_elf_fixture())
     with pytest.raises(AssertionError, match="generated header"):
         _invoke_generated_verifier(monkeypatch, str(DEFAULTS), str(valid_elf))
     with pytest.raises(AssertionError, match="ELF"):
@@ -495,6 +654,71 @@ def test_generated_verifier_rejects_empty_or_malformed_elf(
     elf.write_bytes(bad_elf)
     with pytest.raises(AssertionError, match="ELF"):
         _invoke_generated_verifier(monkeypatch, str(sdkconfig), str(elf))
+
+
+def test_generated_verifier_rejects_20_byte_pseudo_elf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "firmware.elf"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(_pseudo_xtensa_elf_fixture())
+    with pytest.raises(AssertionError, match="ELF header"):
+        _invoke_generated_verifier(monkeypatch, str(sdkconfig), str(elf))
+
+
+@pytest.mark.parametrize(
+    ("field_offset", "bad_value", "message"),
+    [
+        (28, 0x260, "program header table"),
+        (32, 0x260, "section header table"),
+    ],
+)
+def test_elf_rejects_truncated_header_tables(
+    tmp_path: Path, field_offset: int, bad_value: int, message: str
+) -> None:
+    image = bytearray(_structural_xtensa_elf_fixture())
+    struct.pack_into("<I", image, field_offset, bad_value)
+    elf = tmp_path / "firmware.elf"
+    elf.write_bytes(image)
+    with pytest.raises(AssertionError, match=message):
+        _read_xtensa_elf(elf)
+
+
+def test_elf_requires_nonempty_load_segment(tmp_path: Path) -> None:
+    image = bytearray(_structural_xtensa_elf_fixture())
+    struct.pack_into("<I", image, 52, 0)
+    elf = tmp_path / "firmware.elf"
+    elf.write_bytes(image)
+    with pytest.raises(AssertionError, match="PT_LOAD"):
+        _read_xtensa_elf(elf)
+
+
+def test_elf_rejects_program_and_section_ranges_outside_file(tmp_path: Path) -> None:
+    program = bytearray(_structural_xtensa_elf_fixture())
+    struct.pack_into("<I", program, 52 + 4, len(program) - 1)
+    elf = tmp_path / "program-range.elf"
+    elf.write_bytes(program)
+    with pytest.raises(AssertionError, match="segment file range"):
+        _read_xtensa_elf(elf)
+
+    section = bytearray(_structural_xtensa_elf_fixture())
+    shoff = struct.unpack_from("<I", section, 32)[0]
+    struct.pack_into("<I", section, shoff + 2 * 40 + 16, len(section) - 1)
+    elf = tmp_path / "section-range.elf"
+    elf.write_bytes(section)
+    with pytest.raises(AssertionError, match="section file range"):
+        _read_xtensa_elf(elf)
+
+
+def test_elf_requires_real_esp_section_names(tmp_path: Path) -> None:
+    image = bytearray(_structural_xtensa_elf_fixture())
+    shstrtab = image.find(b".flash.rodata")
+    image[shstrtab : shstrtab + len(b".flash.rodata")] = b".fake.section"
+    elf = tmp_path / "firmware.elf"
+    elf.write_bytes(image)
+    with pytest.raises(AssertionError, match="required sections"):
+        _read_xtensa_elf(elf)
 
 
 def test_no_output_pull_hold_or_protected_output_mask_exists() -> None:
