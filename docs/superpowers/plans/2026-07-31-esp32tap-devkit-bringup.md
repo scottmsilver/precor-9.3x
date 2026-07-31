@@ -429,16 +429,24 @@ Expected: clean branch. Record this exact HEAD; every remaining build in this ta
 
 - [ ] **Step 5: Create, preflight, build, and remove a disposable clean worktree**
 
-Run this entire block in one shell. `umask 0022` applies before `mktemp` and remains in force through checkout and every clean-worktree gate/build command. The EXIT trap returns to the live repository before removing only the explicit `mktemp` path, so a failed preflight or build cannot strand the disposable worktree.
+Run this entire block in one shell. `set -eu` stops on a failed checkout, `cd`, preflight, gate, or build before any later clean-worktree command can run; it also rejects an unset path variable. `umask 0022` applies before `mktemp` and remains in force through checkout and every clean-worktree gate/build command. The EXIT trap returns to the live repository before removing only the explicit `mktemp` path, so a failed preflight or build cannot strand the disposable worktree.
 
 ```bash
 (
+  set -eu
   umask 0022
   repo_root=$(git rev-parse --show-toplevel)
   tmp_dir=$(mktemp -d /tmp/esp32tap-devkit-clean.XXXXXX)
   cleanup() {
+    status=$?
+    trap - EXIT
     cd "$repo_root"
-    git worktree remove --force "$tmp_dir" >/dev/null 2>&1 || rmdir "$tmp_dir"
+    if git worktree list --porcelain | grep -Fqx "worktree $tmp_dir"; then
+      git worktree remove --force "$tmp_dir"
+    elif test -e "$tmp_dir"; then
+      rmdir "$tmp_dir"
+    fi
+    exit "$status"
   }
   trap cleanup EXIT
 
@@ -462,9 +470,9 @@ Run this entire block in one shell. `umask 0022` applies before `mktemp` and rem
   # fit, DevKit banner, and absence of QEMU/production startup banners here.
   cd "$repo_root"
   git worktree remove "$tmp_dir"
-  trap - EXIT
   test ! -e "$tmp_dir"
   ! git worktree list --porcelain | grep -Fqx "worktree $tmp_dir"
+  trap - EXIT
 )
 ```
 
