@@ -84,6 +84,11 @@ _value = configured()
 if not isinstance(_value, dict):
     _value = {}
 _names = tuple(_value.get("policies", ()))
+if not all(isinstance(name, str) for name in _names):
+    _names = ()
+_workers = _value.get("workers", {})
+if not isinstance(_workers, dict):
+    _workers = {}
 _POLICY_ORDER = tuple(name for name in _names if name != "broad")
 _POLICIES = {}
 for index, name in enumerate(_names):
@@ -92,7 +97,7 @@ for index, name in enumerate(_names):
         tuple(tuple(argv) for argv in _value.get("host_argv", ())) if index == 0 else (),
         tuple(tuple(argv) for argv in _value.get("qemu_argv", ())) if index == 0 else (),
         tuple(_value.get("artifact_kinds", ())) if index == 0 else (),
-        _value.get("workers", {}).get("qemu", 0) if index == 0 else 0,
+        _workers.get("qemu", 0) if index == 0 else 0,
     )
 
 if __name__ == "__main__":
@@ -459,6 +464,53 @@ def test_malformed_or_oversized_selector_output_fails_broad(
         "both",
     ]
     assert "broad fallback" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("paths", [["nested"]]),
+        ("paths", [{"nested": "dict"}]),
+        ("paths", [1]),
+        ("policies", [["unhashable"]]),
+        ("policies", [{"unhashable": "dict"}]),
+        ("policies", [1]),
+        ("artifact_kinds", [["unhashable"]]),
+        ("artifact_kinds", [{"unhashable": "dict"}]),
+        ("artifact_kinds", [1]),
+        ("host_argv", [{"nested": "command"}]),
+        ("host_argv", [[["nested"]]]),
+        ("host_argv", [[{"nested": "dict"}]]),
+        ("host_argv", [[1]]),
+        ("qemu_argv", [{"nested": "command"}]),
+        ("qemu_argv", [[["nested"]]]),
+        ("qemu_argv", [[{"nested": "dict"}]]),
+        ("qemu_argv", [[1]]),
+        ("workers", [["host", 1]]),
+        ("workers", ["host", "qemu"]),
+        ("workers", {"host": [], "qemu": 0}),
+        ("workers", {"host": {}, "qemu": 0}),
+        ("workers", {"host": "1", "qemu": 0}),
+        ("broad_reason", ["nested"]),
+        ("broad_reason", {"nested": "dict"}),
+        ("broad_reason", 1),
+    ],
+    ids=lambda value: type(value).__name__,
+)
+def test_nested_or_wrong_typed_schema_values_fail_broad_without_partial_execution(
+    fake_repo: tuple[Path, dict[str, str]],
+    field: str,
+    value: object,
+) -> None:
+    malformed = _selection()
+    malformed[field] = value
+
+    completed = _run(fake_repo, malformed)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Traceback" not in completed.stdout
+    assert "Traceback" not in completed.stderr
+    assert [event[0] for event in _events(fake_repo)] == ["selector", "sweep"]
 
 
 def test_selector_process_failure_and_valid_broad_both_invoke_exact_sweep(

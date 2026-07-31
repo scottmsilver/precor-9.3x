@@ -364,7 +364,12 @@ def validate_selection(raw: bytes) -> dict[str, object]:
         value = json.loads(text, object_pairs_hook=unique_object)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"malformed selector JSON: {exc}") from exc
-    if not isinstance(value, dict) or set(value) != EXPECTED_KEYS:
+    if (
+        not isinstance(value, dict)
+        or len(value) != len(EXPECTED_KEYS)
+        or any(not isinstance(key, str) for key in value)
+        or sorted(value) != sorted(EXPECTED_KEYS)
+    ):
         raise ValueError("selector fields do not match schema")
     canonical = (
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -399,23 +404,38 @@ def validate_selection(raw: bytes) -> dict[str, object]:
         not isinstance(policies, list)
         or not policies
         or len(policies) > 16
-        or len(set(policies)) != len(policies)
     ):
         raise ValueError("selector policies are invalid")
+    validated_policies: list[str] = []
     for policy in policies:
-        validate_text(policy, "policy")
+        validated_policies.append(validate_text(policy, "policy"))
+    if len(set(validated_policies)) != len(validated_policies):
+        raise ValueError("selector policies contain duplicates")
+    policies = validated_policies
+    value["policies"] = policies
     host = validate_commands(value["host_argv"], "host")
     qemu = validate_commands(value["qemu_argv"], "qemu")
     artifacts = value["artifact_kinds"]
-    if (
-        not isinstance(artifacts, list)
-        or artifacts != [
-            item for item in ("production", "qemu") if item in artifacts
-        ]
-    ):
+    if not isinstance(artifacts, list) or len(artifacts) > len(KIND_MAP):
         raise ValueError("artifact kinds are invalid")
+    validated_artifacts = [
+        validate_text(item, "artifact kind") for item in artifacts
+    ]
+    if validated_artifacts != [
+        item
+        for item in ("production", "qemu")
+        if item in validated_artifacts
+    ]:
+        raise ValueError("artifact kinds are invalid")
+    artifacts = validated_artifacts
+    value["artifact_kinds"] = artifacts
     workers = value["workers"]
-    if not isinstance(workers, dict) or set(workers) != {"host", "qemu"}:
+    if (
+        not isinstance(workers, dict)
+        or len(workers) != 2
+        or any(not isinstance(key, str) for key in workers)
+        or sorted(workers) != ["host", "qemu"]
+    ):
         raise ValueError("worker fields are invalid")
     if any(type(item) is not int or item < 0 or item > 64 for item in workers.values()):
         raise ValueError("worker counts are invalid")
@@ -453,7 +473,7 @@ def selector() -> tuple[int, dict[str, object] | None, str]:
         return 0, None, f"selector exited {status}"
     try:
         return 0, validate_selection(output), ""
-    except ValueError as exc:
+    except Exception as exc:
         return 0, None, str(exc)
 
 
