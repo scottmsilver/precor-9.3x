@@ -32,7 +32,7 @@ Its build identity and UART banner must say:
 ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS
 ```
 
-The QEMU test image must never be flashable through this workflow. The manifest identifies the target, profile, Git commit, dirty-state verdict, image hashes, flash geometry, and required serial device. The Pi-side flash command refuses an absent or mismatched manifest.
+The QEMU test image must never be flashable through this workflow. Before compilation, the build creates a recipe ID from the clean Git commit, binary target, profile, pinned toolchain identity, and declared configuration inputs. That non-circular recipe ID is embedded in the binary. After compilation, the final manifest records the same recipe ID plus the image hashes, flash geometry, dirty-state verdict, and required serial device. The Pi-side flash command refuses an absent or mismatched manifest. The binary does not attempt to embed the hash of a manifest that contains the binary's own hash.
 
 ## Protected GPIO contract
 
@@ -55,16 +55,18 @@ No internal pull may be enabled on GPIO 15, 17, or 21. GPIO direction proof must
 
 ## Diagnostic report
 
-UART0 emits one bounded, machine-parseable report containing:
+On every boot, UART0 emits one bounded, machine-parseable startup report containing:
 
-- Build identity, Git commit, and artifact manifest hash.
+- Recipe ID and Git commit; the Pi correlates the recipe ID with the externally verified final manifest.
 - Chip model, revision, base MAC, reset reason, and crystal frequency where available.
 - Detected flash size and PSRAM size.
 - Free internal heap and free PSRAM after initialization.
 - Direction and level readback for every protected GPIO.
-- One final `BRINGUP PASS` or one specific `BRINGUP FAIL <code>`.
+- One final `BRINGUP STAGE0 PASS` or one specific `BRINGUP FAIL <code>`.
 
 Any failed invariant produces the failure record and enters a bounded safe halt. The diagnostic application does not compensate by configuring a pin, does not continue into another tier, and does not intentionally reboot-loop.
+
+After `BRINGUP STAGE0 PASS`, the application accepts only a bounded UART command `SAMPLE <sequence>`. Each valid command produces exactly one `INPUT SAMPLE` record containing the sequence, raw GPIO4/5/6/7 levels, and fresh direction readback for GPIO15/17/21. Unknown, oversized, or malformed input produces a bounded error and no pin change. This sampling mode exists only to verify the Stage 1 switches; it cannot configure GPIO or enter a control tier.
 
 ## Build, backup, and flash flow
 
@@ -79,7 +81,7 @@ clean checkout
   -> flash bring-up bundle
   -> capture UART report
   -> machine-check PASS and pin directions
-  -> cold power-cycle and repeat
+  -> remove and restore USB power twice, parsing both cold boots
 ```
 
 Before the first erase, `esptool` reads the complete 8 MB device flash. The workflow records the backup's SHA-256 and chip MAC and performs a byte-count check. It never commits the backup to Git. Restoring that backup is documented, but restoration is not performed during a passing bring-up.
@@ -151,10 +153,10 @@ GPIO16, GPIO17, GPIO18, GPIO38, native USB, every treadmill wire, and the 5 V ra
 1. `esptool` re-identifies the expected ESP32-S3, N8R8 capabilities, and MAC.
 2. The full 8 MB original flash backup completes, has the exact byte count, and receives a SHA-256 record.
 3. Flashing succeeds only after Pi-side manifest verification.
-4. UART emits exactly one complete diagnostic report ending in `BRINGUP PASS`.
-5. A cold USB power cycle produces the same pass without manual BOOT-button intervention.
-6. With Stage 1 installed, the parser observes both relay-simulator states and both SPST states correctly.
-7. LED1 and LED2 remain dark through boot, switch operation, reset, and a five-minute observation window.
+4. The post-flash reset emits one complete startup report ending in `BRINGUP STAGE0 PASS`; this reset is useful evidence but does not count as a cold boot.
+5. USB power is then physically removed and restored twice, manually or through a proven per-port power switch. Each independent power-on must report a power-on reset reason and end in `BRINGUP STAGE0 PASS` without BOOT-button intervention.
+6. With Stage 1 installed, the operator sets the eight-state matrix `DPDT={BYPASS,EMULATE} × S2={OPEN,CLOSED} × S3={OPEN,CLOSED}`. For each state, the Pi sends a unique `SAMPLE <sequence>` and verifies the returned GPIO4/5/6/7 tuple and input direction on GPIO15/17/21.
+7. LED1 and LED2 remain dark through both cold boots, all eight switch states, reset, and a five-minute observation window.
 
 ## Relationship to other work
 
@@ -165,6 +167,6 @@ GPIO16, GPIO17, GPIO18, GPIO38, native USB, every treadmill wire, and the 5 V ra
 
 ## Completion boundary
 
-This milestone is complete when the committed clean-checkout workflow produces a uniquely identified bring-up image, the factory flash backup is verified, the physical DevKit cold-boots twice with parsed `BRINGUP PASS`, and the approved sidecar harness exercises all four simulated inputs while both protected-output LEDs remain dark.
+This milestone is complete when the committed clean-checkout workflow produces a uniquely identified bring-up image, the factory flash backup is verified, two separate power-removal boots each produce a parsed `BRINGUP STAGE0 PASS`, and the approved sidecar harness passes all eight commanded input samples while both protected-output LEDs remain dark.
 
 It does not claim treadmill connectivity, relay timing, motor UART electrical compatibility, Wi-Fi/API availability, BLE behavior, or production readiness.
