@@ -451,12 +451,16 @@ Run this entire block in one shell. `set -eu` stops on a failed checkout, `cd`, 
         rmdir "$tmp_dir"
       fi
     else
-      printf '%s\n' 'git worktree list failed; removing only the explicit path' >&2
+      printf '%s\n' 'git worktree list failed; cleaning only the explicit empty mktemp directory' >&2
       if test -L "$tmp_dir"; then
         printf '%s\n' "refusing symlinked cleanup path: $tmp_dir" >&2
         exit "$status"
+      elif test -d "$tmp_dir"; then
+        rmdir "$tmp_dir"
+      else
+        printf '%s\n' "refusing non-directory cleanup path: $tmp_dir" >&2
+        exit "$status"
       fi
-      git worktree remove --force "$tmp_dir"
     fi
     exit "$status"
   }
