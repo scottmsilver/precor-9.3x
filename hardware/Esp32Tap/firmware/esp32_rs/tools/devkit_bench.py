@@ -20,14 +20,38 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn, Protocol
-
-import artifact_provenance as provenance
+from typing import Protocol
 
 
 ESPTOOL = "/home/ssilver/.local/bin/esptool"
 ESPTOOL_VERSION = "5.3.1"
 FLASH_BYTES = 8_388_608
+MANIFEST_NAME = "artifact-manifest.json"
+BUNDLE_MEMBERS = (
+    "esp32tap.bin",
+    "bootloader.bin",
+    "partition-table.bin",
+    "flash_args",
+    "sdkconfig",
+)
+MEMBER_MAX_BYTES = {
+    "esp32tap.bin": FLASH_BYTES,
+    "bootloader.bin": 1024 * 1024,
+    "partition-table.bin": 128 * 1024,
+    "flash_args": 64 * 1024,
+    "sdkconfig": 2 * 1024 * 1024,
+}
+MAX_MANIFEST_BYTES = 1024 * 1024
+DEVKIT_SERIAL = (
+    "/dev/serial/by-id/"
+    "usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
+    "4cd513f253bff0119bc5c57948e9de0f-if00-port0"
+)
+DEVKIT_GEOMETRY = {
+    "chip": "esp32s3",
+    "size": FLASH_BYTES,
+    "offsets": [0, 32_768, 65_536],
+}
 MAX_TOOL_OUTPUT = 256 * 1024
 MAX_SERIAL_LINE = 512
 MAX_CAPTURE_LINES = 256
@@ -41,6 +65,23 @@ _USB_SERIAL = re.compile(
     r"usb-Silicon_Labs_CP2102N_USB_to_UART_Bridge_Controller_"
     r"([A-Za-z0-9]{1,128})-if00-port0\Z"
 )
+_COMMIT = re.compile(r"[0-9a-f]{40,64}\Z")
+_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_IMAGE_TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]*\Z")
+_FEATURE = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
+_TOOLCHAIN_KEYS = {
+    "image_id",
+    "recipe_sha256",
+    "image_tag",
+    "idf_commit",
+    "rustc_verbose",
+    "target",
+    "linker_version",
+    "esptool_version",
+    "component_lock_sha256",
+    "profile",
+    "features",
+}
 
 
 class BenchError(Exception):
@@ -90,10 +131,6 @@ class StartupReport:
     lines: tuple[str, ...]
 
 
-def _raise_from_artifact(exc: Exception) -> NoReturn:
-    raise BenchError(f"invalid devkit kind or bundle: {exc}") from exc
-
-
 def _bounded_path(path: Path, label: str) -> Path:
     if not isinstance(path, Path):
         raise BenchError(f"{label} must be a path")
@@ -103,8 +140,229 @@ def _bounded_path(path: Path, label: str) -> Path:
     return path
 
 
+def _manifest_bytes(value: dict) -> bytes:
+    try:
+        raw = (
+            json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            ).encode("ascii")
+            + b"\n"
+        )
+    except (TypeError, ValueError, UnicodeError) as exc:
+        raise BenchError(f"manifest is not canonical JSON: {exc}") from exc
+    if len(raw) > MAX_MANIFEST_BYTES:
+        raise BenchError("manifest exceeds its size limit")
+    return raw
+
+
+def _safe_bundle_file(path: Path, label: str, limit: int) -> os.stat_result:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise BenchError(f"{label} is unavailable: {exc}") from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        raise BenchError(f"{label} must be a regular non-symlink single-link file")
+    if info.st_size > limit:
+        raise BenchError(f"{label} exceeds its size limit")
+    return info
+
+
+def _read_bundle_file(path: Path, label: str, limit: int) -> bytes:
+    before = _safe_bundle_file(path, label, limit)
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as exc:
+        raise BenchError(f"cannot read {label}: {exc}") from exc
+    chunks: list[bytes] = []
+    count = 0
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise BenchError(f"{label} changed while opening")
+        while block := os.read(fd, min(1024 * 1024, limit - count + 1)):
+            count += len(block)
+            if count > limit:
+                raise BenchError(f"{label} exceeds its size limit")
+            chunks.append(block)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    current = _safe_bundle_file(path, label, limit)
+    if (
+        opened.st_dev,
+        opened.st_ino,
+        opened.st_size,
+        opened.st_mtime_ns,
+        opened.st_ctime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ) or (
+        after.st_dev,
+        after.st_ino,
+    ) != (
+        current.st_dev,
+        current.st_ino,
+    ):
+        raise BenchError(f"{label} changed while reading")
+    return b"".join(chunks)
+
+
+def _hash_bundle_file(path: Path, expected_size: int, expected_hash: str) -> None:
+    raw = _read_bundle_file(path, path.name, MEMBER_MAX_BYTES[path.name])
+    if len(raw) != expected_size or not hmac.compare_digest(
+        hashlib.sha256(raw).hexdigest(), expected_hash
+    ):
+        raise BenchError(f"{path.name} size or hash does not match manifest")
+
+
+def _validate_toolchain(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _TOOLCHAIN_KEYS:
+        raise BenchError("manifest toolchain fields do not match schema")
+    scalar_fields = (
+        "image_id",
+        "image_tag",
+        "rustc_verbose",
+        "target",
+        "linker_version",
+        "esptool_version",
+        "profile",
+    )
+    for key in scalar_fields:
+        item = value[key]
+        if (
+            not isinstance(item, str)
+            or not item
+            or item != item.strip()
+            or "\0" in item
+            or len(item) > 16 * 1024
+        ):
+            raise BenchError(f"manifest toolchain {key} is not canonical")
+    if not _IMAGE_ID.fullmatch(value["image_id"]):
+        raise BenchError("manifest image_id is invalid")
+    if not _IMAGE_TAG.fullmatch(value["image_tag"]):
+        raise BenchError("manifest image_tag is invalid")
+    if not _COMMIT.fullmatch(value["idf_commit"]):
+        raise BenchError("manifest IDF commit is invalid")
+    for key in ("recipe_sha256", "component_lock_sha256"):
+        if not isinstance(value[key], str) or not _HEX64.fullmatch(value[key]):
+            raise BenchError(f"manifest {key} is invalid")
+    features = value["features"]
+    if (
+        not isinstance(features, list)
+        or len(features) > 128
+        or features != sorted(features)
+        or len(features) != len(set(features))
+        or any(
+            not isinstance(item, str) or len(item) > 128 or not _FEATURE.fullmatch(item)
+            for item in features
+        )
+    ):
+        raise BenchError("manifest features are not canonical")
+    return value
+
+
+def _load_devkit_manifest(bundle: Path) -> dict:
+    raw = _read_bundle_file(
+        bundle / MANIFEST_NAME, "artifact manifest", MAX_MANIFEST_BYTES
+    )
+    try:
+        value = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise BenchError(f"artifact manifest is malformed: {exc}") from exc
+    required = {
+        "schema_version",
+        "kind",
+        "input_digest",
+        "toolchain",
+        "members",
+        "manifest_sha256",
+        "git_commit",
+        "dirty_state",
+        "profile",
+        "required_serial_device",
+        "flash_geometry",
+        "recipe_id",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise BenchError("manifest fields do not match exact DevKit schema")
+    if raw != _manifest_bytes(value):
+        raise BenchError("artifact manifest is not canonically serialized")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise BenchError("unsupported manifest schema")
+    if value["kind"] != "devkit-bringup":
+        raise BenchError("manifest kind is not devkit-bringup")
+    if not isinstance(value["input_digest"], str) or not _HEX64.fullmatch(
+        value["input_digest"]
+    ):
+        raise BenchError("manifest input digest is invalid")
+    if not isinstance(value["manifest_sha256"], str) or not _HEX64.fullmatch(
+        value["manifest_sha256"]
+    ):
+        raise BenchError("manifest identity is invalid")
+    if not isinstance(value["git_commit"], str) or not re.fullmatch(
+        r"[0-9a-f]{40}", value["git_commit"]
+    ):
+        raise BenchError("manifest git commit is invalid")
+    if value["dirty_state"] != "clean" or value["profile"] != "release":
+        raise BenchError("manifest must be a clean release")
+    if value["required_serial_device"] != DEVKIT_SERIAL:
+        raise BenchError("manifest serial path is not the exact DevKit path")
+    if value["flash_geometry"] != DEVKIT_GEOMETRY:
+        raise BenchError("manifest flash geometry is not ESP32-S3 8MB")
+    if not isinstance(value["recipe_id"], str) or not _HEX64.fullmatch(
+        value["recipe_id"]
+    ):
+        raise BenchError("manifest recipe ID is invalid")
+    toolchain = _validate_toolchain(value["toolchain"])
+    if toolchain["profile"] != value["profile"]:
+        raise BenchError("manifest profile does not match toolchain")
+    members = value["members"]
+    if not isinstance(members, list) or len(members) != len(BUNDLE_MEMBERS):
+        raise BenchError("manifest member list is incomplete")
+    for name, member in zip(BUNDLE_MEMBERS, members, strict=True):
+        if (
+            not isinstance(member, dict)
+            or set(member) != {"name", "sha256", "size"}
+            or member["name"] != name
+            or type(member["size"]) is not int
+            or member["size"] < 0
+            or member["size"] > MEMBER_MAX_BYTES[name]
+            or not isinstance(member["sha256"], str)
+            or not _HEX64.fullmatch(member["sha256"])
+        ):
+            raise BenchError("manifest member schema, order, size, or hash is invalid")
+    unsigned = dict(value)
+    unsigned.pop("manifest_sha256")
+    identity = hashlib.sha256(_manifest_bytes(unsigned)).hexdigest()
+    if not hmac.compare_digest(identity, value["manifest_sha256"]):
+        raise BenchError("manifest identity does not match its contents")
+    recipe = {
+        "git_commit": value["git_commit"],
+        "input_digest": value["input_digest"],
+        "kind": value["kind"],
+        "profile": value["profile"],
+        "toolchain": toolchain,
+    }
+    recipe_id = hashlib.sha256(_manifest_bytes(recipe)).hexdigest()
+    if not hmac.compare_digest(recipe_id, value["recipe_id"]):
+        raise BenchError("manifest recipe ID does not match pre-build identity")
+    return value
+
+
 def _parse_flash_args(bundle: Path, raw: bytes) -> tuple[str, ...]:
-    if len(raw) > provenance.MEMBER_MAX_BYTES["flash_args"]:
+    if len(raw) > MEMBER_MAX_BYTES["flash_args"]:
         raise BenchError("flash_args exceeds its size limit")
     try:
         text = raw.decode("ascii")
@@ -158,29 +416,18 @@ def verify_bundle(bundle: Path) -> VerifiedBundle:
         names = {entry.name for entry in os.scandir(bundle)}
     except (FileNotFoundError, OSError) as exc:
         raise BenchError(f"cannot inspect bundle: {exc}") from exc
-    required = {*provenance.BUNDLE_MEMBERS, provenance.MANIFEST_NAME}
+    required = {*BUNDLE_MEMBERS, MANIFEST_NAME}
     if names != required:
         raise BenchError("bundle has missing or extra members")
-    try:
-        manifest, _toolchain = provenance._load_manifest(
-            bundle, expected_kind="devkit-bringup"
-        )
-        records = provenance._member_records(bundle)
-    except provenance.ArtifactError as exc:
-        _raise_from_artifact(exc)
-    if records != manifest["members"]:
-        raise BenchError("bundle member size or hash does not match manifest")
+    manifest = _load_devkit_manifest(bundle)
+    for member in manifest["members"]:
+        _hash_bundle_file(bundle / member["name"], member["size"], member["sha256"])
     geometry = manifest["flash_geometry"]
-    if geometry != provenance.DEVKIT_FLASH_GEOMETRY:
+    if geometry != DEVKIT_GEOMETRY:
         raise BenchError("manifest flash geometry is not ESP32-S3 8MB")
-    try:
-        raw_args = provenance._read_safe_bytes(
-            bundle / "flash_args",
-            "flash_args",
-            limit=provenance.MEMBER_MAX_BYTES["flash_args"],
-        )
-    except provenance.ArtifactError as exc:
-        _raise_from_artifact(exc)
+    raw_args = _read_bundle_file(
+        bundle / "flash_args", "flash_args", MEMBER_MAX_BYTES["flash_args"]
+    )
     return VerifiedBundle(
         path=bundle,
         recipe_id=manifest["recipe_id"],
@@ -679,14 +926,21 @@ def authorize_and_flash(
     )
 
 
-def _readline(port, *, label: str) -> str | None:
+def _readline_bytes(port, *, label: str) -> bytes | None:
     raw = port.readline(MAX_SERIAL_LINE + 1)
     if not raw:
         return None
     if len(raw) > MAX_SERIAL_LINE or not raw.endswith(b"\n") or b"\0" in raw:
         raise BenchError(f"{label} line is oversized or unterminated")
+    return raw[:-1]
+
+
+def _readline(port, *, label: str) -> str | None:
+    raw = _readline_bytes(port, label=label)
+    if raw is None:
+        return None
     try:
-        return raw[:-1].decode("utf-8")
+        return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise BenchError(f"{label} is not UTF-8") from exc
 
@@ -700,16 +954,30 @@ def capture_startup(
         raise BenchError("capture timeout is out of bounds")
     deadline = clock.monotonic() + timeout
     identity = "ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS"
+    identity_bytes = identity.encode("utf-8")
     lines: list[str] = []
     terminal: str | None = None
     idle_after_terminal = False
+    in_application_report = False
     while clock.monotonic() < deadline and len(lines) < MAX_CAPTURE_LINES:
-        line = _readline(port, label="startup")
-        if line is None:
+        raw_line = _readline_bytes(port, label="startup")
+        if raw_line is None:
             if terminal is not None:
                 idle_after_terminal = True
                 break
             continue
+        if not in_application_report:
+            if raw_line != identity_bytes:
+                continue
+            in_application_report = True
+            line = identity
+        else:
+            try:
+                line = raw_line.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise BenchError(
+                    "application report is not strict ASCII/UTF-8"
+                ) from exc
         if (
             line == identity
             or line.startswith("BUILD ")
@@ -719,6 +987,8 @@ def capture_startup(
             or line.startswith("BRINGUP ")
         ):
             lines.append(line)
+        else:
+            raise BenchError("unexpected line inside application report")
         if line.startswith("BRINGUP STAGE0 PASS") or line.startswith("BRINGUP FAIL"):
             terminal = line
     if len(lines) >= MAX_CAPTURE_LINES:
@@ -1010,12 +1280,12 @@ def main(argv: list[str] | None = None) -> int:
         report = monitor_serial(args.serial, verified.recipe_id, args.timeout)
         print(f"PASS recipe={verified.recipe_id} mac={report.mac}")
     elif args.command == "monitor":
-        identity = require_serial(args.serial, provenance.DEVKIT_REQUIRED_SERIAL_DEVICE)
+        identity = require_serial(args.serial, DEVKIT_SERIAL)
         require_same_serial(args.serial, identity)
         report = monitor_serial(args.serial, args.recipe_id, args.timeout)
         print(f"PASS recipe={args.recipe_id} mac={report.mac}")
     elif args.command == "cold-monitor":
-        original = require_serial(args.serial, provenance.DEVKIT_REQUIRED_SERIAL_DEVICE)
+        original = require_serial(args.serial, DEVKIT_SERIAL)
         _cold_confirmation(args.serial)
         wait_cold_cycle(
             args.serial,
@@ -1033,7 +1303,7 @@ def main(argv: list[str] | None = None) -> int:
             port.close()
         print(f"PASS cold recipe={args.recipe_id} mac={report.mac}")
     else:
-        identity = require_serial(args.serial, provenance.DEVKIT_REQUIRED_SERIAL_DEVICE)
+        identity = require_serial(args.serial, DEVKIT_SERIAL)
         port = _default_open(args.serial)
         try:
             _neutral(port)

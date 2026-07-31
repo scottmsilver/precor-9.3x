@@ -5,6 +5,8 @@ import json
 import os
 import shutil
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -65,6 +67,46 @@ def test_verify_bundle_accepts_real_sealed_generation() -> None:
         "0x10000",
         str(REAL_BUNDLE / "esp32tap.bin"),
     )
+
+
+def isolated_verify(tmp_path: Path, bundle: Path) -> subprocess.CompletedProcess[str]:
+    tool = tmp_path / "devkit_bench.py"
+    shutil.copy2(Path(bench.__file__), tool)
+    return subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(tool),
+            "verify-bundle",
+            "--bundle",
+            str(bundle),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+
+
+def test_copied_tool_verifies_bundle_without_repository_modules(
+    tmp_path: Path,
+) -> None:
+    copied_bundle = tmp_path / "bundle"
+    shutil.copytree(REAL_BUNDLE, copied_bundle)
+    result = isolated_verify(tmp_path, copied_bundle)
+    assert result.returncode == 0, result.stderr
+    assert f"VERIFIED manifest={REAL_BUNDLE.name} recipe={RECIPE}" in result.stdout
+
+
+def test_copied_tool_still_rejects_malformed_bundle(tmp_path: Path) -> None:
+    copied_bundle = tmp_path / "bundle"
+    shutil.copytree(REAL_BUNDLE, copied_bundle)
+    copied_bundle.chmod(0o700)
+    (copied_bundle / "unexpected").write_bytes(b"x")
+    result = isolated_verify(tmp_path, copied_bundle)
+    assert result.returncode == 2
+    assert "missing or extra members" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -404,6 +446,26 @@ def test_capture_validates_complete_single_startup_report() -> None:
     report = bench.capture_startup(FakeSerial(), RECIPE, timeout=30, clock=TickClock())
     assert report.mac == MAC
     assert report.terminal == "BRINGUP STAGE0 PASS"
+
+
+def test_capture_tolerates_non_utf8_rom_bytes_before_exact_banner() -> None:
+    report = bench.capture_startup(
+        FakeSerial([b"\xff\xfeROM chatter\n", *STARTUP]),
+        RECIPE,
+        timeout=30,
+        clock=TickClock(),
+    )
+    assert report.terminal == "BRINGUP STAGE0 PASS"
+
+
+def test_capture_rejects_non_utf8_bytes_after_application_banner() -> None:
+    with pytest.raises(bench.BenchError, match="ASCII|UTF-8"):
+        bench.capture_startup(
+            FakeSerial([STARTUP[0], b"\xffbad application line\n", *STARTUP[1:]]),
+            RECIPE,
+            timeout=30,
+            clock=TickClock(),
+        )
 
 
 @pytest.mark.parametrize(
