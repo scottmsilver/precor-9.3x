@@ -1,0 +1,159 @@
+Section,Net,Reference,Pin or terminal,Part or value,Connection / role
+RJ45,GND,J_CONSOLE,1,RJ45 breakout,Ground pass-through
+RJ45,GND,J_MOTOR,1,RJ45 breakout,Ground pass-through
+RJ45,GND,J_CONSOLE,7,RJ45 breakout,Second ground pass-through
+RJ45,GND,J_MOTOR,7,RJ45 breakout,Second ground pass-through
+RJ45,+8V_RAW,J_CONSOLE,2,RJ45 breakout,+8 V pass-through
+RJ45,+8V_RAW,J_MOTOR,2,RJ45 breakout,+8 V pass-through
+RJ45,+8V_RAW,J_CONSOLE,8,RJ45 breakout,Second +8 V pass-through
+RJ45,+8V_RAW,J_MOTOR,8,RJ45 breakout,Second +8 V pass-through
+RJ45,PIN3,J_CONSOLE,3,RJ45 breakout,Direct pass-through and receive tap
+RJ45,PIN3,J_MOTOR,3,RJ45 breakout,Direct pass-through and receive tap
+RJ45,PIN4_PASS,J_CONSOLE,4,RJ45 breakout,Direct pass-through
+RJ45,PIN4_PASS,J_MOTOR,4,RJ45 breakout,Direct pass-through
+RJ45,PIN5_SAFETY,J_CONSOLE,5,RJ45 breakout,Direct safety pass-through
+RJ45,PIN5_SAFETY,J_MOTOR,5,RJ45 breakout,Direct safety pass-through
+Serial,CONS6,J_CONSOLE,6,RJ45 breakout,Console serial transmit line
+Serial,CONS6,K1,4,G5V-2 DC5,Normally closed contact
+Serial,CONS6,R_CONS_RX,1,10 kΩ,Receive tap input
+Serial,MOT6,J_MOTOR,6,RJ45 breakout,Motor serial receive line
+Serial,MOT6,K1,6,G5V-2 DC5,Transfer-pole common
+Serial,TX_DRV,K1,8,G5V-2 DC5,Normally open contact
+Serial,TX_DRV,R_TX,2,100 Ω,Buffered ESP transmit path
+Serial,ESP_TX,U_AHC126,2,SN74AHC126N,Gate 1 input from GPIO17
+Serial,ESP_TX,DEVKIT,GPIO17,ESP32-S3 DevKit,UART transmit
+Serial,TX_BUF,U_AHC126,3,SN74AHC126N,Gate 1 output
+Serial,TX_BUF,R_TX,1,100 Ω,Transmit series resistor
+Serial,CONS_RX,R_CONS_RX,2,10 kΩ,To GPIO18
+Serial,CONS_RX,DEVKIT,GPIO18,ESP32-S3 DevKit,Console pin-6 receive
+Serial,PIN3,R_PIN3_RX,1,10 kΩ,Receive tap input
+Serial,PIN3_RX,R_PIN3_RX,2,10 kΩ,To GPIO16
+Serial,PIN3_RX,DEVKIT,GPIO16,ESP32-S3 DevKit,Pin-3 receive
+Power,+8V_RAW,F_LOCAL,1,RXEF075,Local electronics tap only
+Power,+8V_F,F_LOCAL,2,RXEF075,Fused output
+Power,+8V_F,D_INPUT,anode,1N5822-TP,Series reverse-polarity diode
+Power,VIN,D_INPUT,cathode / striped end,1N5822-TP,Protected VIN
+Power,VIN,D_VIN_TVS,cathode / striped end,P6KE12A-TP,Input transient clamp
+Power,GND,D_VIN_TVS,anode,P6KE12A-TP,Input transient clamp return
+Power,VIN,U_TSR1,1,TSR 1-2433E,3.3 V converter input
+Power,GND,U_TSR1,2,TSR 1-2433E,Converter ground
+Power,TSR_3V3,U_TSR1,3,TSR 1-2433E,Converter output
+Power,VIN,C_VIN_BULK,positive,22 µF,Protected VIN bulk capacitor
+Power,GND,C_VIN_BULK,negative,22 µF,Capacitor return
+Power,VIN,C_TSR_IN,positive,10 µF,TSR input capacitor
+Power,GND,C_TSR_IN,negative,10 µF,Capacitor return
+Power,TSR_3V3,C_TSR_OUT,positive,10 µF,TSR output capacitor
+Power,GND,C_TSR_OUT,negative,10 µF,Capacitor return
+Power,LOGIC_3V3,DEVKIT,3V3,ESP32-S3 DevKit,Logic supply connection
+Power,LOGIC_3V3,J_STANDALONE,logic side,removable jumper,Join to TSR_3V3 only when USB is disconnected
+Power,TSR_3V3,J_STANDALONE,TSR side,removable jumper,Standalone power source
+Supervisor,VIN,U_TPS3700,5,TPS3700DDCR,VDD
+Supervisor,GND,U_TPS3700,2,TPS3700DDCR,Ground
+Supervisor,VIN,R_UV_TOP,1,150 kΩ,Undervoltage divider top
+Supervisor,UV_SENSE,R_UV_TOP,2,150 kΩ,Divider midpoint
+Supervisor,UV_SENSE,R_UV_BOTTOM,1,10 kΩ,Divider midpoint
+Supervisor,GND,R_UV_BOTTOM,2,10 kΩ,Divider bottom
+Supervisor,UV_SENSE,U_TPS3700,3,TPS3700DDCR,INA+
+Supervisor,UV_SENSE,C_UV,1,1 nF,Sense filter
+Supervisor,GND,C_UV,2,1 nF,Sense filter return
+Supervisor,VIN,R_OV_TOP,1,255 kΩ,Overvoltage divider top
+Supervisor,OV_SENSE,R_OV_TOP,2,255 kΩ,Divider midpoint
+Supervisor,OV_SENSE,R_OV_BOTTOM,1,10 kΩ,Divider midpoint
+Supervisor,GND,R_OV_BOTTOM,2,10 kΩ,Divider bottom
+Supervisor,OV_SENSE,U_TPS3700,4,TPS3700DDCR,INB−
+Supervisor,OV_SENSE,C_OV,1,1 nF,Sense filter
+Supervisor,GND,C_OV,2,1 nF,Sense filter return
+Supervisor,TREAD_OK,U_TPS3700,1,TPS3700DDCR,OUTA open drain
+Supervisor,TREAD_OK,U_TPS3700,6,TPS3700DDCR,OUTB open drain
+Supervisor,TREAD_OK,R_TREAD_PULLUP,2,10 kΩ,Pull-up node
+Supervisor,LOGIC_3V3,R_TREAD_PULLUP,1,10 kΩ,Pull-up supply
+Supervisor,TREAD_OK,R_TREAD_PULLDOWN,1,100 kΩ,Power-off pull-down node
+Supervisor,GND,R_TREAD_PULLDOWN,2,100 kΩ,Pull-down return
+Supervisor,TREAD_OK,R_TREAD_MCU,1,4.7 kΩ,GPIO isolation input
+Supervisor,TREAD_OK_MCU,R_TREAD_MCU,2,4.7 kΩ,GPIO isolation output
+Supervisor,TREAD_OK_MCU,DEVKIT,GPIO6,ESP32-S3 DevKit,Voltage-window status input
+Logic,LOGIC_3V3,U_AHC08,14,SN74AHC08N,VCC
+Logic,GND,U_AHC08,7,SN74AHC08N,Ground
+Logic,RELAY_CMD,U_AHC08,1,SN74AHC08N,Gate 1 A input
+Logic,TREAD_OK,U_AHC08,2,SN74AHC08N,Gate 1 B input
+Logic,RELAY_GATE,U_AHC08,3,SN74AHC08N,Gate 1 output
+Logic,TX_ENABLE,U_AHC08,4,SN74AHC08N,Gate 2 A input
+Logic,TREAD_OK,U_AHC08,5,SN74AHC08N,Gate 2 B input
+Logic,TX_GATE,U_AHC08,6,SN74AHC08N,Gate 2 output
+Logic,GND,U_AHC08,"9, 10, 12, 13",SN74AHC08N,Tie all unused inputs low
+Logic,NC,U_AHC08,"8, 11",SN74AHC08N,Leave unused outputs open
+Logic,RELAY_CMD,DEVKIT,GPIO21,ESP32-S3 DevKit,Relay command
+Logic,RELAY_CMD,R_RELAY_CMD_PD,1,10 kΩ,Command pull-down
+Logic,GND,R_RELAY_CMD_PD,2,10 kΩ,Pull-down return
+Logic,TX_ENABLE,DEVKIT,GPIO15,ESP32-S3 DevKit,Transmit enable
+Logic,TX_ENABLE,R_TX_ENABLE_PD,1,10 kΩ,Enable pull-down
+Logic,GND,R_TX_ENABLE_PD,2,10 kΩ,Pull-down return
+Logic,LOGIC_3V3,U_AHC126,14,SN74AHC126N,VCC
+Logic,GND,U_AHC126,7,SN74AHC126N,Ground
+Logic,TX_GATE,U_AHC126,1,SN74AHC126N,Gate 1 output enable
+Logic,GND,U_AHC126,"4, 5, 9, 10, 12, 13",SN74AHC126N,Tie unused enables and inputs low
+Logic,NC,U_AHC126,"6, 8, 11",SN74AHC126N,Leave unused outputs open
+Relay,VIN,U_TPS709,1,TPS70950DBVR,5 V regulator input
+Relay,GND,U_TPS709,2,TPS70950DBVR,Ground
+Relay,RELAY_GATE,U_TPS709,3,TPS70950DBVR,Enable
+Relay,NC,U_TPS709,4,TPS70950DBVR,Leave open
+Relay,+5V_RLY,U_TPS709,5,TPS70950DBVR,5 V output
+Relay,VIN,C_TPS709_IN,1,1 µF,Input bypass
+Relay,GND,C_TPS709_IN,2,1 µF,Input bypass return
+Relay,+5V_RLY,C_TPS709_OUT,positive,4.7 µF,Output capacitor
+Relay,GND,C_TPS709_OUT,negative,4.7 µF,Output capacitor return
+Relay,+5V_RLY,J_COIL_POWER,supply side,removable jumper,Leave removed for initial construction
+Relay,RELAY_COIL+,J_COIL_POWER,coil side,removable jumper,To relay coil after bench tests
+Relay,RELAY_COIL+,K1,1,G5V-2 DC5,Coil; no polarity
+Relay,RELAY_COIL−,K1,16,G5V-2 DC5,Coil; no polarity
+Relay,RELAY_COIL+,D_COIL,1,P6KE6.8CA,Bidirectional TVS across coil
+Relay,RELAY_COIL−,D_COIL,2,P6KE6.8CA,Bidirectional TVS across coil
+Relay,RELAY_GATE,R_BASE,1,560 Ω,BC337 base resistor
+Relay,Q_BASE,R_BASE,2,560 Ω,BC337 base resistor
+Relay,Q_BASE,Q_RELAY,base,BC337-40,Verify physical lead order
+Relay,Q_BASE,R_BASE_PD,1,10 kΩ,Base pull-down
+Relay,GND,R_BASE_PD,2,10 kΩ,Base pull-down return
+Relay,GND,Q_RELAY,emitter,BC337-40,Low-side driver
+Relay,RELAY_COIL−,Q_RELAY,collector,BC337-40,Low-side driver
+Feedback,GND,K1,11,G5V-2 DC5,Dry-contact common
+Feedback,K1_NC_FB,K1,13,G5V-2 DC5,NC feedback
+Feedback,K1_NC_FB,DEVKIT,GPIO4,ESP32-S3 DevKit,NC feedback input
+Feedback,K1_NC_FB,R_FB_NC,2,10 kΩ,Feedback pull-up node
+Feedback,LOGIC_3V3,R_FB_NC,1,10 kΩ,Feedback pull-up supply
+Feedback,K1_NO_FB,K1,9,G5V-2 DC5,NO feedback
+Feedback,K1_NO_FB,DEVKIT,GPIO5,ESP32-S3 DevKit,NO feedback input
+Feedback,K1_NO_FB,R_FB_NO,2,10 kΩ,Feedback pull-up node
+Feedback,LOGIC_3V3,R_FB_NO,1,10 kΩ,Feedback pull-up supply
+USB sense,VBUS_SENSE,DEVKIT,5V/VBUS,ESP32-S3 DevKit,USB-presence source
+USB sense,VBUS_SENSE,Q_VBUS,gate,2N7000,Verify physical lead order
+USB sense,VBUS_SENSE,R_VBUS_DISCHARGE,1,10 kΩ,Gate discharge
+USB sense,GND,R_VBUS_DISCHARGE,2,10 kΩ,Gate discharge return
+USB sense,GND,Q_VBUS,source,2N7000,Source
+USB sense,VBUS_PRESENT_N,Q_VBUS,drain,2N7000,Active-low USB presence
+USB sense,VBUS_PRESENT_N,DEVKIT,GPIO7,ESP32-S3 DevKit,USB-presence input
+USB sense,VBUS_PRESENT_N,R_VBUS_PULLUP,2,10 kΩ,Drain pull-up node
+USB sense,LOGIC_3V3,R_VBUS_PULLUP,1,10 kΩ,Pull-up supply
+Indicators,STATUS_LED,DEVKIT,GPIO38,ESP32-S3 DevKit,Status output
+Indicators,STATUS_LED,R_STATUS,1,330 Ω,Green LED resistor
+Indicators,LED_GREEN_A,R_STATUS,2,330 Ω,Green LED resistor
+Indicators,LED_GREEN_A,LED_GREEN,anode,LTL-4233,Green status LED
+Indicators,GND,LED_GREEN,cathode,LTL-4233,LED return
+Indicators,LOGIC_3V3,R_POWER_LED,1,1 kΩ,Red power LED resistor
+Indicators,LED_RED_A,R_POWER_LED,2,1 kΩ,Red power LED resistor
+Indicators,LED_RED_A,LED_RED,anode,151051RS11000,Red power LED
+Indicators,GND,LED_RED,cathode,151051RS11000,LED return
+Decoupling,LOGIC_3V3,C_LOGIC,1,100 nF,Logic rail decoupling
+Decoupling,GND,C_LOGIC,2,100 nF,Logic rail decoupling return
+Decoupling,VIN,C_TPS3700,1,100 nF,TPS3700 decoupling
+Decoupling,GND,C_TPS3700,2,100 nF,TPS3700 decoupling return
+Decoupling,LOGIC_3V3,C_AHC08,1,100 nF,AHC08 pin 14 to pin 7
+Decoupling,GND,C_AHC08,2,100 nF,AHC08 pin 14 to pin 7
+Decoupling,LOGIC_3V3,C_AHC126,1,100 nF,AHC126 pin 14 to pin 7
+Decoupling,GND,C_AHC126,2,100 nF,AHC126 pin 14 to pin 7
+Power modes,USB bench,J_STANDALONE,removed,removable jumper,Pi UART USB powers DevKit and LOGIC_3V3
+Power modes,USB bench,J_COIL_POWER,removed initially,removable jumper,Install only after relay-supply tests
+Power modes,Standalone,J_STANDALONE,installed,removable jumper,USB must be physically disconnected first
+Power modes,Standalone,DEVKIT UART USB,disconnected,USB cable,TSR powers DevKit and logic
+Safety,Initial state,J_COIL_POWER,removed,removable jumper,Current diagnostic firmware cannot energize relay
+Safety,Relay bypass,K1,"4 ↔ 6",G5V-2 DC5,Must have continuity with coil off
+Safety,TX isolation,K1,"8 ↛ 6",G5V-2 DC5,Must be open with coil off
