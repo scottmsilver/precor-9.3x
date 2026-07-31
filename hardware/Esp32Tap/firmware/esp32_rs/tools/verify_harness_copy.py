@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -63,8 +64,15 @@ IGNORE_NAMES = {"__pycache__", ".pytest_cache"}
 # comparison or a control flow. Deliberately sha-pinned so that "one more
 # small harness edit" cannot ride along unnoticed.
 ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
+    "conftest.py": (
+        "2424ac204e21d954e59b3298a9d0390efd28783351cd8c563b2e520026eecf99",
+        "ARTIFACT PROVENANCE: both production and qemu-test bundles are "
+        "mandatory session fixtures, verified while shared locks remain "
+        "held through every S6 read; Docker availability is checked only "
+        "after artifact rejection. No scenario assertion or bound changes.",
+    ),
     "qemu_session.py": (
-        "981372c4d7e215c183c4b8eb1a7d8c6b6660386274217b547590b53318d52f41",
+        "0847de505627f89b2359f6964510796b8f52f16a543722fa10b30f0976afffee",
         "(a) the emulated flash is padded to the size the image header "
         "declares (read from the build's own flash_args) instead of a "
         "hard-coded 2MB; a header that claims more flash than the emulated "
@@ -100,8 +108,16 @@ ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
         "inside the protected region and close() frees leases in a `finally` — "
         "because a stranded shared lock turned one boot timeout into a 30-minute "
         "hang for the next build. "
-        "None of (a)-(e) touches an assertion, a bound, a comparison or a "
-        "control flow of any scenario.",
+        "(f) ARTIFACT PROVENANCE is verified before port allocation and its "
+        "shared lease is held through flash assembly and teardown, including "
+        "every constructor-failure path. None of (a)-(f) touches an assertion, "
+        "a bound, a comparison or a control flow of any scenario.",
+    ),
+    "run.sh": (
+        "ad706374322bf1ca1bdf257fc5ef42d774dd1887b44820949bcbff8c0619aea4",
+        "ARTIFACT PROVENANCE: the historical harness entrypoint now verifies "
+        "and leases both bundles before checked delegation to the Rust "
+        "run_harness.sh. It changes no scenario assertion or selection.",
     ),
 }
 
@@ -115,6 +131,12 @@ ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
 # with a nonsense message if it ever had been reached. A byte-lock pinned to a
 # placeholder is not a byte-lock; the requirement is plain equality.
 SMOKE_REL = "hardware/Esp32Tap/firmware/esp32/tools/qemu_smoke.sh"
+SMOKE_STRENGTHENING = (
+    "b8f39bccbac85a5f051d7b34028c1de51d4a09b315713afe0b27bd7dbdd1abd0",
+    "ARTIFACT PROVENANCE: the Rust path is an executable regular wrapper "
+    "which leases and verifies production before exec of the separately "
+    "HEAD-anchored, byte-unchanged C++ smoke gate.",
+)
 
 
 def _sha(b: bytes) -> str:
@@ -233,6 +255,32 @@ def main() -> int:
     for name in listing(LIVE_DIR):
         if name not in expected:
             problems.append(f"LEG2 EXTRA {name} — a new file appeared in the committed harness")
+
+    # --- Rust smoke strengthening: exact bytes, type and executable mode ---
+    rust_smoke = HERE / "qemu_smoke.sh"
+    pinned_smoke, smoke_reason = SMOKE_STRENGTHENING
+    try:
+        smoke_info = rust_smoke.lstat()
+    except OSError:
+        problems.append("LEG1 MISSING esp32_rs/tools/qemu_smoke.sh")
+    else:
+        if (
+            not stat.S_ISREG(smoke_info.st_mode)
+            or stat.S_IMODE(smoke_info.st_mode) != 0o755
+        ):
+            problems.append(
+                "LEG1 TYPE/MODE qemu_smoke.sh — Rust smoke must be a "
+                "regular executable file with mode 0755"
+            )
+        elif _sha(rust_smoke.read_bytes()) != pinned_smoke:
+            problems.append(
+                "LEG1 PIN MISMATCH qemu_smoke.sh — Rust provenance wrapper "
+                f"differs from approved bytes\n           pinned {pinned_smoke}\n"
+                f"           copy   {_sha(rust_smoke.read_bytes())}"
+            )
+        else:
+            print("verify_harness_copy: APPROVED STRENGTHENING — qemu_smoke.sh")
+            print(f"  reason: {smoke_reason}")
 
     # --- LEG 2b: the OTHER committed gate script, anchored the same way ----
     smoke_live = REPO_ROOT / SMOKE_REL

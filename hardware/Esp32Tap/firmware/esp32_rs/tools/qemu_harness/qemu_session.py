@@ -25,10 +25,25 @@ import re
 import shlex
 import socket
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from pathlib import Path
+
+TOOLS_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(TOOLS_DIR))
+
+from artifact_provenance import (  # noqa: E402
+    ArtifactError,
+    EXIT_INTERNAL,
+    Result,
+    _current_input_digest,
+    _load_manifest,
+    _verify_current as _full_verify_current,
+    shared_bundle,
+    verify_locked,
+)
 
 IDF_IMAGE = os.environ.get("IDF_IMAGE", "espressif/idf:release-v5.5")
 
@@ -94,6 +109,23 @@ _LEASE_DIR = Path(os.environ.get("ESP32TAP_PORT_LEASES", "/tmp/esp32tap-qemu-por
 _BUILD_LOCK = Path("/tmp") / (
     "esp32tap-build-%s.lock" % hashlib.md5(str(ESP32_RS_DIR).encode()).hexdigest()[:12]
 )
+
+
+def _verify_current(repo_root: Path, kind: str, bundle: Path) -> Result:
+    """Reject missing/stale/invalid bytes before any Docker image inspection."""
+    try:
+        manifest, manifest_toolchain = _load_manifest(bundle, kind)
+        input_digest = _current_input_digest(repo_root)
+        preflight = verify_locked(bundle, manifest_toolchain, input_digest)
+        if not preflight.ok:
+            return preflight
+        if manifest["input_digest"] != input_digest:
+            raise AssertionError("verify_locked accepted a stale input digest")
+        return _full_verify_current(repo_root, kind, bundle)
+    except ArtifactError as exc:
+        return Result(exc.code, str(exc))
+    except Exception as exc:
+        return Result(EXIT_INTERNAL, f"unexpected entry verification failure: {exc}")
 
 
 def _lease_build_shared() -> "object":
@@ -180,6 +212,10 @@ class QemuSession:
         self._pacer_sent = 0
         self._reader_error: BaseException | None = None
         self._leases: list[object] = []
+        self._bundle_lease = None
+        self._bundle_path: Path | None = None
+        self._close_lock = threading.Lock()
+        self._closed = False
         self.proc: subprocess.Popen | None = None
         self.sock0: socket.socket | None = None
         self.sock1: socket.socket | None = None
@@ -192,86 +228,113 @@ class QemuSession:
         self._leases.append(f)
         return port
 
-    def _start(self, boot_timeout: float) -> None:
-        # Leases are held (flock) until close(), so QEMU's own bind on these
-        # ports cannot race any other harness process.
-        p0, p1 = self._lease(), self._lease()
-        # Shared lock on the build dir: see _lease_build_shared. Closed by
-        # close() with the port leases, or by the kernel if we die.
-        self._leases.append(_lease_build_shared())
-        nic = ""
-        if self.net:
-            self.http_port = self._lease()
-            nic = " -nic user,model=open_eth,hostfwd=tcp::%d-:8000" % self.http_port
-        bdir = shlex.quote(self.build_dir)
-        # PER-SESSION FLASH IMAGE. Every session used to merge into the SAME
-        # build_qemu_test/qemu_flash.bin — a path on the BIND-MOUNTED REPO,
-        # shared by every container — so under xdist one session could boot
-        # from an image another was still rewriting: garbage image, no boot
-        # banner, and a 120 s "log pattern not seen" that looked like CPU
-        # starvation. It is not — this machine has 20 cores.
-        #
-        # WHY /tmp IS ALREADY PRIVATE, since "per-session" and a fixed name
-        # read as a contradiction: only the repo is bind-mounted (-v
-        # $REPO_ROOT:/project), so /tmp here is the CONTAINER's own writable
-        # layer — not the host's — and `docker run --rm` destroys it on exit.
-        # That is also what bounds the residency of anything the guest commits
-        # to NVS during a session, including the operator's real API key in the
-        # opt-in test_coach_live.py run.
-        #
-        # The name is made unique anyway. It costs one f-string, and it means
-        # the isolation survives somebody adding `-v /tmp:/tmp` or running the
-        # merge outside a container — neither of which should have to be
-        # remembered for the comment above to stay true.
-        flash_img = f"/tmp/qemu_flash_{self.name}.bin"
-        # The emulated flash MUST be the size the app image header declares.
-        # IDF's spi_flash init aborts ("Detected size(...) smaller than the
-        # size in the binary image header(...). Probe failed.") and reboots
-        # forever otherwise. Hard-coding 2MB silently assumed
-        # CONFIG_ESPTOOLPY_FLASHSIZE=2MB; take it from the build's own
-        # flash_args instead so the emulated part always matches the image.
-        script = (
-            "set -u; cd %s || exit 3; "
-            "FS=$(sed -n 's/.*--flash_size \\([0-9A-Za-z]*\\).*/\\1/p' flash_args | head -1); "
-            "[ -n \"$FS\" ] || { echo 'no --flash_size in flash_args' >&2; exit 3; }; "
-            "python -m esptool --chip esp32s3 merge_bin -o " + flash_img + " "
-            '@flash_args --fill-flash-size "$FS" >/dev/null 2>&1 '
-            "|| python -m esptool --chip esp32s3 merge-bin -o " + flash_img + " "
-            '@flash_args --pad-to-size "$FS" >/dev/null || exit 3; cd ..; '
-            "exec qemu-system-xtensa -nographic -machine esp32s3 "
-            "-drive file=" + flash_img + ",if=mtd,format=raw "
-            "-serial tcp:127.0.0.1:%d,server=on,wait=on "
-            "-serial tcp:127.0.0.1:%d,server=on,wait=on"
-            "%s"
-        ) % (bdir, p0, p1, nic)
-        self.proc = subprocess.Popen(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--name",
-                self.name,
-                "--network=host",
-                "-v",
-                f"{self.repo_root}:/project",
-                "-w",
-                f"/project/{self.rel}",
-                IDF_IMAGE,
-                "bash",
-                "-c",
-                script,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        # EVERYTHING from here to the end of __init__ is protected. The boot
-        # waits used to sit OUTSIDE this try, and the pytest fixture only
-        # registers the session AFTER construction returns — so a boot timeout
-        # left the container running and, worse, left this session's SHARED
-        # build lock and port leases held by live daemon threads with nothing
-        # able to release them. One boot timeout then became a 30-minute hang
-        # for the NEXT build. Found by codex.
+    def _acquire_verified_bundle(self) -> None:
+        if self._bundle_lease is not None:
+            raise HarnessError("artifact bundle lease is already held")
+        kind_by_dir = {
+            "build": "production",
+            "build_qemu_test": "qemu-test",
+        }
         try:
+            kind = kind_by_dir[self.build_dir]
+        except KeyError as exc:
+            raise HarnessError(f"unknown artifact build directory: {self.build_dir}") from exc
+        lease = shared_bundle(self.repo_root, kind)
+        bundle = lease.__enter__()
+        self._bundle_lease = lease
+        self._bundle_path = bundle
+        result = _verify_current(self.repo_root, kind, bundle)
+        if not result.ok:
+            self._release_bundle_lease()
+            raise HarnessError(f"{kind} artifact provenance failed: {result.message}")
+
+    def _release_bundle_lease(self) -> None:
+        lease, self._bundle_lease = self._bundle_lease, None
+        self._bundle_path = None
+        if lease is not None:
+            lease.__exit__(None, None, None)
+
+    def _start(self, boot_timeout: float) -> None:
+        # EVERYTHING from lock acquisition through boot is protected. A
+        # constructor failure happens before the pytest fixture can register
+        # this object, so it must release its own artifact/port/container state.
+        try:
+            # Artifact provenance is the first external operation. The shared
+            # lease remains held through flash assembly and complete teardown.
+            self._acquire_verified_bundle()
+            # Leases are held (flock) until close(), so QEMU's own bind on these
+            # ports cannot race any other harness process.
+            p0, p1 = self._lease(), self._lease()
+            # Retain the legacy build lock too while C++ builders still share it.
+            self._leases.append(_lease_build_shared())
+            nic = ""
+            if self.net:
+                self.http_port = self._lease()
+                nic = " -nic user,model=open_eth,hostfwd=tcp::%d-:8000" % self.http_port
+            assert self._bundle_path is not None
+            # The repository is mounted at /project in the container, so the
+            # leased host path is reached there by its validated public name.
+            bdir = shlex.quote(self._bundle_path.name)
+            # PER-SESSION FLASH IMAGE. Every session used to merge into the SAME
+            # build_qemu_test/qemu_flash.bin — a path on the BIND-MOUNTED REPO,
+            # shared by every container — so under xdist one session could boot
+            # from an image another was still rewriting: garbage image, no boot
+            # banner, and a 120 s "log pattern not seen" that looked like CPU
+            # starvation. It is not — this machine has 20 cores.
+            #
+            # WHY /tmp IS ALREADY PRIVATE, since "per-session" and a fixed name
+            # read as a contradiction: only the repo is bind-mounted (-v
+            # $REPO_ROOT:/project), so /tmp here is the CONTAINER's own writable
+            # layer — not the host's — and `docker run --rm` destroys it on exit.
+            # That is also what bounds the residency of anything the guest
+            # commits to NVS during a session, including the operator's real API
+            # key in the opt-in test_coach_live.py run.
+            #
+            # The name is made unique anyway. It costs one f-string, and it means
+            # the isolation survives somebody adding `-v /tmp:/tmp` or running
+            # the merge outside a container — neither of which should have to be
+            # remembered for the comment above to stay true.
+            flash_img = f"/tmp/qemu_flash_{self.name}.bin"
+            # The emulated flash MUST be the size the app image header declares.
+            # IDF's spi_flash init aborts ("Detected size(...) smaller than the
+            # size in the binary image header(...). Probe failed.") and reboots
+            # forever otherwise. Hard-coding 2MB silently assumed
+            # CONFIG_ESPTOOLPY_FLASHSIZE=2MB; take it from the build's own
+            # flash_args instead so the emulated part always matches the image.
+            script = (
+                "set -u; cd %s || exit 3; "
+                "FS=$(sed -n 's/.*--flash_size \\([0-9A-Za-z]*\\).*/\\1/p' flash_args | head -1); "
+                "[ -n \"$FS\" ] || { echo 'no --flash_size in flash_args' >&2; exit 3; }; "
+                "python -m esptool --chip esp32s3 merge_bin -o " + flash_img + " "
+                '@flash_args --fill-flash-size "$FS" >/dev/null 2>&1 '
+                "|| python -m esptool --chip esp32s3 merge-bin -o " + flash_img + " "
+                '@flash_args --pad-to-size "$FS" >/dev/null || exit 3; cd ..; '
+                "exec qemu-system-xtensa -nographic -machine esp32s3 "
+                "-drive file=" + flash_img + ",if=mtd,format=raw "
+                "-serial tcp:127.0.0.1:%d,server=on,wait=on "
+                "-serial tcp:127.0.0.1:%d,server=on,wait=on"
+                "%s"
+            ) % (bdir, p0, p1, nic)
+            self.proc = subprocess.Popen(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--name",
+                    self.name,
+                    "--network=host",
+                    "-v",
+                    f"{self.repo_root}:/project",
+                    "-w",
+                    f"/project/{self.rel}",
+                    IDF_IMAGE,
+                    "bash",
+                    "-c",
+                    script,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
             # serial0 first: with wait=on QEMU creates the serial1 listener
             # only after the serial0 client connects.
             self.sock0 = self._connect(p0, timeout=60.0)
@@ -288,7 +351,12 @@ class QemuSession:
         except BaseException:
             # BaseException, not Exception: a KeyboardInterrupt or a pytest
             # timeout must not strand the lock either.
-            self.close()
+            try:
+                self.close()
+            except BaseException:
+                # Preserve the construction failure. close() already attempts
+                # every resource and releases the artifact lease in finally.
+                pass
             raise
 
     def _connect(self, port: int, timeout: float) -> socket.socket:
@@ -306,37 +374,56 @@ class QemuSession:
                 time.sleep(0.3)
 
     def close(self) -> None:
-        self._stop.set()
-        self.stop_pacer()
-        subprocess.run(["docker", "kill", self.name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-        if self.proc is not None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        first_error: BaseException | None = None
+
+        def attempt(action) -> None:
+            nonlocal first_error
             try:
-                self.proc.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-            if self.proc.stdout is not None:
-                self.proc.stdout.close()
-        for s in (self.sock0, self.sock1):
-            if s is not None:
-                try:
-                    s.close()
-                except OSError:
-                    pass
+                action()
+            except BaseException as exc:  # teardown must attempt every resource
+                if first_error is None:
+                    first_error = exc
+
         try:
-            for t in self._threads:
-                t.join(timeout=5)
-        finally:
-            # Release the port leases and the shared build lock LAST — after
-            # QEMU is gone, so the next session cannot lease a port this one's
-            # QEMU is still listening on — but in a `finally`, because an
-            # exception from docker kill, wait or stdout cleanup used to skip
-            # this entirely and strand every lease this session held.
-            for f in self._leases:
+            attempt(self._stop.set)
+            attempt(self.stop_pacer)
+            if self.proc is not None:
+                attempt(
+                    lambda: subprocess.run(
+                        ["docker", "kill", self.name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                )
+            if self.proc is not None:
                 try:
-                    f.close()  # closing the fd drops the flock
-                except OSError:
-                    pass
+                    self.proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    attempt(self.proc.kill)
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
+                if self.proc.stdout is not None:
+                    attempt(self.proc.stdout.close)
+            for sock in (self.sock0, self.sock1):
+                if sock is not None:
+                    attempt(sock.close)
+            for t in self._threads:
+                attempt(lambda thread=t: thread.join(timeout=5))
+        finally:
+            # Release all port/build leases only after every teardown attempt,
+            # and the artifact lease last of all.
+            for f in self._leases:
+                attempt(f.close)
             self._leases = []
+            attempt(self._release_bundle_lease)
+        if first_error is not None:
+            raise first_error
 
     # --- readers ---------------------------------------------------------
 

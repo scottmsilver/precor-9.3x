@@ -1,39 +1,41 @@
 #!/usr/bin/env bash
-# run_harness.sh — run the COMMITTED QEMU behavioral harness (S1-S7 + encoder
-# parity) against the RUST image.
-#
-# The harness itself is NOT copied or forked: `ESP32TAP_FW_DIR` simply points
-# its build/ and build_qemu_test/ lookups at esp32_rs/. Every assertion,
-# timeout, bound and comparison is the committed one.
+# Run every Rust QEMU gate while inheriting leases for both artifact bundles.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$0")" && pwd)"
-ESP32_RS="$(cd "$HERE/.." && pwd)"
-HARNESS="$ESP32_RS/../esp32/tools/qemu_harness"
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    SOURCE_DIR="$(CDPATH= cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+    SOURCE="$(readlink -- "$SOURCE")"
+    case "$SOURCE" in
+        /*) ;;
+        *) SOURCE="$SOURCE_DIR/$SOURCE" ;;
+    esac
+done
+HERE="$(CDPATH= cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+ESP32_RS="$(CDPATH= cd -P -- "$HERE/.." && pwd)"
+REPO_ROOT="$(CDPATH= cd -P -- "$ESP32_RS/../../../.." && pwd)"
 
-[ -f "$ESP32_RS/build_qemu_test/esp32tap.bin" ] || {
-    echo "build_qemu_test/esp32tap.bin missing — run tools/build.sh first" >&2
-    exit 2
-}
+# The checked process owns both inherited shared-lock OFDs. Its Rust-only
+# subprocess and final committed-harness exec therefore cannot observe a
+# publisher generation change between the two test tiers.
+exec python3 "$HERE/artifact_provenance.py" \
+    --repo-root "$REPO_ROOT" \
+    exec-many --kind production --kind qemu-test -- \
+    bash -c '
+        set -euo pipefail
+        here="$1"
+        shift
+        harness="$here/qemu_harness"
+        export IDF_IMAGE="${IDF_IMAGE:-esp32tap-rust:build}"
 
-export ESP32TAP_FW_DIR="$ESP32_RS"
-export IDF_IMAGE="${IDF_IMAGE:-esp32tap-rust:build}"
+        if [ "${RS_SCENARIOS:-1}" = "1" ] && [ -z "${1:-}" ]; then
+            echo "run_harness.sh: Rust-only scenarios (tools/qemu_scenarios) ..."
+            (
+                cd -- "$here/qemu_scenarios"
+                exec python3 -m pytest . -v -p no:cacheprovider
+            )
+        fi
 
-# Rust-image-only extra scenarios (S8 normal exit). They live OUTSIDE the
-# committed harness so that directory stays byte-identical to HEAD, and they
-# import it as a library. Run FIRST so a failure there is not buried under the
-# 10-minute S1-S7 run. RS_SCENARIOS=0 to skip.
-if [ "${RS_SCENARIOS:-1}" = "1" ] && [ -z "${1:-}" ]; then
-    echo "run_harness.sh: Rust-only scenarios (tools/qemu_scenarios) ..."
-    ( cd "$HERE/qemu_scenarios" && exec python3 -m pytest . -v -p no:cacheprovider )
-fi
-
-cd "$HARNESS"
-# `-m "not net"` by default: test_net_scenarios.py belongs to the UNCOMMITTED
-# C++ network tier, which this port deliberately does not include (the Rust
-# image is the safety core only). Its `net_qemu` fixture boots the image with
-# an openeth NIC and expects an HTTPS server, so those cases can only fail
-# here — and a red run for an out-of-scope reason hides the in-scope result.
-# Everything the mandate covers (S1, S2a, S2b, S3, S4, S5, S6 x2, S7a, S7b +
-# the 6 encoder-parity cases) is selected. Pass -m to override.
-exec python3 -m pytest -m "not net" "$@" -p no:cacheprovider
+        cd -- "$harness"
+        exec python3 -m pytest -m "not net" "$@" -p no:cacheprovider
+    ' esp32tap-run-harness "$HERE" "$@"

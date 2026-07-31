@@ -24,6 +24,8 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 ESP32_RS = HERE.parents[1]
+REPO_ROOT = ESP32_RS.parents[3]
+sys.path.insert(0, str(HERE.parent))
 # The VERIFIED COPY of the committed harness (tools/qemu_harness/), whose ten
 # files are asserted byte-identical to `git show HEAD:` on every run by
 # tools/verify_harness_copy.py. Importing it from here rather than from the
@@ -32,21 +34,27 @@ ESP32_RS = HERE.parents[1]
 HARNESS = ESP32_RS / "tools" / "qemu_harness"
 sys.path.insert(0, str(HARNESS))
 
-from qemu_session import QemuSession  # noqa: E402  (after sys.path setup)
+from artifact_provenance import shared_bundle  # noqa: E402
+from qemu_session import QemuSession, _verify_current  # noqa: E402
 
 ESP32_DIR = ESP32_RS
 TEST_BUILD = "build_qemu_test"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _require_image():
-    binary = ESP32_DIR / TEST_BUILD / "esp32tap.bin"
-    if not binary.exists():
-        pytest.skip(f"{binary} missing — run tools/build.sh first")
+def _verified_test_bundle():
+    with shared_bundle(REPO_ROOT, "qemu-test") as bundle:
+        result = _verify_current(REPO_ROOT, "qemu-test", bundle)
+        if not result.ok:
+            pytest.fail(
+                f"qemu-test artifact provenance failed: {result.message}",
+                pytrace=False,
+            )
+        yield bundle
 
 
 @pytest.fixture
-def qemu(request):
+def qemu(request, _verified_test_bundle):
     """Factory: boot the qemu-test image. Sessions are closed on teardown, and
     dumped first if the test failed."""
     sessions: list[QemuSession] = []

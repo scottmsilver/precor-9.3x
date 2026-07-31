@@ -2,44 +2,55 @@
 
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from qemu_session import QemuSession
 
 HERE = Path(__file__).resolve().parent
 ESP32_DIR = HERE.parents[1]
+REPO_ROOT = ESP32_DIR.parents[3]
+sys.path.insert(0, str(HERE.parent))
+
+from artifact_provenance import shared_bundle  # noqa: E402
+from qemu_session import QemuSession, _verify_current  # noqa: E402
+
 DEFAULT_BUILD = "build"
 TEST_BUILD = "build_qemu_test"
 
 
-def _require_image(build_dir: str) -> Path:
-    binary = ESP32_DIR / build_dir / "esp32tap.bin"
-    if not binary.exists():
-        pytest.skip(
-            f"{binary} missing — build it first (tools/qemu_harness/run.sh, "
-            f"or: docker run --rm -v $PWD:/project -w /project "
-            f"espressif/idf:release-v5.5 idf.py -B {build_dir}"
-            f"{' -DESP32TAP_QEMU_TEST=1' if build_dir == TEST_BUILD else ''}"
-            f" build)"
-        )
-    return binary
+@pytest.fixture(scope="session", autouse=True)
+def _verified_bundles():
+    """Lease and attest both S6 inputs for every fixture read in the session."""
+    bundles: dict[str, Path] = {}
+    with contextlib.ExitStack() as leases:
+        for kind in ("production", "qemu-test"):
+            bundle = leases.enter_context(shared_bundle(REPO_ROOT, kind))
+            result = _verify_current(REPO_ROOT, kind, bundle)
+            if not result.ok:
+                pytest.fail(
+                    f"{kind} artifact provenance failed: {result.message}",
+                    pytrace=False,
+                )
+            bundles[kind] = bundle
+        yield bundles
 
 
 @pytest.fixture(scope="session")
-def default_build_bin() -> Path:
-    return _require_image(DEFAULT_BUILD)
+def default_build_bin(_verified_bundles) -> Path:
+    return _verified_bundles["production"] / "esp32tap.bin"
 
 
 @pytest.fixture(scope="session")
-def test_build_bin() -> Path:
-    return _require_image(TEST_BUILD)
+def test_build_bin(_verified_bundles) -> Path:
+    return _verified_bundles["qemu-test"] / "esp32tap.bin"
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _require_docker():
+def _require_docker(_verified_bundles):
     if shutil.which("docker") is None:
         pytest.skip("docker not available")
     rc = subprocess.run(
