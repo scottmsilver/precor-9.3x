@@ -30,7 +30,7 @@ esp32_rs/
 ├── sdkconfig.defaults            PLAN normative key set + Rust-specific keys
 ├── sdkconfig.defaults.qemu    -> ../esp32/sdkconfig.defaults.qemu   (symlink)
 ├── partitions_esp32tap.csv       tracked partition-table source
-├── build/  build_qemu_test/      idf.py-shaped generated artifacts
+├── build/  build_qemu_test/      untracked links to immutable generations
 │
 ├── safety_core/    CRATE 1 — portable, no_std, ZERO dependencies, host-tested
 ├── esp32tap/       CRATE 2 — the ESP32-S3 binary (esp-idf-hal + esp-idf-sys)
@@ -58,12 +58,17 @@ esp32_rs/
     └── dump_capture_fixtures.py  real capture data -> difftest/fixtures/
 ```
 
-During the provenance migration, `build_qemu_test/` remains a tracked legacy
-bundle until the clean-build proof succeeds. Do not treat it as current
-firmware: the provenance checks reject bundles that lack a matching manifest.
-The later migration step removes both generated bundle paths from Git only
-after production and QEMU outputs have been built and verified from a clean
-checkout.
+`build/` and `build_qemu_test/` are generated, untracked symlinks into
+`.artifacts/`. Each target is a sealed generation named by its canonical
+manifest identity. A directory that merely has the expected filenames is not a
+current image: every consumer verifies the complete member set, source digest,
+toolchain identity, and symlink generation while holding the physical-worktree
+artifact lock.
+
+For clarity, the earlier migration note that “`build_qemu_test/` remains a
+tracked legacy bundle until the clean-build proof succeeds” is historical; the
+clean-build proof and untracking are complete, so that sentence no longer
+describes the checkout.
 
 **Independent crates, no virtual workspace.** A workspace containing both
 a `build-std` xtensa member and host members forces a default target on every
@@ -122,6 +127,18 @@ tools/build.sh                 # -> build/ and build_qemu_test/
 # into esp_app_desc and every build differs.
 tools/check_log_contract.sh
 
+# Provenance-safe inner loop. With no revision option, Git's complete dirty
+# tracked/untracked state is authoritative; positional paths are only
+# conservative hints and cannot hide other changes.
+tools/fast.sh
+tools/fast.sh --base main
+tools/fast.sh --range main..HEAD
+
+# Release gates. The normal and DEEP command lists remain the established,
+# fingerprinted sweeps; fast.sh does not replace either one.
+tools/sweep.sh
+DEEP=1 tools/sweep.sh
+
 # The UNMODIFIED equivalence gates, against the RUST image.
 IDF_IMAGE=esp32tap-rust:build tools/qemu_smoke.sh
 tools/run_harness.sh            # S8 (below) + -m "not net": S1-S7 + S6 x2 + encoders = 15
@@ -166,6 +183,48 @@ straight: the recipe SHA-256 is not the Docker image ID. A changed recipe or
 component lock intentionally rejects the old image with a command to rebuild
 it; changing ordinary firmware source invalidates the artifact input digest,
 not the toolchain image.
+
+The supported setup is `tools/build_image.sh` followed by `tools/build.sh`; do
+not use an ad-hoc image with the same mutable tag. `tools/fast.sh` verifies the
+selected production or QEMU generation before starting a firmware gate. Exit
+20 (missing) or 21 (stale) permits exactly one rebuild in that invocation,
+followed by verification. Exit 22 (invalid) or 23 (internal failure) stops
+without trying to disguise the problem as staleness. To repair an ordinary
+source or recipe change explicitly, rebuild the image when the image check asks
+for it, then run `tools/build.sh`. Do not delete shared Cargo caches or hand-edit
+`.artifacts/`.
+
+### Fast-loop benchmark contract
+
+Timing acceptance is evaluated only from a canonical JSON record set:
+
+```bash
+python3 tools/benchmark_fast.py evaluate .bench/acceptance.json
+```
+
+The file contains `version`, the exact Task 0 `baseline_command`, an explicit
+`candidate_command`, and `samples`. Every sample records its dataset, role,
+explicit argv array, commit SHA, start load averages, wall time, exit status,
+retry count, artifact identity, pair index, physical worktree, and (for cold
+builds) target-cache path. JSON keys and types are exact, duplicate keys and
+non-canonical serialization are rejected, and the input is bounded to 4 MiB.
+The executable never interprets a shell command and never clears
+`/tmp/rustcargo`.
+
+Collect five direct missing-manifest rejections (exit 20) and five direct stale
+input-digest rejections (exit 21), ten host-only samples, then ten alternating
+warm baseline/candidate pairs. Collect three more cold pairs in six distinct
+detached worktrees so their physical-worktree-keyed target caches are new and
+distinct; remove those worktrees only after recording their paths and results.
+Each pair's starting one-minute loads must be within 20%. The evaluator uses
+the exact nearest-rank p95 and ordinary median and fails on an unexpected exit,
+any retry, a missing sample, or a reused cold path. Acceptance requires
+provenance-rejection p95 below 1 second, host p95 below 5 seconds, warm
+candidate firmware p95 below 30 seconds, and candidate median no more than half
+the broad baseline median, with all ten candidate runs passing without retry.
+The schema and a synthetic valid record set are executable documentation in
+`tools/test_benchmark_fast.py`. No timing claim is made here until the
+controlled Task 11 measurements pass this evaluator.
 
 `IDF_REF=v5.5.4` is a **hard requirement**, not hygiene: the
 `espressif/idf:release-v5.5` tag tracks a branch, and IDF commit `b70607c08b7`
