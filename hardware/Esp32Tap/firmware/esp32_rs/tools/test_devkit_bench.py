@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import datetime as datetime_module
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -22,6 +24,7 @@ REAL_BUNDLE = (
 SERIAL = provenance.DEVKIT_REQUIRED_SERIAL_DEVICE
 MAC = "94:a9:90:db:b0:e4"
 RECIPE = "3eface3e5da39749183f11b9b7c6d8ed72b659dc3c69fa95bc7aad735e077c8b"
+IDENTITY = bench.SerialIdentity("/dev/ttyUSB0", 188, "4cd513")
 
 
 @pytest.fixture
@@ -239,6 +242,20 @@ def test_serial_must_be_byte_exact_and_same_character_device() -> None:
         bench.require_same_serial(SERIAL, identity, inspect=lambda _path: changed)
 
 
+def test_other_otherwise_valid_by_id_path_is_refused_before_inspection() -> None:
+    other = SERIAL.replace("4cd513f253bff0119bc5c57948e9de0f", "aaaaaaaaaaaaaaaa")
+    inspected = False
+
+    def inspect(_path: str) -> bench.SerialIdentity:
+        nonlocal inspected
+        inspected = True
+        return IDENTITY
+
+    with pytest.raises(bench.BenchError, match="byte-exact"):
+        bench.require_serial(other, SERIAL, inspect=inspect)
+    assert not inspected
+
+
 class FakeRunner:
     def __init__(self, *, chip="ESP32-S3", mac=MAC, size="8MB") -> None:
         self.chip = chip
@@ -271,7 +288,9 @@ def test_board_probe_rejects_wrong_chip_mac_or_flash(
     runner: FakeRunner, match: str
 ) -> None:
     with pytest.raises(bench.BenchError, match=match):
-        bench.probe_board(SERIAL, MAC, runner=runner)
+        bench.probe_board(
+            SERIAL, MAC, IDENTITY, runner=runner, inspect=lambda _path: IDENTITY
+        )
     assert all(isinstance(call, list) for call in runner.calls)
 
 
@@ -293,7 +312,9 @@ def test_board_probe_accepts_exact_esptool_5_3_1_transcript() -> None:
             )
         return "Detected flash size: 8MB\n"
 
-    bench.probe_board(SERIAL, MAC, runner=runner)
+    bench.probe_board(
+        SERIAL, MAC, IDENTITY, runner=runner, inspect=lambda _path: IDENTITY
+    )
 
 
 def test_board_probe_rejects_any_conflicting_duplicate_mac() -> None:
@@ -305,7 +326,24 @@ def test_board_probe_rejects_any_conflicting_duplicate_mac() -> None:
         return "Detected flash size: 8MB\n"
 
     with pytest.raises(bench.BenchError, match="MAC"):
-        bench.probe_board(SERIAL, MAC, runner=runner)
+        bench.probe_board(
+            SERIAL, MAC, IDENTITY, runner=runner, inspect=lambda _path: IDENTITY
+        )
+
+
+def test_board_probe_rechecks_serial_identity_before_every_action() -> None:
+    changed = bench.SerialIdentity("/dev/ttyUSB1", 189, "different")
+    states = iter([IDENTITY, changed])
+    runner = FakeRunner()
+    with pytest.raises(bench.BenchError, match="changed"):
+        bench.probe_board(
+            SERIAL,
+            MAC,
+            IDENTITY,
+            runner=runner,
+            inspect=lambda _path: next(states),
+        )
+    assert [call[-1] for call in runner.calls] == ["chip-id"]
 
 
 def secure_dir(path: Path) -> None:
@@ -439,6 +477,44 @@ def test_backup_stays_private_under_permissive_umask_and_rejects_mutation(
             runner=mutating_runner,
             inspect=lambda _path: identity,
         )
+
+
+def test_backup_receipt_collision_preserves_preexisting_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "backups"
+    secure_dir(directory)
+    verified = bench.verify_bundle(REAL_BUNDLE)
+    real_datetime = datetime_module.datetime
+
+    class FixedDateTime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 7, 31, 12, 34, 56, tzinfo=tz)
+
+    monkeypatch.setattr(bench.dt, "datetime", FixedDateTime)
+    receipt = directory / "factory-20260731T123456Z-8mb.receipt.json"
+    receipt.write_bytes(b"pre-existing receipt\n")
+    receipt.chmod(0o600)
+    runner = FakeRunner()
+
+    def writing_runner(argv: list[str], *, timeout: float) -> str:
+        if "read-flash" in argv:
+            Path(argv[-1]).write_bytes(b"x" * bench.FLASH_BYTES)
+            return "ok\n"
+        return runner(argv, timeout=timeout)
+
+    with pytest.raises(bench.BenchError, match="exists"):
+        bench.backup_board(
+            verified,
+            SERIAL,
+            MAC,
+            directory,
+            runner=writing_runner,
+            inspect=lambda _path: IDENTITY,
+        )
+    assert receipt.read_bytes() == b"pre-existing receipt\n"
+    assert not (directory / "factory-20260731T123456Z-8mb.bin").exists()
 
 
 STARTUP = [
@@ -669,6 +745,55 @@ def test_cold_monitor_requires_disappearance_and_same_usb_identity() -> None:
     )
 
 
+def test_cold_monitor_prompts_and_opens_within_five_seconds_of_restore() -> None:
+    states = iter([None, IDENTITY])
+    clock = TickClock()
+    output = io.StringIO()
+    opened_at: list[float] = []
+
+    def opener(_path: str):
+        opened_at.append(clock.value)
+        return FakeSerial(STARTUP)
+
+    report = bench.cold_monitor_serial(
+        SERIAL,
+        RECIPE,
+        30,
+        IDENTITY,
+        inspect=lambda _path: next(states),
+        opener=opener,
+        output=output,
+        clock=clock,
+    )
+    assert output.getvalue().splitlines() == [
+        "REMOVE UART USB POWER",
+        "RESTORE UART USB POWER",
+    ]
+    assert opened_at and opened_at[0] < 5
+    assert report.terminal == "BRINGUP STAGE0 PASS"
+
+
+def test_cold_monitor_rejects_open_that_misses_five_second_settle() -> None:
+    states = iter([None, IDENTITY])
+    clock = TickClock()
+
+    def slow_opener(_path: str):
+        clock.sleep(5.01)
+        return FakeSerial(STARTUP)
+
+    with pytest.raises(bench.BenchError, match="5 second|settle"):
+        bench.cold_monitor_serial(
+            SERIAL,
+            RECIPE,
+            30,
+            IDENTITY,
+            inspect=lambda _path: next(states),
+            opener=slow_opener,
+            output=io.StringIO(),
+            clock=clock,
+        )
+
+
 def test_flash_requires_matching_receipt_before_write(
     tmp_path: Path, bundle: Path
 ) -> None:
@@ -702,3 +827,34 @@ def test_flash_requires_matching_receipt_before_write(
             runner=runner,
             inspect=lambda _p: identity,
         )
+
+
+def test_flash_rehashes_receipt_backup_immediately_after_probes(
+    tmp_path: Path, bundle: Path
+) -> None:
+    directory = tmp_path / "backups"
+    secure_dir(directory)
+    raw = directory / "factory.bin"
+    make_backup(raw)
+    receipt = directory / "factory.receipt.json"
+    bench.write_receipt(raw, receipt, MAC, timestamp="2026-07-31T12:34:56Z")
+    verified = bench.verify_bundle(bundle)
+    runner = FakeRunner()
+
+    def mutating_runner(argv: list[str], *, timeout: float) -> str:
+        result = runner(argv, timeout=timeout)
+        if argv[-1] == "flash-id":
+            with raw.open("r+b") as output:
+                output.write(b"changed")
+        return result
+
+    with pytest.raises(bench.BenchError, match="hash"):
+        bench.authorize_and_flash(
+            verified,
+            SERIAL,
+            receipt,
+            MAC,
+            runner=mutating_runner,
+            inspect=lambda _path: IDENTITY,
+        )
+    assert not any("write-flash" in call for call in runner.calls)

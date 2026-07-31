@@ -552,17 +552,21 @@ def run_esptool(argv: list[str], *, timeout: float) -> str:
 def probe_board(
     serial_path: str,
     expected_mac: str,
+    identity: SerialIdentity,
     *,
     runner: Callable[..., str] = run_esptool,
+    inspect: Callable[[str], SerialIdentity] = inspect_serial,
 ) -> None:
     if not _MAC.fullmatch(expected_mac):
         raise BenchError("expected MAC must be lowercase canonical form")
     prefix = [ESPTOOL, "--chip", "esp32s3", "--port", serial_path]
+    require_same_serial(serial_path, identity, inspect=inspect)
     chip = runner([*prefix, "chip-id"], timeout=30)
     if not re.search(
         r"(?m)^(?:Chip is[ \t]+|Chip type:[ \t]+)ESP32-S3(?:[ \t(]|$)", chip
     ):
         raise BenchError("connected chip is not ESP32-S3")
+    require_same_serial(serial_path, identity, inspect=inspect)
     mac_output = runner([*prefix, "read-mac"], timeout=30)
     mac_lines = [line for line in mac_output.splitlines() if line.startswith("MAC:")]
     matches = [
@@ -575,6 +579,7 @@ def probe_board(
         or any(match.group(1) != expected_mac for match in matches if match is not None)
     ):
         raise BenchError("connected board MAC does not match authorization")
+    require_same_serial(serial_path, identity, inspect=inspect)
     flash = runner([*prefix, "flash-id"], timeout=30)
     sizes = re.findall(r"(?mi)^Detected flash size:\s*([^\s]+)\s*$", flash)
     if sizes != ["8MB"]:
@@ -844,7 +849,7 @@ def validate_receipt(receipt_path: Path, *, expected_mac: str | None = None) -> 
     return Receipt(backup, value["mac"], FLASH_BYTES, digest, value["created_at"])
 
 
-def _create_backup_file(path: Path) -> None:
+def _create_backup_file(path: Path) -> tuple[int, int]:
     try:
         fd = os.open(
             path,
@@ -852,11 +857,27 @@ def _create_backup_file(path: Path) -> None:
             0o600,
         )
         os.fchmod(fd, 0o600)
+        opened = os.fstat(fd)
         os.close(fd)
     except FileExistsError as exc:
         raise BenchError("backup already exists; refusing to overwrite") from exc
     except OSError as exc:
         raise BenchError(f"cannot create backup: {exc}") from exc
+    return opened.st_dev, opened.st_ino
+
+
+def _unlink_created_file(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        stat.S_ISREG(current.st_mode)
+        and current.st_nlink == 1
+        and current.st_uid == os.geteuid()
+        and (current.st_dev, current.st_ino) == identity
+    ):
+        path.unlink()
 
 
 def backup_board(
@@ -869,13 +890,19 @@ def backup_board(
     inspect: Callable[[str], SerialIdentity] = inspect_serial,
 ) -> tuple[Path, Path]:
     identity = require_serial(serial_path, verified.serial_path, inspect=inspect)
-    probe_board(serial_path, expected_mac, runner=runner)
+    probe_board(
+        serial_path,
+        expected_mac,
+        identity,
+        runner=runner,
+        inspect=inspect,
+    )
     backup_dir = _bounded_path(backup_dir, "backup directory").absolute()
     _require_secure_directory(backup_dir)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     raw = backup_dir / f"factory-{stamp}-8mb.bin"
     receipt = backup_dir / f"factory-{stamp}-8mb.receipt.json"
-    _create_backup_file(raw)
+    raw_created = _create_backup_file(raw)
     try:
         require_same_serial(serial_path, identity, inspect=inspect)
         runner(
@@ -896,10 +923,7 @@ def backup_board(
         _require_private_file(raw, "backup", exact_size=FLASH_BYTES)
         write_receipt(raw, receipt, expected_mac)
     except Exception:
-        if receipt.exists():
-            receipt.unlink()
-        if raw.exists():
-            raw.unlink()
+        _unlink_created_file(raw, raw_created)
         raise
     return raw, receipt
 
@@ -915,8 +939,16 @@ def authorize_and_flash(
 ) -> None:
     identity = require_serial(serial_path, verified.serial_path, inspect=inspect)
     receipt = validate_receipt(receipt_path, expected_mac=expected_mac)
-    require_same_serial(serial_path, identity, inspect=inspect)
-    probe_board(serial_path, receipt.mac, runner=runner)
+    probe_board(
+        serial_path,
+        receipt.mac,
+        identity,
+        runner=runner,
+        inspect=inspect,
+    )
+    receipt_after_probe = validate_receipt(receipt_path, expected_mac=receipt.mac)
+    if not hmac.compare_digest(receipt.sha256, receipt_after_probe.sha256):
+        raise BenchError("backup hash changed after board probes")
     require_same_serial(serial_path, identity, inspect=inspect)
     runner(
         [
@@ -1192,6 +1224,60 @@ def wait_cold_cycle(
     raise BenchError("exact serial symlink did not reappear before timeout")
 
 
+def cold_monitor_serial(
+    serial_path: str,
+    recipe_id: str,
+    timeout: float,
+    original: SerialIdentity,
+    *,
+    inspect: Callable[[str], SerialIdentity | None],
+    opener: Callable[[str], object] = _default_open,
+    output=sys.stdout,
+    clock: Clock = SystemClock(),
+) -> StartupReport:
+    if not 0 < timeout <= 600:
+        raise BenchError("cold-monitor timeout is out of bounds")
+    deadline = clock.monotonic() + timeout
+    print("REMOVE UART USB POWER", file=output, flush=True)
+    while clock.monotonic() < deadline:
+        current = inspect(serial_path)
+        if current is None:
+            break
+        if current != original:
+            raise BenchError("serial device changed before power removal")
+        clock.sleep(0.05)
+    else:
+        raise BenchError("exact serial symlink did not disappear")
+
+    print("RESTORE UART USB POWER", file=output, flush=True)
+    while clock.monotonic() < deadline:
+        current = inspect(serial_path)
+        if current is None:
+            clock.sleep(0.05)
+            continue
+        if current != original:
+            raise BenchError("reconnected device changed USB serial identity")
+        reappeared_at = clock.monotonic()
+        break
+    else:
+        raise BenchError("exact serial symlink did not reappear before timeout")
+
+    open_deadline = min(deadline, reappeared_at + 5.0)
+    if clock.monotonic() >= open_deadline:
+        raise BenchError("missed the 5 second cold-monitor settle window")
+    port = opener(serial_path)
+    try:
+        if clock.monotonic() > open_deadline:
+            raise BenchError("serial open missed the 5 second settle window")
+        remaining = deadline - clock.monotonic()
+        if remaining <= 0:
+            raise BenchError("cold-monitor total timeout expired before capture")
+        _neutral(port)
+        return capture_startup(port, recipe_id, remaining, clock=clock)
+    finally:
+        port.close()
+
+
 def _wait_any_terminal(port, timeout: float, *, clock: Clock = SystemClock()) -> None:
     capture_startup(port, None, timeout, clock=clock)
 
@@ -1297,21 +1383,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"PASS recipe={args.recipe_id} mac={report.mac}")
     elif args.command == "cold-monitor":
         original = require_serial(args.serial, DEVKIT_SERIAL)
-        _cold_confirmation(args.serial)
-        wait_cold_cycle(
+        report = cold_monitor_serial(
             args.serial,
-            original,
+            args.recipe_id,
             args.timeout,
+            original,
             inspect=lambda path: _inspect_optional(path),
         )
-        port = _default_open(args.serial)
-        try:
-            _neutral(port)
-            report = capture_startup(
-                port, args.recipe_id, min(args.timeout, 30), clock=SystemClock()
-            )
-        finally:
-            port.close()
         print(f"PASS cold recipe={args.recipe_id} mac={report.mac}")
     else:
         identity = require_serial(args.serial, DEVKIT_SERIAL)
@@ -1335,17 +1413,6 @@ def _inspect_optional(path: str) -> SerialIdentity | None:
         if "absent" in str(exc):
             return None
         raise
-
-
-def _cold_confirmation(serial_path: str) -> None:
-    print(
-        f"Remove exact UART USB {serial_path}, then type REMOVED: ",
-        end="",
-        flush=True,
-    )
-    raw = sys.stdin.buffer.readline(33)
-    if raw != b"REMOVED\n":
-        raise BenchError("cold-monitor confirmation must be exactly REMOVED")
 
 
 if __name__ == "__main__":
