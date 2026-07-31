@@ -33,7 +33,7 @@ EXACT_BROAD_COMMAND = (
     "-n",
     "3",
 )
-EXACT_CANDIDATE_COMMAND = ("bash", "tools/fast.sh", "--base", "HEAD~1")
+EXACT_CANDIDATE_COMMAND = ("tools/fast.sh", "--base", "HEAD~1")
 EXACT_HOST_COMMAND = (
     "cargo",
     "test",
@@ -200,7 +200,9 @@ def _sample(value: object, index: int) -> dict[str, object]:
     retry_count = _strict_int(
         value["retry_count"], f"sample {index} retry count"
     )
-    no_artifact_expected = dataset in {"provenance", "host"}
+    no_artifact_expected = dataset == "host" or (
+        dataset == "provenance" and role == "missing"
+    )
     raw_artifact = value["artifact_identity"]
     if raw_artifact is None:
         if not no_artifact_expected:
@@ -361,6 +363,7 @@ def evaluate_document(document: object) -> dict[str, object]:
         raise ContractError("provenance requires exactly five missing samples")
     if sum(sample["role"] == "stale" for sample in provenance) != 5:
         raise ContractError("provenance requires exactly five stale samples")
+    stale_identities: dict[str, set[str]] = {}
     for index, sample in enumerate(provenance):
         expected = 20 if sample["role"] == "missing" else 21
         label = "missing" if expected == 20 else "stale"
@@ -388,6 +391,10 @@ def evaluate_document(document: object) -> dict[str, object]:
             raise ContractError(
                 f"provenance sample {index} kind must map to its exact public bundle"
             )
+        if sample["role"] == "stale":
+            identity = sample["artifact_identity"]
+            assert isinstance(identity, str)
+            stale_identities.setdefault(kind, set()).add(identity)
         if sample["exit_status"] != expected:
             raise ContractError(
                 f"provenance sample {index} must be recognized {label} exit {expected}"
@@ -395,6 +402,11 @@ def evaluate_document(document: object) -> dict[str, object]:
         if sample["retry_count"] != 0:
             raise ContractError(
                 f"provenance sample {index} retry count must be zero"
+            )
+    for kind, identities in stale_identities.items():
+        if len(identities) != 1:
+            raise ContractError(
+                f"provenance stale {kind} identity must be stable within its cohort"
             )
     provenance_p95 = nearest_rank(
         [float(sample["duration_seconds"]) for sample in provenance], 0.95

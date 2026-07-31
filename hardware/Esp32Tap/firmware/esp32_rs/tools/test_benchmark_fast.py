@@ -32,7 +32,7 @@ BROAD = [
     "-n",
     "3",
 ]
-CANDIDATE = ["bash", "tools/fast.sh", "--base", "HEAD~1"]
+CANDIDATE = ["tools/fast.sh", "--base", "HEAD~1"]
 HOST = [
     "cargo",
     "test",
@@ -96,12 +96,14 @@ def record(
         command = BROAD if role == "baseline" else CANDIDATE
     if role in {"baseline", "candidate"}:
         artifact_number = 1 if role == "baseline" else 2
+    elif role == "stale":
+        artifact_number = 3 if kind == "qemu-test" else 4
     else:
         artifact_number = 3
     return {
         "artifact_identity": (
             None
-            if dataset in {"provenance", "host"}
+            if role == "missing" or dataset == "host"
             else f"sha256:{artifact_number:064x}"
         ),
         "command": command,
@@ -382,7 +384,7 @@ def test_commands_are_arrays_and_broad_command_is_exact() -> None:
         evaluate(document)
 
     document = passing_document()
-    document["candidate_command"] = ["tools/fast.sh", "--base", "HEAD~1"]
+    document["candidate_command"] = ["bash", "tools/fast.sh", "--base", "HEAD~1"]
     with pytest.raises(benchmark_fast.ContractError, match="exact fast runner"):
         evaluate(document)
 
@@ -468,14 +470,33 @@ def test_schema_is_exact_and_scalar_types_are_strict() -> None:
         evaluate(document)
 
 
-def test_provenance_and_host_artifact_identity_is_exactly_absent() -> None:
+def test_missing_and_host_identity_is_absent_but_stale_identity_is_required() -> None:
     document = passing_document()
     missing = next(sample for sample in document["samples"] if sample["role"] == "missing")
     assert missing["artifact_identity"] is None
     stale = next(sample for sample in document["samples"] if sample["role"] == "stale")
-    assert stale["artifact_identity"] is None
-    stale["artifact_identity"] = "sha256:" + "3" * 64
+    assert stale["artifact_identity"] is not None
+    stale["artifact_identity"] = None
     with pytest.raises(benchmark_fast.ContractError, match="artifact_identity"):
+        evaluate(document)
+
+    document = passing_document()
+    missing = next(sample for sample in document["samples"] if sample["role"] == "missing")
+    missing["artifact_identity"] = "sha256:" + "3" * 64
+    with pytest.raises(benchmark_fast.ContractError, match="artifact_identity"):
+        evaluate(document)
+
+
+def test_stale_identity_is_stable_within_each_artifact_kind() -> None:
+    document = passing_document()
+    stale_qemu = [
+        sample
+        for sample in document["samples"]
+        if sample["role"] == "stale" and sample["command"][6] == "qemu-test"
+    ]
+    assert len(stale_qemu) > 1
+    stale_qemu[0]["artifact_identity"] = "sha256:" + "f" * 64
+    with pytest.raises(benchmark_fast.ContractError, match="stale qemu-test identity"):
         evaluate(document)
 
 

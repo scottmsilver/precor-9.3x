@@ -206,15 +206,17 @@ python3 tools/benchmark_fast.py evaluate .bench/acceptance.json
 
 The file contains `version`, the exact Task 0 `baseline_command`, an explicit
 `candidate_command`, and `samples`. The baseline is the exact Task 0 reviewer
-argv; the candidate is exactly `bash tools/fast.sh --base HEAD~1` from
-`esp32_rs/`; the host samples use the full repository-relative `program_core`
-Cargo argv. Every sample records its dataset, role, explicit argv array, commit
-SHA, start load averages, wall time, exit status, retry count, pair index,
-physical worktree, and (for firmware samples) artifact identity. Provenance and
-host identity fields are explicitly null. JSON keys and types are exact,
-duplicate keys and non-canonical serialization are rejected, and the input is
-bounded to 4 MiB. The executable never interprets a shell command and never
-clears `/tmp/rustcargo`.
+argv; the candidate is exactly `tools/fast.sh --base HEAD~1` from `esp32_rs/`;
+the host samples use the full repository-relative `program_core` Cargo argv.
+Every sample records its dataset, role, explicit argv array, commit SHA, start
+load averages, wall time, exit status, retry count, pair index, physical
+worktree, and artifact identity when one exists. Missing-provenance and host
+identity fields are explicitly null. A stale-provenance record names the
+retained bundle identity, which must remain stable within each production or
+QEMU-test cohort. JSON keys and types are exact, duplicate keys and
+non-canonical serialization are rejected, and the input is bounded to 4 MiB.
+The executable never interprets a shell command and never clears
+`/tmp/rustcargo`.
 
 Collect five direct missing-manifest rejections (exit 20) and five direct stale
 input-digest rejections (exit 21), ten host-only samples, then ten alternating
