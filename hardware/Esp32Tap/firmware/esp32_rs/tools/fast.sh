@@ -6,6 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd -P)"
 exec /usr/bin/python3 - "$HERE" "$@" <<'PY'
 from __future__ import annotations
 
+import ctypes
 import json
 import importlib.util
 import os
@@ -53,6 +54,10 @@ esp32_rs = tools.parent
 current_child: subprocess.Popen[bytes] | None = None
 received_signal: int | None = None
 keep_logs = False
+WATCHED_SIGNALS = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)
+original_handlers = {
+    watched: signal.getsignal(watched) for watched in WATCHED_SIGNALS
+}
 
 
 def clean_environment() -> dict[str, str]:
@@ -111,20 +116,28 @@ if (
     print("fast: private log directory validation failed", file=sys.stderr)
     raise SystemExit(23)
 
+# Adopt orphaned descendants so command cleanup can reap an entire process
+# group even when its original leader exits before its children.
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:  # Linux PR_SET_CHILD_SUBREAPER
+    error = ctypes.get_errno()
+    print(f"fast: cannot become child subreaper: errno {error}", file=sys.stderr)
+    raise SystemExit(23)
+
 
 def handle_signal(signum: int, _frame: object) -> None:
     global received_signal
     if received_signal is None:
         received_signal = signum
     child = current_child
-    if child is not None and child.poll() is None:
+    if child is not None:
         try:
             os.killpg(child.pid, signum)
         except ProcessLookupError:
             pass
 
 
-for watched in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+for watched in WATCHED_SIGNALS:
     signal.signal(watched, handle_signal)
 
 
@@ -145,20 +158,55 @@ def safe_log(label: str, suffix: str = "log") -> Path:
 
 
 def terminate(process: subprocess.Popen[bytes], signum: int = signal.SIGTERM) -> None:
-    if process.poll() is not None:
-        return
+    process_group = process.pid
+    term_delivered = False
     try:
-        os.killpg(process.pid, signum)
+        os.killpg(process_group, signum)
+        term_delivered = True
+    except ProcessLookupError:
+        pass
+
+    deadline = time.monotonic() + 1.0
+    while term_delivered and time.monotonic() < deadline:
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            break
+        process.poll()
+        time.sleep(0.02)
+
+    # Always issue the non-catchable group kill after the TERM grace. The
+    # leader may already be reaped while an inherited descendant remains.
+    try:
+        os.killpg(process_group, signal.SIGKILL)
     except ProcessLookupError:
         pass
     try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
         process.wait()
+    except ChildProcessError:
+        pass
+
+    reap_deadline = time.monotonic() + 1.0
+    while True:
+        reaped = False
+        while True:
+            try:
+                pid, _status = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                pid = 0
+            if pid <= 0:
+                break
+            reaped = True
+        try:
+            os.killpg(process_group, 0)
+            group_exists = True
+        except ProcessLookupError:
+            group_exists = False
+        if not group_exists and not reaped:
+            break
+        if time.monotonic() >= reap_deadline:
+            break
+        time.sleep(0.01)
 
 
 def run_command(
@@ -242,7 +290,7 @@ def run_command(
             return_code = current_child.returncode
             status = return_code if return_code is not None and return_code >= 0 else 23
     finally:
-        if current_child is not None and current_child.poll() is None:
+        if current_child is not None:
             terminate(current_child)
         current_child = None
     elapsed = time.monotonic() - started
@@ -491,30 +539,107 @@ def verification_argv(kind: str) -> list[str]:
     ]
 
 
-IDENTITY_READER = r'''
-# FAST_IDENTITY_READER
+GATE_WRAPPER = r'''
+# FAST_GATE_IDENTITY_WRAPPER
 import json, os, re, stat, sys
-kind = sys.argv[sys.argv.index("--fast-identity") + 1]
-bundle = sys.argv[sys.argv.index("--fast-identity") + 2]
-path = os.path.join(bundle, "artifact-manifest.json")
-fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+
+report_index = sys.argv.index("--fast-gate-report")
+bundles_index = sys.argv.index("--fast-gate-bundles")
+separator = sys.argv.index("--", bundles_index + 2)
+report = sys.argv[report_index + 1]
+raw_bundles = sys.argv[bundles_index + 1]
+command = sys.argv[separator + 1:]
+if not command or not command[0]:
+    raise SystemExit(22)
 try:
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
-        raise SystemExit(22)
-    raw = os.read(fd, info.st_size + 1)
-finally:
-    os.close(fd)
-value = json.loads(raw)
-identity = value.get("manifest_sha256")
+    bundles = json.loads(raw_bundles)
+except json.JSONDecodeError:
+    raise SystemExit(22)
 if (
-    value.get("kind") != kind
-    or not isinstance(identity, str)
-    or re.fullmatch(r"[0-9a-f]{64}", identity) is None
-    or os.path.basename(os.readlink(bundle)) != identity
+    not isinstance(bundles, dict)
+    or not bundles
+    or any(
+        not isinstance(kind, str)
+        or not isinstance(bundle, str)
+        or kind not in ("production", "qemu-test")
+        for kind, bundle in bundles.items()
+    )
 ):
     raise SystemExit(22)
-print(kind, identity)
+canonical_bundles = json.dumps(
+    bundles, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+)
+if raw_bundles != canonical_bundles:
+    raise SystemExit(22)
+
+identities = {}
+for kind, bundle in bundles.items():
+    path = os.path.join(bundle, "artifact-manifest.json")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_nlink != 1
+            or info.st_size > 1024 * 1024
+        ):
+            raise SystemExit(22)
+        chunks = []
+        remaining = info.st_size + 1
+        while remaining:
+            block = os.read(fd, min(64 * 1024, remaining))
+            if not block:
+                break
+            chunks.append(block)
+            remaining -= len(block)
+        raw = b"".join(chunks)
+    finally:
+        os.close(fd)
+    if len(raw) != info.st_size:
+        raise SystemExit(22)
+    try:
+        value = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError):
+        raise SystemExit(22)
+    if not isinstance(value, dict):
+        raise SystemExit(22)
+    identity = value.get("manifest_sha256")
+    if (
+        value.get("kind") != kind
+        or not isinstance(identity, str)
+        or re.fullmatch(r"[0-9a-f]{64}", identity) is None
+        or os.path.basename(os.readlink(bundle)) != identity
+    ):
+        raise SystemExit(22)
+    identities[kind] = identity
+
+encoded = (
+    json.dumps(identities, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    + "\n"
+).encode("ascii")
+flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+report_fd = os.open(report, flags)
+try:
+    opened = os.fstat(report_fd)
+    lexical = os.lstat(report)
+    if (
+        not stat.S_ISREG(opened.st_mode)
+        or not stat.S_ISREG(lexical.st_mode)
+        or opened.st_nlink != 1
+        or opened.st_uid != os.geteuid()
+        or (opened.st_dev, opened.st_ino) != (lexical.st_dev, lexical.st_ino)
+    ):
+        raise SystemExit(22)
+    view = memoryview(encoded)
+    while view:
+        written = os.write(report_fd, view)
+        if written <= 0:
+            raise SystemExit(22)
+        view = view[written:]
+    os.fsync(report_fd)
+finally:
+    os.close(report_fd)
+os.execvp(command[0], command)
 '''
 
 
@@ -533,6 +658,60 @@ def leased_prefix(kinds: list[str]) -> list[str]:
         result.extend(("--kind", kind))
     result.append("--")
     return result
+
+
+def read_gate_identities(
+    report: Path, expected_kinds: list[str]
+) -> dict[str, str]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(report, flags)
+    try:
+        opened = os.fstat(descriptor)
+        lexical = report.lstat()
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(lexical.st_mode)
+            or opened.st_nlink != 1
+            or opened.st_uid != os.geteuid()
+            or (opened.st_dev, opened.st_ino)
+            != (lexical.st_dev, lexical.st_ino)
+            or opened.st_size > 1024 * 1024
+        ):
+            raise ValueError("gate identity report is not one safe regular file")
+        chunks: list[bytes] = []
+        remaining = opened.st_size + 1
+        while remaining:
+            block = os.read(descriptor, min(64 * 1024, remaining))
+            if not block:
+                break
+            chunks.append(block)
+            remaining -= len(block)
+        raw = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    if len(raw) != opened.st_size:
+        raise ValueError("gate identity report changed while reading")
+    try:
+        text = raw.decode("ascii")
+        value = json.loads(text, object_pairs_hook=unique_object)
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("gate identity report is malformed") from exc
+    expected = [KIND_MAP[kind][0] for kind in expected_kinds]
+    if (
+        not isinstance(value, dict)
+        or sorted(value) != sorted(expected)
+        or any(
+            not isinstance(identity, str) or not HEX64.fullmatch(identity)
+            for identity in value.values()
+        )
+        or text
+        != json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        )
+        + "\n"
+    ):
+        raise ValueError("gate identity report does not match leased kinds")
+    return value
 
 
 def finish(status: int) -> int:
@@ -655,53 +834,48 @@ def main() -> int:
             if status != 0:
                 return finish(status)
 
-    identities: dict[str, str] = {}
-    for kind in kinds:
-        provenance_kind, public_name, _only = KIND_MAP[kind]
-        command = [
-            *leased_prefix([kind]),
-            sys.executable,
-            "-c",
-            IDENTITY_READER,
-            "--fast-identity",
-            provenance_kind,
-            os.fspath(esp32_rs / public_name),
-        ]
-        status, output, _log = run_command(
-            command,
-            cwd=root,
-            label=f"identity-{kind}",
-            timeout=VERIFY_TIMEOUT,
-            capture_limit=1024 * 1024,
-        )
-        if status != 0:
-            return finish(status)
-        try:
-            text = output.decode("ascii")
-            expected_prefix = f"{provenance_kind} "
-            if not text.startswith(expected_prefix) or not text.endswith("\n"):
-                raise ValueError
-            identity = text[len(expected_prefix) : -1]
-            if not HEX64.fullmatch(identity):
-                raise ValueError
-        except (UnicodeDecodeError, ValueError):
-            print("fast: invalid leased artifact identity output", file=sys.stderr)
-            return finish(22)
-        identities[provenance_kind] = identity
-        print(f"FAST artifact={provenance_kind} id={identity}", flush=True)
-
     qemu_commands = selected["qemu_argv"]
     assert isinstance(qemu_commands, list)
     prefix = leased_prefix(kinds) if qemu_commands else []
+    bundles = {
+        KIND_MAP[kind][0]: os.fspath(esp32_rs / KIND_MAP[kind][1])
+        for kind in kinds
+    }
+    encoded_bundles = json.dumps(
+        bundles, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
     for index, argv in enumerate(qemu_commands, 1):
+        report = safe_log(f"qemu-{index}", "identity")
         status, _output, _log = run_command(
-            [*prefix, *argv],
+            [
+                *prefix,
+                sys.executable,
+                "-c",
+                GATE_WRAPPER,
+                "--fast-gate-report",
+                os.fspath(report),
+                "--fast-gate-bundles",
+                encoded_bundles,
+                "--",
+                *argv,
+            ],
             cwd=root,
             label=f"qemu-{index}",
             timeout=QEMU_TIMEOUT,
         )
         if status != 0:
             return finish(status)
+        try:
+            identities = read_gate_identities(report, kinds)
+        except (OSError, ValueError) as exc:
+            print(f"fast: invalid leased gate identity: {exc}", file=sys.stderr)
+            return finish(22)
+        for provenance_kind, identity in identities.items():
+            print(
+                f"FAST artifact={provenance_kind} id={identity} "
+                f"gate=qemu-{index}",
+                flush=True,
+            )
     print("FAST ALL GREEN", flush=True)
     return finish(0)
 
@@ -725,6 +899,20 @@ finally:
                 shutil.rmtree(log_root)
         except OSError:
             pass
+    # Keep the latch installed through cleanup. Block watched signals before
+    # restoring the caller's handlers so a cleanup-time delivery cannot be
+    # lost between the final status check and process exit.
+    signal.pthread_sigmask(signal.SIG_BLOCK, WATCHED_SIGNALS)
+    pending = signal.sigpending()
+    if received_signal is None:
+        received_signal = next(
+            (watched for watched in WATCHED_SIGNALS if watched in pending),
+            None,
+        )
+    for watched, original in original_handlers.items():
+        signal.signal(watched, original)
+    if received_signal is not None:
+        exit_status = 128 + received_signal
 
 raise SystemExit(exit_status)
 PY

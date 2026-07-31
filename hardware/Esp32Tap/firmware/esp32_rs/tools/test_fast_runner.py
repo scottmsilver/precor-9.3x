@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import re
 import shutil
 import signal
 import stat
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -116,7 +118,7 @@ if __name__ == "__main__":
     _write_executable(
         tools / "artifact_provenance.py",
         """#!/usr/bin/env python3
-import json, os, subprocess, sys
+import fcntl, json, os, subprocess, sys, time
 args = sys.argv[1:]
 with open(os.environ["EVENT_LOG"], "a", encoding="utf-8") as stream:
     stream.write(json.dumps(["provenance", *args]) + "\\n")
@@ -137,6 +139,17 @@ if operation == "verify":
     raise SystemExit(code)
 separator = args.index("--")
 command = args[separator + 1:]
+if "--fast-gate-report" in command and os.environ.get("BEFORE_GATE_READY"):
+    open(os.environ["BEFORE_GATE_READY"], "w").close()
+    deadline = time.monotonic() + 10
+    while not os.path.exists(os.environ["BEFORE_GATE_CONTINUE"]):
+        if time.monotonic() >= deadline:
+            raise SystemExit(23)
+        time.sleep(0.01)
+lock = None
+if os.environ.get("FAKE_PROVENANCE_LOCK"):
+    lock = open(os.environ["FAKE_PROVENANCE_LOCK"], "a+")
+    fcntl.flock(lock, fcntl.LOCK_SH)
 if "--fast-identity" in command:
     if os.environ.get("REAL_IDENTITY_READER"):
         raise SystemExit(subprocess.run(command, env=os.environ).returncode)
@@ -144,7 +157,12 @@ if "--fast-identity" in command:
     identities = json.loads(os.environ["FAKE_IDENTITIES"])
     print(f"{kind} {identities[kind]}")
     raise SystemExit(0)
-raise SystemExit(subprocess.run(command, env=os.environ).returncode)
+try:
+    raise SystemExit(subprocess.run(command, env=os.environ).returncode)
+finally:
+    if lock is not None:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
 """,
     )
     _write_executable(
@@ -175,9 +193,39 @@ PY
     _write_executable(
         fake_bin / "fake-gate",
         """#!/usr/bin/env python3
-import json, os, sys, time
+import json, os, signal, subprocess, sys, time
 with open(os.environ["EVENT_LOG"], "a", encoding="utf-8") as stream:
     stream.write(json.dumps(["gate", *sys.argv[1:], os.getcwd()]) + "\\n")
+if "--orphan" in sys.argv:
+    pid_path = sys.argv[sys.argv.index("--orphan") + 1]
+    code = '''
+import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(sys.argv[1], "w").write(str(os.getpid()))
+while True:
+    time.sleep(1)
+'''
+    subprocess.Popen([sys.executable, "-c", code, pid_path])
+    deadline = time.monotonic() + 5
+    while not os.path.exists(pid_path):
+        if time.monotonic() >= deadline:
+            raise SystemExit(23)
+        time.sleep(0.01)
+    raise SystemExit(0)
+if "--barrier" in sys.argv:
+    ready = sys.argv[sys.argv.index("--barrier") + 1]
+    go = sys.argv[sys.argv.index("--barrier") + 2]
+    open(ready, "w").close()
+    deadline = time.monotonic() + 10
+    while not os.path.exists(go):
+        if time.monotonic() >= deadline:
+            raise SystemExit(23)
+        time.sleep(0.01)
+if "--consume-bundle" in sys.argv:
+    bundle = sys.argv[sys.argv.index("--consume-bundle") + 1]
+    identity = os.path.basename(os.readlink(bundle))
+    with open(os.environ["EVENT_LOG"], "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(["consume", identity]) + "\\n")
 if "--sleep" in sys.argv:
     time.sleep(60)
 fail = os.environ.get("FAIL_TOKEN")
@@ -200,6 +248,8 @@ raise SystemExit(int(os.environ.get("GATE_EXIT", "9")) if fail in sys.argv else 
             "VERIFY_STATE": os.fspath(tmp_path / "verify-state.json"),
         }
     )
+    _write_bundle(root, "production", IDENTITY["production"])
+    _write_bundle(root, "qemu-test", IDENTITY["qemu-test"])
     return root, environment
 
 
@@ -252,6 +302,38 @@ def _operations(events: list[list[object]]) -> list[str]:
     return result
 
 
+def _write_bundle(root: Path, kind: str, identity: str) -> Path:
+    store = "prod" if kind == "production" else "qemu"
+    public = "build" if kind == "production" else "build_qemu_test"
+    generation = root / RS / ".artifacts" / store / identity
+    generation.mkdir(parents=True, exist_ok=True)
+    (generation / "artifact-manifest.json").write_text(
+        json.dumps(
+            {"kind": kind, "manifest_sha256": identity},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n",
+        encoding="ascii",
+    )
+    link = root / RS / public
+    temporary = link.with_name(f".{public}.test-link")
+    if os.path.lexists(temporary):
+        temporary.unlink()
+    os.symlink(f".artifacts/{store}/{identity}", temporary)
+    os.replace(temporary, link)
+    return link
+
+
+def _wait_path(path: Path, timeout: float = 5) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.01)
+    pytest.fail(f"timed out waiting for {path}")
+
+
 def test_runner_exists_is_executable_and_parses_as_bash() -> None:
     assert RUNNER.is_file()
     assert stat.S_IMODE(RUNNER.stat().st_mode) == 0o755
@@ -276,7 +358,6 @@ def test_host_runs_before_provenance_and_valid_bundle_is_reused_under_lock(
         "selector",
         "gate:host",
         "provenance:verify",
-        "provenance:exec",
         "provenance:exec",
         "gate:qemu",
     ]
@@ -618,26 +699,10 @@ def test_leased_identity_reader_uses_real_manifest_bytes(
 ) -> None:
     root, _environment = fake_repo
     identity = IDENTITY["qemu-test"]
-    generation = root / RS / ".artifacts/qemu" / identity
-    generation.mkdir(parents=True)
-    (generation / "artifact-manifest.json").write_text(
-        json.dumps(
-            {
-                "kind": "qemu-test",
-                "manifest_sha256": identity,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n",
-        encoding="ascii",
-    )
-    os.symlink(
-        f".artifacts/qemu/{identity}",
-        root / RS / "build_qemu_test",
-    )
+    _write_bundle(root, "qemu-test", identity)
     selected = _selection(
         policies=["program-control"],
+        qemu=[["fake-gate", "qemu"]],
         artifacts=["qemu"],
     )
 
@@ -711,3 +776,220 @@ def test_signal_terminates_child_group_and_removes_private_log_directory(
     ]
     assert log_paths
     assert all(not path.parent.exists() for path in log_paths)
+
+
+def test_natural_leader_exit_kills_and_reaps_term_ignoring_grandchild(
+    fake_repo: tuple[Path, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    grandchild_pid = tmp_path / "grandchild.pid"
+    selection = _selection(
+        policies=["program-host"],
+        host=[["fake-gate", "host", "--orphan", os.fspath(grandchild_pid)]],
+    )
+    pid = None
+    try:
+        completed = _run(fake_repo, selection)
+        _wait_path(grandchild_pid)
+        pid = int(grandchild_pid.read_text(encoding="ascii"))
+
+        assert completed.returncode == 0, completed.stderr
+        assert not Path(f"/proc/{pid}").exists()
+    finally:
+        if pid is not None and Path(f"/proc/{pid}").exists():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_gate_reports_generation_published_after_preflight_before_gate_lease(
+    fake_repo: tuple[Path, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    root, base_environment = fake_repo
+    old_identity = "3" * 64
+    new_identity = "4" * 64
+    bundle = _write_bundle(root, "qemu-test", old_identity)
+    _write_bundle(root, "qemu-test", new_identity)
+    _write_bundle(root, "qemu-test", old_identity)
+    ready = tmp_path / "before-gate.ready"
+    go = tmp_path / "before-gate.continue"
+    selection = _selection(
+        policies=["program-control"],
+        qemu=[
+            [
+                "fake-gate",
+                "qemu",
+                "--consume-bundle",
+                os.fspath(bundle),
+            ]
+        ],
+        artifacts=["qemu"],
+    )
+    environment = dict(base_environment)
+    environment.update(
+        {
+            "SELECTOR_OUTPUT": json.dumps(
+                selection, sort_keys=True, separators=(",", ":")
+            )
+            + "\n",
+            "BEFORE_GATE_READY": os.fspath(ready),
+            "BEFORE_GATE_CONTINUE": os.fspath(go),
+        }
+    )
+    process = subprocess.Popen(
+        ["bash", os.fspath(root / RS / "tools/fast.sh")],
+        cwd=root.parent,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _wait_path(ready)
+    _write_bundle(root, "qemu-test", new_identity)
+    go.touch()
+    stdout, stderr = process.communicate(timeout=20)
+
+    assert process.returncode == 0, stderr
+    assert f"artifact=qemu-test id={new_identity}" in stdout
+    assert ["consume", new_identity] in _events(fake_repo)
+    assert ["consume", old_identity] not in _events(fake_repo)
+
+
+def test_publisher_cannot_swap_between_gate_identity_report_and_consumption(
+    fake_repo: tuple[Path, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    root, base_environment = fake_repo
+    old_identity = "5" * 64
+    new_identity = "6" * 64
+    bundle = _write_bundle(root, "qemu-test", old_identity)
+    _write_bundle(root, "qemu-test", new_identity)
+    _write_bundle(root, "qemu-test", old_identity)
+    gate_ready = tmp_path / "gate.ready"
+    gate_go = tmp_path / "gate.continue"
+    publisher_done = tmp_path / "publisher.done"
+    lock_path = tmp_path / "provenance.lock"
+    lock_path.touch()
+    selection = _selection(
+        policies=["program-control"],
+        qemu=[
+            [
+                "fake-gate",
+                "qemu",
+                "--barrier",
+                os.fspath(gate_ready),
+                os.fspath(gate_go),
+                "--consume-bundle",
+                os.fspath(bundle),
+            ]
+        ],
+        artifacts=["qemu"],
+    )
+    environment = dict(base_environment)
+    environment.update(
+        {
+            "SELECTOR_OUTPUT": json.dumps(
+                selection, sort_keys=True, separators=(",", ":")
+            )
+            + "\n",
+            "FAKE_PROVENANCE_LOCK": os.fspath(lock_path),
+        }
+    )
+    process = subprocess.Popen(
+        ["bash", os.fspath(root / RS / "tools/fast.sh")],
+        cwd=root.parent,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _wait_path(gate_ready)
+
+    def publish() -> None:
+        with lock_path.open("r+") as descriptor:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            _write_bundle(root, "qemu-test", new_identity)
+            publisher_done.touch()
+
+    publisher = threading.Thread(target=publish)
+    publisher.start()
+    time.sleep(0.2)
+    assert not publisher_done.exists()
+    assert Path(os.readlink(bundle)).name == old_identity
+    gate_go.touch()
+    stdout, stderr = process.communicate(timeout=20)
+    publisher.join(timeout=5)
+
+    assert process.returncode == 0, stderr
+    assert not publisher.is_alive()
+    assert f"artifact=qemu-test id={old_identity}" in stdout
+    assert ["consume", old_identity] in _events(fake_repo)
+    assert publisher_done.exists()
+    assert Path(os.readlink(bundle)).name == new_identity
+
+
+def test_signal_during_success_log_cleanup_overrides_zero_after_cleanup(
+    fake_repo: tuple[Path, dict[str, str]],
+    tmp_path: Path,
+) -> None:
+    root, base_environment = fake_repo
+    ready = tmp_path / "cleanup.ready"
+    go = tmp_path / "cleanup.continue"
+    custom = tmp_path / "site"
+    custom.mkdir()
+    (custom / "sitecustomize.py").write_text(
+        """
+import os
+from pathlib import Path
+import shutil
+import time
+
+original = shutil.rmtree
+def barrier(path, *args, **kwargs):
+    if Path(path).name.startswith("esp32tap-fast."):
+        Path(os.environ["CLEANUP_READY"]).touch()
+        deadline = time.monotonic() + 10
+        while not Path(os.environ["CLEANUP_CONTINUE"]).exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("cleanup barrier timed out")
+            time.sleep(0.01)
+    return original(path, *args, **kwargs)
+shutil.rmtree = barrier
+""",
+        encoding="utf-8",
+    )
+    selection = _selection(policies=["program-host"])
+    environment = dict(base_environment)
+    environment.update(
+        {
+            "SELECTOR_OUTPUT": json.dumps(
+                selection, sort_keys=True, separators=(",", ":")
+            )
+            + "\n",
+            "PYTHONPATH": os.fspath(custom),
+            "CLEANUP_READY": os.fspath(ready),
+            "CLEANUP_CONTINUE": os.fspath(go),
+        }
+    )
+    process = subprocess.Popen(
+        ["bash", os.fspath(root / RS / "tools/fast.sh")],
+        cwd=root.parent,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _wait_path(ready)
+    process.send_signal(signal.SIGTERM)
+    go.touch()
+    stdout, stderr = process.communicate(timeout=10)
+
+    assert process.returncode == 128 + signal.SIGTERM, (stdout, stderr)
+    log_roots = {
+        Path(value).parent
+        for value in re.findall(r'log="(/tmp/esp32tap-fast\.[^"]+)"', stdout)
+    }
+    assert log_roots
+    assert all(not path.exists() for path in log_roots)
