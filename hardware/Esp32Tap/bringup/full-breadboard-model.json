@@ -1,0 +1,182 @@
+{
+  "schema_version": 2,
+  "storage_key": "esp32tap-full-breadboard-builder-v2",
+  "identity": {
+    "name": "Esp32Tap full-breadboard relay builder",
+    "architecture": "full_breadboard"
+  },
+  "references": {
+    "g5v2": {
+      "url": "https://components.omron.com/sites/default/files/datasheet_pdf/K046-E1.pdf",
+      "retrieved": "2026-07-31"
+    },
+    "tps3700": {
+      "url": "https://www.ti.com/lit/ds/symlink/tps3700.pdf",
+      "retrieved": "2026-07-31"
+    },
+    "tps709": {
+      "url": "https://www.ti.com/lit/ds/symlink/tps709.pdf",
+      "retrieved": "2026-07-31"
+    },
+    "sn74ahc08": {
+      "url": "https://www.ti.com/lit/ds/symlink/sn74ahc08.pdf",
+      "retrieved": "2026-07-31"
+    },
+    "sn74ahc126": {
+      "url": "https://www.ti.com/lit/ds/symlink/sn74ahc126.pdf",
+      "retrieved": "2026-07-31"
+    },
+    "bc337": {
+      "url": "https://diotec.com/tl_files/diotec/files/pdf/datasheets/bc337.pdf",
+      "retrieved": "2026-07-31"
+    },
+    "2n7000": {
+      "url": "https://diotec.com/tl_files/diotec/files/pdf/datasheets/2n7000.pdf",
+      "retrieved": "2026-07-31"
+    },
+    "tsr1": {
+      "url": "https://www.tracopower.com/model/tsr-1-2433e",
+      "retrieved": "2026-07-31"
+    },
+    "p6ke": {
+      "url": "https://www.littelfuse.com/products/tvs-diodes/high-power-tvs-diodes/p6ke",
+      "retrieved": "2026-07-31"
+    },
+    "rxef": {
+      "url": "https://www.littelfuse.com/products/polyswitch-resettable-pptcs/radial-leaded/rxef",
+      "retrieved": "2026-07-31"
+    }
+  },
+  "tools": [],
+  "parts": [
+    {
+      "id": "devkit",
+      "source": "purchased",
+      "mpn": "ESP32-S3-DEVKITC-1-N8R8",
+      "quantity": 1
+    },
+    {
+      "id": "u_tps3700",
+      "source": "purchased",
+      "mpn": "TPS3700DDCR",
+      "quantity": 1,
+      "reference": "tps3700"
+    },
+    {
+      "id": "adapter_tps3700",
+      "source": "purchased",
+      "mpn": "LCQT-SOT23-6",
+      "quantity": 1
+    },
+    {
+      "id": "u_tps709",
+      "source": "purchased",
+      "mpn": "TPS70950DBVR",
+      "quantity": 1,
+      "reference": "tps709"
+    },
+    {
+      "id": "adapter_tps709",
+      "source": "purchased",
+      "mpn": "LCQT-SOT23-6",
+      "quantity": 1
+    },
+    {
+      "id": "u_ahc08",
+      "source": "purchased",
+      "mpn": "SN74AHC08N",
+      "quantity": 1,
+      "reference": "sn74ahc08"
+    },
+    {
+      "id": "u_ahc126",
+      "source": "purchased",
+      "mpn": "SN74AHC126N",
+      "quantity": 1,
+      "reference": "sn74ahc126"
+    },
+    {
+      "id": "k1",
+      "source": "purchased",
+      "mpn": "G5V-2 DC5",
+      "quantity": 1,
+      "reference": "g5v2"
+    },
+    {
+      "id": "q_relay",
+      "source": "purchased",
+      "mpn": "BC337-40",
+      "quantity": 1,
+      "reference": "bc337"
+    },
+    {
+      "id": "q_vbus",
+      "source": "purchased",
+      "mpn": "2N7000",
+      "quantity": 1,
+      "reference": "2n7000"
+    },
+    {
+      "id": "d_input",
+      "source": "purchased",
+      "mpn": "1N5822-TP",
+      "quantity": 1
+    },
+    {
+      "id": "d_coil_tvs",
+      "source": "purchased",
+      "mpn": "P6KE6.8CA",
+      "quantity": 1,
+      "reference": "p6ke"
+    },
+    {
+      "id": "f_input",
+      "source": "purchased",
+      "mpn": "RXEF075",
+      "quantity": 1,
+      "reference": "rxef"
+    },
+    {
+      "id": "d_input_tvs",
+      "source": "purchased",
+      "mpn": "P6KE12A-TP",
+      "quantity": 1,
+      "reference": "p6ke"
+    },
+    {
+      "id": "u_tsr",
+      "source": "purchased",
+      "mpn": "TSR 1-2433E",
+      "quantity": 1,
+      "reference": "tsr1"
+    },
+    {
+      "id": "breadboard",
+      "source": "operator_mapped",
+      "mpn": null,
+      "quantity": 1
+    },
+    {
+      "id": "j_console",
+      "source": "operator_mapped",
+      "mpn": null,
+      "quantity": 1
+    },
+    {
+      "id": "j_motor",
+      "source": "operator_mapped",
+      "mpn": null,
+      "quantity": 1
+    }
+  ],
+  "nodes": {},
+  "mapping_contracts": {},
+  "nets": {},
+  "items": [],
+  "temporary_configurations": {},
+  "limits": {},
+  "power_states": {},
+  "firmware_roles": {},
+  "phases": [],
+  "steps": []
+}
