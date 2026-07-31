@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import importlib.util
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -568,6 +569,130 @@ def test_strengthened_harness_and_smoke_are_exactly_sha_pinned():
     pinned, reason = verifier.SMOKE_STRENGTHENING
     assert pinned == hashlib.sha256((TOOLS / "qemu_smoke.sh").read_bytes()).hexdigest()
     assert "provenance" in reason.lower()
+
+
+@pytest.fixture
+def isolated_harness_verifier(tmp_path: Path, monkeypatch):
+    """Copy every verifier input so adversarial mutations never touch the tree."""
+    verifier = _load(
+        "task7_verify_harness_isolated",
+        TOOLS / "verify_harness_copy.py",
+    )
+    fixture_root = tmp_path / "fixture"
+    copy_dir = fixture_root / "rust-tools" / "qemu_harness"
+    live_dir = fixture_root / "cpp-tools" / "qemu_harness"
+    copy_dir.parent.mkdir(parents=True)
+    live_dir.parent.mkdir(parents=True)
+    shutil.copytree(TOOLS / "qemu_harness", copy_dir)
+    source_live = REPO_ROOT / "hardware/Esp32Tap/firmware/esp32/tools/qemu_harness"
+    shutil.copytree(source_live, live_dir)
+
+    rows = subprocess.run(
+        [
+            "git",
+            "ls-tree",
+            "-r",
+            "HEAD",
+            "hardware/Esp32Tap/firmware/esp32/tools/qemu_harness",
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    modes = {}
+    for row in rows:
+        metadata, path = row.split("\t", 1)
+        mode = metadata.split()[0]
+        name = Path(path).name
+        modes[name] = mode
+        physical_mode = int(mode[-3:], 8)
+        (copy_dir / name).chmod(physical_mode)
+        (live_dir / name).chmod(physical_mode)
+    names = sorted(modes)
+    head_blobs = {name: (source_live / name).read_bytes() for name in names}
+
+    rust_smoke = copy_dir.parent / "qemu_smoke.sh"
+    shutil.copy2(TOOLS / "qemu_smoke.sh", rust_smoke)
+    rust_smoke.chmod(0o755)
+    smoke_rel = Path(verifier.SMOKE_REL)
+    cpp_smoke = fixture_root / smoke_rel
+    cpp_smoke.parent.mkdir(parents=True, exist_ok=True)
+    source_cpp_smoke = REPO_ROOT / smoke_rel
+    shutil.copy2(source_cpp_smoke, cpp_smoke)
+    cpp_smoke.chmod(0o755)
+    smoke_blob = source_cpp_smoke.read_bytes()
+
+    monkeypatch.setattr(verifier, "HERE", copy_dir.parent)
+    monkeypatch.setattr(verifier, "REPO_ROOT", fixture_root)
+    monkeypatch.setattr(verifier, "COPY_DIR", copy_dir)
+    monkeypatch.setattr(verifier, "LIVE_DIR", live_dir)
+    monkeypatch.setattr(verifier, "head_files", lambda: names)
+    monkeypatch.setattr(verifier, "head_blob", lambda name: head_blobs[name])
+    monkeypatch.setattr(verifier, "head_blob_at", lambda _rel: smoke_blob)
+    monkeypatch.setattr(verifier, "head_modes", lambda: modes, raising=False)
+    monkeypatch.setattr(verifier, "head_mode_at", lambda _rel: "100755", raising=False)
+    return verifier, {
+        "copy_python": copy_dir / "conftest.py",
+        "copy_shell": copy_dir / "run.sh",
+        "live_python": live_dir / "conftest.py",
+        "live_shell": live_dir / "run.sh",
+        "rust_smoke": rust_smoke,
+        "cpp_smoke": cpp_smoke,
+    }
+
+
+@pytest.mark.parametrize(
+    "target_name",
+    (
+        "copy_python",
+        "copy_shell",
+        "live_python",
+        "live_shell",
+        "rust_smoke",
+        "cpp_smoke",
+    ),
+)
+@pytest.mark.parametrize("attack", ("symlink", "wrong_mode"))
+def test_harness_verifier_rejects_type_and_mode_before_hashing(
+    isolated_harness_verifier,
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+    target_name: str,
+    attack: str,
+):
+    verifier, targets = isolated_harness_verifier
+    target = targets[target_name]
+    original = target.read_bytes()
+    original_mode = stat.S_IMODE(target.lstat().st_mode)
+
+    if attack == "symlink":
+        relocated = tmp_path / f"relocated-{target_name}"
+        relocated.write_bytes(original)
+        relocated.chmod(original_mode)
+        target.unlink()
+        target.symlink_to(relocated)
+    else:
+        target.chmod(0o755 if original_mode == 0o644 else 0o644)
+
+    real_sha = verifier._sha
+
+    def forbid_target_hash(data: bytes) -> str:
+        assert data != original, f"{target_name} bytes were hashed before type/mode rejection"
+        return real_sha(data)
+
+    monkeypatch.setattr(verifier, "_sha", forbid_target_hash)
+    assert verifier.main() == 1
+    failure = capsys.readouterr().err
+    assert "TYPE/MODE" in failure
+
+    monkeypatch.setattr(verifier, "_sha", real_sha)
+    if target.is_symlink():
+        target.unlink()
+        target.write_bytes(original)
+    target.chmod(original_mode)
+    assert verifier.main() == 0
 
 
 def test_git_records_both_wrappers_as_executable_regular_files():

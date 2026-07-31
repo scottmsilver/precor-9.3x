@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import os
 import stat
 import subprocess
 import sys
@@ -121,15 +122,8 @@ ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
     ),
 }
 
-# The other committed gate script the Rust tree reuses. esp32_rs/tools/
-# qemu_smoke.sh is a SYMLINK to this exact file — not a copy at all, so LEG 1
-# is satisfied by construction and only the HEAD anchor needs checking.
-#
-# There used to be a SMOKE_ALLOWED pin here whose sha was the literal string
-# "@SMOKE_SHA@". It was unreachable (it is only consulted when live != HEAD,
-# which cannot happen for a read-only tier) and it would have failed closed
-# with a nonsense message if it ever had been reached. A byte-lock pinned to a
-# placeholder is not a byte-lock; the requirement is plain equality.
+# The Rust smoke path is a pinned executable provenance wrapper. Its delegated
+# C++ smoke gate remains a separately type/mode/byte-checked HEAD anchor.
 SMOKE_REL = "hardware/Esp32Tap/firmware/esp32/tools/qemu_smoke.sh"
 SMOKE_STRENGTHENING = (
     "b8f39bccbac85a5f051d7b34028c1de51d4a09b315713afe0b27bd7dbdd1abd0",
@@ -154,6 +148,24 @@ def head_files() -> list[str]:
     return sorted(Path(p).name for p in out)
 
 
+def head_modes() -> dict[str, str]:
+    rows = subprocess.run(
+        ["git", "ls-tree", "HEAD", f"{HEAD_DIR}/"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    result: dict[str, str] = {}
+    for row in rows:
+        metadata, path = row.split("\t", 1)
+        mode, object_type, _object_id = metadata.split()
+        if object_type != "blob" or mode not in {"100644", "100755"}:
+            raise RuntimeError(f"unsupported harness tree entry: {row}")
+        result[Path(path).name] = mode
+    return result
+
+
 def head_blob_at(rel: str) -> bytes:
     return subprocess.run(
         ["git", "show", f"HEAD:{rel}"],
@@ -161,6 +173,21 @@ def head_blob_at(rel: str) -> bytes:
         capture_output=True,
         check=True,
     ).stdout
+
+
+def head_mode_at(rel: str) -> str:
+    row = subprocess.run(
+        ["git", "ls-tree", "HEAD", rel],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    metadata, path = row.split("\t", 1)
+    mode, object_type, _object_id = metadata.split()
+    if path != rel or object_type != "blob" or mode not in {"100644", "100755"}:
+        raise RuntimeError(f"unsupported tracked entry: {row}")
+    return mode
 
 
 def head_blob(name: str) -> bytes:
@@ -182,33 +209,125 @@ def show_diff(base_text: str, derived_text: str, label: str, why: str, from_rel:
 
 def listing(d: Path) -> list[str]:
     return sorted(
-        p.name for p in d.iterdir() if p.name not in IGNORE_NAMES and not p.name.startswith(".") and p.is_file()
+        p.name
+        for p in d.iterdir()
+        if p.name not in IGNORE_NAMES and not p.name.startswith(".")
     )
+
+
+def _tracked_mode(info: os.stat_result) -> str | None:
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    return "100755" if info.st_mode & 0o111 else "100644"
+
+
+def _regular_bytes(
+    path: Path,
+    label: str,
+    expected_mode: str,
+    problems: list[str],
+) -> bytes | None:
+    """Read one exact regular entry without following or racing a symlink."""
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        problems.append(f"{label} MISSING — {exc}")
+        return None
+    actual_mode = _tracked_mode(before)
+    if actual_mode != expected_mode:
+        shown = actual_mode or f"type {stat.S_IFMT(before.st_mode):#o}"
+        problems.append(
+            f"{label} TYPE/MODE — expected regular {expected_mode}, got {shown}"
+        )
+        return None
+    fd = -1
+    try:
+        fd = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        opened = os.fstat(fd)
+        if (
+            (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or _tracked_mode(opened) != expected_mode
+        ):
+            problems.append(f"{label} TYPE/MODE — entry changed before read")
+            return None
+        chunks = []
+        size = 0
+        while chunk := os.read(fd, 1024 * 1024):
+            chunks.append(chunk)
+            size += len(chunk)
+        after = os.fstat(fd)
+        if (
+            (after.st_dev, after.st_ino) != (opened.st_dev, opened.st_ino)
+            or size != opened.st_size
+            or after.st_size != opened.st_size
+            or after.st_mtime_ns != opened.st_mtime_ns
+            or after.st_ctime_ns != opened.st_ctime_ns
+            or _tracked_mode(after) != expected_mode
+        ):
+            problems.append(f"{label} TYPE/MODE — entry changed during read")
+            return None
+        return b"".join(chunks)
+    except OSError as exc:
+        problems.append(f"{label} TYPE/MODE — safe read failed: {exc}")
+        return None
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _real_directory(path: Path, label: str) -> bool:
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        print(f"verify_harness_copy: FAIL — {label} missing: {exc}", file=sys.stderr)
+        return False
+    if not stat.S_ISDIR(info.st_mode):
+        print(
+            f"verify_harness_copy: FAIL — {label} must be a real directory",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def main() -> int:
     problems: list[str] = []
 
-    if not COPY_DIR.is_dir():
-        print(f"verify_harness_copy: FAIL — {COPY_DIR} missing", file=sys.stderr)
+    if not _real_directory(COPY_DIR, str(COPY_DIR)):
         return 1
-    if not LIVE_DIR.is_dir():
-        print(f"verify_harness_copy: FAIL — {LIVE_DIR} missing", file=sys.stderr)
+    if not _real_directory(LIVE_DIR, str(LIVE_DIR)):
         return 1
 
     expected = head_files()
+    expected_modes = head_modes()
+    if set(expected_modes) != set(expected):
+        print(
+            "verify_harness_copy: FAIL — tracked harness names/modes disagree",
+            file=sys.stderr,
+        )
+        return 1
 
     # --- LEG 1: the copy IS the live harness, modulo the pinned allowlist --
     deviations: list[str] = []
+    live_bytes: dict[str, bytes] = {}
     for name in expected:
         live, copy = LIVE_DIR / name, COPY_DIR / name
-        if not live.is_file():
-            problems.append(f"LEG1 MISSING-LIVE {name}")
+        mode = expected_modes[name]
+        live_data = _regular_bytes(
+            live, f"LEG1 LIVE {name}", mode, problems
+        )
+        copy_data = _regular_bytes(
+            copy, f"LEG1 COPY {name}", mode, problems
+        )
+        if live_data is None or copy_data is None:
             continue
-        if not copy.is_file():
-            problems.append(f"LEG1 MISSING-COPY {name}")
-            continue
-        live_sha, copy_sha = _sha(live.read_bytes()), _sha(copy.read_bytes())
+        live_bytes[name] = live_data
+        live_sha, copy_sha = _sha(live_data), _sha(copy_data)
         if live_sha == copy_sha:
             continue
         if name not in ALLOWED_STRENGTHENING:
@@ -228,8 +347,8 @@ def main() -> int:
             continue
         deviations.append(name)
         show_diff(
-            live.read_text(),
-            copy.read_text(),
+            live_data.decode("utf-8", errors="replace"),
+            copy_data.decode("utf-8", errors="replace"),
             f"esp32_rs copy of {name}",
             why,
             f"{HEAD_DIR}/{name}",
@@ -242,10 +361,9 @@ def main() -> int:
     # firmware/esp32/ is read-only to this tree. Any deviation, committed or
     # not, has moved the anchor LEG 1 measures the copy against.
     for name in expected:
-        live = LIVE_DIR / name
-        if not live.is_file():
+        if name not in live_bytes:
             continue
-        want, got = _sha(head_blob(name)), _sha(live.read_bytes())
+        want, got = _sha(head_blob(name)), _sha(live_bytes[name])
         if want != got:
             problems.append(
                 f"LEG2 EDITED {name} — firmware/esp32/ is read-only to this tree but "
@@ -259,35 +377,34 @@ def main() -> int:
     # --- Rust smoke strengthening: exact bytes, type and executable mode ---
     rust_smoke = HERE / "qemu_smoke.sh"
     pinned_smoke, smoke_reason = SMOKE_STRENGTHENING
-    try:
-        smoke_info = rust_smoke.lstat()
-    except OSError:
-        problems.append("LEG1 MISSING esp32_rs/tools/qemu_smoke.sh")
+    rust_smoke_data = _regular_bytes(
+        rust_smoke,
+        "LEG1 COPY qemu_smoke.sh",
+        "100755",
+        problems,
+    )
+    if rust_smoke_data is None:
+        pass
+    elif _sha(rust_smoke_data) != pinned_smoke:
+        problems.append(
+            "LEG1 PIN MISMATCH qemu_smoke.sh — Rust provenance wrapper "
+            f"differs from approved bytes\n           pinned {pinned_smoke}\n"
+            f"           copy   {_sha(rust_smoke_data)}"
+        )
     else:
-        if (
-            not stat.S_ISREG(smoke_info.st_mode)
-            or stat.S_IMODE(smoke_info.st_mode) != 0o755
-        ):
-            problems.append(
-                "LEG1 TYPE/MODE qemu_smoke.sh — Rust smoke must be a "
-                "regular executable file with mode 0755"
-            )
-        elif _sha(rust_smoke.read_bytes()) != pinned_smoke:
-            problems.append(
-                "LEG1 PIN MISMATCH qemu_smoke.sh — Rust provenance wrapper "
-                f"differs from approved bytes\n           pinned {pinned_smoke}\n"
-                f"           copy   {_sha(rust_smoke.read_bytes())}"
-            )
-        else:
-            print("verify_harness_copy: APPROVED STRENGTHENING — qemu_smoke.sh")
-            print(f"  reason: {smoke_reason}")
+        print("verify_harness_copy: APPROVED STRENGTHENING — qemu_smoke.sh")
+        print(f"  reason: {smoke_reason}")
 
     # --- LEG 2b: the OTHER committed gate script, anchored the same way ----
     smoke_live = REPO_ROOT / SMOKE_REL
-    if not smoke_live.is_file():
-        problems.append(f"LEG2 MISSING {SMOKE_REL}")
-    else:
-        want, got = _sha(head_blob_at(SMOKE_REL)), _sha(smoke_live.read_bytes())
+    live_smoke_data = _regular_bytes(
+        smoke_live,
+        "LEG2 LIVE qemu_smoke.sh",
+        head_mode_at(SMOKE_REL),
+        problems,
+    )
+    if live_smoke_data is not None:
+        want, got = _sha(head_blob_at(SMOKE_REL)), _sha(live_smoke_data)
         if want != got:
             problems.append(
                 f"LEG2 EDITED qemu_smoke.sh — firmware/esp32/ is read-only to this tree "
