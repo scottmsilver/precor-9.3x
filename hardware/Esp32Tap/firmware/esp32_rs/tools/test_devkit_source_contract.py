@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import tomllib
 from pathlib import Path
 
@@ -108,11 +109,68 @@ def _generated_artifacts() -> tuple[Path, Path]:
     elf_value = os.environ.get("DEVKIT_FIRMWARE_ELF")
     assert sdkconfig_value, "DEVKIT_GENERATED_SDKCONFIG is required in generated mode"
     assert elf_value, "DEVKIT_FIRMWARE_ELF is required in generated mode"
-    sdkconfig = Path(sdkconfig_value)
-    elf = Path(elf_value)
-    assert sdkconfig.is_file(), f"generated sdkconfig not found: {sdkconfig}"
-    assert elf.is_file(), f"DevKit ELF not found: {elf}"
+    sdkconfig = _absolute_regular_file(sdkconfig_value, "generated sdkconfig")
+    elf = _absolute_regular_file(elf_value, "DevKit ELF")
     return sdkconfig, elf
+
+
+def _absolute_regular_file(value: str, label: str) -> Path:
+    path = Path(value)
+    assert path.is_absolute(), f"{label} path must be absolute: {path}"
+    assert not path.is_symlink(), f"{label} path must not be a symlink: {path}"
+    assert path.exists(), f"{label} not found: {path}"
+    assert stat.S_ISREG(path.stat().st_mode), f"{label} is not a regular file: {path}"
+    return path
+
+
+def _validate_generated_sdkconfig(path: Path) -> None:
+    expected_header = (
+        "#\n"
+        "# Automatically generated file. DO NOT EDIT.\n"
+        "# Espressif IoT Development Framework (ESP-IDF) 5.5.4 Project Configuration\n"
+        "#\n"
+    )
+    assert _read(path).startswith(
+        expected_header
+    ), f"generated sdkconfig lacks the canonical IDF 5.5.4 generated header: {path}"
+
+
+def _read_xtensa_elf(path: Path) -> bytes:
+    image = path.read_bytes()
+    assert len(image) >= 20, f"ELF header is truncated or empty: {path}"
+    assert image[:4] == b"\x7fELF", f"ELF magic is missing: {path}"
+    assert image[4] == 1, f"ELF is not 32-bit: {path}"
+    assert image[5] == 1, f"ELF is not little-endian: {path}"
+    assert image[6] == 1, f"ELF header version is invalid: {path}"
+    assert int.from_bytes(image[16:18], "little") == 2, f"ELF is not executable: {path}"
+    assert (
+        int.from_bytes(image[18:20], "little") == 94
+    ), f"ELF machine is not Xtensa: {path}"
+    return image
+
+
+def _generated_sdkconfig_fixture() -> bytes:
+    header = (
+        "#\n"
+        "# Automatically generated file. DO NOT EDIT.\n"
+        "# Espressif IoT Development Framework (ESP-IDF) 5.5.4 Project Configuration\n"
+        "#\n"
+    )
+    return (header + _read(DEFAULTS)).encode()
+
+
+def _xtensa_elf_fixture() -> bytes:
+    # ELF32, little-endian, current ELF version, ET_EXEC, EM_XTENSA (94).
+    return b"\x7fELF\x01\x01\x01" + b"\x00" * 9 + b"\x02\x00\x5e\x00"
+
+
+def _invoke_generated_verifier(
+    monkeypatch: pytest.MonkeyPatch, sdkconfig: str, elf: str
+) -> None:
+    monkeypatch.setenv("DEVKIT_VERIFY_GENERATED", "1")
+    monkeypatch.setenv("DEVKIT_GENERATED_SDKCONFIG", sdkconfig)
+    monkeypatch.setenv("DEVKIT_FIRMWARE_ELF", elf)
+    test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode()
 
 
 def test_all_isolated_firmware_files_exist() -> None:
@@ -368,12 +426,13 @@ def test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode() -> None:
     """
 
     sdkconfig, elf = _generated_artifacts()
+    _validate_generated_sdkconfig(sdkconfig)
     config = _parse_kconfig(sdkconfig)
     _assert_n8r8_uart_halt_config(config)
     # ESP_WIFI_ENABLED is an invisible capability symbol forced on for an S3
     # by IDF 5.5.4.  Prove operational radio absence from the linked image.
     assert config.get("CONFIG_ESP_WIFI_ENABLED") in {"n", "y"}
-    image = elf.read_bytes()
+    image = _read_xtensa_elf(elf)
     for symbol in (
         b"esp_wifi_init",
         b"esp_wifi_start",
@@ -384,6 +443,58 @@ def test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode() -> None:
         b"esp_eth_driver_install",
     ):
         assert symbol not in image
+
+
+def test_generated_verifier_rejects_relative_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "sdkconfig").write_bytes(_generated_sdkconfig_fixture())
+    (tmp_path / "firmware.elf").write_bytes(_xtensa_elf_fixture())
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(AssertionError, match="absolute"):
+        _invoke_generated_verifier(monkeypatch, "sdkconfig", "firmware.elf")
+
+
+def test_generated_verifier_rejects_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdkconfig = tmp_path / "real-sdkconfig"
+    elf = tmp_path / "real.elf"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(_xtensa_elf_fixture())
+    sdk_link = tmp_path / "sdkconfig"
+    elf_link = tmp_path / "firmware.elf"
+    sdk_link.symlink_to(sdkconfig)
+    elf_link.symlink_to(elf)
+    with pytest.raises(AssertionError, match="symlink"):
+        _invoke_generated_verifier(monkeypatch, str(sdk_link), str(elf_link))
+
+
+def test_generated_verifier_rejects_defaults_and_text_as_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    valid_sdkconfig = tmp_path / "sdkconfig"
+    valid_elf = tmp_path / "firmware.elf"
+    valid_sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    valid_elf.write_bytes(_xtensa_elf_fixture())
+    with pytest.raises(AssertionError, match="generated header"):
+        _invoke_generated_verifier(monkeypatch, str(DEFAULTS), str(valid_elf))
+    with pytest.raises(AssertionError, match="ELF"):
+        _invoke_generated_verifier(
+            monkeypatch, str(valid_sdkconfig), str(DEVKIT / "Cargo.toml")
+        )
+
+
+@pytest.mark.parametrize("bad_elf", [b"", b"not an elf", b"\x7fELF\x02\x01\x01"])
+def test_generated_verifier_rejects_empty_or_malformed_elf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_elf: bytes
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "firmware.elf"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(bad_elf)
+    with pytest.raises(AssertionError, match="ELF"):
+        _invoke_generated_verifier(monkeypatch, str(sdkconfig), str(elf))
 
 
 def test_no_output_pull_hold_or_protected_output_mask_exists() -> None:
