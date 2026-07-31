@@ -427,40 +427,48 @@ git status --short --branch
 
 Expected: clean branch. Record this exact HEAD; every remaining build in this task must use it. If HEAD changes later for any reason, restart this task from Step 4 and rebuild both clean and live bundles.
 
-- [ ] **Step 5: Create a disposable clean worktree**
+- [ ] **Step 5: Create, preflight, build, and remove a disposable clean worktree**
+
+Run this entire block in one shell. `umask 0022` applies before `mktemp` and remains in force through checkout and every clean-worktree gate/build command. The EXIT trap returns to the live repository before removing only the explicit `mktemp` path, so a failed preflight or build cannot strand the disposable worktree.
 
 ```bash
-tmp_dir=$(mktemp -d /tmp/esp32tap-devkit-clean.XXXXXX)
-git worktree add --detach "$tmp_dir" HEAD
+(
+  umask 0022
+  repo_root=$(git rev-parse --show-toplevel)
+  tmp_dir=$(mktemp -d /tmp/esp32tap-devkit-clean.XXXXXX)
+  cleanup() {
+    cd "$repo_root"
+    git worktree remove --force "$tmp_dir" >/dev/null 2>&1 || rmdir "$tmp_dir"
+  }
+  trap cleanup EXIT
+
+  git worktree add --detach "$tmp_dir" HEAD
+  cd "$tmp_dir/hardware/Esp32Tap/firmware/esp32_rs"
+
+  # Physical modes must match Git's 100755 entries in a fresh checkout.
+  stat -c '%a %n' tools/build_image.sh tools/qemu_smoke.sh tools/run_harness.sh tools/qemu_harness/run.sh
+  python3 -m pytest -q \
+    tools/test_build_image.py::test_script_is_executable_and_tracked_as_100755 \
+    tools/test_provenance_entrypoints.py::test_shell_entrypoint_verifies_before_delegating
+
+  python3 -m pytest -q tools/test_devkit_*.py
+  python3 tools/check_unsafe_budget.py
+  python3 tools/check_pins.py
+  python3 tools/check_wdt_chain.py
+  ONLY=devkit tools/build.sh
+  python3 tools/artifact_provenance.py verify --repo-root "$tmp_dir" --kind devkit-bringup
+
+  # Inspect kind, input digest, toolchain, five hashes, 8 MB header, partition
+  # fit, DevKit banner, and absence of QEMU/production startup banners here.
+  cd "$repo_root"
+  git worktree remove "$tmp_dir"
+  trap - EXIT
+  test ! -e "$tmp_dir"
+  ! git worktree list --porcelain | grep -Fqx "worktree $tmp_dir"
+)
 ```
 
-Keep the explicit returned path; never target a broad directory.
-
-- [ ] **Step 6: Run clean host/build gates**
-
-```bash
-cd "$tmp_dir/hardware/Esp32Tap/firmware/esp32_rs"
-python3 -m pytest -q tools/test_devkit_*.py
-python3 tools/check_unsafe_budget.py
-python3 tools/check_pins.py
-python3 tools/check_wdt_chain.py
-ONLY=devkit tools/build.sh
-python3 tools/artifact_provenance.py verify --repo-root "$tmp_dir" --kind devkit-bringup
-```
-
-Expected: no retained ignored input is required; sealed bundle is current.
-
-- [ ] **Step 7: Inspect clean artifact identity**
-
-Verify kind, input digest, toolchain, five hashes, 8 MB header, partition fit, DevKit banner, and absence of QEMU/production startup banners.
-
-- [ ] **Step 8: Remove only the disposable worktree**
-
-```bash
-git worktree remove "$tmp_dir"
-```
-
-Confirm the exact path disappears from `git worktree list`.
+Expected: all four printed modes are `755`; the targeted exact-mode preflight covers `build_image.sh`, `qemu_smoke.sh`, `run_harness.sh`, and `qemu_harness/run.sh`; no retained ignored input is required; the sealed bundle is current; and the exact disposable path disappears from `git worktree list`.
 
 - [ ] **Step 9: Build and publish the same current commit in the live worktree**
 
