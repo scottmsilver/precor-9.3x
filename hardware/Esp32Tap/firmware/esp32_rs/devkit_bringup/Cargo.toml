@@ -1,0 +1,24 @@
+[package]
+name = "devkit_bringup"
+version = "0.0.0"
+edition = "2021"
+resolver = "2"
+rust-version = "1.90"
+build = "build.rs"
+
+[[bin]]
+name = "devkit_bringup"
+harness = false
+
+[profile.release]
+opt-level = "s"
+debug = true
+lto = "thin"
+codegen-units = 1
+
+[dependencies]
+bringup_core = { path = "../bringup_core" }
+esp-idf-sys = { version = "0.37.2", features = ["binstart"] }
+
+[build-dependencies]
+embuild = "0.33"

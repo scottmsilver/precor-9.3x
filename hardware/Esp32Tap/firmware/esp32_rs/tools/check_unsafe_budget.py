@@ -45,6 +45,7 @@ HERE = Path(__file__).resolve().parent
 ESP32_RS = HERE.parent
 FW_SRC = ESP32_RS / "esp32tap" / "src"
 CORE_SRC = ESP32_RS / "safety_core" / "src"
+DEVKIT_FW_SRC = ESP32_RS / "devkit_bringup" / "src"
 
 # Crates that are `#![forbid(unsafe_code)]` and contain no `unsafe` token at
 # all. `reqbudget` is deliberately absent: it owns the static request pool and
@@ -117,6 +118,11 @@ QEMU_UNSAFE = {
     "net/coach.rs",
 }
 UNSAFE_ALLOWLIST = PRODUCTION_UNSAFE | QEMU_UNSAFE
+
+# The DevKit image is deliberately not part of either treadmill budget.  Its
+# only unsafe-bearing file is the independent, observational hardware boundary.
+DEVKIT_UNSAFE = {"hardware.rs"}
+DEVKIT_UNSAFE_LINES = 27
 
 # Exactly where `allow(unsafe_code)` may appear: file -> the modules it grants.
 ALLOW_SITES = {
@@ -586,6 +592,53 @@ def check() -> list[str]:
         )
     if qemu_lines != QEMU_UNSAFE_LINES:
         failures.append(f"qemu-test unsafe budget is {qemu_lines} lines, documented as " f"{QEMU_UNSAFE_LINES}.")
+
+    # --- 7. independent DevKit unsafe allowlist and line budget -----------
+    devkit_found: set[str] = set()
+    devkit_lines = 0
+    if not DEVKIT_FW_SRC.is_dir():
+        failures.append("DevKit firmware source directory is missing")
+    else:
+        for p in rs_files(DEVKIT_FW_SRC):
+            name = rel(p, DEVKIT_FW_SRC)
+            raw = p.read_text(encoding="utf-8")
+            code = strip_comments_and_strings(raw)
+            if not _UNSAFE_TOKEN.search(code):
+                continue
+            devkit_found.add(name)
+            if name not in DEVKIT_UNSAFE:
+                failures.append(
+                    f"devkit_bringup/src/{name} contains `unsafe` but is not in "
+                    "the independent DevKit allowlist"
+                )
+                continue
+            lines = raw.split("\n")
+            code_lines = code.split("\n")
+            for i, code_line in enumerate(code_lines):
+                if not re.search(r"\bunsafe\s*\{", code_line):
+                    continue
+                previous = i - 1
+                while previous >= 0 and not lines[previous].strip():
+                    previous -= 1
+                if previous < 0 or not lines[previous].lstrip().startswith(
+                    "// SAFETY:"
+                ):
+                    failures.append(
+                        f"devkit_bringup/src/{name}:{i + 1}: unsafe block needs "
+                        "an adjacent `// SAFETY:` comment"
+                    )
+            devkit_lines += unsafe_line_count(raw)
+
+    if devkit_found != DEVKIT_UNSAFE:
+        failures.append(
+            f"DevKit unsafe files are {sorted(devkit_found)}, expected "
+            f"{sorted(DEVKIT_UNSAFE)}"
+        )
+    if devkit_lines != DEVKIT_UNSAFE_LINES:
+        failures.append(
+            f"devkit unsafe budget is {devkit_lines} lines, documented as "
+            f"{DEVKIT_UNSAFE_LINES}. Update DEVKIT_UNSAFE_LINES deliberately."
+        )
     return failures
 
 
@@ -602,6 +655,7 @@ def main() -> int:
         f"{len(FORBID_MODULES)} firmware modules compiler-forbid; unsafe confined to "
         f"{len(PRODUCTION_UNSAFE)} production files ({PRODUCTION_UNSAFE_LINES} lines) "
         f"+ {len(QEMU_UNSAFE)} test-image files ({QEMU_UNSAFE_LINES} lines); "
+        f"DevKit unsafe is independent ({DEVKIT_UNSAFE_LINES} lines); "
         "every unsafe block carries a SAFETY comment."
     )
     return 0
