@@ -70,38 +70,61 @@ DATASETS = frozenset(
     {"provenance", "host", "firmware_warm", "firmware_cold"}
 )
 HEX40 = re.compile(r"[0-9a-f]{40}\Z")
-ARTIFACT_ID = re.compile(r"(?:sha256:)?[0-9a-f]{64}\Z")
+ARTIFACT_ID = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class ContractError(ValueError):
     """The benchmark input cannot support the acceptance claim."""
 
 
+def _nonnegative_finite(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ContractError(f"{label} must be a finite nonnegative number")
+    try:
+        converted = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ContractError(
+            f"{label} must be a finite nonnegative number"
+        ) from exc
+    if not math.isfinite(converted) or converted < 0:
+        raise ContractError(f"{label} must be a finite nonnegative number")
+    return converted
+
+
 def nearest_rank(values: Sequence[float], percentile: float) -> float:
     """Return the exact nearest-rank percentile."""
     if not values:
         raise ContractError("statistics require at least one sample")
-    if (
-        isinstance(percentile, bool)
-        or not isinstance(percentile, (int, float))
-        or not math.isfinite(float(percentile))
-        or not 0 < float(percentile) <= 1
-    ):
+    finite_percentile = _nonnegative_finite(percentile, "percentile")
+    if not 0 < finite_percentile <= 1:
         raise ContractError("percentile must be finite and in (0, 1]")
-    ordered = sorted(float(value) for value in values)
-    rank = math.ceil(float(percentile) * len(ordered))
-    return ordered[rank - 1]
+    ordered = sorted(
+        _nonnegative_finite(value, "statistic sample") for value in values
+    )
+    rank = math.ceil(finite_percentile * len(ordered))
+    result = ordered[rank - 1]
+    if not math.isfinite(result):
+        raise ContractError("nearest-rank result must be finite")
+    return result
 
 
 def sample_median(values: Sequence[float]) -> float:
     """Return the ordinary median, averaging the two center values."""
     if not values:
         raise ContractError("statistics require at least one sample")
-    ordered = sorted(float(value) for value in values)
+    ordered = sorted(
+        _nonnegative_finite(value, "statistic sample") for value in values
+    )
     midpoint = len(ordered) // 2
     if len(ordered) % 2:
-        return ordered[midpoint]
-    return (ordered[midpoint - 1] + ordered[midpoint]) / 2
+        result = ordered[midpoint]
+    else:
+        lower = ordered[midpoint - 1]
+        upper = ordered[midpoint]
+        result = lower + (upper - lower) / 2
+    if not math.isfinite(result):
+        raise ContractError("median result must be finite")
+    return result
 
 
 def _exact_keys(value: Mapping[str, object], expected: frozenset[str], label: str) -> None:
@@ -121,20 +144,17 @@ def _strict_int(value: object, label: str, *, minimum: int = 0) -> int:
 
 
 def _finite_number(value: object, label: str) -> float:
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(float(value))
-        or float(value) < 0
-    ):
-        raise ContractError(f"{label} must be a finite nonnegative number")
-    return float(value)
+    return _nonnegative_finite(value, label)
 
 
 def _bounded_text(value: object, label: str) -> str:
     if not isinstance(value, str) or not value or "\0" in value:
         raise ContractError(f"{label} must be a nonempty NUL-free string")
-    if len(value.encode("utf-8")) > MAX_TEXT_BYTES:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ContractError(f"{label} must contain valid Unicode text") from exc
+    if len(encoded) > MAX_TEXT_BYTES:
         raise ContractError(f"{label} is too large")
     return value
 
@@ -151,12 +171,15 @@ def _command(value: object, label: str) -> tuple[str, ...]:
         )
     result: list[str] = []
     for index, item in enumerate(value):
-        if (
-            not isinstance(item, str)
-            or not item
-            or "\0" in item
-            or len(item.encode("utf-8")) > MAX_COMMAND_ITEM_BYTES
-        ):
+        if not isinstance(item, str) or not item or "\0" in item:
+            raise ContractError(f"{label}[{index}] is not a bounded command argument")
+        try:
+            encoded = item.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise ContractError(
+                f"{label}[{index}] is not a bounded command argument"
+            ) from exc
+        if len(encoded) > MAX_COMMAND_ITEM_BYTES:
             raise ContractError(f"{label}[{index}] is not a bounded command argument")
         result.append(item)
     return tuple(result)
@@ -174,7 +197,11 @@ def _load_matched(first: float, second: float) -> bool:
     scale = min(first, second)
     if scale == 0:
         return first == second
-    return abs(first - second) <= LOAD_BAND * scale
+    difference = abs(first - second)
+    limit = LOAD_BAND * scale
+    if not math.isfinite(difference) or not math.isfinite(limit):
+        raise ContractError("load comparison must remain finite")
+    return difference <= limit
 
 
 def _sample(value: object, index: int) -> dict[str, object]:
@@ -220,7 +247,8 @@ def _sample(value: object, index: int) -> dict[str, object]:
         )
         if ARTIFACT_ID.fullmatch(artifact) is None:
             raise ContractError(
-                f"sample {index} artifact_identity must be a SHA-256 identity"
+                f"sample {index} artifact_identity must be one bare lowercase "
+                "64-hex SHA-256 identity"
             )
     sha = _bounded_text(value["sha"], f"sample {index} sha")
     if HEX40.fullmatch(sha) is None:
@@ -467,7 +495,10 @@ def evaluate_document(document: object) -> dict[str, object]:
     candidate_median = sample_median(candidate_durations)
     if candidate_p95 >= 30:
         raise ContractError("firmware candidate p95 must be below 30 seconds")
-    if candidate_median > baseline_median * 0.5:
+    median_limit = baseline_median * 0.5
+    if not math.isfinite(median_limit):
+        raise ContractError("firmware median comparison must remain finite")
+    if candidate_median > median_limit:
         raise ContractError(
             "firmware candidate median must be at least 50% below baseline"
         )
@@ -628,6 +659,7 @@ def load_document(path: Path) -> object:
             json.dumps(
                 document,
                 ensure_ascii=True,
+                allow_nan=False,
                 separators=(",", ":"),
                 sort_keys=True,
             )
@@ -657,9 +689,18 @@ def main(arguments: Sequence[str]) -> int:
     except (ContractError, OSError) as exc:
         print(f"benchmark-fast: FAIL: {exc}", file=sys.stderr)
         return 1
-    print(
-        json.dumps(result, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-    )
+    try:
+        encoded = json.dumps(
+            result,
+            ensure_ascii=True,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as exc:
+        print(f"benchmark-fast: FAIL: result is not finite JSON: {exc}", file=sys.stderr)
+        return 1
+    print(encoded)
     return 0
 
 

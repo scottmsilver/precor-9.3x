@@ -212,11 +212,13 @@ Every sample records its dataset, role, explicit argv array, commit SHA, start
 load averages, wall time, exit status, retry count, pair index, physical
 worktree, and artifact identity when one exists. Missing-provenance and host
 identity fields are explicitly null. A stale-provenance record names the
-retained bundle identity, which must remain stable within each production or
-QEMU-test cohort. JSON keys and types are exact, duplicate keys and
-non-canonical serialization are rejected, and the input is bounded to 4 MiB.
-The executable never interprets a shell command and never clears
-`/tmp/rustcargo`.
+retained bundle's canonical `manifest_sha256`: exactly 64 lowercase hexadecimal
+characters with no `sha256:` alias. It must remain stable within each
+production or QEMU-test cohort. Firmware artifact identities use the same
+single representation. JSON keys and types are exact, duplicate keys,
+non-finite numbers, numeric overflow, invalid Unicode, and non-canonical
+serialization are rejected, and the input is bounded to 4 MiB. The executable
+never interprets a shell command and never clears `/tmp/rustcargo`.
 
 Collect five direct missing-manifest rejections (exit 20) and five direct stale
 input-digest rejections (exit 21), ten host-only samples, then ten alternating

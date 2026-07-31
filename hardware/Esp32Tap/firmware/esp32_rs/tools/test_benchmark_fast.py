@@ -104,7 +104,7 @@ def record(
         "artifact_identity": (
             None
             if role == "missing" or dataset == "host"
-            else f"sha256:{artifact_number:064x}"
+            else f"{artifact_number:064x}"
         ),
         "command": command,
         "dataset": dataset,
@@ -168,6 +168,19 @@ def test_exact_nearest_rank_p95_and_median() -> None:
     values = [10.0, 1.0, 9.0, 2.0, 8.0, 3.0, 7.0, 4.0, 6.0, 5.0]
     assert benchmark_fast.nearest_rank(values, 0.95) == 10.0
     assert benchmark_fast.sample_median(values) == 5.5
+
+
+def test_median_is_overflow_safe_and_statistics_reject_nonfinite_values() -> None:
+    assert benchmark_fast.sample_median([1e308, 1e308]) == 1e308
+    for function in (benchmark_fast.sample_median, benchmark_fast.nearest_rank):
+        arguments = ([float("inf")],) if function is benchmark_fast.sample_median else (
+            [float("inf")],
+            0.95,
+        )
+        with pytest.raises(benchmark_fast.ContractError, match="finite"):
+            function(*arguments)
+    with pytest.raises(benchmark_fast.ContractError, match="finite"):
+        benchmark_fast.nearest_rank([1.0], 10**1000)
 
 
 def test_passing_contract_reports_deterministic_summary() -> None:
@@ -482,7 +495,7 @@ def test_missing_and_host_identity_is_absent_but_stale_identity_is_required() ->
 
     document = passing_document()
     missing = next(sample for sample in document["samples"] if sample["role"] == "missing")
-    missing["artifact_identity"] = "sha256:" + "3" * 64
+    missing["artifact_identity"] = "3" * 64
     with pytest.raises(benchmark_fast.ContractError, match="artifact_identity"):
         evaluate(document)
 
@@ -495,8 +508,22 @@ def test_stale_identity_is_stable_within_each_artifact_kind() -> None:
         if sample["role"] == "stale" and sample["command"][6] == "qemu-test"
     ]
     assert len(stale_qemu) > 1
-    stale_qemu[0]["artifact_identity"] = "sha256:" + "f" * 64
+    stale_qemu[0]["artifact_identity"] = "f" * 64
     with pytest.raises(benchmark_fast.ContractError, match="stale qemu-test identity"):
+        evaluate(document)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    ["sha256:" + "a" * 64, "A" * 64],
+)
+def test_artifact_identity_is_one_canonical_bare_lowercase_digest(
+    identity: str,
+) -> None:
+    document = passing_document()
+    stale = next(sample for sample in document["samples"] if sample["role"] == "stale")
+    stale["artifact_identity"] = identity
+    with pytest.raises(benchmark_fast.ContractError, match="bare lowercase"):
         evaluate(document)
 
 
@@ -509,7 +536,7 @@ def test_each_firmware_role_keeps_one_artifact_identity() -> None:
         and sample["role"] == "candidate"
         and sample["pair_index"] == 0
     )
-    candidate["artifact_identity"] = "sha256:" + "f" * 64
+    candidate["artifact_identity"] = "f" * 64
     with pytest.raises(benchmark_fast.ContractError, match="one artifact identity"):
         evaluate(document)
 
@@ -520,7 +547,7 @@ def test_each_firmware_role_keeps_one_artifact_identity() -> None:
         if sample["dataset"] == "firmware_cold"
         and sample["role"] == "candidate"
     )
-    cold_candidate["artifact_identity"] = "sha256:" + "e" * 64
+    cold_candidate["artifact_identity"] = "e" * 64
     with pytest.raises(benchmark_fast.ContractError, match="one artifact identity"):
         evaluate(document)
 
@@ -627,6 +654,41 @@ def test_cli_rejects_pathological_json_without_a_traceback(tmp_path: Path) -> No
     )
     assert completed.returncode != 0
     assert "invalid benchmark JSON" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (
+            lambda document: document["samples"][0].update(
+                worktree_path="\ud800"
+            ),
+            "worktree_path",
+        ),
+        (
+            lambda document: document["samples"][0].update(
+                duration_seconds=10**1000
+            ),
+            "duration_seconds",
+        ),
+    ],
+)
+def test_cli_rejects_surrogates_and_numeric_overflow_without_traceback(
+    tmp_path: Path, mutation: object, message: str
+) -> None:
+    document = passing_document()
+    mutation(document)  # type: ignore[operator]
+    path = tmp_path / "invalid.json"
+    write_document(path, document)
+    completed = subprocess.run(
+        [sys.executable, os.fspath(SCRIPT), "evaluate", os.fspath(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0
+    assert message in completed.stderr
     assert "Traceback" not in completed.stderr
 
 
