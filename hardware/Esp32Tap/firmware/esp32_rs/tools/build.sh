@@ -30,6 +30,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -94,6 +95,11 @@ def request_cancellation(signum: int, _frame: object) -> None:
         return
     pending_signal = signum
     if not cleanup_in_progress and not cancellation_deferred:
+        raise BuildCancelled(pending_signal)
+
+
+def raise_pending_cancellation() -> None:
+    if pending_signal is not None:
         raise BuildCancelled(pending_signal)
 
 
@@ -240,6 +246,56 @@ def cleanup_staging(path: Path) -> None:
     shutil.rmtree(absolute)
 
 
+def cleanup_task_root(path: Path) -> None:
+    """Remove only this invocation's owned direct-child /tmp directory."""
+
+    absolute = path.absolute()
+    if (
+        absolute.parent != Path("/tmp")
+        or re.fullmatch(
+            r"esp32tap-snapshot-build\.[-A-Za-z0-9_]+", absolute.name
+        )
+        is None
+        or not os.path.lexists(absolute)
+    ):
+        return
+    info = absolute.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or absolute.resolve(strict=True) != absolute
+    ):
+        raise BuildError(f"refusing unsafe task-root cleanup: {absolute}")
+
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for directory, dirnames, _ in os.walk(
+        absolute, topdown=False, onerror=raise_walk_error, followlinks=False
+    ):
+        base = Path(directory)
+        for name in dirnames:
+            child = base / name
+            if not child.is_symlink():
+                child_info = child.lstat()
+                if (
+                    not stat.S_ISDIR(child_info.st_mode)
+                    or child_info.st_uid != os.geteuid()
+                ):
+                    raise BuildError(
+                        f"refusing unsafe task-root member cleanup: {child}"
+                    )
+                child.chmod(stat.S_IMODE(child_info.st_mode) | stat.S_IWUSR)
+        base_info = base.lstat()
+        if (
+            not stat.S_ISDIR(base_info.st_mode)
+            or base_info.st_uid != os.geteuid()
+        ):
+            raise BuildError(f"refusing unsafe task-root directory cleanup: {base}")
+        base.chmod(stat.S_IMODE(base_info.st_mode) | stat.S_IWUSR)
+    shutil.rmtree(absolute)
+
+
 def live_digest_without_staging_sdkconfigs(
     stagings: list[Path], task_root: Path
 ) -> str:
@@ -250,8 +306,12 @@ def live_digest_without_staging_sdkconfigs(
         for index, staging in enumerate(stagings):
             source = staging / "sdkconfig"
             destination = task_root / f"output-sdkconfig-{index}"
-            os.rename(source, destination)
             held.append((source, destination))
+            try:
+                os.rename(source, destination)
+            except BaseException:
+                held.pop()
+                raise
         return working_digest(repo_root)
     finally:
         for source, destination in reversed(held):
@@ -536,10 +596,23 @@ def main() -> None:
     snapshot = None
     stagings: list[Path] = []
     try:
-        task_root = Path(
-            tempfile.mkdtemp(prefix="esp32tap-snapshot-build.", dir="/tmp")
-        )
-        snapshot = create_snapshot(repo_root, task_root / "source", cache_root)
+        cancellation_deferred = True
+        try:
+            task_root = Path(
+                tempfile.mkdtemp(prefix="esp32tap-snapshot-build.", dir="/tmp")
+            )
+        finally:
+            cancellation_deferred = False
+        raise_pending_cancellation()
+
+        cancellation_deferred = True
+        try:
+            snapshot = create_snapshot(
+                repo_root, task_root / "source", cache_root
+            )
+        finally:
+            cancellation_deferred = False
+        raise_pending_cancellation()
         print(f"== immutable source {snapshot.digest} ==")
         sealed_baseline = sealed_snapshot_digest(snapshot.root, snapshot.paths)
 
@@ -562,8 +635,14 @@ def main() -> None:
             staging = esp32_rs / (
                 f".snapshot-build-{os.getpid()}-{uuid.uuid4().hex}-{cache_kind}"
             )
-            staging.mkdir(mode=0o700)
-            stagings.append(staging)
+            cancellation_deferred = True
+            try:
+                staging.mkdir(mode=0o700)
+            finally:
+                if os.path.lexists(staging):
+                    stagings.append(staging)
+                cancellation_deferred = False
+            raise_pending_cancellation()
             run_docker(
                 snapshot.root,
                 staging,
@@ -612,23 +691,58 @@ def main() -> None:
                 print(f"published {kind}: {identity}")
         finally:
             cancellation_deferred = False
-        if pending_signal is not None:
-            raise BuildCancelled(pending_signal)
+        raise_pending_cancellation()
         if only == "both":
             print("ONLY=both published both manifests")
+    except BaseException:
+        # Enter cleanup with watched signals latch-only. If a signal lands
+        # before this assignment, it has already populated pending_signal, so
+        # later deliveries are duplicates and cannot bypass the finally suite.
+        cancellation_deferred = True
+        raise
+    else:
+        cancellation_deferred = True
     finally:
         cleanup_in_progress = True
+        failed_stagings: list[tuple[Path, BaseException]] = []
         for staging in reversed(stagings):
-            cleanup_staging(staging)
-        if snapshot is not None and task_root is not None:
-            remove_snapshot(snapshot.root, task_root)
+            try:
+                cleanup_staging(staging)
+            except BaseException as exc:
+                failed_stagings.append((staging, exc))
+
+        snapshot_failure: BaseException | None = None
+        task_root_failure: BaseException | None = None
         if task_root is not None:
             try:
-                task_root.rmdir()
-            except FileNotFoundError:
-                pass
-        if pending_signal is not None:
-            raise BuildCancelled(pending_signal)
+                if snapshot is not None:
+                    remove_snapshot(snapshot.root, task_root)
+            except BaseException as exc:
+                snapshot_failure = exc
+            finally:
+                try:
+                    cleanup_task_root(task_root)
+                except BaseException as exc:
+                    task_root_failure = exc
+
+        cleanup_failures: list[BaseException] = []
+        for staging, first_failure in failed_stagings:
+            try:
+                cleanup_staging(staging)
+            except BaseException as retry_failure:
+                cleanup_failures.extend((first_failure, retry_failure))
+        if task_root_failure is not None:
+            if snapshot_failure is not None:
+                cleanup_failures.append(snapshot_failure)
+            cleanup_failures.append(task_root_failure)
+
+        for failure in cleanup_failures:
+            print(f"build.sh: cleanup failed: {failure}", file=sys.stderr)
+        cleanup_in_progress = False
+        cancellation_deferred = False
+        raise_pending_cancellation()
+        if cleanup_failures:
+            raise cleanup_failures[0]
 
 
 try:

@@ -114,6 +114,31 @@ def fake_worktree(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     shutil.copy2(SCRIPT, tools / "build.sh")
     for name in ("artifact_inputs.py", "artifact_provenance.py"):
         shutil.copy2(TOOLS / name, tools / name)
+    inputs = tools / "artifact_inputs.py"
+    _write(
+        inputs,
+        inputs.read_text(encoding="utf-8")
+        + """
+
+_real_create_snapshot_for_seam_test = create_snapshot
+
+
+def create_snapshot(*args, **kwargs):
+    result = _real_create_snapshot_for_seam_test(*args, **kwargs)
+    seam = os.environ.get("FAKE_RESOURCE_SEAM")
+    if seam in ("snapshot_return", "snapshot_exception"):
+        Path(os.environ["FAKE_RESOURCE_PATH"]).write_text(
+            str(result.root), encoding="utf-8"
+        )
+        if seam == "snapshot_return":
+            import signal as _signal
+
+            os.kill(os.getpid(), _signal.SIGTERM)
+        else:
+            raise RuntimeError("intentional create_snapshot return failure")
+    return result
+""",
+    )
     provenance = tools / "artifact_provenance.py"
     _write(
         provenance,
@@ -214,6 +239,103 @@ def publish_generation_atomic(*args, **kwargs):
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
+    signal_hooks = tmp_path / "signal-hooks"
+    signal_hooks.mkdir()
+    _write(
+        signal_hooks / "sitecustomize.py",
+        """import os
+import signal
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+seam = os.environ.get("FAKE_RESOURCE_SEAM", "")
+resource_path = os.environ.get("FAKE_RESOURCE_PATH", "")
+trace_line = int(os.environ.get("FAKE_TRACE_SIGNAL_LINE", "0"))
+trace_marker = os.environ.get("FAKE_TRACE_SIGNAL_MARKER", "")
+
+
+def signal_at_cleanup_entry(frame, event, arg):
+    if (
+        event == "line"
+        and frame.f_code.co_filename == "<stdin>"
+        and frame.f_lineno == trace_line
+    ):
+        sys.settrace(None)
+        Path(trace_marker).write_text("cleanup-entry", encoding="utf-8")
+        os.kill(os.getpid(), signal.SIGTERM)
+        return None
+    return signal_at_cleanup_entry
+
+
+if trace_line:
+    sys.settrace(signal_at_cleanup_entry)
+
+
+def signal_after_create(path):
+    Path(resource_path).write_text(str(path), encoding="utf-8")
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+_real_mkdtemp = tempfile.mkdtemp
+
+
+def seam_mkdtemp(*args, **kwargs):
+    result = _real_mkdtemp(*args, **kwargs)
+    prefix = kwargs.get("prefix", args[0] if args else "")
+    if seam == "task_root_return" and prefix == "esp32tap-snapshot-build.":
+        signal_after_create(result)
+    if seam == "snapshot_internal_temp_return" and prefix.startswith(".source."):
+        signal_after_create(result)
+    return result
+
+
+tempfile.mkdtemp = seam_mkdtemp
+_real_mkdir = Path.mkdir
+
+
+def seam_mkdir(self, *args, **kwargs):
+    result = _real_mkdir(self, *args, **kwargs)
+    if seam == "staging_mkdir_return" and self.name.startswith(".snapshot-build-"):
+        signal_after_create(self)
+    return result
+
+
+Path.mkdir = seam_mkdir
+_real_rename = os.rename
+
+
+def seam_rename(source, destination, *args, **kwargs):
+    result = _real_rename(source, destination, *args, **kwargs)
+    if (
+        seam == "live_digest_rename_return"
+        and Path(destination).name.startswith("output-sdkconfig-")
+    ):
+        signal_after_create(destination)
+    return result
+
+
+os.rename = seam_rename
+_real_rmtree = shutil.rmtree
+
+
+def seam_rmtree(path, *args, **kwargs):
+    failure_path = os.environ.get("FAKE_CLEANUP_FAILURE_PATH", "")
+    candidate = Path(path)
+    if (
+        failure_path
+        and candidate.name.startswith(".snapshot-build-")
+        and not Path(failure_path).exists()
+    ):
+        Path(failure_path).write_text(str(candidate), encoding="utf-8")
+        raise RuntimeError("intentional first staging cleanup failure")
+    return _real_rmtree(path, *args, **kwargs)
+
+
+shutil.rmtree = seam_rmtree
+""",
+    )
     docker_log = tmp_path / "docker.jsonl"
     _write(
         fake_bin / "docker",
@@ -223,6 +345,10 @@ from pathlib import Path
 argv = sys.argv[1:]
 with Path(os.environ["FAKE_DOCKER_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps(argv) + "\\n")
+if os.environ.get("FAKE_DOCKER_PID_FILE"):
+    Path(os.environ["FAKE_DOCKER_PID_FILE"]).write_text(
+        str(os.getpid()), encoding="utf-8"
+    )
 if os.environ.get("FAKE_DOCKER_BARRIER"):
     barrier = Path(os.environ["FAKE_DOCKER_BARRIER"])
     if os.environ.get("FAKE_DOCKER_RESIST_TERM"):
@@ -579,6 +705,224 @@ def test_term_cancels_child_cleans_resources_then_releases_lock(
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
     finally:
         os.close(descriptor)
+
+
+def _assert_build_lock_released(root: Path) -> None:
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    lock = Path("/tmp") / (
+        "esp32tap-build-"
+        + hashlib.md5(str(rs.resolve()).encode(), usedforsecurity=False).hexdigest()[
+            :12
+        ]
+        + ".lock"
+    )
+    descriptor = os.open(lock, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
+
+
+def _seam_cleanup_root(created: Path, rs: Path) -> Path:
+    absolute = created.absolute()
+    if absolute.parent == rs and absolute.name.startswith(".snapshot-build-"):
+        return absolute
+    for candidate in (absolute, *absolute.parents):
+        if candidate.parent == Path("/tmp") and candidate.name.startswith(
+            "esp32tap-snapshot-build."
+        ):
+            return candidate
+    raise AssertionError(f"unsafe test seam resource path: {created}")
+
+
+def _remove_seam_test_resource(created: Path, rs: Path) -> None:
+    root = _seam_cleanup_root(created, rs)
+    if not os.path.lexists(root):
+        return
+    assert not root.is_symlink()
+    for directory, dirnames, _ in os.walk(root, topdown=False, followlinks=False):
+        base = Path(directory)
+        for name in dirnames:
+            child = base / name
+            if not child.is_symlink():
+                child.chmod(
+                    stat.S_IMODE(child.stat().st_mode) | stat.S_IWUSR | stat.S_IXUSR
+                )
+        base.chmod(stat.S_IMODE(base.stat().st_mode) | stat.S_IWUSR | stat.S_IXUSR)
+    shutil.rmtree(root)
+
+
+@pytest.mark.parametrize(
+    "seam",
+    [
+        "task_root_return",
+        "snapshot_internal_temp_return",
+        "snapshot_return",
+        "staging_mkdir_return",
+        "live_digest_rename_return",
+    ],
+)
+def test_signal_at_resource_registration_seam_cleans_and_releases_lock(
+    fake_worktree: tuple[Path, Path, Path, Path],
+    seam: str,
+) -> None:
+    root, event_log, docker_log, _ = fake_worktree
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    resource_path = root.parent / f"{seam}.path"
+    docker_pid_path = root.parent / f"{seam}.docker-pid"
+    completed = _run(
+        fake_worktree,
+        extra_env={
+            "PYTHONPATH": str(root.parent / "signal-hooks"),
+            "FAKE_RESOURCE_SEAM": seam,
+            "FAKE_RESOURCE_PATH": str(resource_path),
+            "FAKE_DOCKER_PID_FILE": str(docker_pid_path),
+        },
+    )
+    assert resource_path.is_file(), (completed.stdout, completed.stderr)
+    created = Path(resource_path.read_text(encoding="utf-8"))
+    try:
+        assert completed.returncode == 128 + signal.SIGTERM, (
+            completed.stdout,
+            completed.stderr,
+        )
+        assert not os.path.lexists(created)
+        assert not list(rs.glob(".snapshot-build-*"))
+        if event_log.exists():
+            snapshot_path = Path(_events(event_log)[0]["path"])
+            task_root = next(
+                parent
+                for parent in snapshot_path.parents
+                if parent.name.startswith("esp32tap-snapshot-build.")
+            )
+            assert not task_root.exists()
+        if docker_pid_path.exists():
+            docker_pid = int(docker_pid_path.read_text(encoding="utf-8"))
+            with pytest.raises(ProcessLookupError):
+                os.kill(docker_pid, 0)
+        else:
+            assert not docker_log.exists()
+        _assert_build_lock_released(root)
+    finally:
+        _remove_seam_test_resource(created, rs)
+
+
+def test_snapshot_create_exception_after_publication_cleans_registered_parent(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, docker_log, _ = fake_worktree
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    resource_path = root.parent / "snapshot-exception.path"
+    completed = _run(
+        fake_worktree,
+        extra_env={
+            "FAKE_RESOURCE_SEAM": "snapshot_exception",
+            "FAKE_RESOURCE_PATH": str(resource_path),
+        },
+    )
+    assert resource_path.is_file(), (completed.stdout, completed.stderr)
+    created = Path(resource_path.read_text(encoding="utf-8"))
+    try:
+        assert completed.returncode != 0
+        assert "intentional create_snapshot return failure" in completed.stderr
+        assert not os.path.lexists(created)
+        assert not created.parent.exists()
+        assert not docker_log.exists()
+        _assert_build_lock_released(root)
+    finally:
+        _remove_seam_test_resource(created, rs)
+
+
+def _embedded_python_line(exact_text: str) -> int:
+    outer = source().split("<<'PY'\n", 1)[1].rsplit("\nPY\n", 1)[0]
+    matches = [
+        number
+        for number, line in enumerate(outer.splitlines(), 1)
+        if line.strip() == exact_text
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_signal_before_cleanup_entry_cannot_bypass_registered_cleanup(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, event_log, _, _ = fake_worktree
+    marker = root.parent / "cleanup-entry.marker"
+    docker_pid_path = root.parent / "cleanup-entry.docker-pid"
+    completed = _run(
+        fake_worktree,
+        extra_env={
+            "PYTHONPATH": str(root.parent / "signal-hooks"),
+            "FAKE_TRACE_SIGNAL_LINE": str(
+                _embedded_python_line("cleanup_in_progress = True")
+            ),
+            "FAKE_TRACE_SIGNAL_MARKER": str(marker),
+            "FAKE_DOCKER_PID_FILE": str(docker_pid_path),
+        },
+    )
+    assert event_log.is_file(), (completed.stdout, completed.stderr)
+    snapshot_path = Path(_events(event_log)[0]["path"])
+    task_root = next(
+        parent
+        for parent in snapshot_path.parents
+        if parent.name.startswith("esp32tap-snapshot-build.")
+    )
+    try:
+        assert marker.is_file(), (completed.stdout, completed.stderr)
+        assert completed.returncode == 128 + signal.SIGTERM, (
+            completed.stdout,
+            completed.stderr,
+        )
+        assert not task_root.exists()
+        docker_pid = int(docker_pid_path.read_text(encoding="utf-8"))
+        with pytest.raises(ProcessLookupError):
+            os.kill(docker_pid, 0)
+        _assert_build_lock_released(root)
+    finally:
+        _remove_seam_test_resource(task_root, root / "unused")
+
+
+def test_cleanup_failure_attempts_every_resource_and_pending_signal_wins(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, _, _ = fake_worktree
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    resource_path = root.parent / "cleanup-failure-resource.path"
+    failure_path = root.parent / "cleanup-failure-staging.path"
+    docker_pid_path = root.parent / "cleanup-failure.docker-pid"
+    completed = _run(
+        fake_worktree,
+        only="both",
+        extra_env={
+            "PYTHONPATH": str(root.parent / "signal-hooks"),
+            "FAKE_RESOURCE_SEAM": "live_digest_rename_return",
+            "FAKE_RESOURCE_PATH": str(resource_path),
+            "FAKE_CLEANUP_FAILURE_PATH": str(failure_path),
+            "FAKE_DOCKER_PID_FILE": str(docker_pid_path),
+        },
+    )
+    assert resource_path.is_file(), (completed.stdout, completed.stderr)
+    destination = Path(resource_path.read_text(encoding="utf-8"))
+    task_root = _seam_cleanup_root(destination, rs)
+    try:
+        assert failure_path.is_file(), (completed.stdout, completed.stderr)
+        failed_staging = Path(failure_path.read_text(encoding="utf-8"))
+        assert completed.returncode == 128 + signal.SIGTERM, (
+            completed.stdout,
+            completed.stderr,
+        )
+        assert not os.path.lexists(failed_staging)
+        assert not list(rs.glob(".snapshot-build-*"))
+        assert not task_root.exists()
+        docker_pid = int(docker_pid_path.read_text(encoding="utf-8"))
+        with pytest.raises(ProcessLookupError):
+            os.kill(docker_pid, 0)
+        _assert_build_lock_released(root)
+    finally:
+        _remove_seam_test_resource(destination, rs)
+        for staging in rs.glob(".snapshot-build-*"):
+            _remove_seam_test_resource(staging, rs)
 
 
 def test_first_signal_during_publish_is_latched_in_arrival_order(
