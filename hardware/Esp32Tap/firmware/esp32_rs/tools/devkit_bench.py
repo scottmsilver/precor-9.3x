@@ -930,9 +930,19 @@ def _readline_bytes(port, *, label: str) -> bytes | None:
     raw = port.readline(MAX_SERIAL_LINE + 1)
     if not raw:
         return None
-    if len(raw) > MAX_SERIAL_LINE or not raw.endswith(b"\n") or b"\0" in raw:
-        raise BenchError(f"{label} line is oversized or unterminated")
-    return raw[:-1]
+    if len(raw) > MAX_SERIAL_LINE:
+        raise BenchError(f"{label} line is oversized")
+    if b"\0" in raw:
+        raise BenchError(f"{label} line contains NUL")
+    if raw.endswith(b"\r\n"):
+        content = raw[:-2]
+    elif raw.endswith(b"\n"):
+        content = raw[:-1]
+    else:
+        raise BenchError(f"{label} line is unterminated")
+    if b"\r" in content:
+        raise BenchError(f"{label} line contains an embedded carriage return")
+    return content
 
 
 def _readline(port, *, label: str) -> str | None:

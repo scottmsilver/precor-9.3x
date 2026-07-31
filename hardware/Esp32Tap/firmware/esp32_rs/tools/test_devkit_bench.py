@@ -448,6 +448,15 @@ def test_capture_validates_complete_single_startup_report() -> None:
     assert report.terminal == "BRINGUP STAGE0 PASS"
 
 
+def test_capture_accepts_real_uart_crlf_startup_records() -> None:
+    crlf_startup = [line.removesuffix(b"\n") + b"\r\n" for line in STARTUP]
+    report = bench.capture_startup(
+        FakeSerial(crlf_startup), RECIPE, timeout=30, clock=TickClock()
+    )
+    assert report.mac == MAC
+    assert report.terminal == "BRINGUP STAGE0 PASS"
+
+
 def test_capture_tolerates_non_utf8_rom_bytes_before_exact_banner() -> None:
     report = bench.capture_startup(
         FakeSerial([b"\xff\xfeROM chatter\n", *STARTUP]),
@@ -533,6 +542,35 @@ def test_sample_sends_canonical_command_and_requires_exact_response() -> None:
     )
     with pytest.raises(bench.BenchError, match="sample"):
         bench.sample_inputs(bad, 7, (0, 1, 1, 0), timeout=1, clock=TickClock())
+
+
+def test_sample_accepts_real_uart_crlf_response() -> None:
+    port = FakeSerial(
+        [
+            b"INPUT SAMPLE seq=7 gpio4=0 gpio5=1 gpio6=1 gpio7=0 "
+            b"dir15=input dir17=input dir21=input\r\n"
+        ]
+    )
+    bench.sample_inputs(port, 7, (0, 1, 1, 0), timeout=1, clock=TickClock())
+    assert port.writes == [b"SAMPLE 7\n"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"record\r",
+        b"record\rinside\n",
+        b"record\r\r\n",
+        b"record\0\n",
+        b"record",
+        b"x" * (bench.MAX_SERIAL_LINE + 1),
+    ],
+)
+def test_serial_line_rejects_noncanonical_terminators_and_unsafe_bytes(
+    raw: bytes,
+) -> None:
+    with pytest.raises(bench.BenchError, match="oversized|unterminated|carriage|NUL"):
+        bench._readline_bytes(FakeSerial([raw]), label="capture")
 
 
 def test_cold_monitor_requires_disappearance_and_same_usb_identity() -> None:
