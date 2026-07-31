@@ -198,6 +198,19 @@ def _generated_legacy_provenance_marker(relative: str) -> bool:
     ) is not None
 
 
+def _generated_legacy_provenance_swap(relative: str) -> bool:
+    path = PurePosixPath(relative)
+    try:
+        below_root = path.relative_to(_ESP32_RS)
+    except ValueError:
+        return False
+    return bool(below_root.parts) and re.fullmatch(
+        r"\.artifact-provenance-legacy-(?:build|build_qemu_test)-"
+        r"[0-9a-f]{64}\.swap",
+        below_root.parts[0],
+    ) is not None
+
+
 def _in_tracked_build_scope(relative: str) -> bool:
     path = PurePosixPath(relative)
     return path in _TRACKED_INPUT_FILES or any(
@@ -250,6 +263,7 @@ def _collect_paths(root: Path) -> tuple[str, ...]:
             or (
                 relative not in tracked
                 and not _generated_legacy_provenance_marker(relative)
+                and not _generated_legacy_provenance_swap(relative)
                 and _relevant_untracked(relative)
             )
         )

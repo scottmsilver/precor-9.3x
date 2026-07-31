@@ -367,6 +367,88 @@ def test_tracked_exact_legacy_provenance_marker_remains_an_input(repo: Path) -> 
     assert working_digest(repo) != original
 
 
+def test_exact_untracked_legacy_swap_trees_do_not_change_digest(repo: Path) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    original = working_digest(repo)
+    swaps = (
+        RS / f".artifact-provenance-legacy-build-{'c' * 64}.swap",
+        RS / f".artifact-provenance-legacy-build_qemu_test-{'1' * 64}.swap",
+    )
+    generated = tuple(
+        child
+        for swap in swaps
+        for child in (swap / "sdkconfig", swap / "metadata.json")
+    )
+    for child in generated:
+        write(repo, child, "retained transaction evidence\n")
+
+    paths = set(declared_inputs(repo))
+
+    assert not paths.intersection(child.as_posix() for child in generated)
+    assert working_digest(repo) == original
+
+
+@pytest.mark.parametrize(
+    "child",
+    [
+        RS
+        / f".artifact-provenance-legacy-build-{'C' * 64}.swap"
+        / "sdkconfig",
+        RS
+        / f".artifact-provenance-legacy-build-{'c' * 63}.swap"
+        / "sdkconfig",
+        RS
+        / f".artifact-provenance-legacy-build-{'c' * 65}.swap"
+        / "sdkconfig",
+        RS
+        / f".artifact-provenance-legacy-build_debug-{'c' * 64}.swap"
+        / "sdkconfig",
+        RS
+        / f"x.artifact-provenance-legacy-build-{'c' * 64}.swap"
+        / "sdkconfig",
+        RS
+        / f".artifact-provenance-legacy-build-{'c' * 64}.swap-extra"
+        / "sdkconfig",
+        RS
+        / "nested"
+        / f".artifact-provenance-legacy-build-{'c' * 64}.swap"
+        / "sdkconfig",
+        RS
+        / f".artifact_provenance-legacy-build-{'c' * 64}.swap"
+        / "sdkconfig",
+    ],
+)
+def test_legacy_swap_tree_lookalikes_remain_inputs(
+    repo: Path, child: Path
+) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    original = working_digest(repo)
+    write(repo, child, "not exact retained transaction evidence\n")
+
+    assert child.as_posix() in declared_inputs(repo)
+    assert working_digest(repo) != original
+
+
+def test_tracked_exact_legacy_swap_tree_descendant_remains_an_input(
+    repo: Path,
+) -> None:
+    write(repo, RS / "esp32tap/src/main.rs")
+    commit_all(repo)
+    original = working_digest(repo)
+    child = (
+        RS
+        / f".artifact-provenance-legacy-build-{'d' * 64}.swap"
+        / "sdkconfig"
+    )
+    write(repo, child, "tracked transaction-shaped source\n")
+    commit_all(repo)
+
+    assert child.as_posix() in declared_inputs(repo)
+    assert working_digest(repo) != original
+
+
 def test_unrelated_untracked_files_caches_and_secrets_are_excluded(repo: Path) -> None:
     tracked = write(repo, RS / "esp32tap/src/main.rs")
     commit_all(repo)
