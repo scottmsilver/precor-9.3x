@@ -65,65 +65,113 @@ only runtime wiring source. It has these exact top-level keys:
 }
 ```
 
-Each `items` entry is `{id,type,value,from,to,step}`. The exact item endpoint
-tuples are:
+Every two-terminal `items` entry is `{id,type,value,from,to,step}`. The DPDT is
+the sole exception: it is one physical BOM item with an explicit six-terminal
+shape and two independent poles:
+
+```json
+{"id":"dpdt","type":"switch","value":"DPDT","step":"dpdt_identify",
+ "terminals":{
+   "common_a":"dpdt_common_a","grounded_a":"dpdt_ground_a","unused_a":"dpdt_unused_a",
+   "common_b":"dpdt_common_b","grounded_b":"dpdt_ground_b","unused_b":"dpdt_unused_b"
+ },
+ "contacts":[
+   {"common":"dpdt_common_a","grounded":"dpdt_ground_a","unused":"dpdt_unused_a"},
+   {"common":"dpdt_common_b","grounded":"dpdt_ground_b","unused":"dpdt_unused_b"}
+ ]}
+```
+
+No DPDT common is electrically connected to the other common. Each pole may
+connect only its own common to its own selected throw. The exact two-terminal
+item tuples, including their construction step, are:
 
 ```text
-r4_pullup,resistor,10k,gpio4,3v3
-r5_pullup,resistor,10k,gpio5,3v3
-dpdt,switch,DPDT,dpdt_common_a,dpdt_common_b
-w_dpdt_a,wire,,gpio4,dpdt_common_a
-w_dpdt_b,wire,,gpio5,dpdt_common_b
-w_dpdt_ga,wire,,dpdt_ground_a,gnd
-w_dpdt_gb,wire,,dpdt_ground_b,gnd
-r6_pulldown,resistor,47k,gpio6,gnd
-sw6,switch,SPST,gpio6,gpio6_sw
-r6_series,resistor,1k,gpio6_sw,3v3
-r7_pullup,resistor,10k,gpio7,3v3
-sw7,switch,SPST,gpio7,gnd
-r15_pulldown,resistor,47k,gpio15,gnd
-r15_series,resistor,1k,gpio15,led15_a
-led15,led,red,led15_a,led15_k
-w_led15_gnd,wire,,led15_k,gnd
-r21_pulldown,resistor,47k,gpio21,gnd
-r21_series,resistor,1k,gpio21,led21_a
-led21,led,yellow,led21_a,led21_k
-w_led21_gnd,wire,,led21_k,gnd
-j_gnd,jumper,,devkit_gnd,gnd
-j_3v3,jumper,,devkit_3v3,3v3
-j_gpio4,jumper,,devkit_gpio4,gpio4
-j_gpio5,jumper,,devkit_gpio5,gpio5
-j_gpio6,jumper,,devkit_gpio6,gpio6
-j_gpio7,jumper,,devkit_gpio7,gpio7
-j_gpio15,jumper,,devkit_gpio15,gpio15
-j_gpio21,jumper,,devkit_gpio21,gpio21
+r4_pullup,resistor,10k,gpio4,3v3,r4_pullup
+r5_pullup,resistor,10k,gpio5,3v3,r5_pullup
+w_dpdt_a,wire,,gpio4,dpdt_common_a,w_dpdt_a
+w_dpdt_b,wire,,gpio5,dpdt_common_b,w_dpdt_b
+w_dpdt_ga,wire,,dpdt_ground_a,gnd,w_dpdt_ga
+w_dpdt_gb,wire,,dpdt_ground_b,gnd,w_dpdt_gb
+r6_pulldown,resistor,47k,gpio6,gnd,r6_pulldown
+sw6,switch,SPST,gpio6,gpio6_sw,sw6
+r6_series,resistor,1k,gpio6_sw,3v3,r6_series
+r7_pullup,resistor,10k,gpio7,3v3,r7_pullup
+sw7,switch,SPST,gpio7,gnd,sw7
+r15_pulldown,resistor,47k,gpio15,gnd,r15_pulldown
+r15_series,resistor,1k,gpio15,led15_a,r15_series
+led15,led,red,led15_a,led15_k,led15
+w_led15_gnd,wire,,led15_k,gnd,w_led15_gnd
+r21_pulldown,resistor,47k,gpio21,gnd,r21_pulldown
+r21_series,resistor,1k,gpio21,led21_a,r21_series
+led21,led,yellow,led21_a,led21_k,led21
+w_led21_gnd,wire,,led21_k,gnd,w_led21_gnd
+j_gnd,jumper,,devkit_gnd,gnd,j_gnd
+j_3v3,jumper,,devkit_3v3,3v3,j_3v3
+j_gpio4,jumper,,devkit_gpio4,gpio4,j_gpio4
+j_gpio5,jumper,,devkit_gpio5,gpio5,j_gpio5
+j_gpio6,jumper,,devkit_gpio6,gpio6,j_gpio6
+j_gpio7,jumper,,devkit_gpio7,gpio7,j_gpio7
+j_gpio15,jumper,,devkit_gpio15,gpio15,j_gpio15
+j_gpio21,jumper,,devkit_gpio21,gpio21,j_gpio21
 ```
 
 No item endpoint references `dpdt_unused_a` or `dpdt_unused_b`; the UI labels
 both insulated. No node or item contains `5V`, native USB, or treadmill wiring.
 
 `baseline` is exactly `{"dpdt":"ungrounded","gpio6":"open","gpio7":"open","levels":[1,1,0,1]}`.
-The eight truth-table level arrays in display order are exactly:
-`[1,1,0,1]`, `[1,1,0,0]`, `[1,1,1,1]`, `[1,1,1,0]`,
-`[0,0,0,1]`, `[0,0,0,0]`, `[0,0,1,1]`, `[0,0,1,0]`.
+`truth_table` is exactly these complete rows in display order:
+
+```json
+[
+ {"dpdt":"ungrounded","gpio6":"open","gpio7":"open","levels":[1,1,0,1]},
+ {"dpdt":"ungrounded","gpio6":"open","gpio7":"closed","levels":[1,1,0,0]},
+ {"dpdt":"ungrounded","gpio6":"closed","gpio7":"open","levels":[1,1,1,1]},
+ {"dpdt":"ungrounded","gpio6":"closed","gpio7":"closed","levels":[1,1,1,0]},
+ {"dpdt":"grounded","gpio6":"open","gpio7":"open","levels":[0,0,0,1]},
+ {"dpdt":"grounded","gpio6":"open","gpio7":"closed","levels":[0,0,0,0]},
+ {"dpdt":"grounded","gpio6":"closed","gpio7":"open","levels":[0,0,1,1]},
+ {"dpdt":"grounded","gpio6":"closed","gpio7":"closed","levels":[0,0,1,0]}
+]
+```
 
 Atomic step IDs are exactly:
 
 ```text
 safety,bom,rails,r4_pullup,r5_pullup,dpdt_identify,w_dpdt_a,w_dpdt_b,
-w_dpdt_ga,w_dpdt_gb,r6_pulldown,sw6,r6_series,r7_pullup,sw7,
+w_dpdt_ga,w_dpdt_gb,dpdt_insulate,r6_pulldown,sw6,r6_series,r7_pullup,sw7,
 r15_pulldown,r15_series,led15,w_led15_gnd,r21_pulldown,r21_series,
 led21,w_led21_gnd,precheck,j_gnd,j_3v3,j_gpio4,j_gpio5,j_gpio6,j_gpio7,
-j_gpio15,j_gpio21,postcheck,photo
+j_gpio15,j_gpio21,check_3v3_gnd,check_devkit_gnd,check_devkit_3v3,
+check_gpio4,check_gpio5,check_gpio6,check_gpio7,check_gpio15,check_gpio21,
+check_empty16,check_empty17,check_empty18,check_empty38,photo
 ```
+
+Every step object has exactly `id`, `phase`, `highlight`, `instruction`,
+`purpose`, `requires_meter`, and `applies_power`. `highlight` is the matching
+item ID for item-placement steps, `dpdt` for `dpdt_identify` and
+`dpdt_insulate`, and `null` for safety/check/photo steps. `phase` is `prepare`
+through `rails`, `inputs` through `w_led21_gnd`, `attach` from `precheck`
+through `j_gpio21`, and `verify` thereafter. `instruction` is an imperative
+placement or exact measurement; `purpose` explains the electrical function.
+Neither field may be empty. `requires_meter` is true for `dpdt_identify`,
+`precheck`, and every `check_*` step, and false otherwise.
 
 `dpdt_identify` has `requires_meter=true` and therefore two confirmations.
 `j_gnd`, then `j_3v3`, then the six signal jumpers occur only after `precheck`.
-`postcheck` precedes `photo`. Every step has `applies_power=false`.
+Every individual `check_*` precedes and independently gates `photo`. Every
+step has `applies_power=false`.
 
-Meter-check text includes these exact normative tokens: `<2 Ohm`, `<100 Ohm`,
-`wait five seconds`, `UART USB disconnected`, `3V3-to-ground`,
-`GPIO16`, `GPIO17`, `GPIO18`, and `GPIO38`.
+`meter_checks` has `semantics`, `pre`, and `post`. `semantics` is exactly
+`{"continuity_pass":"<2 Ohm","short_fail":"<100 Ohm after waiting five seconds"}`.
+`pre` requires UART USB disconnected, no power, continuous GND rail, continuous
+3V3 rail, and 3V3-to-ground not below the short-fail threshold. `post` has one
+entry matching every `check_*` step: 3V3-to-ground not shorted; DevKit GND to
+GND rail `<2 Ohm`; DevKit 3V3 to 3V3 rail `<2 Ohm`; each of GPIO4, GPIO5,
+GPIO6, GPIO7, GPIO15, and GPIO21 to its named breadboard node `<2 Ohm`; and
+GPIO16, GPIO17, GPIO18, and GPIO38 visibly empty/disconnected. Every result is
+an explicit boolean confirmation stored independently by the controller.
+
+The UI states exactly: `Powered testing is deferred until the overhead photo is reviewed.`
 The final instruction is exactly:
 
 ```text
@@ -145,8 +193,12 @@ The final checkbox text is exactly `I attached the overhead photo in this chat`.
 Implement `load_model()` with `html.parser.HTMLParser`; reject missing/duplicate
 model scripts, non-JSON, or extra top-level keys. Assert the complete canonical
 model above, exact BOM counts, endpoint-node membership, value counts, item IDs,
-step IDs/order, unused DPDT nodes, rail polarity, no forbidden power strings,
-truth-table rows, meter tokens, and final instruction/checkbox.
+step IDs/order and every required step field. Assert the DPDT has exactly six
+distinct terminals and two per-pole contact objects, and reject common-to-common
+or cross-pole contacts. Assert the split rail is deliberately limited to columns
+1-27, LED anode/cathode nodes and labels are distinct, baseline/truth rows are
+exact, every meter result is independent, and powered testing is explicitly
+deferred. Assert final instruction/checkbox exactly.
 
 - [ ] **Step 2: Run RED**
 
@@ -188,7 +240,9 @@ Extract `<script id="wizard-controller">`, evaluate it with `node:vm`, and call
 - Next disabled until the active step is confirmed;
 - DPDT identify requires both placement and meter confirmations;
 - Back retains confirmations;
-- photo is unreachable until all earlier steps are confirmed;
+- photo is unreachable until all earlier steps and every individual post-check
+  result are confirmed (loop over every `check_*` ID, omit one at a time, and
+  prove the photo remains unreachable);
 - state persists only under `esp32tap-breadboard-wizard-v1`;
 - reset calls `confirmReset`, removes only that key, returns to index 0;
 - zoom clamps to 0.7 through 2.0.
@@ -287,11 +341,15 @@ Expected JSON contains `"type":"server-started"`, a port/URL, and an absolute
 
 - [ ] **Step 2: Publish the exact tracked file**
 
-After checking `$screen_dir/.server-info` exists and `.server-stopped` does not:
+Copy the absolute `screen_dir` value from the server-started JSON into the
+following assignment, then verify and publish using that same variable:
 
 ```bash
+SCREEN_DIR='/absolute/screen_dir/from/server-started-json'
+test -f "$SCREEN_DIR/.server-info"
+test ! -e "$SCREEN_DIR/.server-stopped"
 cp -f hardware/Esp32Tap/bringup/breadboard-wizard.html \
-  "$screen_dir/breadboard-wizard-live.html"
+  "$SCREEN_DIR/breadboard-wizard-live.html"
 ```
 
 - [ ] **Step 3: Inspect desktop and phone views**
