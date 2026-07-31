@@ -87,36 +87,72 @@ rail jumper, and DevKit jumper receives explicit endpoint labels in the SVG.
 
 ## Construction Order
 
+The following are phases in the progress display. Each placement phase expands
+into atomic UI steps containing exactly one resistor, LED, switch, or wire:
+
 1. Disconnect UART USB and all other power; inventory the exact BOM.
 2. Identify one continuous 3V3 rail segment and one continuous ground rail
    segment covering columns 1-27 with a continuity meter.
-3. Place the GPIO4/GPIO5 10 kOhm pull-ups and continuity-identified DPDT leads.
-4. Place the GPIO6 47 kOhm pull-down, SPST, and 1 kOhm 3V3 path.
-5. Place the GPIO7 10 kOhm pull-up and ground-switch path.
-6. Place both 47 kOhm tripwire pull-downs, 1 kOhm resistors, and LEDs, checking
-   anode/cathode orientation.
-7. Perform unpowered resistance/continuity and rail-short checks.
-8. With USB still disconnected, connect DevKit GND, then 3V3.
-9. Connect GPIO4, GPIO5, GPIO6, GPIO7, GPIO15, and GPIO21 by printed board label.
-10. Confirm GPIO16/17/18/38 are empty and submit an overhead photo for review.
+3. Place, in order: GPIO4 10 kOhm pull-up; GPIO5 10 kOhm pull-up; identify the
+   DPDT commons/throws; common-A wire; common-B wire; grounded-throw-A wire;
+   grounded-throw-B wire. Insulate the two unused throws.
+4. Place, in order: GPIO6 47 kOhm pull-down; GPIO6 SPST; GPIO6 1 kOhm-to-3V3
+   resistor.
+5. Place, in order: GPIO7 10 kOhm pull-up; GPIO7-to-ground SPST.
+6. Place, in order: GPIO15 47 kOhm pull-down; GPIO15 1 kOhm resistor; LED1;
+   LED1-cathode ground wire; GPIO21 47 kOhm pull-down; GPIO21 1 kOhm resistor;
+   LED2; LED2-cathode ground wire.
+7. Perform the pre-DevKit unpowered checks defined below.
+8. With USB still disconnected, place the DevKit GND jumper, then the DevKit
+   3V3 jumper as two separate atomic steps.
+9. Place six separate signal jumpers in this order: GPIO4, GPIO5, GPIO6, GPIO7,
+   GPIO15, GPIO21, always following the printed board label.
+10. Perform the post-connection unpowered checks defined below, confirm
+    GPIO16/17/18/38 are empty, then complete the photo handoff.
 
 No construction step applies power. Powered testing is a separate supervised
 workflow after photo approval.
 
+### Normative unpowered meter checks
+
+All checks use a de-energized board with UART USB disconnected. A low-resistance
+continuity result is less than 2 Ohm. A short is a stable reading below 100 Ohm;
+ignore only the meter's initial capacitive transient and wait five seconds.
+
+Before DevKit jumpers are installed:
+
+- the selected 3V3 rail is continuous from its first to last used hole;
+- the selected ground rail is continuous from its first to last used hole;
+- 3V3-to-ground is not a short;
+- each LED cathode has low-resistance continuity to ground;
+- DPDT baseline gives no continuity from either common to ground, while its
+  other position gives low-resistance continuity from both commons to ground;
+- GPIO6 and GPIO7 SPSTs are open in baseline and show continuity only when
+  closed.
+
+After every DevKit jumper is installed, repeat 3V3-to-ground (not a short), then
+require low-resistance continuity for DevKit GND-to-ground rail, DevKit
+3V3-to-3V3 rail, and each of the six DevKit GPIO labels to its named signal tie
+group. Confirm no jumper or component touches GPIO16, GPIO17, GPIO18, or GPIO38.
+These results are individual required confirmations before the photo screen.
+
 ## Switch Truth Table
 
-The baseline is DPDT **away from its grounded throws**, GPIO6 SPST open, and
-GPIO7 SPST open. It reads `(GPIO4,GPIO5,GPIO6,GPIO7) = (1,1,0,1)`.
+The baseline is the continuity-verified DPDT **Ungrounded** position, in which
+neither common has continuity to ground, with GPIO6 SPST open and GPIO7 SPST
+open. The user marks that actuator position `Ungrounded` after measuring it;
+the UI never infers contact state from lever direction. Baseline reads
+`(GPIO4,GPIO5,GPIO6,GPIO7) = (1,1,0,1)`.
 
-The DPDT grounded position produces GPIO4/GPIO5 = `0/0`; away produces `1/1`.
+The DPDT grounded position produces GPIO4/GPIO5 = `0/0`; Ungrounded produces `1/1`.
 GPIO6 open/closed produces `0/1`. GPIO7 open/closed produces `1/0`.
 
 | DPDT | GPIO6 SPST | GPIO7 SPST | Expected GPIO4,5,6,7 |
 |---|---|---|---|
-| Away | Open | Open | 1,1,0,1 |
-| Away | Open | Closed | 1,1,0,0 |
-| Away | Closed | Open | 1,1,1,1 |
-| Away | Closed | Closed | 1,1,1,0 |
+| Ungrounded | Open | Open | 1,1,0,1 |
+| Ungrounded | Open | Closed | 1,1,0,0 |
+| Ungrounded | Closed | Open | 1,1,1,1 |
+| Ungrounded | Closed | Closed | 1,1,1,0 |
 | Grounded | Open | Open | 0,0,0,1 |
 | Grounded | Open | Closed | 0,0,0,0 |
 | Grounded | Closed | Open | 0,0,1,1 |
@@ -142,6 +178,12 @@ The page stops at an unpowered photo-review handoff. Live eight-state testing
 is a later supervised step using the guarded Pi bench tool. Both tripwire LEDs
 remaining dark is an explicit acceptance criterion of that later powered test,
 not something the unpowered wizard claims to verify.
+
+The handoff screen says: `Keep UART USB unplugged. Take one sharp photo directly
+overhead with every rail, resistor band, switch lug, LED lead, and DevKit label
+visible. Attach that photo in this chat and wait for approval before applying
+power.` The final checkbox is `I attached the overhead photo in this chat`; it
+records the handoff but does not imply electrical approval.
 
 ## Verification
 
