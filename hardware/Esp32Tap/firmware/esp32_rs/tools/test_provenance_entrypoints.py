@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import importlib.util
 import os
+import signal
 import shutil
 import stat
 import subprocess
@@ -556,6 +557,183 @@ def test_shell_entrypoint_verifies_before_delegating(
         assert f"--kind {kind}" in invocation
     assert "--sentinel" in invocation
     assert "hostile value" in invocation
+
+
+def _directory_snapshot(path: Path) -> tuple[tuple[str, int, str], ...]:
+    result = []
+    for entry in sorted(path.iterdir()):
+        info = entry.lstat()
+        assert stat.S_ISREG(info.st_mode), entry
+        result.append(
+            (
+                entry.name,
+                stat.S_IMODE(info.st_mode),
+                hashlib.sha256(entry.read_bytes()).hexdigest(),
+            )
+        )
+    return tuple(result)
+
+
+def _smoke_fixture(tmp_path: Path):
+    fixture_root = tmp_path / "fixture root"
+    rust_tools = (
+        fixture_root
+        / "hardware"
+        / "Esp32Tap"
+        / "firmware"
+        / "esp32_rs"
+        / "tools"
+    )
+    cpp_tools = rust_tools.parent.parent / "esp32" / "tools"
+    rust_tools.mkdir(parents=True)
+    cpp_tools.mkdir(parents=True)
+    wrapper = rust_tools / "qemu_smoke.sh"
+    shutil.copy2(TOOLS / "qemu_smoke.sh", wrapper)
+    wrapper.chmod(0o755)
+    (rust_tools / "artifact_provenance.py").write_text(
+        "# intercepted by the fake python3\n",
+        encoding="utf-8",
+    )
+    rust_build = rust_tools.parent / ".artifacts" / "prod" / ("a" * 64)
+    rust_build.mkdir(parents=True)
+    (rust_tools.parent / "build").symlink_to(
+        Path(".artifacts") / "prod" / ("a" * 64)
+    )
+    for index, member in enumerate(MEMBERS):
+        artifact = rust_build / member
+        artifact.write_bytes(f"{member}:{index}\n".encode())
+        artifact.chmod(0o444)
+    cpp_smoke = cpp_tools / "qemu_smoke.sh"
+    cpp_smoke.write_text(
+        "#!/usr/bin/env bash\n"
+        'ESP32_DIR="$(cd "$(dirname "$0")/.." && pwd)"\n'
+        'printf "temporary qemu flash\\n" >"$ESP32_DIR/build/qemu_flash.bin"\n'
+        'printf "zero=%s\\nesp32_dir=%s\\nenv=%s\\n" "$0" "$ESP32_DIR" "$SMOKE_SENTINEL"\n'
+        'printf "arg=<%s>\\n" "$@"\n'
+        'sleep "${SMOKE_FAKE_DELAY:-0}"\n'
+        'exit "${SMOKE_FAKE_EXIT}"\n',
+        encoding="utf-8",
+    )
+    cpp_smoke.chmod(0o755)
+
+    fake_bin = tmp_path / "fake bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        'while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done\n'
+        '[ "$#" -gt 0 ] || exit 98\n'
+        "shift\n"
+        'exec "$@"\n',
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["SMOKE_SENTINEL"] = "environment preserved"
+    env["SMOKE_FAKE_EXIT"] = "37"
+    return wrapper, rust_build, rust_tools.parent.parent, env
+
+
+def test_smoke_sources_head_anchored_gate_in_private_build_context(
+    tmp_path: Path,
+):
+    wrapper, rust_build, firmware_dir, env = _smoke_fixture(tmp_path)
+    before = _directory_snapshot(rust_build)
+    assert {row[0] for row in before} == set(MEMBERS)
+
+    result = subprocess.run(
+        [str(wrapper), "one argument", "", "--literal"],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 37
+    fields = dict(
+        line.split("=", 1)
+        for line in result.stdout.splitlines()
+        if line.startswith(("zero=", "esp32_dir="))
+    )
+    private_root = Path(fields["esp32_dir"])
+    assert private_root.parent == firmware_dir.resolve()
+    assert private_root.name.startswith(".esp32tap-smoke.")
+    assert fields["zero"] == str(private_root / "tools" / "qemu_smoke.sh")
+    assert "env=environment preserved" in result.stdout
+    assert result.stdout.splitlines()[-3:] == [
+        "arg=<one argument>",
+        "arg=<>",
+        "arg=<--literal>",
+    ]
+    assert _directory_snapshot(rust_build) == before
+    assert not list(firmware_dir.glob(".esp32tap-smoke.*"))
+
+
+def test_concurrent_smokes_use_distinct_private_builds_and_clean_them(
+    tmp_path: Path,
+):
+    wrapper, rust_build, firmware_dir, env = _smoke_fixture(tmp_path)
+    before = _directory_snapshot(rust_build)
+    env["SMOKE_FAKE_EXIT"] = "0"
+    env["SMOKE_FAKE_DELAY"] = "0.2"
+
+    processes = [
+        subprocess.Popen(
+            [str(wrapper), f"run-{index}"],
+            cwd=tmp_path,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for index in range(2)
+    ]
+    results = [process.communicate(timeout=5) for process in processes]
+
+    assert [process.returncode for process in processes] == [0, 0]
+    roots = []
+    for stdout, stderr in results:
+        assert stderr == ""
+        line = next(line for line in stdout.splitlines() if line.startswith("esp32_dir="))
+        roots.append(Path(line.split("=", 1)[1]))
+    assert roots[0] != roots[1]
+    assert all(root.parent == firmware_dir.resolve() for root in roots)
+    assert _directory_snapshot(rust_build) == before
+    assert not list(firmware_dir.glob(".esp32tap-smoke.*"))
+
+
+def test_interrupted_smoke_cleans_private_build(tmp_path: Path):
+    wrapper, rust_build, firmware_dir, env = _smoke_fixture(tmp_path)
+    before = _directory_snapshot(rust_build)
+    env["SMOKE_FAKE_EXIT"] = "0"
+    env["SMOKE_FAKE_DELAY"] = "30"
+    process = subprocess.Popen(
+        [str(wrapper), "interrupt"],
+        cwd=tmp_path,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    private_root = None
+    for _ in range(4):
+        line = process.stdout.readline().strip()
+        if line.startswith("esp32_dir="):
+            private_root = Path(line.split("=", 1)[1])
+            break
+    assert private_root is not None and private_root.is_dir()
+
+    os.killpg(process.pid, signal.SIGTERM)
+    process.communicate(timeout=5)
+
+    assert process.returncode == 143
+    assert not private_root.exists()
+    assert _directory_snapshot(rust_build) == before
+    assert not list(firmware_dir.glob(".esp32tap-smoke.*"))
 
 
 def test_strengthened_harness_and_smoke_are_exactly_sha_pinned():

@@ -45,6 +45,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -55,6 +56,74 @@ from qemu_session import HarnessError, QemuSession  # noqa: E402
 
 MDNS_PORT = 5353
 TYPE_A, TYPE_PTR, TYPE_TXT, TYPE_SRV = 1, 12, 16, 33
+
+
+_CAPTURE_START_LOCK = threading.RLock()
+
+
+class _CaptureSubprocessProxy:
+    """Per-start subprocess dependency for the byte-pinned base harness.
+
+    `qemu_session.subprocess` normally refers to Python's process-global
+    ``subprocess`` module. Replacing ``subprocess.Popen`` through that alias
+    therefore replaces it for artifact provenance, Git, Docker inspection,
+    and every other thread too. This proxy leaves the shared module untouched:
+    it delegates every operation and every non-QEMU spawn byte-for-byte, and
+    rewrites only the exact Docker/QEMU command emitted by ``QemuSession``.
+    """
+
+    def __init__(self, delegate, session: "MdnsCaptureSession"):
+        self._delegate = delegate
+        self._session = session
+
+    def __getattr__(self, name):
+        return getattr(self._delegate, name)
+
+    def Popen(self, argv, *args, **kwargs):  # noqa: N802 - mirror subprocess API
+        if not self._is_session_qemu_run(argv):
+            return self._delegate.Popen(argv, *args, **kwargs)
+        rewritten = self._rewrite_qemu_run(argv)
+        return self._delegate.Popen(rewritten, *args, **kwargs)
+
+    def _is_session_qemu_run(self, argv) -> bool:
+        if not isinstance(argv, (list, tuple)) or not all(
+            isinstance(value, str) for value in argv
+        ):
+            return False
+        if len(argv) < 10 or list(argv[:3]) != ["docker", "run", "--rm"]:
+            return False
+        try:
+            name_index = argv.index("--name")
+        except ValueError:
+            return False
+        if name_index + 1 >= len(argv) or argv[name_index + 1] != self._session.name:
+            return False
+        return (
+            list(argv[-3:-1]) == ["bash", "-c"]
+            and "exec qemu-system-xtensa " in argv[-1]
+            and "-drive file=" in argv[-1]
+            and argv[-1].count("-serial tcp:127.0.0.1:") == 2
+        )
+
+    def _rewrite_qemu_run(self, argv) -> list[str]:
+        rewritten = list(argv)
+        script = rewritten[-1]
+        expected_nic = "-nic user,model=open_eth,"
+        if script.count(expected_nic) != 1:
+            raise HarnessError("harness did not emit the expected -nic option")
+        if "id=n0" in script or "filter-dump" in script or "/pcap" in script:
+            raise HarnessError("harness QEMU command already contains capture options")
+        rewritten[-1] = (
+            script.replace(
+                expected_nic,
+                "-nic user,id=n0,model=open_eth,",
+                1,
+            )
+            + " -object filter-dump,id=f0,netdev=n0,file=/pcap/wire.pcap"
+        )
+        # Insert among Docker flags, before the image name.
+        rewritten[3:3] = ["-v", f"{self._session.capture_dir}:/pcap"]
+        return rewritten
 
 
 class MdnsCaptureSession(QemuSession):
@@ -77,35 +146,20 @@ class MdnsCaptureSession(QemuSession):
         super().__init__(*args, **kwargs)
 
     def _start(self, boot_timeout):
-        real_popen = subprocess.Popen
-
-        def patched(argv, **kw):
-            argv = list(argv)
-            # Give the machine's own NIC a netdev id, then attach the dump
-            # filter to it. `-nic` is the only way to configure an onboard NIC
-            # (`-device open_eth,netdev=...` is refused: "Parameter 'driver'
-            # expects a pluggable device type"), and it does accept `id=`.
-            script = argv[-1]
-            if "-nic user,model=open_eth," not in script:
-                raise HarnessError("harness did not emit the expected -nic option")
-            argv[-1] = (
-                script.replace(
-                    "-nic user,model=open_eth,",
-                    "-nic user,id=n0,model=open_eth,",
-                )
-                + " -object filter-dump,id=f0,netdev=n0,file=/pcap/wire.pcap"
-            )
-            # Mount the capture directory. Inserted straight after `--rm`, i.e.
-            # among the docker flags and before the image name.
-            i = argv.index("--rm") + 1
-            argv[i:i] = ["-v", f"{self.capture_dir}:/pcap"]
-            return real_popen(argv, **kw)
-
-        qemu_session.subprocess.Popen = patched
-        try:
-            super()._start(boot_timeout)
-        finally:
-            qemu_session.subprocess.Popen = real_popen
+        # The base harness is sha-pinned, so inject its subprocess dependency
+        # without editing it. Serializing this short injection scope prevents
+        # two capture sessions from nesting proxies; ordinary concurrent
+        # QemuSessions remain safe because the proxy passes their calls through.
+        # BaseException is intentional: Ctrl-C and pytest timeouts must restore
+        # the module alias just as reliably as normal construction failures.
+        with _CAPTURE_START_LOCK:
+            real_subprocess = qemu_session.subprocess
+            proxy = _CaptureSubprocessProxy(real_subprocess, self)
+            qemu_session.subprocess = proxy
+            try:
+                super()._start(boot_timeout)
+            finally:
+                qemu_session.subprocess = real_subprocess
 
     def flush_capture(self, timeout: float = 30.0) -> bytes:
         """Stop the guest cleanly and return the finished pcap.

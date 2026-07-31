@@ -126,10 +126,14 @@ ALLOWED_STRENGTHENING: dict[str, tuple[str, str]] = {
 # C++ smoke gate remains a separately type/mode/byte-checked HEAD anchor.
 SMOKE_REL = "hardware/Esp32Tap/firmware/esp32/tools/qemu_smoke.sh"
 SMOKE_STRENGTHENING = (
-    "b8f39bccbac85a5f051d7b34028c1de51d4a09b315713afe0b27bd7dbdd1abd0",
+    "aac4ffa7b931d070b93ad12e22b001c9db871a7f3e14a67746d9f28ee21749ad",
     "ARTIFACT PROVENANCE: the Rust path is an executable regular wrapper "
-    "which leases and verifies production before exec of the separately "
-    "HEAD-anchored, byte-unchanged C++ smoke gate.",
+    "which leases and verifies production before sourcing the separately "
+    "HEAD-anchored, byte-unchanged C++ smoke gate with a task-private $0. "
+    "Its positional ESP32_DIR resolves to a private copy of the five leased "
+    "Rust members, so qemu_flash.bin cannot mutate the sealed generation. "
+    "Private workspaces are isolated and trap-cleaned; arguments, environment "
+    "and exit status pass through unchanged.",
 )
 
 
