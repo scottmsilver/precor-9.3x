@@ -34,6 +34,10 @@ class GitFailure(RuntimeError):
     """Git did not provide a trustworthy, bounded selector input."""
 
 
+class SelectionError(ValueError):
+    """The caller did not provide enough safe information to select gates."""
+
+
 @dataclass(frozen=True)
 class Policy:
     name: str
@@ -428,15 +432,30 @@ def _safe_revision(value: str, *, is_range: bool) -> str:
         or value.startswith("-")
         or any(character.isspace() or character == "\0" for character in value)
     ):
-        raise ValueError(f"unsafe Git revision: {value!r}")
+        kind = "range" if is_range else "revision"
+        raise SelectionError(f"unsafe Git {kind}: {value!r}")
     if is_range:
-        if value.count("..") != 1:
-            raise ValueError(f"unsafe Git range: {value!r}")
-        left, right = value.split("..")
-        if not left or not right or left.startswith("-") or right.startswith("-"):
-            raise ValueError(f"unsafe Git range: {value!r}")
+        separators = [
+            index
+            for index in range(len(value) - 1)
+            if value[index : index + 2] == ".."
+        ]
+        if len(separators) != 1:
+            raise SelectionError(f"unsafe Git range: {value!r}")
+        separator = separators[0]
+        left = value[:separator]
+        right = value[separator + 2 :]
+        if (
+            not left
+            or not right
+            or left.startswith("-")
+            or right.startswith("-")
+            or ".." in left
+            or ".." in right
+        ):
+            raise SelectionError(f"unsafe Git range: {value!r}")
     elif ".." in value:
-        raise ValueError(f"unsafe Git revision: {value!r}")
+        raise SelectionError(f"unsafe Git revision: {value!r}")
     return value
 
 
@@ -565,7 +584,10 @@ def select(
         return _broad((), "git-enumeration-failed")
 
     if not authoritative:
-        return _broad((), "no-authoritative-changes")
+        raise SelectionError(
+            "no authoritative Git changes; use --base REV or "
+            "--range A..B for committed work"
+        )
 
     for value in explicit_paths:
         try:
@@ -637,6 +659,9 @@ def main(argv: list[str] | None = None) -> int:
             range_spec=arguments.range_spec,
             explicit_paths=arguments.paths,
         )
+    except SelectionError as exc:
+        print(f"fast-select: {exc}", file=sys.stderr)
+        return 2
     except (GitFailure, OSError, ValueError):
         selected = _broad((), "selector-internal-failure")
     print(selected.to_json())

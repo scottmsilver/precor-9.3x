@@ -203,11 +203,74 @@ def test_explicit_paths_only_augment_nonempty_authoritative_changes(
 def test_explicit_path_cannot_establish_authority(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(fast_select, "_run_git", lambda _root, _args: b"")
 
-    selected = fast_select.select(tmp_path, explicit_paths=("docs/hint.md",))
+    with pytest.raises(
+        fast_select.SelectionError,
+        match="no authoritative Git changes",
+    ):
+        fast_select.select(tmp_path, explicit_paths=("docs/hint.md",))
 
-    assert selected.policies == ("broad",)
-    assert selected.broad_reason == "no-authoritative-changes"
-    assert selected.paths == ()
+
+def test_clean_cli_without_base_or_range_is_nonzero_and_emits_no_json_or_sweep(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(fast_select, "discover_repo_root", lambda _script: tmp_path)
+    monkeypatch.setattr(fast_select, "_run_git", lambda _root, _args: b"")
+
+    status = fast_select.main(["docs/hint.md"])
+
+    captured = capsys.readouterr()
+    assert status == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "fast-select: no authoritative Git changes; use --base REV or "
+        "--range A..B for committed work\n"
+    )
+    assert "sweep.sh" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "range_spec",
+    [
+        "left...right",
+        "left....right",
+        "left..right..extra",
+        "..right",
+        "left..",
+        "-left..right",
+        "left..-right",
+        "left ..right",
+        "left..right\nextra",
+    ],
+)
+def test_range_requires_one_exact_dot_pair_and_safe_nonempty_sides(
+    monkeypatch, tmp_path: Path, range_spec: str
+) -> None:
+    calls = 0
+
+    def unexpected(_root: Path, _args: tuple[str, ...]) -> bytes:
+        nonlocal calls
+        calls += 1
+        return b""
+
+    monkeypatch.setattr(fast_select, "_run_git", unexpected)
+
+    with pytest.raises(fast_select.SelectionError, match="unsafe Git range"):
+        fast_select.select(tmp_path, range_spec=range_spec)
+
+    assert calls == 0
+
+
+def test_unsafe_range_cli_is_nonzero_before_git_and_emits_no_json(
+    monkeypatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(fast_select, "discover_repo_root", lambda _script: tmp_path)
+
+    status = fast_select.main(["--range", "left...right"])
+
+    captured = capsys.readouterr()
+    assert status == 2
+    assert captured.out == ""
+    assert captured.err == "fast-select: unsafe Git range: 'left...right'\n"
 
 
 @pytest.mark.parametrize(
