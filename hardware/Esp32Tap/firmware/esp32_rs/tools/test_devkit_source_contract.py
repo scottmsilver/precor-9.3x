@@ -8,14 +8,15 @@ artifact gate performs the real cross-build and also leaves a generated
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import stat
 import struct
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
-
-import pytest
 
 
 # Source-only verification (works in a clean checkout):
@@ -58,6 +59,29 @@ FORBIDDEN_TEXT = {
     "ble_core",
     "coach_core",
 }
+FORBIDDEN_LINKED_SYMBOLS = tuple(
+    symbol.encode()
+    for symbol in (
+        "gpio_set_direction",
+        "gpio_config",
+        "gpio_set_level",
+        "gpio_pullup_en",
+        "gpio_pullup_dis",
+        "gpio_pulldown_en",
+        "gpio_pulldown_dis",
+        "gpio_set_pull_mode",
+        "gpio_hold_en",
+        "uart_set_pin",
+        "uart_driver_install",
+        "esp_wifi_init",
+        "esp_wifi_start",
+        "esp_wifi_connect",
+        "esp_wifi_set_mode",
+        "esp_wifi_set_config",
+        "nimble_port_init",
+        "esp_eth_driver_install",
+    )
+)
 FAILURE_CODES = {
     "BAD_RECIPE",
     "CHIP_INFO",
@@ -685,16 +709,183 @@ def test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode() -> None:
     assert config.get("CONFIG_ESP_WIFI_ENABLED") in {"n", "y"}
     image = _read_xtensa_elf(elf)
     _validate_devkit_identity(image, expected_recipe, expected_git_commit)
-    for symbol in (
-        b"esp_wifi_init",
-        b"esp_wifi_start",
-        b"esp_wifi_connect",
-        b"esp_wifi_set_mode",
-        b"esp_wifi_set_config",
-        b"nimble_port_init",
-        b"esp_eth_driver_install",
-    ):
+    for symbol in FORBIDDEN_LINKED_SYMBOLS:
         assert symbol not in image
+
+
+def validate_prebuild_contract() -> None:
+    """Validate every source/defaults invariant without importing pytest."""
+
+    checks = (
+        test_all_isolated_firmware_files_exist,
+        test_manifest_has_only_the_two_direct_dependencies,
+        test_build_script_fail_closes_recipe_and_commit_identity,
+        test_crate_imports_only_its_read_only_hardware_boundary,
+        test_gpio_getters_exist_only_in_hardware_boundary,
+        test_hardware_ffi_surface_is_read_only_and_status_checked,
+        test_unsafe_is_confined_and_every_block_has_adjacent_justification,
+        test_unsafe_budget_has_an_independent_devkit_allowlist_and_budget,
+        test_startup_report_contains_every_required_bounded_record,
+        test_every_observed_pin_has_level_and_direction_in_one_record,
+        test_failure_codes_are_exact_and_protected_directions_gate_pass,
+        test_settle_delay_is_fixed_once_before_first_report_write,
+        test_terminal_result_is_single_shot_and_halt_cannot_restart,
+        test_post_pass_gpio_and_uart_failures_emit_one_best_effort_failure,
+        test_standalone_sdkconfig_is_n8r8_uart_and_halt_only,
+    )
+    for check in checks:
+        check()
+    sources = _rust_sources()
+    code = "\n".join(_without_comments_and_strings(text) for text in sources.values())
+    lowered = code.lower()
+    assert not (
+        present := sorted(token for token in FORBIDDEN_TEXT if token in lowered)
+    ), present
+    assert not re.search(
+        r"(?i)output_mask\s*[:=][^;]*(?:gpio)?(?:4|5|6|7|15|17|21)\b", code
+    )
+
+
+def validate_generated_contract(
+    sdkconfig_value: str,
+    elf_value: str,
+    recipe: str,
+    git_commit: str,
+) -> None:
+    """Validate exact generated files and build identity without pytest."""
+
+    sdkconfig = _absolute_regular_file(sdkconfig_value, "generated sdkconfig")
+    elf = _absolute_regular_file(elf_value, "DevKit ELF")
+    assert re.fullmatch(
+        r"[0-9a-f]{64}", recipe
+    ), "expected recipe ID must be exactly 64 lowercase hexadecimal characters"
+    assert re.fullmatch(
+        r"[0-9a-f]{40}", git_commit
+    ), "expected git commit must be exactly 40 lowercase hexadecimal characters"
+    _validate_generated_sdkconfig(sdkconfig)
+    config = _parse_kconfig(sdkconfig)
+    _assert_n8r8_uart_halt_config(config)
+    assert config.get("CONFIG_ESP_WIFI_ENABLED") in {"n", "y"}
+    image = _read_xtensa_elf(elf)
+    _validate_devkit_identity(image, recipe.encode(), git_commit.encode())
+    for symbol in FORBIDDEN_LINKED_SYMBOLS:
+        assert symbol not in image, f"ELF contains forbidden linked symbol: {symbol!r}"
+
+
+def _contract_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="test_devkit_source_contract.py")
+    modes = parser.add_subparsers(dest="mode", required=True)
+    modes.add_parser("prebuild")
+    generated = modes.add_parser("generated")
+    generated.add_argument("--sdkconfig", required=True)
+    generated.add_argument("--elf", required=True)
+    generated.add_argument("--recipe-id", required=True)
+    generated.add_argument("--git-commit", required=True)
+    args = parser.parse_args(argv)
+    try:
+        if sys.flags.optimize:
+            raise RuntimeError("contract validation forbids optimized Python")
+        if args.mode == "prebuild":
+            validate_prebuild_contract()
+            print("DevKit prebuild contract: PASS")
+        else:
+            validate_generated_contract(
+                args.sdkconfig, args.elf, args.recipe_id, args.git_commit
+            )
+            print("DevKit generated contract: PASS")
+    except Exception as exc:
+        print(f"DevKit {args.mode} contract: FAIL: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_contract_cli(sys.argv[1:]))
+
+
+import pytest  # noqa: E402  (CLI deliberately exits before this optional dependency)
+
+
+def test_prebuild_cli_has_no_ambient_pytest_dependency() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", str(Path(__file__).resolve()), "prebuild"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "DevKit prebuild contract: PASS"
+
+
+def test_generated_cli_uses_explicit_artifacts_and_identity_without_skips(
+    tmp_path: Path,
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "devkit_bringup"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(_structural_xtensa_elf_fixture((TEST_RECIPE_ID, TEST_GIT_COMMIT)))
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(Path(__file__).resolve()),
+            "generated",
+            "--sdkconfig",
+            str(sdkconfig),
+            "--elf",
+            str(elf),
+            "--recipe-id",
+            TEST_RECIPE_ID,
+            "--git-commit",
+            TEST_GIT_COMMIT,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "DevKit generated contract: PASS"
+
+
+def test_generated_cli_rejects_protected_gpio_output_symbol(tmp_path: Path) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "devkit_bringup"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(
+        _structural_xtensa_elf_fixture((TEST_RECIPE_ID, TEST_GIT_COMMIT))
+        + b"\0gpio_set_level\0"
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(Path(__file__).resolve()),
+            "generated",
+            "--sdkconfig",
+            str(sdkconfig),
+            "--elf",
+            str(elf),
+            "--recipe-id",
+            TEST_RECIPE_ID,
+            "--git-commit",
+            TEST_GIT_COMMIT,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "gpio_set_level" in completed.stderr
 
 
 def test_generated_verifier_rejects_relative_paths(

@@ -89,10 +89,11 @@ _UNTRACKED_INPUT_SUFFIXES = frozenset(
 )
 _UNTRACKED_INPUT_NAMES = frozenset({"Dockerfile", "Makefile"})
 _GATES = (
-    "check_unsafe_budget.py",
-    "check_case_parity.py",
-    "check_pins.py",
-    "check_wdt_chain.py",
+    ("check_unsafe_budget.py", False),
+    ("check_case_parity.py", False),
+    ("check_pins.py", False),
+    ("check_wdt_chain.py", False),
+    ("test_devkit_source_contract.py", True),
 )
 
 
@@ -885,7 +886,9 @@ def create_snapshot(repo_root: Path, destination: Path, target_cache: Path) -> S
     )
 
 
-def verify_gate_input_completeness(snapshot_root: Path) -> None:
+def verify_gate_input_completeness(
+    snapshot_root: Path, *, include_devkit: bool = False
+) -> None:
     """Run every current host gate using only snapshot-local repository paths."""
 
     root = Path(snapshot_root).resolve(strict=True)
@@ -905,21 +908,28 @@ def verify_gate_input_completeness(snapshot_root: Path) -> None:
         "sys.path.insert(0, sys.argv[1]); "
         "runpy.run_path(sys.argv[2], run_name='__main__')"
     )
-    for gate in _GATES:
+    for gate, devkit_only in _GATES:
+        if devkit_only and not include_devkit:
+            continue
         script = tools / gate
         if not script.is_file():
             raise RuntimeError(
                 f"gate input completeness failed: missing gate {script.relative_to(root)}"
             )
-        result = subprocess.run(
-            [
+        argv = (
+            [sys.executable, "-I", "-S", str(script), "prebuild"]
+            if devkit_only
+            else [
                 sys.executable,
                 "-I",
                 "-c",
                 bootstrap,
                 str(script.parent),
                 str(script),
-            ],
+            ]
+        )
+        result = subprocess.run(
+            argv,
             cwd=root,
             env=environment,
             stdout=subprocess.PIPE,

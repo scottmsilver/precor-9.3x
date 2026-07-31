@@ -632,6 +632,13 @@ if (
 print(sdkconfig)
 PYSDK
 )"
+if [ "$ARTIFACT_KIND" = devkit-bringup ]; then
+    python3 "$RS_DIR/tools/test_devkit_source_contract.py" generated \
+        --sdkconfig "$sdk" \
+        --elf "$T/$APP_NAME" \
+        --recipe-id "$ESP32TAP_RECIPE_ID" \
+        --git-commit "$ESP32TAP_GIT_COMMIT"
+fi
 FLASH_SIZE="$(grep -E '^CONFIG_ESPTOOLPY_FLASHSIZE=' "$sdk" | head -1 | cut -d\" -f2)"
 [ -n "$FLASH_SIZE" ] || { echo "FATAL: flash size missing from sdkconfig" >&2; exit 1; }
 
@@ -652,46 +659,7 @@ python -m esptool --chip esp32s3 image_info --version 2 /output/esp32tap.bin 2>/
     | grep -qi "^Flash size: *$FLASH_SIZE$" \
     || { echo "FATAL: image header flash size mismatch" >&2; exit 1; }
 
-if [ "$ARTIFACT_KIND" = devkit-bringup ]; then
-    grep -q '^CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y$' "$sdk"
-    grep -q '^CONFIG_SPIRAM=y$' "$sdk"
-    grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' "$sdk"
-    grep -q '^CONFIG_ESP_CONSOLE_UART_DEFAULT=y$' "$sdk"
-    grep -q '^CONFIG_ESP_CONSOLE_UART=y$' "$sdk"
-    grep -q '^CONFIG_ESP_CONSOLE_SECONDARY_NONE=y$' "$sdk"
-    if grep -Eq '^CONFIG_(ESP_CONSOLE_USB_CDC|ESP_CONSOLE_USB_SERIAL_JTAG|ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG|ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED|USJ_ENABLE_USB_SERIAL_JTAG)=y$' "$sdk"; then
-        echo "FATAL: USB Serial/JTAG console is enabled" >&2
-        exit 1
-    fi
-    if grep -q '^CONFIG_BT_ENABLED=y$' "$sdk"; then
-        echo "FATAL: Bluetooth identity is enabled" >&2
-        exit 1
-    fi
-    python3 - "$T/$APP_NAME" "$ESP32TAP_RECIPE_ID" "$ESP32TAP_GIT_COMMIT" <<'PYIDENTITY'
-import sys
-from pathlib import Path
-
-elf = Path(sys.argv[1]).read_bytes()
-identity = (
-    sys.argv[2].encode()
-    + sys.argv[3].encode()
-    + "ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS".encode()
-)
-if elf.count(identity) != 1:
-    raise SystemExit("FATAL: linked DevKit ELF has embedded recipe mismatch")
-for forbidden in (
-    b"esp32tap QEMU-TEST build",
-    b"qemu-test",
-    b"esp_wifi_init",
-    b"esp_wifi_start",
-    b"esp_wifi_connect",
-    b"nimble_port_init",
-    b"esp_eth_driver_install",
-):
-    if forbidden in elf:
-        raise SystemExit(f"FATAL: linked DevKit ELF contains forbidden identity {forbidden!r}")
-PYIDENTITY
-else
+if [ "$ARTIFACT_KIND" != devkit-bringup ]; then
     grep -q "CONFIG_ESP_TASK_WDT_PANIC=y" "$sdk"
     grep -q "CONFIG_FREERTOS_HZ=1000" "$sdk"
     qemu_flag=()
@@ -940,7 +908,9 @@ def main() -> None:
             )
             for kind, _ in kinds
         }
-        verify_gate_input_completeness(snapshot.root)
+        verify_gate_input_completeness(
+            snapshot.root, include_devkit=devkit_commit is not None
+        )
         if sealed_snapshot_digest(snapshot.root, snapshot.paths) != sealed_baseline:
             raise BuildError("sealed source snapshot changed while gates were running")
 

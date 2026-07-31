@@ -144,6 +144,20 @@ def test_devkit_build_uses_isolated_crate_config_and_final_linked_elf() -> None:
     assert '--message-format=json-render-diagnostics "${args[@]}"' in text
 
 
+def test_devkit_generated_contract_precedes_app_conversion_with_exact_inputs() -> None:
+    text = source()
+    contract = 'python3 "$RS_DIR/tools/test_devkit_source_contract.py" generated'
+    assert (
+        text.index('cargo +esp build --manifest-path "$CRATE/Cargo.toml"')
+        < (text.index(contract))
+        < text.index("python -m esptool --chip esp32s3 elf2image")
+    )
+    assert '--sdkconfig "$sdk"' in text
+    assert '--elf "$T/$APP_NAME"' in text
+    assert '--recipe-id "$ESP32TAP_RECIPE_ID"' in text
+    assert '--git-commit "$ESP32TAP_GIT_COMMIT"' in text
+
+
 def test_physical_worktree_keys_lock_targets_and_cache() -> None:
     text = source()
     assert 'lock_path(repo_root, "production")' in text
@@ -258,6 +272,22 @@ def publish_generation_atomic(*args, **kwargs):
                 "    raise SystemExit(19)\n"
             ),
         )
+    _write(
+        tools / "test_devkit_source_contract.py",
+        (
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            f"log = Path({str(event_log)!r})\n"
+            "if sys.argv[1:] != ['prebuild']:\n"
+            "    raise SystemExit('fake contract accepts only prebuild')\n"
+            "with log.open('a', encoding='utf-8') as stream:\n"
+            "    stream.write(json.dumps({'event':'gate','name':"
+            "'test_devkit_source_contract.py','path':__file__}) + '\\n')\n"
+            "source = Path(__file__).parent.parent / 'devkit_bringup/src/main.rs'\n"
+            "if 'gpio_set_level' in source.read_text(encoding='utf-8').lower():\n"
+            "    raise SystemExit('forbidden DevKit source contract token: gpio_set_level')\n"
+        ),
+    )
     toolchain_common = {
         "image_id": "sha256:" + "a" * 64,
         "recipe_sha256": "b" * 64,
@@ -456,6 +486,14 @@ if os.environ.get("FAKE_DOCKER_MUTATE"):
     path.write_text(("B" if current[0] != "B" else "A") + current[1:], encoding="utf-8")
 if os.environ.get("FAKE_DOCKER_FAIL"):
     raise SystemExit(17)
+command = argv[-1] if argv else ""
+if (
+    os.environ.get("FAKE_DEVKIT_GENERATED_CONTRACT_FAIL")
+    and "test_devkit_source_contract.py" in command
+    and " generated " in command
+):
+    print("generated DevKit contract rejected linked ELF", file=sys.stderr)
+    raise SystemExit(23)
 mounts = [argv[index + 1] for index, value in enumerate(argv) if value == "-v"]
 output = Path(next(value.split(":", 1)[0] for value in mounts if value.endswith(":/output")))
 settings = {}
@@ -778,6 +816,55 @@ def test_devkit_rejects_mutate_capture_revert_snapshot_race_before_docker(
     assert not (
         root / "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup"
     ).exists()
+
+
+def test_devkit_clean_forbidden_source_contract_stops_before_docker(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, docker_log, _ = fake_worktree
+    source_path = (
+        root / "hardware/Esp32Tap/firmware/esp32_rs/devkit_bringup/src/main.rs"
+    )
+    source_path.write_text(
+        source_path.read_text(encoding="utf-8")
+        + "\nfn forbidden() { gpio_set_level(4, 1); }\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(root), "add", str(source_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-qm", "forbidden clean source"],
+        check=True,
+    )
+
+    completed = _run(fake_worktree, only="devkit")
+
+    assert completed.returncode != 0
+    assert "forbidden DevKit source contract token" in completed.stderr
+    assert not docker_log.exists()
+    assert not (
+        root / "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup"
+    ).exists()
+
+
+def test_devkit_generated_contract_failure_preserves_public_generation(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, docker_log, _ = fake_worktree
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    first = _run(fake_worktree, only="devkit")
+    assert first.returncode == 0, first.stderr
+    original = os.readlink(rs / "build_devkit_bringup")
+
+    rejected = _run(
+        fake_worktree,
+        only="devkit",
+        extra_env={"FAKE_DEVKIT_GENERATED_CONTRACT_FAIL": "1"},
+    )
+
+    assert rejected.returncode != 0
+    assert "generated DevKit contract rejected linked ELF" in rejected.stderr
+    assert os.readlink(rs / "build_devkit_bringup") == original
+    assert len(_events(docker_log)) == 2
 
 
 @pytest.mark.parametrize(
