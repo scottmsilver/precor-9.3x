@@ -147,16 +147,17 @@ check_empty16,check_empty17,check_empty18,check_empty38,photo
 ```
 
 Every step object has exactly `id`, `phase`, `highlight`, `instruction`,
-`purpose`, `requires_meter`, and `applies_power`. `highlight` is the matching
+`purpose`, `confirmation_ids`, and `applies_power`. `highlight` is the matching
 item ID for item-placement steps, `dpdt` for `dpdt_identify` and
 `dpdt_insulate`, and `null` for safety/check/photo steps. `phase` is `prepare`
 through `rails`, `inputs` through `w_led21_gnd`, `attach` from `precheck`
 through `j_gpio21`, and `verify` thereafter. `instruction` is an imperative
 placement or exact measurement; `purpose` explains the electrical function.
-Neither field may be empty. `requires_meter` is true for `dpdt_identify`,
-`precheck`, and every `check_*` step, and false otherwise.
+Neither field may be empty. Every ordinary placement, precheck, and `check_*`
+step has one result ID in `confirmation_ids`. `dpdt_identify` alone has exactly
+two: `placed` and `both_pole_pairs_meter_identified`.
 
-`dpdt_identify` has `requires_meter=true` and therefore two confirmations.
+The controller gates Next on every ID in the active step's `confirmation_ids`.
 `j_gnd`, then `j_3v3`, then the six signal jumpers occur only after `precheck`.
 Every individual `check_*` precedes and independently gates `photo`. Every
 step has `applies_power=false`.
@@ -164,14 +165,26 @@ step has `applies_power=false`.
 `meter_checks` has `semantics`, `pre`, and `post`. `semantics` is exactly
 `{"continuity_pass":"<2 Ohm","short_fail":"<100 Ohm after waiting five seconds"}`.
 `pre` requires UART USB disconnected, no power, continuous GND rail, continuous
-3V3 rail, and 3V3-to-ground not below the short-fail threshold. `post` has one
-entry matching every `check_*` step: 3V3-to-ground not shorted; DevKit GND to
+3V3 rail, and 3V3-to-ground not below the short-fail threshold. It also requires
+both LED cathodes to GND at `<2 Ohm`; meter-confirmed DPDT ungrounded/grounded
+behavior on each pole independently; GPIO6 SPST open/closed behavior; and GPIO7
+SPST open/closed behavior. `post` has one entry matching every `check_*` step:
+3V3-to-ground not shorted; DevKit GND to
 GND rail `<2 Ohm`; DevKit 3V3 to 3V3 rail `<2 Ohm`; each of GPIO4, GPIO5,
 GPIO6, GPIO7, GPIO15, and GPIO21 to its named breadboard node `<2 Ohm`; and
 GPIO16, GPIO17, GPIO18, and GPIO38 visibly empty/disconnected. Every result is
 an explicit boolean confirmation stored independently by the controller.
 
-The UI states exactly: `Powered testing is deferred until the overhead photo is reviewed.`
+The safety and final-inspection UI explicitly states all of the following:
+
+- DPDT lug arrangements vary; meter-identify both independent common/throw
+  pairs and never infer them from physical position.
+- If either rail is split or fails continuity, replace it with one verified
+  continuous rail segment; do not assume it is continuous and do not bridge it.
+- Confirm no 5V, native USB, or treadmill connection; GPIO16/17/18/38 empty;
+  every resistor value; both LED A/K polarities; and baseline DPDT ungrounded,
+  GPIO6 open, GPIO7 open.
+- `Powered testing is deferred until the overhead photo is reviewed.`
 The final instruction is exactly:
 
 ```text
@@ -238,7 +251,9 @@ Extract `<script id="wizard-controller">`, evaluate it with `node:vm`, and call
 `window.createBreadboardController({model,storage,confirmReset})`. Test:
 
 - Next disabled until the active step is confirmed;
-- DPDT identify requires both placement and meter confirmations;
+- DPDT identify requires both `placed` and
+  `both_pole_pairs_meter_identified`; every other step requires its one exact
+  result confirmation;
 - Back retains confirmations;
 - photo is unreachable until all earlier steps and every individual post-check
   result are confirmed (loop over every `check_*` ID, omit one at a time, and
@@ -266,8 +281,8 @@ Run the same Node command. Expected: all controller tests pass.
 
 - [ ] **Step 5: Extend Python static safety assertions**
 
-Require DOM IDs `board-svg`, `step-title`, `step-copy`, `confirm-step`,
-`confirm-meter`, `previous-step`, `next-step`, `zoom-in`, `zoom-out`,
+Require DOM IDs `board-svg`, `step-title`, `step-copy`, `confirmations`,
+`previous-step`, `next-step`, `zoom-in`, `zoom-out`,
 `reset-progress`, `netlist-panel`, `truth-table`, and `photo-handoff`. Require
 CSS classes `.item-complete`, `.item-active`, `.item-future`; exact warnings
 `NO 5V`, `UART USB UNPLUGGED`, `NO NATIVE USB`, `NO TREADMILL`; LED `A`/`K`
@@ -294,8 +309,9 @@ rail segment, DevKit printed-name pads, all items/endpoints, resistor values,
 LED polarity, DPDT unused insulated throws, active/completed/future states,
 phase/progress, atomic instruction, persistent BOM/netlist/truth table, meter
 checks, disconnected pins, and photo handoff. Wire DOM controls to the pure
-controller. `Next` uses controller gating; the meter checkbox appears only on
-`dpdt_identify`; photo requires all earlier confirmations. Reset uses a native
+controller. `Next` uses controller gating and renders one checkbox per active
+step `confirmation_ids` entry; only `dpdt_identify` renders two. Photo requires
+all earlier confirmations. Reset uses a native
 confirmation dialog and clears only the versioned key.
 
 - [ ] **Step 2: Run Python GREEN**
