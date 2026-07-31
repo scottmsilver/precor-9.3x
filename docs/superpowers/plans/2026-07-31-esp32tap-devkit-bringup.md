@@ -319,7 +319,7 @@ git commit -m "build(Esp32Tap): publish immutable DevKit bundles"
 
 - [ ] **Step 1: Write failing verification/refusal tests**
 
-Use temporary bundles and a fake command runner. Require refusal for non-canonical/oversized manifests; wrong kind; missing, extra, symlinked, or hard-linked members; size/hash mismatch; any serial path unequal to the manifest's exact CP2102N `required_serial_device`; wrong chip/MAC/flash size; and flash before a matching 8 MB backup receipt. A different valid `/dev/serial/by-id/...` path must be a RED test.
+Use temporary bundles and a fake command runner. Require refusal for non-canonical/oversized manifests; wrong kind; missing, extra, symlinked, or hard-linked members; size/hash mismatch; any serial path unequal to the manifest's exact CP2102N `required_serial_device`; wrong chip/MAC/flash size; and flash before a matching 8 MB backup receipt. Test that `backup` rejects a non-physical, non-owned, or non-`0700` backup directory and that it creates only an owned, single-link regular raw backup file with exact mode `0600`, even under permissive umask. Test that receipt creation/acceptance and flash authorization reject a backup whose parent directory or raw file later fails those checks. A different valid `/dev/serial/by-id/...` path must be a RED test.
 
 - [ ] **Step 2: Run RED**
 
@@ -338,7 +338,7 @@ cold-monitor --serial PATH --recipe-id HEX --timeout 180
 sample --serial PATH --sequence N --expect 0,1,1,0
 ```
 
-All subprocess calls are argv arrays using fixed `/home/ssilver/.local/bin/esptool`; no shell. The serial argument must byte-for-byte equal the manifest-bound path and resolve to the same character device immediately before every chip, backup, and flash action. Reads are bounded. Receipt JSON is canonical mode `0600` and records MAC, byte count, backup SHA-256, path, and timestamp. Backups use exclusive create and are never overwritten.
+All subprocess calls are argv arrays using fixed `/home/ssilver/.local/bin/esptool`; no shell. The serial argument must byte-for-byte equal the manifest-bound path and resolve to the same character device immediately before every chip, backup, and flash action. Reads are bounded. `backup-dir` must be an owned physical directory (not a symlink) with exact mode `0700`. `backup` uses exclusive create and a requested `0600` mode; before hashing or accepting/writing a receipt, it re-stats the raw backup and requires an owned, single-link regular file with exact mode `0600`. Receipt JSON is canonical mode `0600` and records MAC, byte count, backup SHA-256, path, and timestamp. Backups and receipts are never overwritten.
 
 - [ ] **Step 4: Implement backup/flash sequencing**
 
@@ -348,7 +348,7 @@ Backup command:
 esptool --chip esp32s3 --port SERIAL read-flash 0x0 0x800000 BACKUP
 ```
 
-`flash-monitor` parses verified `flash_args` into bounded argv instead of trusting a shell response file. Immediately before write, re-check chip/MAC and re-hash the exact backup named by the receipt.
+`flash-monitor` parses verified `flash_args` into bounded argv instead of trusting a shell response file. Before accepting the receipt, re-hashing its backup, or authorizing a write, re-check the owned physical `0700` backup directory, the owned single-link regular `0600` raw backup, and the `0600` receipt. Immediately before write, re-check chip/MAC and re-hash the exact backup named by the receipt.
 
 - [ ] **Step 5: Implement bounded UART parsing**
 
@@ -403,7 +403,7 @@ git commit -m "feat(Esp32Tap): add locked remote DevKit transport"
 
 - [ ] **Step 1: Add operator documentation**
 
-Document exact build, stage, backup, flash, monitor, restore, and SAMPLE commands. Copy the approved netlist, corrected BOM (`3×10k`, `3×47k`, `3×1k`), and eight-state table. State restore is recovery-only.
+Document exact build, stage, backup, flash, monitor, restore, and SAMPLE commands. Require an owned physical backup directory with exact mode `0700`, a single-link regular raw backup with exact mode `0600`, and a mode-`0600` receipt before flash; state that the tool validates all three despite ambient umask. Copy the approved netlist, corrected BOM (`3×10k`, `3×47k`, `3×1k`), and eight-state table. State restore is recovery-only.
 
 - [ ] **Step 2: Commit documentation before computing/building the artifact**
 
@@ -441,10 +441,22 @@ Run this entire block in one shell. `set -eu` stops on a failed checkout, `cd`, 
     status=$?
     trap - EXIT
     cd "$repo_root"
-    if git worktree list --porcelain | grep -Fqx "worktree $tmp_dir"; then
+    if worktree_list=$(git worktree list --porcelain); then
+      if test -L "$tmp_dir"; then
+        printf '%s\n' "refusing symlinked cleanup path: $tmp_dir" >&2
+        exit "$status"
+      elif printf '%s\n' "$worktree_list" | grep -Fqx "worktree $tmp_dir"; then
+        git worktree remove --force "$tmp_dir"
+      elif test -e "$tmp_dir"; then
+        rmdir "$tmp_dir"
+      fi
+    else
+      printf '%s\n' 'git worktree list failed; removing only the explicit path' >&2
+      if test -L "$tmp_dir"; then
+        printf '%s\n' "refusing symlinked cleanup path: $tmp_dir" >&2
+        exit "$status"
+      fi
       git worktree remove --force "$tmp_dir"
-    elif test -e "$tmp_dir"; then
-      rmdir "$tmp_dir"
     fi
     exit "$status"
   }
@@ -470,15 +482,16 @@ Run this entire block in one shell. `set -eu` stops on a failed checkout, `cd`, 
   # fit, DevKit banner, and absence of QEMU/production startup banners here.
   cd "$repo_root"
   git worktree remove "$tmp_dir"
-  test ! -e "$tmp_dir"
-  ! git worktree list --porcelain | grep -Fqx "worktree $tmp_dir"
+  test ! -e "$tmp_dir" && test ! -L "$tmp_dir"
+  worktree_list=$(git worktree list --porcelain)
+  ! printf '%s\n' "$worktree_list" | grep -Fqx "worktree $tmp_dir"
   trap - EXIT
 )
 ```
 
-Expected: all four printed modes are `755`; the targeted exact-mode preflight covers `build_image.sh`, `qemu_smoke.sh`, `run_harness.sh`, and `qemu_harness/run.sh`; no retained ignored input is required; the sealed bundle is current; and the exact disposable path disappears from `git worktree list`.
+Expected: all four printed modes are `755`; the targeted exact-mode preflight covers `build_image.sh`, `qemu_smoke.sh`, `run_harness.sh`, and `qemu_harness/run.sh`; no retained ignored input is required; the sealed bundle is current; and the exact disposable path is neither present nor a symlink and is absent from a successfully captured `git worktree list`.
 
-- [ ] **Step 9: Build and publish the same current commit in the live worktree**
+- [ ] **Step 6: Build and publish the same current commit in the live worktree**
 
 The clean worktree's bundle is worktree-local and was intentionally removed. From the live feature worktree, rerun:
 
@@ -490,7 +503,7 @@ python3 tools/artifact_provenance.py verify --repo-root "$(git rev-parse --show-
 
 Expected: a sealed, current `build_devkit_bringup` bundle exists in the live worktree for Task 8.
 
-- [ ] **Step 10: Close `precor-9_3x-344` and push before hardware mutation**
+- [ ] **Step 7: Close `precor-9_3x-344` and push before hardware mutation**
 
 Record clean commit, clean-worktree command/result, and both clean/live image and manifest hashes in Beads; close the issue. Then run:
 
@@ -518,11 +531,11 @@ Run locked remote `stage`, remote `verify-bundle`, and `esptool chip-id`. Requir
 
 - [ ] **Step 3: Back up all 8 MB**
 
-Run remote `backup`. Require exact size `8,388,608`, independently recompute SHA-256 on the Pi, and record the mode-0600 receipt/hash in Beads. Never print or commit backup content.
+Run remote `backup`. Before hashing or receipt acceptance, require the owned physical backup directory to be exact mode `0700` and the raw backup to be an owned, single-link regular file with exact mode `0600`; require exact size `8,388,608`, independently recompute SHA-256 on the Pi, and record the mode-0600 receipt/hash in Beads. Never print or commit backup content.
 
 - [ ] **Step 4: Flash and capture through the single race-free verb**
 
-Run remote `flash-monitor` against the sealed staged bundle and receipt. It must use `--after no-reset`, open the exact serial device, apply `HardReset` on that already-open descriptor, and capture without clearing the post-reset buffer. Capture the complete flash and UART transcript. `ClassicReset` is forbidden because it enters the ROM bootloader.
+Run remote `flash-monitor` against the sealed staged bundle and receipt. Before it authorizes flash, require the backup directory, raw backup, and receipt to still satisfy their `0700`/owned-physical, `0600`/owned-single-link-regular, and `0600` checks. It must use `--after no-reset`, open the exact serial device, apply `HardReset` on that already-open descriptor, and capture without clearing the post-reset buffer. Capture the complete flash and UART transcript. `ClassicReset` is forbidden because it enters the ROM bootloader.
 
 - [ ] **Step 5: Verify captured post-flash Stage 0**
 
