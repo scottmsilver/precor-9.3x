@@ -62,17 +62,6 @@ FORBIDDEN_TEXT = {
 FORBIDDEN_LINKED_SYMBOLS = tuple(
     symbol.encode()
     for symbol in (
-        "gpio_set_direction",
-        "gpio_config",
-        "gpio_set_level",
-        "gpio_pullup_en",
-        "gpio_pullup_dis",
-        "gpio_pulldown_en",
-        "gpio_pulldown_dis",
-        "gpio_set_pull_mode",
-        "gpio_hold_en",
-        "uart_set_pin",
-        "uart_driver_install",
         "esp_wifi_init",
         "esp_wifi_start",
         "esp_wifi_connect",
@@ -80,6 +69,12 @@ FORBIDDEN_LINKED_SYMBOLS = tuple(
         "esp_wifi_set_config",
         "nimble_port_init",
         "esp_eth_driver_install",
+        "esp32tap QEMU-TEST build",
+        "qemu-test",
+        "safety_core",
+        "program_core",
+        "ble_core",
+        "coach_core",
     )
 )
 FAILURE_CODES = {
@@ -853,13 +848,68 @@ def test_generated_cli_uses_explicit_artifacts_and_identity_without_skips(
     assert completed.stdout.strip() == "DevKit generated contract: PASS"
 
 
-def test_generated_cli_rejects_protected_gpio_output_symbol(tmp_path: Path) -> None:
+def test_generated_cli_accepts_unreferenced_idf_gpio_and_uart_symbols(
+    tmp_path: Path,
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "devkit_bringup"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    resident_idf_symbols = b"\0".join(
+        symbol.encode()
+        for symbol in (
+            "gpio_set_direction",
+            "gpio_config",
+            "gpio_set_level",
+            "gpio_pullup_en",
+            "gpio_pullup_dis",
+            "gpio_pulldown_en",
+            "gpio_pulldown_dis",
+            "gpio_set_pull_mode",
+            "gpio_hold_en",
+            "uart_set_pin",
+            "uart_driver_install",
+        )
+    )
+    elf.write_bytes(
+        _structural_xtensa_elf_fixture((TEST_RECIPE_ID, TEST_GIT_COMMIT))
+        + b"\0"
+        + resident_idf_symbols
+        + b"\0"
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(Path(__file__).resolve()),
+            "generated",
+            "--sdkconfig",
+            str(sdkconfig),
+            "--elf",
+            str(elf),
+            "--recipe-id",
+            TEST_RECIPE_ID,
+            "--git-commit",
+            TEST_GIT_COMMIT,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "DevKit generated contract: PASS"
+
+
+def test_generated_cli_rejects_usable_radio_entry_point(tmp_path: Path) -> None:
     sdkconfig = tmp_path / "sdkconfig"
     elf = tmp_path / "devkit_bringup"
     sdkconfig.write_bytes(_generated_sdkconfig_fixture())
     elf.write_bytes(
         _structural_xtensa_elf_fixture((TEST_RECIPE_ID, TEST_GIT_COMMIT))
-        + b"\0gpio_set_level\0"
+        + b"\0esp_wifi_init\0"
     )
 
     completed = subprocess.run(
@@ -885,7 +935,7 @@ def test_generated_cli_rejects_protected_gpio_output_symbol(tmp_path: Path) -> N
     )
 
     assert completed.returncode != 0
-    assert "gpio_set_level" in completed.stderr
+    assert "esp_wifi_init" in completed.stderr
 
 
 def test_generated_verifier_rejects_relative_paths(
