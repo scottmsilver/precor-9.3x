@@ -17,11 +17,11 @@ import devkit_bench as bench
 
 REAL_BUNDLE = (
     Path(__file__).resolve().parents[1]
-    / ".artifacts/devkit/5e2a8c825fcdd4468c29e5803c7cf79c2b960de0929d78e82627512a15f5d64c"
+    / ".artifacts/devkit/3d563f8a5949ff824943e70c47918c21b5eef11593ce84501e4a6c99e8dee673"
 )
 SERIAL = provenance.DEVKIT_REQUIRED_SERIAL_DEVICE
 MAC = "94:a9:90:db:b0:e4"
-RECIPE = "ac3caa97900889b8f5d4d8f03199f7fd1b681dd73ade1dfe5d498ed89ced25d1"
+RECIPE = "3eface3e5da39749183f11b9b7c6d8ed72b659dc3c69fa95bc7aad735e077c8b"
 
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def test_verify_bundle_accepts_real_sealed_generation() -> None:
     assert verified.serial_path == SERIAL
     assert verified.flash_argv == (
         "--flash-mode",
-        "qio",
+        "dio",
         "--flash-freq",
         "80m",
         "--flash-size",
@@ -201,6 +201,25 @@ def test_flash_args_are_bounded_and_exact(bundle: Path) -> None:
         ),
     )
     with pytest.raises(bench.BenchError, match="flash_args"):
+        bench.verify_bundle(bundle)
+
+
+def test_qio_flash_recipe_is_explicitly_refused(bundle: Path) -> None:
+    args = bundle / "flash_args"
+    args.write_text(
+        "--flash_mode qio --flash_freq 80m --flash_size 8MB\n"
+        "0x0 bootloader.bin\n"
+        "0x8000 partition-table.bin\n"
+        "0x10000 esp32tap.bin\n"
+    )
+    rewrite_manifest(
+        bundle,
+        lambda value: value["members"][3].update(
+            size=args.stat().st_size,
+            sha256=hashlib.sha256(args.read_bytes()).hexdigest(),
+        ),
+    )
+    with pytest.raises(bench.BenchError, match="exact bounded DevKit write recipe"):
         bench.verify_bundle(bundle)
 
 

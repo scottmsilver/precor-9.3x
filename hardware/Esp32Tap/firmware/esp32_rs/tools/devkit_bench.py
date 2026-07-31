@@ -376,7 +376,7 @@ def _parse_flash_args(bundle: Path, raw: bytes) -> tuple[str, ...]:
         raise BenchError(f"invalid flash_args: {exc}") from exc
     expected = [
         "--flash_mode",
-        "qio",
+        "dio",
         "--flash_freq",
         "80m",
         "--flash_size",
@@ -392,7 +392,7 @@ def _parse_flash_args(bundle: Path, raw: bytes) -> tuple[str, ...]:
         raise BenchError("flash_args is not the exact bounded DevKit write recipe")
     return (
         "--flash-mode",
-        "qio",
+        "dio",
         "--flash-freq",
         "80m",
         "--flash-size",
