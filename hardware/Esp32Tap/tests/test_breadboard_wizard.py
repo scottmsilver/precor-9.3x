@@ -4,6 +4,7 @@ from collections import Counter
 from html.parser import HTMLParser
 import json
 from pathlib import Path
+import re
 
 import pytest
 
@@ -288,3 +289,13 @@ def test_self_contained_view_exposes_required_bench_controls_and_labels():
         assert label in html
     assert "http://" not in html
     assert "https://" not in html
+
+
+def test_mobile_svg_percentage_zoom_is_not_clamped_by_a_fixed_minimum_width():
+    html = HTML_PATH.read_text(encoding="utf-8")
+    board_rule = re.search(r"#board-svg\s*\{([^}]*)\}", html, re.DOTALL)
+    assert board_rule is not None
+    assert "width: 100%" in board_rule.group(1)
+    assert "min-width" not in board_rule.group(1)
+    assert ".diagram-scroll { overflow: auto" in html
+    assert "style.width = Math.round(controller.zoom() * 100) + '%'" in html
