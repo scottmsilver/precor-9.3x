@@ -880,9 +880,14 @@ def immutable_id(image: dict) -> str:
     return value
 
 
-def validate_candidate(image: dict, recipe: str, attestation: str) -> str:
+def validate_candidate(
+    image: dict, stage_image: dict, recipe: str, attestation: str
+) -> str:
     image_id = immutable_id(image)
     config = image.get("Config")
+    stage_config = stage_image.get("Config")
+    if not isinstance(config, dict) or not isinstance(stage_config, dict):
+        raise BuildImageError("candidate or stage image has no configuration")
     labels = config.get("Labels") if isinstance(config, dict) else None
     if not isinstance(labels, dict):
         raise BuildImageError("candidate image has no labels")
@@ -890,6 +895,14 @@ def validate_candidate(image: dict, recipe: str, attestation: str) -> str:
         raise BuildImageError("candidate image recipe label mismatch")
     if labels.get(toolchain_label) != attestation:
         raise BuildImageError("candidate image toolchain label mismatch")
+    for key in ("Entrypoint", "Cmd", "Env"):
+        if (
+            (key in config) != (key in stage_config)
+            or config.get(key) != stage_config.get(key)
+        ):
+            raise BuildImageError(
+                f"candidate image changed stage runtime configuration field {key}"
+            )
     return image_id
 
 
@@ -998,7 +1011,8 @@ def required_remove_container(reference: str) -> None:
     completed = docker("rm", "-f", reference, check=False)
     if completed.returncode != 0:
         raise BuildImageError(
-            f"cannot remove probe container before publication: {completed.stderr.strip()}"
+            f"cannot remove temporary container before publication: "
+            f"{completed.stderr.strip()}"
         )
 
 
@@ -1016,9 +1030,11 @@ with publication_lifecycle():
     context = task_root / "context"
     stage = f"esp32tap-rust-stage:{token}"
     candidate = f"esp32tap-rust-candidate:{token}"
-    container = f"esp32tap-rust-probe-{token}"
+    probe_container = f"esp32tap-rust-probe-{token}"
+    label_container = f"esp32tap-rust-label-{token}"
     task_root_exists = False
-    container_possible = False
+    probe_container_possible = False
+    label_container_possible = False
     stage_possible = False
     candidate_possible = False
     publication_succeeded = False
@@ -1041,11 +1057,14 @@ with publication_lifecycle():
 
         stage_possible = True
         docker("build", "--tag", stage, str(context))
-        container_possible = True
+        stage_image = inspect_image(stage)
+        if stage_image is None:
+            raise BuildImageError("stage image is missing after build")
+        probe_container_possible = True
         probe = docker(
             "run",
             "--name",
-            container,
+            probe_container,
             "-e",
             f"ESP32TAP_PROBE_COMMAND_TIMEOUT={probe_timeout:g}",
             "--entrypoint",
@@ -1055,9 +1074,13 @@ with publication_lifecycle():
             PROBE_PROGRAM,
         )
         attestation = validate_probe(probe.stdout, component_sha)
+        required_remove_container(probe_container)
+        probe_container_possible = False
         if read_recipe(context)[1] != recipe:
             raise BuildImageError("private Docker recipe snapshot changed during build")
 
+        label_container_possible = True
+        docker("create", "--name", label_container, stage)
         candidate_possible = True
         docker(
             "commit",
@@ -1065,19 +1088,21 @@ with publication_lifecycle():
             label_change(recipe_label, recipe),
             "--change",
             label_change(toolchain_label, attestation),
-            container,
+            label_container,
             candidate,
         )
         candidate_image = inspect_image(candidate)
         if candidate_image is None:
             raise BuildImageError("candidate image is missing after commit")
-        candidate_id = validate_candidate(candidate_image, recipe, attestation)
+        candidate_id = validate_candidate(
+            candidate_image, stage_image, recipe, attestation
+        )
 
         # These resources are no longer needed once the candidate is attested.
         # Their cleanup is part of the transaction: failure leaves the prior
         # final tag untouched and makes this invocation fail.
-        required_remove_container(container)
-        container_possible = False
+        required_remove_container(label_container)
+        label_container_possible = False
         required_remove_image(stage)
         stage_possible = False
         try:
@@ -1117,15 +1142,20 @@ with publication_lifecycle():
         # release completes before the conventional 128+signal exit is raised.
         cancellation_deferred = True
         cleanup_warnings = []
-        if container_possible:
-            try:
-                completed = docker("rm", "-f", container, check=False)
-                if completed.returncode != 0:
-                    cleanup_warnings.append(
-                        f"cannot remove probe container: {completed.stderr.strip()}"
-                    )
-            except Exception as exc:
-                cleanup_warnings.append(str(exc))
+        for reference, possible in (
+            (probe_container, probe_container_possible),
+            (label_container, label_container_possible),
+        ):
+            if possible:
+                try:
+                    completed = docker("rm", "-f", reference, check=False)
+                    if completed.returncode != 0:
+                        cleanup_warnings.append(
+                            f"cannot remove temporary container {reference}: "
+                            f"{completed.stderr.strip()}"
+                        )
+                except Exception as exc:
+                    cleanup_warnings.append(str(exc))
         for reference, possible in (
             (candidate, candidate_possible),
             (stage, stage_possible),

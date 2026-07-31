@@ -139,12 +139,16 @@ bash ../esp32/tools/qemu_harness/run.sh
 ```
 
 `tools/build_image.sh --recipe` fingerprints the exact build recipe: the
-Dockerfile's path, mode, and bytes plus the deny-by-default `.dockerignore`
-policy. Generated bundles, Cargo targets, and caches are outside that context.
+Dockerfile's path, executable permission bits, and bytes plus the
+deny-by-default `.dockerignore` policy. Read-only snapshot sealing therefore
+does not change the recipe identity, while an executable-bit change does.
+Generated bundles, Cargo targets, and caches are outside that context.
 The wrapper probes the pinned IDF commit, verbose Espressif Rust compiler,
 `ldproxy` linker shim, esptool, target, and managed-component lock once when it
-creates the image, then stores the canonical result in OCI labels. `ldproxy`
-is the relevant linker identity here because it is the linker Cargo is
+creates the image. It removes that probe container, creates a separate
+no-override container from the stage image, and commits only the OCI label
+changes so the stage entrypoint, command, and environment remain intact.
+`ldproxy` is the relevant linker identity here because it is the linker Cargo is
 configured to invoke; the Xtensa linker it delegates to is not a replacement
 for that fact. `ldproxy` has no version-reporting CLI mode: version/help flags
 enter link mode and fail without linker arguments. The wrapper instead

@@ -44,6 +44,14 @@ COMMON = {
     ),
     "esptool_version": "esptool.py v4.9.0",
 }
+STAGE_RUNTIME_CONFIG = {
+    "Entrypoint": ["/opt/esp/entrypoint.sh"],
+    "Cmd": ["bash"],
+    "Env": [
+        "IDF_TOOLS_PATH=/opt/esp",
+        "PATH=/opt/esp/tools:/usr/local/bin:/usr/bin:/bin",
+    ],
+}
 
 
 def canonical(value: object) -> str:
@@ -139,6 +147,13 @@ if fail and argv and argv[0] == fail:
 if argv[:2] == ["rm", "-f"] and os.environ.get("FAKE_DOCKER_FAIL_CONTAINER_RM"):
     print("forced container removal failure", file=sys.stderr)
     raise SystemExit(18)
+if (
+    argv[:2] == ["rm", "-f"]
+    and "esp32tap-rust-label-" in argv[2]
+    and os.environ.get("FAKE_DOCKER_FAIL_LABEL_CONTAINER_RM")
+):
+    print("forced label container removal failure", file=sys.stderr)
+    raise SystemExit(18)
 if argv and argv[0] == "build" and os.environ.get("FAKE_DOCKER_MUTATE_CONTEXT"):
     with open(os.path.join(os.environ["FAKE_LIVE_CONTEXT"], "Dockerfile"), "a", encoding="utf-8") as stream:
         stream.write("# concurrent edit\\n")
@@ -195,7 +210,8 @@ def mutate(callback):
             with open(state_path, encoding="utf-8") as stream:
                 state = json.load(stream)
         except FileNotFoundError:
-            state = {"refs": {}, "events": {}}
+            state = {"refs": {}, "containers": {}, "events": {}}
+        state.setdefault("containers", {})
         result = callback(state)
         temporary = state_path + "." + str(os.getpid())
         with open(temporary, "w", encoding="utf-8") as stream:
@@ -223,7 +239,17 @@ def image_for(state, reference):
         return default
     return None
 
-if argv[:2] == ["image", "inspect"]:
+if argv and argv[0] == "build":
+    reference = argv[argv.index("--tag") + 1]
+    image_id = "sha256:" + hashlib.sha256(reference.encode()).hexdigest()
+    config = json.loads(os.environ["FAKE_STAGE_CONFIG"])
+    config["Labels"] = {}
+    mutate(
+        lambda state: state["refs"].__setitem__(
+            reference, {"Id": image_id, "Config": config}
+        )
+    )
+elif argv[:2] == ["image", "inspect"]:
     reference = argv[2]
     image = mutate(lambda state: image_for(state, reference))
     if image is None:
@@ -231,11 +257,48 @@ if argv[:2] == ["image", "inspect"]:
         raise SystemExit(1)
     print(json.dumps([image], sort_keys=True, separators=(",", ":")))
 elif argv and argv[0] == "run":
+    if "--name" not in argv:
+        reference = argv[argv.index("--rm") + 1]
+        image = mutate(lambda state: image_for(state, reference))
+        expected = json.loads(os.environ["FAKE_STAGE_CONFIG"])
+        actual = image["Config"]
+        for key in ("Entrypoint", "Cmd", "Env"):
+            if actual.get(key) != expected.get(key):
+                print("published image runtime config differs from stage", file=sys.stderr)
+                raise SystemExit(24)
+        command = argv[argv.index(reference) + 1 :]
+        completed = subprocess.run(command, text=True, check=False)
+        raise SystemExit(completed.returncode)
+    name = argv[argv.index("--name") + 1]
+    reference = next(value for value in argv if value.startswith("esp32tap-rust-stage:"))
+    image = mutate(lambda state: image_for(state, reference))
+    config = json.loads(json.dumps(image["Config"]))
+    environment = list(config.get("Env") or [])
+    for index, value in enumerate(argv):
+        if value == "-e" and index + 1 < len(argv):
+            setting = argv[index + 1]
+            key = setting.split("=", 1)[0]
+            environment = [
+                existing
+                for existing in environment
+                if existing.split("=", 1)[0] != key
+            ]
+            environment.append(setting)
+    config["Env"] = environment
     if "--entrypoint" not in argv:
         sys.stdout.write("Activating ESP-IDF 5.5\\nDone!\\n")
-    elif argv[argv.index("--entrypoint") + 1] != "python3":
-        print("unexpected probe entrypoint", file=sys.stderr)
-        raise SystemExit(23)
+    else:
+        entrypoint = argv[argv.index("--entrypoint") + 1]
+        if entrypoint != "python3":
+            print("unexpected probe entrypoint", file=sys.stderr)
+            raise SystemExit(23)
+        config["Entrypoint"] = [entrypoint]
+    config["Cmd"] = argv[argv.index(reference) + 1 :]
+    mutate(
+        lambda state: state["containers"].__setitem__(
+            name, {"Image": reference, "Config": config}
+        )
+    )
     if os.environ.get("FAKE_RUN_SIGNAL_BARRIER"):
         barrier = os.environ["FAKE_RUN_SIGNAL_BARRIER"]
         with open(barrier + ".pid", "w", encoding="utf-8") as stream:
@@ -267,14 +330,41 @@ elif argv and argv[0] == "run":
         sys.stderr.write(completed.stderr)
         raise SystemExit(completed.returncode)
     print(os.environ.get("FAKE_DOCKER_PROBE", "{}"))
+elif argv and argv[0] == "create":
+    name = argv[argv.index("--name") + 1]
+    reference = argv[-1]
+    image = mutate(lambda state: image_for(state, reference))
+    container = {
+        "Image": reference,
+        "Config": json.loads(json.dumps(image["Config"])),
+    }
+    mutate(lambda state: state["containers"].__setitem__(name, container))
+    if os.environ.get("FAKE_CREATE_SIGNAL_BARRIER"):
+        barrier = os.environ["FAKE_CREATE_SIGNAL_BARRIER"]
+        with open(barrier + ".pid", "w", encoding="utf-8") as stream:
+            stream.write(str(os.getpid()))
+        with open(barrier + ".ready", "w", encoding="utf-8") as stream:
+            stream.write("ready")
+        while not os.path.exists(barrier + ".release"):
+            time.sleep(0.01)
+    print(name)
 elif argv and argv[0] == "commit":
+    container_name = argv[-2]
     candidate = argv[-1]
     candidate_id = "sha256:" + hashlib.sha256(candidate.encode()).hexdigest()
     labels = {} if os.environ.get("FAKE_DOCKER_LABEL_NOOP") else {
         "org.treddy.esp32tap.recipe-sha256": os.environ["FAKE_EXPECT_RECIPE"],
         "org.treddy.esp32tap.toolchain-json": os.environ["FAKE_EXPECT_ATTESTATION"],
     }
-    image = {"Id": candidate_id, "Config": {"Labels": labels}}
+    container = mutate(lambda state: state["containers"].get(container_name))
+    if container is None:
+        print("No such container", file=sys.stderr)
+        raise SystemExit(1)
+    config = json.loads(json.dumps(container["Config"]))
+    if os.environ.get("FAKE_DOCKER_COMMIT_CONFIG_MUTATION"):
+        config["Entrypoint"] = ["/unexpected-entrypoint"]
+    config["Labels"] = labels
+    image = {"Id": candidate_id, "Config": config}
     mutate(lambda state: state["refs"].__setitem__(candidate, image))
     if os.environ.get("FAKE_DOCKER_COMMIT_TIMEOUT"):
         time.sleep(30)
@@ -310,6 +400,9 @@ elif argv and argv[0] == "tag":
         mutate(enter)
         time.sleep(delay)
         mutate(lambda state: state["events"].__setitem__("tag_active", False))
+elif argv[:2] == ["rm", "-f"]:
+    for reference in argv[2:]:
+        mutate(lambda state, ref=reference: state["containers"].pop(ref, None))
 elif argv[:2] == ["image", "rm"]:
     for reference in argv[2:]:
         if "candidate" in reference and os.environ.get("FAKE_CANDIDATE_RM_SIGNAL_BARRIER"):
@@ -399,6 +492,7 @@ def run_environment(
         "FAKE_DOCKER_LOG": str(log),
         "FAKE_DOCKER_STATE": str(log.with_name("docker-state.json")),
         "FAKE_DOCKER_INSPECT": canonical(inspect),
+        "FAKE_STAGE_CONFIG": canonical(STAGE_RUNTIME_CONFIG),
         "FAKE_DOCKER_PROBE": canonical(COMMON),
         "FAKE_LIVE_CONTEXT": str(context),
         "FAKE_EXPECT_RECIPE": recipe(context),
@@ -782,6 +876,56 @@ def test_default_build_probes_once_then_commits_labels(
     )
 
 
+def test_published_image_preserves_stage_runtime_config(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(context, fake_docker)
+    assert completed.returncode == 0, completed.stderr
+    calls = docker_calls(fake_docker[1])
+    probe_calls = [call for call in calls if call[0] == "run"]
+    assert len(probe_calls) == 1
+    probe_name = probe_calls[0][probe_calls[0].index("--name") + 1]
+    stage = next(
+        value
+        for value in probe_calls[0]
+        if value.startswith("esp32tap-rust-stage:")
+    )
+    creates = [call for call in calls if call[0] == "create"]
+    assert len(creates) == 1
+    assert creates[0][:3] == ["create", "--name", creates[0][2]]
+    assert creates[0][3:] == [stage]
+    label_container = creates[0][2]
+    commit = next(call for call in calls if call[0] == "commit")
+    assert commit[-2] == label_container
+    assert commit[-2] != probe_name
+
+    final = docker_state(fake_docker[1])["refs"][IMAGE_TAG]
+    for key, value in STAGE_RUNTIME_CONFIG.items():
+        assert final["Config"][key] == value
+    serialized_config = canonical(final["Config"])
+    assert "ESP32TAP_PROBE_COMMAND_TIMEOUT" not in serialized_config
+    assert "import contextlib" not in serialized_config
+
+    runtime = subprocess.run(
+        [
+            str(fake_docker[0] / "docker"),
+            "run",
+            "--rm",
+            IMAGE_TAG,
+            "bash",
+            "-c",
+            "printf config-inheritance-ok",
+        ],
+        env=run_environment(context, fake_docker),
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert runtime.returncode == 0, runtime.stderr
+    assert runtime.stdout == "config-inheritance-ok"
+
+
 def test_build_uses_private_exact_context(
     context: Path, fake_docker: tuple[Path, Path]
 ) -> None:
@@ -987,9 +1131,31 @@ def test_commit_that_ignores_labels_never_promotes_candidate(
     assert docker_state(fake_docker[1])["refs"].get(IMAGE_TAG) is None
 
 
+def test_commit_that_changes_runtime_config_never_promotes_candidate(
+    context: Path, fake_docker: tuple[Path, Path]
+) -> None:
+    completed = run(
+        context,
+        fake_docker,
+        extra_env={"FAKE_DOCKER_COMMIT_CONFIG_MUTATION": "1"},
+    )
+    assert completed.returncode != 0
+    assert "runtime configuration field Entrypoint" in completed.stderr
+    calls = docker_calls(fake_docker[1])
+    assert not any(call[0] == "tag" and call[-1] == IMAGE_TAG for call in calls)
+    state = docker_state(fake_docker[1])
+    assert state["refs"].get(IMAGE_TAG) is None
+    assert state["containers"] == {}
+    assert not any("candidate" in reference for reference in state["refs"])
+
+
 @pytest.mark.parametrize(
     "failure_env",
-    ["FAKE_DOCKER_FAIL_CONTAINER_RM", "FAKE_DOCKER_FAIL_STAGE_RM"],
+    [
+        "FAKE_DOCKER_FAIL_CONTAINER_RM",
+        "FAKE_DOCKER_FAIL_LABEL_CONTAINER_RM",
+        "FAKE_DOCKER_FAIL_STAGE_RM",
+    ],
 )
 def test_required_prepublication_cleanup_failure_preserves_prior_final(
     context: Path,
@@ -1381,6 +1547,7 @@ def test_equivalent_aliases_share_lifecycle_lock_and_cannot_clobber_publication(
         ("FAKE_BUILD_SIGNAL_BARRIER", False, signal.SIGINT),
         ("FAKE_BUILD_SIGNAL_BARRIER", False, signal.SIGTERM),
         ("FAKE_RUN_SIGNAL_BARRIER", True, signal.SIGTERM),
+        ("FAKE_CREATE_SIGNAL_BARRIER", True, signal.SIGTERM),
     ],
 )
 def test_termination_during_build_or_probe_reaps_child_and_preserves_final(
