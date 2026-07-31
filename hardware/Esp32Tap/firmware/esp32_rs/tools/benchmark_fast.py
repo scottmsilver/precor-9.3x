@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -32,6 +33,19 @@ EXACT_BROAD_COMMAND = (
     "-n",
     "3",
 )
+EXACT_CANDIDATE_COMMAND = ("bash", "tools/fast.sh", "--base", "HEAD~1")
+EXACT_HOST_COMMAND = (
+    "cargo",
+    "test",
+    "--manifest-path",
+    "hardware/Esp32Tap/firmware/esp32_rs/program_core/Cargo.toml",
+    "-q",
+)
+RS = "hardware/Esp32Tap/firmware/esp32_rs"
+PUBLIC_BUNDLES = {
+    "production": "build",
+    "qemu-test": "build_qemu_test",
+}
 TOP_LEVEL_KEYS = frozenset(
     {"baseline_command", "candidate_command", "samples", "version"}
 )
@@ -186,9 +200,7 @@ def _sample(value: object, index: int) -> dict[str, object]:
     retry_count = _strict_int(
         value["retry_count"], f"sample {index} retry count"
     )
-    no_artifact_expected = dataset == "host" or (
-        dataset == "provenance" and role == "missing"
-    )
+    no_artifact_expected = dataset in {"provenance", "host"}
     raw_artifact = value["artifact_identity"]
     if raw_artifact is None:
         if not no_artifact_expected:
@@ -292,21 +304,18 @@ def _indexed_pairs(
         )
     pairs: list[tuple[Mapping[str, object], Mapping[str, object]]] = []
     for pair_index in range(count):
-        matching = [
-            sample for sample in selected if sample["pair_index"] == pair_index
-        ]
-        if len(matching) != 2 or {sample["role"] for sample in matching} != {
-            "baseline",
-            "candidate",
-        }:
+        baseline = selected[pair_index * 2]
+        candidate = selected[pair_index * 2 + 1]
+        if (
+            baseline["pair_index"] != pair_index
+            or baseline["role"] != "baseline"
+            or candidate["pair_index"] != pair_index
+            or candidate["role"] != "candidate"
+        ):
             raise ContractError(
-                f"{dataset} pair indexes must be exact 0..{count - 1} "
-                "with one baseline and one candidate"
+                f"{dataset} records must be ordered alternating baseline,candidate "
+                f"for exact pair indexes 0..{count - 1}"
             )
-        baseline = next(sample for sample in matching if sample["role"] == "baseline")
-        candidate = next(
-            sample for sample in matching if sample["role"] == "candidate"
-        )
         if not _load_matched(
             float(baseline["load_1"]), float(candidate["load_1"])
         ):
@@ -333,8 +342,10 @@ def evaluate_document(document: object) -> dict[str, object]:
         raise ContractError(
             "baseline_command must be the exact broad reviewer command from Task 0"
         )
-    if candidate_command == baseline_command:
-        raise ContractError("candidate_command must differ from baseline_command")
+    if candidate_command != EXACT_CANDIDATE_COMMAND:
+        raise ContractError(
+            "candidate_command must be the exact fast runner command from Task 9"
+        )
 
     raw_samples = document["samples"]
     if not isinstance(raw_samples, list) or len(raw_samples) != EXPECTED_SAMPLE_COUNT:
@@ -356,13 +367,26 @@ def evaluate_document(document: object) -> dict[str, object]:
         command = sample["command"]
         assert isinstance(command, tuple)
         if (
-            len(command) < 3
-            or not PurePosixPath(command[0]).name.startswith("python3")
-            or PurePosixPath(command[1]).name != "artifact_provenance.py"
-            or "verify" not in command[2:]
+            len(command) != 8
+            or command[0:3]
+            != ("python3", "tools/artifact_provenance.py", "--repo-root")
+            or command[3] != sample["worktree_path"]
+            or command[4:6] != ("verify", "--kind")
         ):
             raise ContractError(
                 f"provenance sample {index} must record the direct verifier command"
+            )
+        kind = command[6]
+        if kind not in PUBLIC_BUNDLES:
+            raise ContractError(
+                f"provenance sample {index} has an unsupported artifact kind"
+            )
+        expected_bundle = (
+            f"{sample['worktree_path']}/{RS}/{PUBLIC_BUNDLES[kind]}"
+        )
+        if command[7] != expected_bundle:
+            raise ContractError(
+                f"provenance sample {index} kind must map to its exact public bundle"
             )
         if sample["exit_status"] != expected:
             raise ContractError(
@@ -384,12 +408,7 @@ def evaluate_document(document: object) -> dict[str, object]:
     for index, sample in enumerate(host):
         command = sample["command"]
         assert isinstance(command, tuple)
-        if (
-            len(command) != 5
-            or command[0:3] != ("cargo", "test", "--manifest-path")
-            or not command[3].endswith("program_core/Cargo.toml")
-            or command[4] != "-q"
-        ):
+        if command != EXACT_HOST_COMMAND:
             raise ContractError(
                 f"host sample {index} must record the program_core host command"
             )
@@ -451,6 +470,16 @@ def evaluate_document(document: object) -> dict[str, object]:
         raise ContractError("cold samples require six distinct target_cache paths")
     if len(set(worktrees)) != 6:
         raise ContractError("cold samples require six distinct worktree_path paths")
+    for sample in cold_samples:
+        expected_cache = (
+            "/tmp/esp32tap-target-"
+            + hashlib.sha256(os.fsencode(str(sample["worktree_path"]))).hexdigest()[:12]
+            + "/qemu"
+        )
+        if sample["target_cache"] != expected_cache:
+            raise ContractError(
+                "cold target_cache must be the exact physical-worktree cache"
+            )
     for pair_index, (baseline, candidate) in enumerate(cold_pairs):
         _require_success(baseline, f"firmware cold baseline {pair_index}")
         _require_success(candidate, f"firmware cold candidate {pair_index}")
@@ -463,6 +492,37 @@ def evaluate_document(document: object) -> dict[str, object]:
             raise ContractError(
                 f"firmware cold candidate {pair_index} command does not match "
                 "the declared candidate"
+            )
+    firmware_samples = [
+        sample
+        for sample in samples
+        if sample["dataset"] in {"firmware_warm", "firmware_cold"}
+    ]
+    role_sha: dict[str, str] = {}
+    role_identity: dict[str, str] = {}
+    for role in ("baseline", "candidate"):
+        shas = {str(sample["sha"]) for sample in firmware_samples if sample["role"] == role}
+        identities = {
+            str(sample["artifact_identity"])
+            for sample in firmware_samples
+            if sample["role"] == role
+        }
+        if len(shas) != 1:
+            raise ContractError(f"firmware {role} samples must use one commit SHA")
+        if len(identities) != 1:
+            raise ContractError(
+                f"firmware {role} samples must use one artifact identity"
+            )
+        role_sha[role] = shas.pop()
+        role_identity[role] = identities.pop()
+    if role_sha["baseline"] == role_sha["candidate"]:
+        raise ContractError("baseline and candidate commit SHAs must differ")
+    if role_identity["baseline"] == role_identity["candidate"]:
+        raise ContractError("baseline and candidate artifact identities must differ")
+    for sample in [*provenance, *host]:
+        if sample["sha"] != role_sha["candidate"]:
+            raise ContractError(
+                "provenance and host samples must use the candidate commit SHA"
             )
     cold_baseline_durations = [
         float(baseline["duration_seconds"]) for baseline, _candidate in cold_pairs

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import stat
@@ -31,8 +32,17 @@ BROAD = [
     "-n",
     "3",
 ]
-CANDIDATE = ["tools/fast.sh", "--base", "HEAD~1"]
-HEX40 = "1" * 40
+CANDIDATE = ["bash", "tools/fast.sh", "--base", "HEAD~1"]
+HOST = [
+    "cargo",
+    "test",
+    "--manifest-path",
+    "hardware/Esp32Tap/firmware/esp32_rs/program_core/Cargo.toml",
+    "-q",
+]
+RS = "hardware/Esp32Tap/firmware/esp32_rs"
+BASELINE_SHA = "1" * 40
+CANDIDATE_SHA = "2" * 40
 
 
 def record(
@@ -45,25 +55,45 @@ def record(
 ) -> dict[str, object]:
     firmware = dataset.startswith("firmware_")
     cold = dataset == "firmware_cold"
+    worktree = (
+        f"/tmp/esp32tap-bench-cold.worktree-{role}-{index}"
+        if cold
+        else f"/tmp/esp32tap-bench-{dataset}-{role}"
+    )
     if role == "missing":
         status = 20
-        command = ["python3", "tools/artifact_provenance.py", "verify", "missing"]
+        kind = "qemu-test" if index % 2 == 0 else "production"
+        public = "build_qemu_test" if kind == "qemu-test" else "build"
+        command = [
+            "python3",
+            "tools/artifact_provenance.py",
+            "--repo-root",
+            worktree,
+            "verify",
+            "--kind",
+            kind,
+            f"{worktree}/{RS}/{public}",
+        ]
     elif role == "stale":
         status = 21
-        command = ["python3", "tools/artifact_provenance.py", "verify", "stale"]
+        kind = "qemu-test" if index % 2 == 0 else "production"
+        public = "build_qemu_test" if kind == "qemu-test" else "build"
+        command = [
+            "python3",
+            "tools/artifact_provenance.py",
+            "--repo-root",
+            worktree,
+            "verify",
+            "--kind",
+            kind,
+            f"{worktree}/{RS}/{public}",
+        ]
     elif dataset == "host":
         status = 0
-        command = [
-            "cargo",
-            "test",
-            "--manifest-path",
-            "program_core/Cargo.toml",
-            "-q",
-        ]
+        command = HOST
     else:
         status = 0
         command = BROAD if role == "baseline" else CANDIDATE
-    sample_number = index * 2 + (1 if role == "candidate" else 0)
     if role in {"baseline", "candidate"}:
         artifact_number = 1 if role == "baseline" else 2
     else:
@@ -71,7 +101,7 @@ def record(
     return {
         "artifact_identity": (
             None
-            if role == "missing" or dataset == "host"
+            if dataset in {"provenance", "host"}
             else f"sha256:{artifact_number:064x}"
         ),
         "command": command,
@@ -83,15 +113,15 @@ def record(
         "pair_index": index if firmware else None,
         "retry_count": 0,
         "role": role,
-        "sha": HEX40,
+        "sha": BASELINE_SHA if role == "baseline" else CANDIDATE_SHA,
         "target_cache": (
-            f"/tmp/esp32tap-target-{sample_number:012x}/qemu" if cold else None
-        ),
-        "worktree_path": (
-            f"/tmp/esp32tap-bench-cold.worktree-{role}-{index}"
+            "/tmp/esp32tap-target-"
+            + hashlib.sha256(worktree.encode()).hexdigest()[:12]
+            + "/qemu"
             if cold
-            else f"/tmp/esp32tap-bench-warm-{role}"
+            else None
         ),
+        "worktree_path": worktree,
     }
 
 
@@ -292,6 +322,54 @@ def test_provenance_and_host_samples_record_the_required_direct_commands() -> No
         evaluate(document)
 
 
+@pytest.mark.parametrize(
+    "evil",
+    [
+        ["true"],
+        [
+            "python3",
+            "tools/artifact_provenance.py.evil",
+            "--repo-root",
+            "/tmp/esp32tap-bench-provenance-missing",
+            "verify",
+            "--kind",
+            "qemu-test",
+            "/tmp/esp32tap-bench-provenance-missing/"
+            + RS
+            + "/build_qemu_test",
+        ],
+    ],
+)
+def test_provenance_command_rejects_fake_executables(evil: list[str]) -> None:
+    document = passing_document()
+    document["samples"][0]["command"] = evil
+    with pytest.raises(benchmark_fast.ContractError, match="direct verifier"):
+        evaluate(document)
+
+
+def test_provenance_kind_maps_to_one_exact_public_bundle() -> None:
+    document = passing_document()
+    sample = document["samples"][0]
+    sample["command"][-1] += "-evil"
+    with pytest.raises(benchmark_fast.ContractError, match="public bundle"):
+        evaluate(document)
+
+    document = passing_document()
+    sample = document["samples"][0]
+    sample["command"][6] = "production"
+    with pytest.raises(benchmark_fast.ContractError, match="public bundle"):
+        evaluate(document)
+
+
+def test_host_command_rejects_manifest_suffix_tricks() -> None:
+    document = passing_document()
+    host = next(sample for sample in document["samples"] if sample["dataset"] == "host")
+    host["command"] = [*HOST]
+    host["command"][3] += ".evil"
+    with pytest.raises(benchmark_fast.ContractError, match="host command"):
+        evaluate(document)
+
+
 def test_commands_are_arrays_and_broad_command_is_exact() -> None:
     document = passing_document()
     document["baseline_command"] = ["bash", "-c", "pytest"]
@@ -301,6 +379,11 @@ def test_commands_are_arrays_and_broad_command_is_exact() -> None:
     document = passing_document()
     document["candidate_command"] = "tools/fast.sh"  # type: ignore[assignment]
     with pytest.raises(benchmark_fast.ContractError, match="candidate_command"):
+        evaluate(document)
+
+    document = passing_document()
+    document["candidate_command"] = ["tools/fast.sh", "--base", "HEAD~1"]
+    with pytest.raises(benchmark_fast.ContractError, match="exact fast runner"):
         evaluate(document)
 
 
@@ -341,6 +424,32 @@ def test_cold_samples_use_six_distinct_isolated_paths() -> None:
     with pytest.raises(benchmark_fast.ContractError, match="rustcargo"):
         evaluate(document)
 
+    document = passing_document()
+    cold = [
+        sample for sample in document["samples"] if sample["dataset"] == "firmware_cold"
+    ]
+    cold[0]["target_cache"] += "-evil"
+    with pytest.raises(benchmark_fast.ContractError, match="physical-worktree cache"):
+        evaluate(document)
+
+
+@pytest.mark.parametrize("dataset", ["firmware_warm", "firmware_cold"])
+def test_firmware_records_must_alternate_baseline_candidate_in_pair_order(
+    dataset: str,
+) -> None:
+    document = passing_document()
+    indexes = [
+        index
+        for index, sample in enumerate(document["samples"])
+        if sample["dataset"] == dataset
+    ]
+    document["samples"][indexes[0]], document["samples"][indexes[1]] = (
+        document["samples"][indexes[1]],
+        document["samples"][indexes[0]],
+    )
+    with pytest.raises(benchmark_fast.ContractError, match="ordered alternating"):
+        evaluate(document)
+
 
 def test_schema_is_exact_and_scalar_types_are_strict() -> None:
     document = passing_document()
@@ -359,12 +468,13 @@ def test_schema_is_exact_and_scalar_types_are_strict() -> None:
         evaluate(document)
 
 
-def test_artifact_identity_is_absent_only_when_no_firmware_artifact_exists() -> None:
+def test_provenance_and_host_artifact_identity_is_exactly_absent() -> None:
     document = passing_document()
     missing = next(sample for sample in document["samples"] if sample["role"] == "missing")
     assert missing["artifact_identity"] is None
     stale = next(sample for sample in document["samples"] if sample["role"] == "stale")
-    stale["artifact_identity"] = None
+    assert stale["artifact_identity"] is None
+    stale["artifact_identity"] = "sha256:" + "3" * 64
     with pytest.raises(benchmark_fast.ContractError, match="artifact_identity"):
         evaluate(document)
 
@@ -380,6 +490,49 @@ def test_each_firmware_role_keeps_one_artifact_identity() -> None:
     )
     candidate["artifact_identity"] = "sha256:" + "f" * 64
     with pytest.raises(benchmark_fast.ContractError, match="one artifact identity"):
+        evaluate(document)
+
+    document = passing_document()
+    cold_candidate = next(
+        sample
+        for sample in document["samples"]
+        if sample["dataset"] == "firmware_cold"
+        and sample["role"] == "candidate"
+    )
+    cold_candidate["artifact_identity"] = "sha256:" + "e" * 64
+    with pytest.raises(benchmark_fast.ContractError, match="one artifact identity"):
+        evaluate(document)
+
+
+def test_baseline_and_candidate_sources_are_internally_consistent_and_distinct() -> None:
+    document = passing_document()
+    cold_baseline = next(
+        sample
+        for sample in document["samples"]
+        if sample["dataset"] == "firmware_cold"
+        and sample["role"] == "baseline"
+    )
+    cold_baseline["sha"] = "f" * 40
+    with pytest.raises(benchmark_fast.ContractError, match="one commit SHA"):
+        evaluate(document)
+
+    document = passing_document()
+    host = next(sample for sample in document["samples"] if sample["dataset"] == "host")
+    host["sha"] = "f" * 40
+    with pytest.raises(benchmark_fast.ContractError, match="candidate commit SHA"):
+        evaluate(document)
+
+    document = passing_document()
+    candidate_identity = next(
+        sample["artifact_identity"]
+        for sample in document["samples"]
+        if sample["dataset"] == "firmware_warm"
+        and sample["role"] == "candidate"
+    )
+    for sample in document["samples"]:
+        if sample["dataset"].startswith("firmware_") and sample["role"] == "baseline":
+            sample["artifact_identity"] = candidate_identity
+    with pytest.raises(benchmark_fast.ContractError, match="must differ"):
         evaluate(document)
 
 

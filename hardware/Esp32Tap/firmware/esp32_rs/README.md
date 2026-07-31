@@ -49,7 +49,8 @@ esp32_rs/
 │                                  path is unreachable under esp-QEMU
 └── tools/
     ├── build.sh                  containerized build -> build/, build_qemu_test/
-    ├── qemu_smoke.sh          -> ../../esp32/tools/qemu_smoke.sh    (symlink)
+    ├── qemu_smoke.sh             regular provenance-checking wrapper around
+    │                             ../../esp32/tools/qemu_smoke.sh
     ├── check_pins.py          -> ../../esp32/tools/check_pins.py    (symlink)
     ├── run_harness.sh            runs the COMMITTED harness against this image
     ├── check_case_parity.py      GATE: 149 cases, 1:1 names, 3-way chain
@@ -187,12 +188,13 @@ not the toolchain image.
 The supported setup is `tools/build_image.sh` followed by `tools/build.sh`; do
 not use an ad-hoc image with the same mutable tag. `tools/fast.sh` verifies the
 selected production or QEMU generation before starting a firmware gate. Exit
-20 (missing) or 21 (stale) permits exactly one rebuild in that invocation,
-followed by verification. Exit 22 (invalid) or 23 (internal failure) stops
-without trying to disguise the problem as staleness. To repair an ordinary
-source or recipe change explicitly, rebuild the image when the image check asks
-for it, then run `tools/build.sh`. Do not delete shared Cargo caches or hand-edit
-`.artifacts/`.
+20 means the expected public bundle symlink or its manifest is missing; exit 21
+means the public bundle exists but its declared input digest is stale. Either
+permits exactly one rebuild in that invocation, followed by verification. Exit
+22 (invalid) or 23 (internal failure) stops without trying to disguise the
+problem as staleness. To repair an ordinary source or recipe change explicitly,
+rebuild the image when the image check asks for it, then run `tools/build.sh`.
+Do not delete shared Cargo caches or hand-edit `.artifacts/`.
 
 ### Fast-loop benchmark contract
 
@@ -203,22 +205,30 @@ python3 tools/benchmark_fast.py evaluate .bench/acceptance.json
 ```
 
 The file contains `version`, the exact Task 0 `baseline_command`, an explicit
-`candidate_command`, and `samples`. Every sample records its dataset, role,
-explicit argv array, commit SHA, start load averages, wall time, exit status,
-retry count, artifact identity, pair index, physical worktree, and (for cold
-builds) target-cache path. JSON keys and types are exact, duplicate keys and
-non-canonical serialization are rejected, and the input is bounded to 4 MiB.
-The executable never interprets a shell command and never clears
-`/tmp/rustcargo`.
+`candidate_command`, and `samples`. The baseline is the exact Task 0 reviewer
+argv; the candidate is exactly `bash tools/fast.sh --base HEAD~1` from
+`esp32_rs/`; the host samples use the full repository-relative `program_core`
+Cargo argv. Every sample records its dataset, role, explicit argv array, commit
+SHA, start load averages, wall time, exit status, retry count, pair index,
+physical worktree, and (for firmware samples) artifact identity. Provenance and
+host identity fields are explicitly null. JSON keys and types are exact,
+duplicate keys and non-canonical serialization are rejected, and the input is
+bounded to 4 MiB. The executable never interprets a shell command and never
+clears `/tmp/rustcargo`.
 
 Collect five direct missing-manifest rejections (exit 20) and five direct stale
 input-digest rejections (exit 21), ten host-only samples, then ten alternating
 warm baseline/candidate pairs. Collect three more cold pairs in six distinct
-detached worktrees so their physical-worktree-keyed target caches are new and
-distinct; remove those worktrees only after recording their paths and results.
-Each pair's starting one-minute loads must be within 20%. The evaluator uses
-the exact nearest-rank p95 and ordinary median and fails on an unexpected exit,
-any retry, a missing sample, or a reused cold path. Acceptance requires
+detached worktrees. Each cold QEMU cache record must be exactly
+`/tmp/esp32tap-target-${sha256(real-worktree)[:12]}/qemu`, matching
+`tools/build.sh`, so all six caches are new and distinct; remove those
+worktrees only after recording their paths and results. The missing samples
+invoke the direct verifier against an absent expected public bundle link; the
+stale samples invoke it against the matching `production`/`build` or
+`qemu-test`/`build_qemu_test` public link. Each pair's starting one-minute loads
+must be within 20%. The evaluator uses the exact nearest-rank p95 and ordinary
+median and fails on an unexpected exit, any retry, a missing sample, or a
+reused cold path. Acceptance requires
 provenance-rejection p95 below 1 second, host p95 below 5 seconds, warm
 candidate firmware p95 below 30 seconds, and candidate median no more than half
 the broad baseline median, with all ten candidate runs passing without retry.
