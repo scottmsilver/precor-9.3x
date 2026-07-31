@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Esp32Tap Breadboard From-To Wiring List</title>
+<style>
+@page { size: letter landscape; margin: .34in; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #172033; font: 9px/1.25 Arial, sans-serif; }
+h1 { margin: 0 0 3px; color: #10264f; font-size: 21px; }
+h2 { margin: 12px 0 4px; padding: 4px 7px; background: #2458a6; color: #fff; font-size: 12px; break-after: avoid; }
+p { margin: 3px 0 7px; }
+.warning { border: 2px solid #a13b28; background: #fff1ed; padding: 6px 8px; font-weight: bold; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 7px; }
+tr { break-inside: avoid; }
+th,td { border: 1px solid #aeb8c8; padding: 2.5px 4px; vertical-align: top; }
+th { background: #3f526f; color: white; text-align: left; }
+tbody tr:nth-child(even) { background: #f3f6fa; }
+.n { width: 4%; text-align: right; }
+.from,.to { width: 27%; }
+.part { width: 17%; }
+.note { width: 25%; }
+.open { color: #9b2c1f; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Esp32Tap Breadboard — Point-to-Point Wiring List</h1>
+<p>Each row is one physical connection. Map the RJ45 breakout terminals and SOT-23 adapters with a meter before using their labels.</p>
+<div class="warning">Start with all power disconnected. Leave STANDALONE POWER and COIL POWER removed. The relay datasheet pin drawing is a bottom view—meter-verify K1 before wiring.</div>
+
+<h2>A. RJ45 pass-through and relay contacts</h2>
+<table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
+<tr><td>1</td><td>CONSOLE RJ45 pin 1</td><td>GND</td><td>Jumper wire</td><td>First ground</td></tr>
+<tr><td>2</td><td>MOTOR RJ45 pin 1</td><td>GND</td><td>Jumper wire</td><td>First ground</td></tr>
+<tr><td>3</td><td>CONSOLE RJ45 pin 7</td><td>GND</td><td>Jumper wire</td><td>Second ground</td></tr>
+<tr><td>4</td><td>MOTOR RJ45 pin 7</td><td>GND</td><td>Jumper wire</td><td>Second ground</td></tr>
+<tr><td>5</td><td>CONSOLE RJ45 pin 2</td><td>+8V_RAW</td><td>Jumper wire</td><td>First +8 V contact</td></tr>
+<tr><td>6</td><td>MOTOR RJ45 pin 2</td><td>+8V_RAW</td><td>Jumper wire</td><td>First +8 V contact</td></tr>
+<tr><td>7</td><td>CONSOLE RJ45 pin 8</td><td>+8V_RAW</td><td>Jumper wire</td><td>Second +8 V contact</td></tr>
+<tr><td>8</td><td>MOTOR RJ45 pin 8</td><td>+8V_RAW</td><td>Jumper wire</td><td>Second +8 V contact</td></tr>
+<tr><td>9</td><td>CONSOLE RJ45 pin 3</td><td>MOTOR RJ45 pin 3</td><td>Jumper wire</td><td>Direct pass-through</td></tr>
+<tr><td>10</td><td>CONSOLE RJ45 pin 4</td><td>MOTOR RJ45 pin 4</td><td>Jumper wire</td><td>Direct pass-through</td></tr>
+<tr><td>11</td><td>CONSOLE RJ45 pin 5</td><td>MOTOR RJ45 pin 5</td><td>Jumper wire</td><td>Direct safety pass-through</td></tr>
+<tr><td>12</td><td>CONSOLE RJ45 pin 6</td><td>K1 G5V-2 pin 4</td><td>Jumper wire</td><td>Relay NC contact</td></tr>
+<tr><td>13</td><td>MOTOR RJ45 pin 6</td><td>K1 G5V-2 pin 6</td><td>Jumper wire</td><td>Relay COM contact</td></tr>
+<tr><td>14</td><td>K1 G5V-2 pin 8</td><td>R_TX 100 Ω, end 2</td><td>Jumper wire</td><td>Relay NO / ESP transmit</td></tr>
+</tbody></table>
+
+<h2>B. Local power</h2>
+<table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
+<tr><td>15</td><td>+8V_RAW</td><td>RXEF075 lead 1</td><td>Wire</td><td>Local electronics tap only</td></tr>
+<tr><td>16</td><td>RXEF075 lead 2</td><td>1N5822 anode</td><td>Wire</td><td>Non-striped diode end</td></tr>
+<tr><td>17</td><td>1N5822 cathode</td><td>VIN</td><td>Wire</td><td>Striped diode end</td></tr>
+<tr><td>18</td><td>VIN</td><td>P6KE12A cathode</td><td>Wire</td><td>Striped TVS end</td></tr>
+<tr><td>19</td><td>P6KE12A anode</td><td>GND</td><td>Wire</td><td>TVS return</td></tr>
+<tr><td>20</td><td>VIN</td><td>TSR1-2433E pin 1</td><td>Wire</td><td>Converter input</td></tr>
+<tr><td>21</td><td>TSR1-2433E pin 2</td><td>GND</td><td>Wire</td><td>Converter ground</td></tr>
+<tr><td>22</td><td>TSR1-2433E pin 3</td><td>TSR_3V3</td><td>Wire</td><td>Converter output</td></tr>
+<tr><td>23</td><td>VIN</td><td>22 µF positive</td><td>Wire</td><td>Bulk capacitor</td></tr>
+<tr><td>24</td><td>22 µF negative</td><td>GND</td><td>Wire</td><td>Observe polarity</td></tr>
+<tr><td>25</td><td>VIN</td><td>10 µF input-cap positive</td><td>Wire</td><td>Near TSR input</td></tr>
+<tr><td>26</td><td>10 µF input-cap negative</td><td>GND</td><td>Wire</td><td>Observe polarity</td></tr>
+<tr><td>27</td><td>TSR_3V3</td><td>10 µF output-cap positive</td><td>Wire</td><td>Near TSR output</td></tr>
+<tr><td>28</td><td>10 µF output-cap negative</td><td>GND</td><td>Wire</td><td>Observe polarity</td></tr>
+<tr><td>29</td><td>DevKit 3V3</td><td>LOGIC_3V3</td><td>Jumper wire</td><td>Logic rail</td></tr>
+<tr><td>30</td><td>DevKit GND</td><td>GND</td><td>Jumper wire</td><td>Common ground</td></tr>
+<tr><td>31</td><td>TSR_3V3</td><td>LOGIC_3V3</td><td>STANDALONE POWER jumper</td><td class="open">Leave removed when USB is attached</td></tr>
+</tbody></table>
+
+<h2>C. TPS3700 voltage monitor</h2>
+<table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
+<tr><td>32</td><td>VIN</td><td>TPS3700 pin 5 VDD</td><td>Wire</td><td>Supply</td></tr>
+<tr><td>33</td><td>TPS3700 pin 2</td><td>GND</td><td>Wire</td><td>Ground</td></tr>
+<tr><td>34</td><td>VIN</td><td>R_UV_TOP 150 kΩ, end 1</td><td>Wire</td><td>UV divider</td></tr>
+<tr><td>35</td><td>R_UV_TOP end 2</td><td>UV_SENSE</td><td>Wire</td><td>Divider midpoint</td></tr>
+<tr><td>36</td><td>UV_SENSE</td><td>TPS3700 pin 3 INA+</td><td>Wire</td><td>UV input</td></tr>
+<tr><td>37</td><td>UV_SENSE</td><td>R_UV_BOTTOM 10 kΩ, end 1</td><td>Wire</td><td>Divider bottom</td></tr>
+<tr><td>38</td><td>R_UV_BOTTOM end 2</td><td>GND</td><td>Wire</td><td>Divider return</td></tr>
+<tr><td>39</td><td>UV_SENSE</td><td>C_UV 1 nF, end 1</td><td>Wire</td><td>Filter</td></tr>
+<tr><td>40</td><td>C_UV end 2</td><td>GND</td><td>Wire</td><td>Filter return</td></tr>
+<tr><td>41</td><td>VIN</td><td>R_OV_TOP 255 kΩ, end 1</td><td>Wire</td><td>OV divider</td></tr>
+<tr><td>42</td><td>R_OV_TOP end 2</td><td>OV_SENSE</td><td>Wire</td><td>Divider midpoint</td></tr>
+<tr><td>43</td><td>OV_SENSE</td><td>TPS3700 pin 4 INB−</td><td>Wire</td><td>OV input</td></tr>
+<tr><td>44</td><td>OV_SENSE</td><td>R_OV_BOTTOM 10 kΩ, end 1</td><td>Wire</td><td>Divider bottom</td></tr>
+<tr><td>45</td><td>R_OV_BOTTOM end 2</td><td>GND</td><td>Wire</td><td>Divider return</td></tr>
+<tr><td>46</td><td>OV_SENSE</td><td>C_OV 1 nF, end 1</td><td>Wire</td><td>Filter</td></tr>
+<tr><td>47</td><td>C_OV end 2</td><td>GND</td><td>Wire</td><td>Filter return</td></tr>
+<tr><td>48</td><td>TPS3700 pin 1 OUTA</td><td>TREAD_OK</td><td>Wire</td><td>Open-drain output</td></tr>
+<tr><td>49</td><td>TPS3700 pin 6 OUTB</td><td>TREAD_OK</td><td>Wire</td><td>Tie outputs together</td></tr>
+<tr><td>50</td><td>LOGIC_3V3</td><td>R_TREAD_PULLUP 10 kΩ, end 1</td><td>Wire</td><td>Pull-up</td></tr>
+<tr><td>51</td><td>R_TREAD_PULLUP end 2</td><td>TREAD_OK</td><td>Wire</td><td>Pull-up node</td></tr>
+<tr><td>52</td><td>TREAD_OK</td><td>R_TREAD_PULLDOWN 100 kΩ, end 1</td><td>Wire</td><td>Power-off pull-down</td></tr>
+<tr><td>53</td><td>R_TREAD_PULLDOWN end 2</td><td>GND</td><td>Wire</td><td>Pull-down return</td></tr>
+<tr><td>54</td><td>TREAD_OK</td><td>R_TREAD_MCU 4.7 kΩ, end 1</td><td>Wire</td><td>GPIO isolation</td></tr>
+<tr><td>55</td><td>R_TREAD_MCU end 2</td><td>DevKit GPIO6</td><td>Wire</td><td>TREAD_OK_MCU</td></tr>
+<tr><td>56</td><td>VIN</td><td>C_TPS3700 100 nF, end 1</td><td>Wire</td><td>Decoupling</td></tr>
+<tr><td>57</td><td>C_TPS3700 end 2</td><td>GND</td><td>Wire</td><td>Decoupling return</td></tr>
+</tbody></table>
+
+<h2>D. SN74AHC08N gates</h2>
+<table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
+<tr><td>58</td><td>LOGIC_3V3</td><td>AHC08 pin 14</td><td>Wire</td><td>VCC</td></tr>
+<tr><td>59</td><td>AHC08 pin 7</td><td>GND</td><td>Wire</td><td>Ground</td></tr>
+<tr><td>60</td><td>DevKit GPIO21</td><td>AHC08 pin 1</td><td>Wire</td><td>RELAY_CMD</td></tr>
+<tr><td>61</td><td>DevKit GPIO21</td><td>R_RELAY_CMD_PD 10 kΩ, end 1</td><td>Wire</td><td>Command pull-down</td></tr>
+<tr><td>62</td><td>R_RELAY_CMD_PD end 2</td><td>GND</td><td>Wire</td><td>Pull-down return</td></tr>
+<tr><td>63</td><td>TREAD_OK</td><td>AHC08 pin 2</td><td>Wire</td><td>Relay permission</td></tr>
+<tr><td>64</td><td>AHC08 pin 3</td><td>RELAY_GATE</td><td>Wire</td><td>Relay gate output</td></tr>
+<tr><td>65</td><td>DevKit GPIO15</td><td>AHC08 pin 4</td><td>Wire</td><td>TX_ENABLE</td></tr>
+<tr><td>66</td><td>DevKit GPIO15</td><td>R_TX_ENABLE_PD 10 kΩ, end 1</td><td>Wire</td><td>Enable pull-down</td></tr>
+<tr><td>67</td><td>R_TX_ENABLE_PD end 2</td><td>GND</td><td>Wire</td><td>Pull-down return</td></tr>
+<tr><td>68</td><td>TREAD_OK</td><td>AHC08 pin 5</td><td>Wire</td><td>TX permission</td></tr>
+<tr><td>69</td><td>AHC08 pin 6</td><td>TX_GATE</td><td>Wire</td><td>TX gate output</td></tr>
+<tr><td>70</td><td>AHC08 pins 9,10,12,13</td><td>GND</td><td>Four wires</td><td>Tie unused inputs low</td></tr>
+<tr><td>71</td><td>AHC08 pins 8,11</td><td class="open">NO CONNECTION</td><td>—</td><td>Unused outputs</td></tr>
+<tr><td>72</td><td>AHC08 pin 14</td><td>C_AHC08 100 nF, end 1</td><td>Wire</td><td>Place close to IC</td></tr>
+<tr><td>73</td><td>C_AHC08 end 2</td><td>AHC08 pin 7</td><td>Wire</td><td>Decoupling return</td></tr>
+</tbody></table>
+
+<h2>E. TPS709, BC337, and relay coil</h2>
+<table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
+<tr><td>74</td><td>VIN</td><td>TPS709 pin 1 IN</td><td>Wire</td><td>Regulator input</td></tr>
+<tr><td>75</td><td>TPS709 pin 2</td><td>GND</td><td>Wire</td><td>Ground</td></tr>
+<tr><td>76</td><td>RELAY_GATE</td><td>TPS709 pin 3 EN</td><td>Wire</td><td>Hardware-gated enable</td></tr>
+<tr><td>77</td><td>TPS709 pin 4</td><td class="open">NO CONNECTION</td><td>—</td><td>NC pin</td></tr>
+<tr><td>78</td><td>TPS709 pin 5 OUT</td><td>+5V_RLY</td><td>Wire</td><td>Relay supply</td></tr>
+<tr><td>79</td><td>VIN</td><td>C_TPS709_IN 1 µF, end 1</td><td>Wire</td><td>Input bypass</td></tr>
+<tr><td>80</td><td>C_TPS709_IN end 2</td><td>GND</td><td>Wire</td><td>Bypass return</td></tr>
+<tr><td>81</td><td>+5V_RLY</td><td>C_TPS709_OUT 4.7 µF positive</td><td>Wire</td><td>Output capacitor</td></tr>
+<tr><td>82</td><td>C_TPS709_OUT negative</td><td>GND</td><td>Wire</td><td>Output return</td></tr>
+<tr><td>83</td><td>RELAY_GATE</td><td>R_BASE 560 Ω, end 1</td><td>Wire</td><td>Base resistor</td></tr>
+<tr><td>84</td><td>R_BASE end 2</td><td>BC337 base</td><td>Wire</td><td>Verify physical lead</td></tr>
+<tr><td>85</td><td>BC337 base</td><td>R_BASE_PD 10 kΩ, end 1</td><td>Wire</td><td>Base pull-down</td></tr>
+<tr><td>86</td><td>R_BASE_PD end 2</td><td>GND</td><td>Wire</td><td>Pull-down return</td></tr>
+<tr><td>87</td><td>BC337 emitter</td><td>GND</td><td>Wire</td><td>Verify physical lead</td></tr>
+<tr><td>88</td><td>BC337 collector</td><td>K1 pin 16</td><td>Wire</td><td>RELAY_COIL−</td></tr>
+<tr><td>89</td><td>+5V_RLY</td><td>K1 pin 1</td><td>COIL POWER jumper</td><td class="open">Leave removed initially</td></tr>
+<tr><td>90</td><td>K1 pin 1</td><td>P6KE6.8CA lead 1</td><td>Wire</td><td>Bidirectional coil TVS</td></tr>
+<tr><td>91</td><td>P6KE6.8CA lead 2</td><td>K1 pin 16</td><td>Wire</td><td>Bidirectional coil TVS</td></tr>
+</tbody></table>
+
+<h2>F. SN74AHC126N and UART</h2>
+<table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
+<tr><td>92</td><td>LOGIC_3V3</td><td>AHC126 pin 14</td><td>Wire</td><td>VCC</td></tr>
+<tr><td>93</td><td>AHC126 pin 7</td><td>GND</td><td>Wire</td><td>Ground</td></tr>
+<tr><td>94</td><td>TX_GATE</td><td>AHC126 pin 1</td><td>Wire</td><td>Gate 1 OE</td></tr>
+<tr><td>95</td><td>DevKit GPIO17</td><td>AHC126 pin 2</td><td>Wire</td><td>Gate 1 input</td></tr>
+<tr><td>96</td><td>AHC126 pin 3</td><td>R_TX 100 Ω, end 1</td><td>Wire</td><td>Gate 1 output</td></tr>
+<tr><td>97</td><td>AHC126 pins 4,5,9,10,12,13</td><td>GND</td><td>Six wires</td><td>Unused enables/inputs low</td></tr>
+<tr><td>98</td><td>AHC126 pins 6,8,11</td><td class="open">NO CONNECTION</td><td>—</td><td>Unused outputs</td></tr>
+<tr><td>99</td><td>AHC126 pin 14</td><td>C_AHC126 100 nF, end 1</td><td>Wire</td><td>Place close to IC</td></tr>
+<tr><td>100</td><td>C_AHC126 end 2</td><td>AHC126 pin 7</td><td>Wire</td><td>Decoupling return</td></tr>
+<tr><td>101</td><td>CONSOLE RJ45 pin 6</td><td>R_CONS_RX 10 kΩ, end 1</td><td>Wire</td><td>Console RX tap</td></tr>
+<tr><td>102</td><td>R_CONS_RX end 2</td><td>DevKit GPIO18</td><td>Wire</td><td>Console RX</td></tr>
+<tr><td>103</td><td>RJ45 pin-3 net</td><td>R_PIN3_RX 10 kΩ, end 1</td><td>Wire</td><td>Pin-3 tap</td></tr>
+<tr><td>104</td><td>R_PIN3_RX end 2</td><td>DevKit GPIO16</td><td>Wire</td><td>Pin-3 RX</td></tr>
+</tbody></table>
+
+<h2>G. Relay feedback, USB presence, and LEDs</h2>
+<table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
+<tr><td>105</td><td>K1 pin 11</td><td>GND</td><td>Wire</td><td>Feedback COM</td></tr>
+<tr><td>106</td><td>K1 pin 13</td><td>DevKit GPIO4</td><td>Wire</td><td>NC feedback</td></tr>
+<tr><td>107</td><td>LOGIC_3V3</td><td>R_FB_NC 10 kΩ, end 1</td><td>Wire</td><td>NC pull-up</td></tr>
+<tr><td>108</td><td>R_FB_NC end 2</td><td>DevKit GPIO4</td><td>Wire</td><td>NC pull-up node</td></tr>
+<tr><td>109</td><td>K1 pin 9</td><td>DevKit GPIO5</td><td>Wire</td><td>NO feedback</td></tr>
+<tr><td>110</td><td>LOGIC_3V3</td><td>R_FB_NO 10 kΩ, end 1</td><td>Wire</td><td>NO pull-up</td></tr>
+<tr><td>111</td><td>R_FB_NO end 2</td><td>DevKit GPIO5</td><td>Wire</td><td>NO pull-up node</td></tr>
+<tr><td>112</td><td>DevKit 5V/VBUS</td><td>2N7000 gate</td><td>Wire</td><td>Verify physical lead</td></tr>
+<tr><td>113</td><td>DevKit 5V/VBUS</td><td>R_VBUS_DISCHARGE 10 kΩ, end 1</td><td>Wire</td><td>Gate discharge</td></tr>
+<tr><td>114</td><td>R_VBUS_DISCHARGE end 2</td><td>GND</td><td>Wire</td><td>Discharge return</td></tr>
+<tr><td>115</td><td>2N7000 source</td><td>GND</td><td>Wire</td><td>Verify physical lead</td></tr>
+<tr><td>116</td><td>2N7000 drain</td><td>DevKit GPIO7</td><td>Wire</td><td>VBUS_PRESENT_N</td></tr>
+<tr><td>117</td><td>LOGIC_3V3</td><td>R_VBUS_PULLUP 10 kΩ, end 1</td><td>Wire</td><td>Drain pull-up</td></tr>
+<tr><td>118</td><td>R_VBUS_PULLUP end 2</td><td>DevKit GPIO7</td><td>Wire</td><td>Pull-up node</td></tr>
+<tr><td>119</td><td>DevKit GPIO38</td><td>R_STATUS 330 Ω, end 1</td><td>Wire</td><td>Status LED</td></tr>
+<tr><td>120</td><td>R_STATUS end 2</td><td>Green LED anode</td><td>Wire</td><td>Long LED lead</td></tr>
+<tr><td>121</td><td>Green LED cathode</td><td>GND</td><td>Wire</td><td>Short/flat-side lead</td></tr>
+<tr><td>122</td><td>LOGIC_3V3</td><td>R_POWER_LED 1 kΩ, end 1</td><td>Wire</td><td>Power LED</td></tr>
+<tr><td>123</td><td>R_POWER_LED end 2</td><td>Red LED anode</td><td>Wire</td><td>Long LED lead</td></tr>
+<tr><td>124</td><td>Red LED cathode</td><td>GND</td><td>Wire</td><td>Short/flat-side lead</td></tr>
+<tr><td>125</td><td>LOGIC_3V3</td><td>C_LOGIC 100 nF, end 1</td><td>Wire</td><td>Logic rail bypass</td></tr>
+<tr><td>126</td><td>C_LOGIC end 2</td><td>GND</td><td>Wire</td><td>Bypass return</td></tr>
+</tbody></table>
+
+<h2>H. Before power</h2>
+<table><thead><tr><th>Check</th><th>Expected result</th></tr></thead><tbody>
+<tr><td>K1 pins 4 to 6</td><td>Continuity with COIL POWER removed</td></tr>
+<tr><td>K1 pins 8 to 6</td><td>Open with COIL POWER removed</td></tr>
+<tr><td>+8V_RAW to GND</td><td>No short</td></tr>
+<tr><td>VIN to GND</td><td>No short; capacitor charging may briefly affect reading</td></tr>
+<tr><td>LOGIC_3V3 to GND</td><td>No short</td></tr>
+<tr><td>STANDALONE POWER</td><td>Removed while UART USB is connected</td></tr>
+<tr><td>COIL POWER</td><td>Removed until the relay supply and driver are bench-tested</td></tr>
+</tbody></table>
+</body>
+</html>
