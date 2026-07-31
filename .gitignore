@@ -62,6 +62,7 @@ build/
 hardware/Esp32Tap/firmware/esp32/build_qemu_test/
 hardware/Esp32Tap/firmware/esp32_rs/build
 hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test
+hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup
 hardware/Esp32Tap/firmware/esp32_rs/.artifacts/
 hardware/Esp32Tap/firmware/esp32_rs/.bench/
 

@@ -11,6 +11,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -44,6 +45,39 @@ def test_rejects_unknown_kind_before_docker() -> None:
     )
     assert completed.returncode == 2
     assert "ONLY must be prod, qemu, devkit, or both" in completed.stderr
+
+
+def test_real_repo_ignores_each_exact_publication_alias_and_store() -> None:
+    repo_root = Path(
+        subprocess.run(
+            ["git", "-C", str(TOOLS), "rev-parse", "--show-toplevel"],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+    )
+    paths = (
+        "hardware/Esp32Tap/firmware/esp32_rs/build",
+        "hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test",
+        "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup",
+        "hardware/Esp32Tap/firmware/esp32_rs/.artifacts/devkit/generation",
+    )
+
+    for relative in paths:
+        completed = subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "-q", relative],
+            check=False,
+        )
+        assert completed.returncode == 0, f"publication path is not ignored: {relative}"
+
+    unrelated = "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup_notes"
+    assert (
+        subprocess.run(
+            ["git", "-C", str(repo_root), "check-ignore", "-q", unrelated],
+            check=False,
+        ).returncode
+        == 1
+    )
 
 
 def test_exact_snapshot_gate_build_publish_order_is_explicit() -> None:
@@ -259,8 +293,9 @@ def publish_generation_atomic(*args, **kwargs):
     _write(
         root / ".gitignore",
         "hardware/Esp32Tap/firmware/esp32_rs/.artifacts/\n"
-        "hardware/Esp32Tap/firmware/esp32_rs/.snapshot-build-*\n"
-        "hardware/Esp32Tap/firmware/esp32_rs/build*\n",
+        "hardware/Esp32Tap/firmware/esp32_rs/build\n"
+        "hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test\n"
+        "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup\n",
     )
     _write(rs / "esp32tap" / "components_esp32s3.lock", "lock\n")
     _write(rs / "bringup_core" / "src" / "lib.rs", "pub const SAFE: bool = true;\n")
@@ -622,6 +657,91 @@ def test_fake_devkit_build_publishes_independent_identity_bound_manifest(
         "size": 8_388_608,
         "offsets": [0, 32_768, 65_536],
     }
+
+
+def test_repeated_devkit_publish_stays_clean_current_and_executable(
+    fake_worktree: tuple[Path, Path, Path, Path],
+) -> None:
+    root, _, docker_log, _ = fake_worktree
+    rs = root / "hardware/Esp32Tap/firmware/esp32_rs"
+    expected_ignores = {
+        "hardware/Esp32Tap/firmware/esp32_rs/.artifacts/",
+        "hardware/Esp32Tap/firmware/esp32_rs/build",
+        "hardware/Esp32Tap/firmware/esp32_rs/build_qemu_test",
+        "hardware/Esp32Tap/firmware/esp32_rs/build_devkit_bringup",
+    }
+    assert set((root / ".gitignore").read_text(encoding="utf-8").splitlines()) == (
+        expected_ignores
+    )
+    provenance_env = {
+        **os.environ,
+        "PATH": f"{docker_log.parent / 'fake-bin'}:{os.environ['PATH']}",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+    for iteration in range(2):
+        built = _run(fake_worktree, only="devkit")
+        assert built.returncode == 0, built.stderr
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout
+        assert status == ""
+
+        verify = subprocess.run(
+            [
+                sys.executable,
+                str(rs / "tools/artifact_provenance.py"),
+                "--repo-root",
+                str(root),
+                "verify",
+                "--kind",
+                "devkit-bringup",
+                str(rs / "build_devkit_bringup"),
+            ],
+            cwd=root,
+            env=provenance_env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert verify.returncode == 0, verify.stderr
+
+        executed = subprocess.run(
+            [
+                sys.executable,
+                str(rs / "tools/artifact_provenance.py"),
+                "--repo-root",
+                str(root),
+                "exec",
+                "--kind",
+                "devkit-bringup",
+                "--",
+                sys.executable,
+                "-c",
+                f"print('current-devkit-{iteration}')",
+            ],
+            cwd=root,
+            env=provenance_env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert executed.returncode == 0, executed.stderr
+        assert executed.stdout.strip() == f"current-devkit-{iteration}"
+
+    assert len(_events(docker_log)) == 2
 
 
 def test_devkit_refuses_dirty_live_tree_before_docker(
