@@ -964,9 +964,13 @@ def _readline(port, *, label: str) -> str | None:
 
 
 def capture_startup(
-    port, recipe_id: str, timeout: float, *, clock: Clock = SystemClock()
+    port,
+    recipe_id: str | None,
+    timeout: float,
+    *,
+    clock: Clock = SystemClock(),
 ) -> StartupReport:
-    if not _HEX64.fullmatch(recipe_id):
+    if recipe_id is not None and not _HEX64.fullmatch(recipe_id):
         raise BenchError("recipe ID must be exactly 64 lowercase hex characters")
     if not 0 < timeout <= 600:
         raise BenchError("capture timeout is out of bounds")
@@ -1033,7 +1037,7 @@ def capture_startup(
     build_match = re.fullmatch(
         r"BUILD recipe=([0-9a-f]{64}) git=([0-9a-f]{40})", build[0]
     )
-    if not build_match or build_match.group(1) != recipe_id:
+    if not build_match or (recipe_id is not None and build_match.group(1) != recipe_id):
         raise BenchError("startup recipe does not match requested recipe")
     chip_match = re.fullmatch(
         r"CHIP model=ESP32-S3 revision=([0-9]{1,3}) mac=([0-9a-f]{2}(?::[0-9a-f]{2}){5}) crystal_mhz=40 reset=([A-Za-z0-9_-]{1,64})",
@@ -1189,18 +1193,7 @@ def wait_cold_cycle(
 
 
 def _wait_any_terminal(port, timeout: float, *, clock: Clock = SystemClock()) -> None:
-    deadline = clock.monotonic() + timeout
-    count = 0
-    while clock.monotonic() < deadline and count < MAX_CAPTURE_LINES:
-        line = _readline(port, label="startup")
-        if line is None:
-            continue
-        count += 1
-        if line.startswith("BRINGUP FAIL"):
-            raise BenchError(f"firmware reported FAIL: {line}")
-        if line == "BRINGUP STAGE0 PASS":
-            return
-    raise BenchError("firmware did not become ready for sampling")
+    capture_startup(port, None, timeout, clock=clock)
 
 
 def _bounded_int(value: str, minimum: int, maximum: int, label: str) -> int:

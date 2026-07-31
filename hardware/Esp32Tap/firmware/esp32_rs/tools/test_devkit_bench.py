@@ -607,6 +607,29 @@ def test_sample_accepts_real_uart_crlf_response() -> None:
     assert port.writes == [b"SAMPLE 7\n"]
 
 
+def test_sample_readiness_ignores_non_utf8_rom_and_validates_full_crlf_startup() -> (
+    None
+):
+    crlf_startup = [line.removesuffix(b"\n") + b"\r\n" for line in STARTUP]
+    port = FakeSerial([b"\xff\xfeESP-ROM:esp32s3\r\n", *crlf_startup])
+    bench._wait_any_terminal(port, 30, clock=TickClock())
+    port.lines.append(
+        b"INPUT SAMPLE seq=7 gpio4=0 gpio5=1 gpio6=1 gpio7=0 "
+        b"dir15=input dir17=input dir21=input\r\n"
+    )
+    bench.sample_inputs(port, 7, (0, 1, 1, 0), timeout=1, clock=TickClock())
+    assert port.writes == [b"SAMPLE 7\n"]
+
+
+def test_sample_readiness_rejects_invalid_bytes_after_banner() -> None:
+    with pytest.raises(bench.BenchError, match="ASCII|UTF-8"):
+        bench._wait_any_terminal(
+            FakeSerial([STARTUP[0], b"\xffbad application record\r\n"]),
+            1,
+            clock=TickClock(),
+        )
+
+
 @pytest.mark.parametrize(
     "raw",
     [
