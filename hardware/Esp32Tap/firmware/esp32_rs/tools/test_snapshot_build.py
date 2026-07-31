@@ -507,13 +507,17 @@ sdkconfig = b"sdkconfig\\n"
 partition = b"partition-table.bin\\n"
 if kind == "devkit-bringup":
     image = (
-        settings["ESP32TAP_RECIPE_ID"].encode()
+        b"\\xe9\\x00\\x02\\x00"
+        + settings["ESP32TAP_RECIPE_ID"].encode()
         + settings["ESP32TAP_GIT_COMMIT"].encode()
         + "ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS".encode()
     )
     sdkconfig = (
         b'CONFIG_IDF_TARGET="esp32s3"\\n'
         b'CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y\\n'
+        b'CONFIG_ESPTOOLPY_FLASHMODE_DIO=y\\n'
+        b'# CONFIG_ESPTOOLPY_FLASHMODE_QIO is not set\\n'
+        b'CONFIG_ESPTOOLPY_FLASHMODE="dio"\\n'
         b'CONFIG_SPIRAM=y\\nCONFIG_SPIRAM_MODE_OCT=y\\n'
         b'CONFIG_ESP_CONSOLE_UART_DEFAULT=y\\n'
         b'CONFIG_ESP_CONSOLE_UART=y\\n'
@@ -525,7 +529,7 @@ if kind == "devkit-bringup":
     partition = entry + b"\\xff" * (32 - len(entry)) + b"\\xff" * 32
     corruption = os.environ.get("FAKE_DEVKIT_CORRUPTION", "")
     if corruption == "embedded-recipe":
-        image = b"0" * 64 + image[64:]
+        image = image.replace(settings["ESP32TAP_RECIPE_ID"].encode(), b"0" * 64, 1)
     elif corruption == "flash-size":
         sdkconfig = sdkconfig.replace(b"FLASHSIZE_8MB", b"FLASHSIZE_4MB")
     elif corruption == "octal-psram":
@@ -543,11 +547,11 @@ if kind == "devkit-bringup":
         image = b"esp32tap production image"
         sdkconfig = b"sdkconfig production\\n"
 output.joinpath("esp32tap.bin").write_bytes(image)
-output.joinpath("bootloader.bin").write_bytes(b"bootloader.bin\\n")
+output.joinpath("bootloader.bin").write_bytes(b"\\xe9\\x00\\x02\\x00bootloader.bin\\n")
 output.joinpath("partition-table.bin").write_bytes(partition)
 output.joinpath("sdkconfig").write_bytes(sdkconfig)
 output.joinpath("flash_args").write_text(
-    "--flash_mode qio --flash_freq 80m --flash_size 8MB\\n"
+    "--flash_mode dio --flash_freq 80m --flash_size 8MB\\n"
     "0x0 bootloader.bin\\n0x8000 partition-table.bin\\n0x10000 esp32tap.bin\\n",
     encoding="utf-8",
 )
@@ -695,6 +699,19 @@ def test_fake_devkit_build_publishes_independent_identity_bound_manifest(
         "size": 8_388_608,
         "offsets": [0, 32_768, 65_536],
     }
+    assert (
+        (public / "flash_args")
+        .read_text(encoding="utf-8")
+        .startswith("--flash_mode dio --flash_freq 80m --flash_size 8MB\n")
+    )
+    generated_config = (public / "sdkconfig").read_text(encoding="utf-8")
+    assert "CONFIG_ESPTOOLPY_FLASHMODE_DIO=y\n" in generated_config
+    assert "# CONFIG_ESPTOOLPY_FLASHMODE_QIO is not set\n" in generated_config
+    assert 'CONFIG_ESPTOOLPY_FLASHMODE="dio"\n' in generated_config
+    for member in ("bootloader.bin", "esp32tap.bin"):
+        header = (public / member).read_bytes()[:3]
+        assert header[0] == 0xE9
+        assert header[2] == 2
 
 
 def test_repeated_devkit_publish_stays_clean_current_and_executable(

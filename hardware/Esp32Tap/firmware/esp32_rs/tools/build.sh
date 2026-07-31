@@ -645,7 +645,6 @@ FLASH_SIZE="$(grep -E '^CONFIG_ESPTOOLPY_FLASHSIZE=' "$sdk" | head -1 | cut -d\"
 cp -f "$T/bootloader.bin" /output/bootloader.bin
 cp -f "$T/partition-table.bin" /output/partition-table.bin
 FLASH_MODE=dio
-if [ "$ARTIFACT_KIND" = devkit-bringup ]; then FLASH_MODE=qio; fi
 python -m esptool --chip esp32s3 elf2image \
     --flash_mode "$FLASH_MODE" --flash_freq 80m --flash_size "$FLASH_SIZE" \
     -o /output/esp32tap.bin "$T/$APP_NAME"
@@ -764,7 +763,7 @@ def validate_devkit_outputs(
     lines = flash_args.splitlines()
     if (
         lines != [
-            "--flash_mode qio --flash_freq 80m --flash_size 8MB",
+            "--flash_mode dio --flash_freq 80m --flash_size 8MB",
             "0x0 bootloader.bin",
             "0x8000 partition-table.bin",
             "0x10000 esp32tap.bin",
@@ -775,6 +774,8 @@ def validate_devkit_outputs(
     sdkconfig = (staging / "sdkconfig").read_bytes()
     for required in (
         b"CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y\n",
+        b"CONFIG_ESPTOOLPY_FLASHMODE_DIO=y\n",
+        b'CONFIG_ESPTOOLPY_FLASHMODE="dio"\n',
         b"CONFIG_SPIRAM=y\n",
         b"CONFIG_SPIRAM_MODE_OCT=y\n",
         b"CONFIG_ESP_CONSOLE_UART_DEFAULT=y\n",
@@ -791,11 +792,23 @@ def validate_devkit_outputs(
         b"CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y\n",
         b"CONFIG_BT_ENABLED=y\n",
         b"CONFIG_ETH_USE_OPENETH=y\n",
+        b"CONFIG_ESPTOOLPY_FLASHMODE_QIO=y\n",
     ):
         if forbidden in sdkconfig:
             raise BuildError(f"DevKit sdkconfig enables forbidden identity {forbidden.strip()!r}")
 
-    image = (staging / "esp32tap.bin").read_bytes()
+    images: dict[str, bytes] = {}
+    for name in ("bootloader.bin", "esp32tap.bin"):
+        image_bytes = (staging / name).read_bytes()
+        if (
+            len(image_bytes) < 3
+            or image_bytes[0] != 0xE9
+            or image_bytes[2] != 2
+        ):
+            raise BuildError(f"DevKit {name} image header is not DIO")
+        images[name] = image_bytes
+
+    image = images["esp32tap.bin"]
     identity = (
         recipe_id.encode()
         + git_commit.encode()

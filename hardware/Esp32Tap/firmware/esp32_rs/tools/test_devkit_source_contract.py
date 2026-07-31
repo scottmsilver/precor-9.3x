@@ -647,12 +647,17 @@ def test_standalone_sdkconfig_is_n8r8_uart_and_halt_only() -> None:
     config = _parse_kconfig(DEFAULTS)
     _assert_n8r8_uart_halt_config(config)
     assert config.get("CONFIG_ESP_WIFI_ENABLED") == "n"
+    assert config.get("CONFIG_ESPTOOLPY_FLASHMODE_DIO") == "y"
+    assert config.get("CONFIG_ESPTOOLPY_FLASHMODE_QIO") == "n"
 
 
 def _assert_n8r8_uart_halt_config(config: dict[str, str]) -> None:
     assert config.get("CONFIG_IDF_TARGET") == "esp32s3"
     assert config.get("CONFIG_IDF_TARGET_ESP32S3") == "y"
     assert config.get("CONFIG_ESPTOOLPY_FLASHSIZE_8MB") == "y"
+    assert config.get("CONFIG_ESPTOOLPY_FLASHMODE_DIO") == "y"
+    assert config.get("CONFIG_ESPTOOLPY_FLASHMODE_QIO") == "n"
+    assert config.get("CONFIG_ESPTOOLPY_FLASHMODE") == "dio"
     assert config.get("CONFIG_PARTITION_TABLE_CUSTOM") == "y"
     assert config.get("CONFIG_PARTITION_TABLE_CUSTOM_FILENAME") == (
         "/project/hardware/Esp32Tap/firmware/esp32_rs/partitions_esp32tap.csv"
