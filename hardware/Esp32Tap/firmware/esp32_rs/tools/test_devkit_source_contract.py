@@ -26,6 +26,8 @@ import pytest
 #   DEVKIT_VERIFY_GENERATED=1 \
 #   DEVKIT_GENERATED_SDKCONFIG=/absolute/path/to/generated/sdkconfig \
 #   DEVKIT_FIRMWARE_ELF=/absolute/path/to/devkit_bringup \
+#   DEVKIT_EXPECTED_RECIPE_ID=<64-lowercase-hex> \
+#   DEVKIT_EXPECTED_GIT_COMMIT=<40-lowercase-hex> \
 #   python3 -m pytest -q tools/test_devkit_source_contract.py
 
 ESP32_RS = Path(__file__).resolve().parent.parent
@@ -66,6 +68,9 @@ FAILURE_CODES = {
     "PROTECTED_DIRECTION",
     "UART_WRITE",
 }
+TEST_RECIPE_ID = "a" * 64
+TEST_GIT_COMMIT = "b" * 40
+DEVKIT_BANNER = "ESP32TAP DEVKIT BRINGUP — NO CONTROL OUTPUTS".encode()
 
 
 def _read(path: Path) -> str:
@@ -113,6 +118,20 @@ def _generated_artifacts() -> tuple[Path, Path]:
     sdkconfig = _absolute_regular_file(sdkconfig_value, "generated sdkconfig")
     elf = _absolute_regular_file(elf_value, "DevKit ELF")
     return sdkconfig, elf
+
+
+def _expected_build_identity() -> tuple[bytes, bytes]:
+    recipe = os.environ.get("DEVKIT_EXPECTED_RECIPE_ID")
+    git_commit = os.environ.get("DEVKIT_EXPECTED_GIT_COMMIT")
+    assert recipe, "DEVKIT_EXPECTED_RECIPE_ID is required in generated mode"
+    assert git_commit, "DEVKIT_EXPECTED_GIT_COMMIT is required in generated mode"
+    assert re.fullmatch(
+        r"[0-9a-f]{64}", recipe
+    ), "expected recipe ID must be exactly 64 lowercase hexadecimal characters"
+    assert re.fullmatch(
+        r"[0-9a-f]{40}", git_commit
+    ), "expected git commit must be exactly 40 lowercase hexadecimal characters"
+    return recipe.encode(), git_commit.encode()
 
 
 def _absolute_regular_file(value: str, label: str) -> Path:
@@ -227,6 +246,41 @@ def _read_xtensa_elf(path: Path) -> bytes:
     return image
 
 
+def _validate_devkit_identity(
+    image: bytes, expected_recipe: bytes, expected_git_commit: bytes
+) -> None:
+    identity_cluster = expected_recipe + expected_git_commit + DEVKIT_BANNER
+    assert (
+        image.count(identity_cluster) == 1
+    ), "ELF must contain exactly one expected recipe/git/banner identity cluster"
+
+    identity_end = image.index(identity_cluster) + len(identity_cluster)
+    build_anchor = b"BUILD recipe= git="
+    build_offset = image.find(build_anchor, identity_end, identity_end + 64)
+    assert (
+        build_offset >= 0 and image.count(build_anchor) == 1
+    ), "ELF identity cluster is not in the BUILD recipe/git record context"
+
+    protocol_markers = {
+        b"CHIP model= revision= mac=: crystal_mhz=40 reset=",
+        b"MEMORY flash_bytes= psram_total= internal_free= psram_free=",
+        b"PINS gpio4=/",
+        b"BRINGUP STAGE0 PASS",
+        b"BRINGUP FAIL code=",
+        b"INPUT SAMPLE seq=",
+        b"BRINGUP ERROR code=",
+        b"BAD_COMMAND",
+    }
+    for marker in protocol_markers:
+        assert (
+            image.count(marker) == 1
+        ), f"ELF must contain exactly one protocol identity marker: {marker!r}"
+    for failure_code in FAILURE_CODES:
+        assert (
+            failure_code.encode() in image
+        ), f"ELF is missing failure code: {failure_code}"
+
+
 def _bounded_table(
     offset: int, entry_size: int, count: int, total: int, label: str, path: Path
 ) -> None:
@@ -255,16 +309,18 @@ def _pseudo_xtensa_elf_fixture() -> bytes:
     return b"\x7fELF\x01\x01\x01" + b"\x00" * 9 + b"\x02\x00\x5e\x00"
 
 
-def _structural_xtensa_elf_fixture() -> bytes:
+def _structural_xtensa_elf_fixture(
+    identity: tuple[str, str] | None = None,
+) -> bytes:
     """Small coherent ELF32 used only to corrupt individual structures."""
 
     phoff = 52
     text_offset = 0x100
-    rodata_offset = 0x104
+    rodata_offset = 0x104 if identity is None else 0x180
     symtab_offset = 0x108
     strtab_offset = 0x118
     shstrtab_offset = 0x120
-    shoff = 0x180
+    shoff = 0x180 if identity is None else 0x500
     shnum = 6
     shstrtab = b"\0.flash.text\0.flash.rodata\0.symtab\0.strtab\0.shstrtab\0"
     names = {
@@ -293,7 +349,8 @@ def _structural_xtensa_elf_fixture() -> bytes:
         "<IIIIIIII", 1, text_offset, 0x4200_0000, 0x4200_0000, 4, 4, 5, 4
     )
     image[text_offset : text_offset + 4] = b"TEXT"
-    image[rodata_offset : rodata_offset + 4] = b"DATA"
+    rodata = b"DATA" if identity is None else _identity_blob(*identity)
+    image[rodata_offset : rodata_offset + len(rodata)] = rodata
     image[symtab_offset : symtab_offset + 16] = b"\0" * 16
     image[strtab_offset : strtab_offset + 8] = b"\0symbol\0"
     image[shstrtab_offset : shstrtab_offset + len(shstrtab)] = shstrtab
@@ -301,7 +358,18 @@ def _structural_xtensa_elf_fixture() -> bytes:
     sections = (
         (0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
         (names[".flash.text"], 1, 6, 0x4200_0000, text_offset, 4, 0, 0, 4, 0),
-        (names[".flash.rodata"], 1, 2, 0x3C04_0000, rodata_offset, 4, 0, 0, 4, 0),
+        (
+            names[".flash.rodata"],
+            1,
+            2,
+            0x3C04_0000,
+            rodata_offset,
+            len(rodata),
+            0,
+            0,
+            4,
+            0,
+        ),
         (names[".symtab"], 2, 0, 0, symtab_offset, 16, 4, 0, 4, 16),
         (names[".strtab"], 3, 0, 0, strtab_offset, 8, 0, 0, 1, 0),
         (
@@ -323,12 +391,35 @@ def _structural_xtensa_elf_fixture() -> bytes:
     return bytes(image)
 
 
+def _identity_blob(recipe: str, git_commit: str) -> bytes:
+    markers = [
+        recipe.encode() + git_commit.encode() + DEVKIT_BANNER,
+        b"BUILD recipe= git=",
+        b"CHIP model= revision= mac=: crystal_mhz=40 reset=",
+        b"MEMORY flash_bytes= psram_total= internal_free= psram_free=",
+        b"PINS gpio4=/ gpio5=/ gpio6=/ gpio7=/ gpio15=/ gpio16=/ gpio17=/ gpio18=/ gpio21=/ gpio38=/",
+        b"BRINGUP STAGE0 PASS",
+        b"BRINGUP FAIL code=",
+        b"INPUT SAMPLE seq=",
+        b"BRINGUP ERROR code=",
+        b"BAD_COMMAND",
+        *(code.encode() for code in sorted(FAILURE_CODES)),
+    ]
+    return b"\0".join(markers) + b"\0"
+
+
 def _invoke_generated_verifier(
-    monkeypatch: pytest.MonkeyPatch, sdkconfig: str, elf: str
+    monkeypatch: pytest.MonkeyPatch,
+    sdkconfig: str,
+    elf: str,
+    recipe: str = TEST_RECIPE_ID,
+    git_commit: str = TEST_GIT_COMMIT,
 ) -> None:
     monkeypatch.setenv("DEVKIT_VERIFY_GENERATED", "1")
     monkeypatch.setenv("DEVKIT_GENERATED_SDKCONFIG", sdkconfig)
     monkeypatch.setenv("DEVKIT_FIRMWARE_ELF", elf)
+    monkeypatch.setenv("DEVKIT_EXPECTED_RECIPE_ID", recipe)
+    monkeypatch.setenv("DEVKIT_EXPECTED_GIT_COMMIT", git_commit)
     test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode()
 
 
@@ -585,6 +676,7 @@ def test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode() -> None:
     """
 
     sdkconfig, elf = _generated_artifacts()
+    expected_recipe, expected_git_commit = _expected_build_identity()
     _validate_generated_sdkconfig(sdkconfig)
     config = _parse_kconfig(sdkconfig)
     _assert_n8r8_uart_halt_config(config)
@@ -592,6 +684,7 @@ def test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode() -> None:
     # by IDF 5.5.4.  Prove operational radio absence from the linked image.
     assert config.get("CONFIG_ESP_WIFI_ENABLED") in {"n", "y"}
     image = _read_xtensa_elf(elf)
+    _validate_devkit_identity(image, expected_recipe, expected_git_commit)
     for symbol in (
         b"esp_wifi_init",
         b"esp_wifi_start",
@@ -664,6 +757,86 @@ def test_generated_verifier_rejects_20_byte_pseudo_elf(
     sdkconfig.write_bytes(_generated_sdkconfig_fixture())
     elf.write_bytes(_pseudo_xtensa_elf_fixture())
     with pytest.raises(AssertionError, match="ELF header"):
+        _invoke_generated_verifier(monkeypatch, str(sdkconfig), str(elf))
+
+
+def test_generated_verifier_requires_expected_build_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "firmware.elf"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(_structural_xtensa_elf_fixture((TEST_RECIPE_ID, TEST_GIT_COMMIT)))
+    monkeypatch.setenv("DEVKIT_VERIFY_GENERATED", "1")
+    monkeypatch.setenv("DEVKIT_GENERATED_SDKCONFIG", str(sdkconfig))
+    monkeypatch.setenv("DEVKIT_FIRMWARE_ELF", str(elf))
+    monkeypatch.delenv("DEVKIT_EXPECTED_RECIPE_ID", raising=False)
+    monkeypatch.delenv("DEVKIT_EXPECTED_GIT_COMMIT", raising=False)
+    with pytest.raises(AssertionError, match="DEVKIT_EXPECTED_RECIPE_ID"):
+        test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode()
+    monkeypatch.setenv("DEVKIT_EXPECTED_RECIPE_ID", TEST_RECIPE_ID)
+    with pytest.raises(AssertionError, match="DEVKIT_EXPECTED_GIT_COMMIT"):
+        test_generated_sdkconfig_and_elf_are_mandatory_in_generated_mode()
+
+
+@pytest.mark.parametrize(
+    ("recipe", "git_commit", "message"),
+    [
+        ("A" * 64, TEST_GIT_COMMIT, "recipe ID"),
+        ("a" * 63, TEST_GIT_COMMIT, "recipe ID"),
+        (TEST_RECIPE_ID, "B" * 40, "git commit"),
+        (TEST_RECIPE_ID, "b" * 39, "git commit"),
+    ],
+)
+def test_generated_verifier_rejects_malformed_expected_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recipe: str,
+    git_commit: str,
+    message: str,
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "firmware.elf"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(_structural_xtensa_elf_fixture((TEST_RECIPE_ID, TEST_GIT_COMMIT)))
+    with pytest.raises(AssertionError, match=message):
+        _invoke_generated_verifier(
+            monkeypatch, str(sdkconfig), str(elf), recipe, git_commit
+        )
+
+
+@pytest.mark.parametrize(
+    ("recipe", "git_commit", "message"),
+    [
+        ("c" * 64, TEST_GIT_COMMIT, "identity cluster"),
+        (TEST_RECIPE_ID, "c" * 40, "identity cluster"),
+    ],
+)
+def test_generated_verifier_rejects_wrong_embedded_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recipe: str,
+    git_commit: str,
+    message: str,
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "firmware.elf"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(_structural_xtensa_elf_fixture((TEST_RECIPE_ID, TEST_GIT_COMMIT)))
+    with pytest.raises(AssertionError, match=message):
+        _invoke_generated_verifier(
+            monkeypatch, str(sdkconfig), str(elf), recipe, git_commit
+        )
+
+
+def test_generated_verifier_rejects_generic_structural_elf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdkconfig = tmp_path / "sdkconfig"
+    elf = tmp_path / "firmware.elf"
+    sdkconfig.write_bytes(_generated_sdkconfig_fixture())
+    elf.write_bytes(_structural_xtensa_elf_fixture())
+    with pytest.raises(AssertionError, match="identity cluster"):
         _invoke_generated_verifier(monkeypatch, str(sdkconfig), str(elf))
 
 
