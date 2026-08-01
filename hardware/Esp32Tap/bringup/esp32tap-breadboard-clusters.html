@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Esp32Tap Breadboard Cluster Layout</title>
+<style>
+@page { size: letter landscape; margin: .35in; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #172033; font: 10px/1.3 Arial, sans-serif; }
+h1 { margin: 0; color: #10264f; font-size: 22px; }
+h2 { margin: 7px 0 5px; color: #163c73; font-size: 15px; }
+p { margin: 3px 0 6px; }
+.sub { color: #4b5565; }
+.warning { margin: 6px 0; border: 2px solid #a13b28; background: #fff1ed; padding: 5px 8px; font-weight: bold; }
+.page { break-after: page; }
+.page:last-child { break-after: auto; }
+svg { display: block; width: 100%; height: 6.25in; }
+.board { fill: #fbfcfe; stroke: #75849a; stroke-width: 2; }
+.ditch { fill: #e4e8ee; }
+.zone { stroke-width: 2; rx: 10; ry: 10; }
+.z1 { fill: #fff0e6; stroke: #b75d23; }
+.z2 { fill: #fff8d9; stroke: #a87900; }
+.z3 { fill: #e8f2ff; stroke: #2563a8; }
+.z4 { fill: #e9f8ec; stroke: #2d7d46; }
+.z5 { fill: #f7eaff; stroke: #7d43a7; }
+.z6 { fill: #e8f8f7; stroke: #18776f; }
+.z7 { fill: #f3f0ff; stroke: #5a50a5; }
+.zt { font: bold 14px Arial, sans-serif; fill: #152238; }
+.zb { font: 10.5px Arial, sans-serif; fill: #263449; }
+.rail-label { font: bold 10px Arial, sans-serif; }
+.arrow { fill: none; stroke: #34445c; stroke-width: 2; marker-end: url(#arrow); }
+.arrow-soft { fill: none; stroke: #68788e; stroke-width: 1.5; stroke-dasharray: 5 4; marker-end: url(#arrowSoft); }
+.net { font: bold 9px Arial, sans-serif; fill: #24344a; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.note { font: italic 9px Arial, sans-serif; fill: #596579; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #aeb8c8; padding: 4px 5px; vertical-align: top; }
+th { background: #3f526f; color: #fff; text-align: left; }
+tr:nth-child(even) td { background: #f4f7fa; }
+.zone-tag { white-space: nowrap; font-weight: bold; }
+.jump td:first-child { width: 18%; font-weight: bold; }
+.small { font-size: 9px; }
+.check { margin: 5px 0 0; padding-left: 18px; }
+.check li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<section class="page">
+  <h1>Esp32Tap Breadboard — Logical Cluster Layout</h1>
+  <p class="sub">Approximate placement only. Use two full-size breadboards side-by-side; keep each zone compact, then connect zones by the named nets below.</p>
+  <div class="warning">Start unpowered. Leave STANDALONE POWER and COIL POWER open. Meter-identify relay, transistor, regulator, and breakout pins before inserting them.</div>
+
+  <svg viewBox="0 0 1000 600" role="img" aria-label="Two breadboards divided into seven logical wiring zones">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#34445c"/></marker>
+      <marker id="arrowSoft" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#68788e"/></marker>
+    </defs>
+
+    <text x="25" y="20" class="zt">Breadboard A — treadmill / power side</text>
+    <rect x="20" y="30" width="475" height="525" class="board" rx="12"/>
+    <rect x="252" y="34" width="12" height="517" class="ditch"/>
+    <text x="525" y="20" class="zt">Breadboard B — ESP32 / logic side</text>
+    <rect x="515" y="30" width="465" height="525" class="board" rx="12"/>
+    <rect x="742" y="34" width="12" height="517" class="ditch"/>
+
+    <line x1="35" y1="52" x2="480" y2="52" stroke="#b91c1c" stroke-width="6"/>
+    <text x="38" y="47" class="rail-label" fill="#9b1c1c">+8V_RAW: short rail, connector end only</text>
+    <line x1="35" y1="536" x2="965" y2="536" stroke="#1f2937" stroke-width="6"/>
+    <text x="38" y="530" class="rail-label" fill="#1f2937">GND: join both boards with two jumpers</text>
+    <line x1="535" y1="52" x2="965" y2="52" stroke="#2563eb" stroke-width="6"/>
+    <text x="538" y="47" class="rail-label" fill="#1d4ed8">LOGIC_3V3: logic board only</text>
+
+    <rect x="38" y="78" width="205" height="205" class="zone z1"/>
+    <text x="52" y="100" class="zt">1 — RJ45 + relay contacts</text>
+    <text x="52" y="121" class="zb">• CONSOLE and MOTOR breakouts</text>
+    <text x="52" y="138" class="zb">• K1 at right edge of zone</text>
+    <text x="52" y="155" class="zb">• pins 1/7 → GND</text>
+    <text x="52" y="172" class="zb">• pins 2/8 → +8V_RAW</text>
+    <text x="52" y="189" class="zb">• pins 3/4/5 pass through</text>
+    <text x="52" y="206" class="zb">• pin 6 through K1 contacts</text>
+    <text x="52" y="230" class="note">Put RJ45 breakouts at the outer edge.</text>
+
+    <rect x="277" y="78" width="200" height="205" class="zone z2"/>
+    <text x="291" y="100" class="zt">2 — Input power</text>
+    <text x="291" y="121" class="zb">• RXEF075 + 1N5822</text>
+    <text x="291" y="138" class="zb">• P6KE12A TVS</text>
+    <text x="291" y="155" class="zb">• TSR1-2433E</text>
+    <text x="291" y="172" class="zb">• 22 µF + two 10 µF caps</text>
+    <text x="291" y="189" class="zb">• local VIN and TSR_3V3 strips</text>
+    <text x="291" y="213" class="note">Keep protection parts near +8V entry.</text>
+
+    <rect x="38" y="305" width="205" height="205" class="zone z4"/>
+    <text x="52" y="327" class="zt">4 — Voltage monitor</text>
+    <text x="52" y="348" class="zb">• TPS3700 breakout</text>
+    <text x="52" y="365" class="zb">• UV divider: 150k / 10k</text>
+    <text x="52" y="382" class="zb">• OV divider: 255k / 10k</text>
+    <text x="52" y="399" class="zb">• two 1 nF filters</text>
+    <text x="52" y="416" class="zb">• TREAD_OK pulls + GPIO6 R</text>
+    <text x="52" y="440" class="note">Keep divider midpoints short.</text>
+
+    <rect x="277" y="305" width="200" height="205" class="zone z5"/>
+    <text x="291" y="327" class="zt">5 — Relay driver</text>
+    <text x="291" y="348" class="zb">• TPS709 + 1 µF / 4.7 µF</text>
+    <text x="291" y="365" class="zb">• BC337 + 560 Ω + 10k</text>
+    <text x="291" y="382" class="zb">• P6KE6.8CA across K1 coil</text>
+    <text x="291" y="399" class="zb">• COIL POWER removable jumper</text>
+    <text x="291" y="423" class="note">Place beside K1; verify B/C/E leads.</text>
+
+    <rect x="535" y="78" width="200" height="432" class="zone z3"/>
+    <text x="549" y="100" class="zt">3 — ESP32 DevKit</text>
+    <text x="549" y="121" class="zb">Straddle center ditch; USB faces edge.</text>
+    <text x="549" y="150" class="zb">Left-facing jumpers:</text>
+    <text x="549" y="167" class="zb">• GPIO6 — TREAD_OK</text>
+    <text x="549" y="184" class="zb">• GPIO21 — RELAY_CMD</text>
+    <text x="549" y="201" class="zb">• GPIO15 — TX_ENABLE</text>
+    <text x="549" y="218" class="zb">• GPIO17 — UART TX</text>
+    <text x="549" y="235" class="zb">• GPIO18 / 16 — RX taps</text>
+    <text x="549" y="264" class="zb">Right-facing jumpers:</text>
+    <text x="549" y="281" class="zb">• GPIO4 / 5 — K1 feedback</text>
+    <text x="549" y="298" class="zb">• GPIO7 — VBUS_PRESENT_N</text>
+    <text x="549" y="315" class="zb">• GPIO38 — status LED</text>
+    <text x="549" y="344" class="zb">Rails:</text>
+    <text x="549" y="361" class="zb">• 3V3 → LOGIC_3V3</text>
+    <text x="549" y="378" class="zb">• GND → common GND</text>
+    <text x="549" y="395" class="zb">• 5V/VBUS → zone 7 only</text>
+    <text x="549" y="426" class="note">Leave room for USB cable and reset.</text>
+
+    <rect x="768" y="78" width="194" height="252" class="zone z6"/>
+    <text x="782" y="100" class="zt">6 — Logic + UART</text>
+    <text x="782" y="121" class="zb">• SN74AHC08N across ditch</text>
+    <text x="782" y="138" class="zb">• SN74AHC126N across ditch</text>
+    <text x="782" y="155" class="zb">• 100 nF at each IC</text>
+    <text x="782" y="172" class="zb">• command pull-downs</text>
+    <text x="782" y="189" class="zb">• R_TX 100 Ω</text>
+    <text x="782" y="206" class="zb">• two 10k RX resistors</text>
+    <text x="782" y="230" class="note">IC notches point the same way.</text>
+    <text x="782" y="247" class="note">Tie every unused input low.</text>
+
+    <rect x="768" y="352" width="194" height="158" class="zone z7"/>
+    <text x="782" y="374" class="zt">7 — Feedback + LEDs</text>
+    <text x="782" y="395" class="zb">• K1 feedback pull-ups</text>
+    <text x="782" y="412" class="zb">• 2N7000 VBUS sense</text>
+    <text x="782" y="429" class="zb">• green status LED + 330 Ω</text>
+    <text x="782" y="446" class="zb">• red power LED + 1k</text>
+    <text x="782" y="463" class="zb">• C_LOGIC 100 nF</text>
+
+    <path d="M243 180 C260 180 260 180 277 180" class="arrow"/>
+    <text x="245" y="169" class="net">+8V_RAW</text>
+    <path d="M377 283 C377 292 377 296 377 305" class="arrow"/>
+    <text x="384" y="299" class="net">VIN</text>
+    <path d="M735 190 C747 190 756 190 768 190" class="arrow"/>
+    <text x="716" y="180" class="net">GPIOs</text>
+    <path d="M277 420 C250 420 250 245 225 245" class="arrow-soft"/>
+    <text x="248" y="337" class="net">K1 coil</text>
+    <path d="M768 430 C750 430 750 430 735 430" class="arrow"/>
+    <text x="704" y="420" class="net">GPIO4/5/7/38</text>
+    <text x="507" y="424" class="rail-label" fill="#34445c" transform="rotate(-90 507 424)">INTER-BOARD JUMPERS: SEE PAGE 2</text>
+  </svg>
+</section>
+
+<section class="page">
+  <h1>Cluster Build Order and Inter-Zone Jumpers</h1>
+  <p class="sub">Build and meter-check one zone at a time. Use the point-to-point wiring PDF for every pin-level connection.</p>
+  <div class="grid">
+    <div>
+      <h2>Suggested build order</h2>
+      <table>
+        <tr><th>Order</th><th>Zone</th><th>Stop-and-check point</th></tr>
+        <tr><td>1</td><td><b>3 — ESP32</b></td><td>USB boot works; 3V3 and GND rails are correct.</td></tr>
+        <tr><td>2</td><td><b>7 — Feedback/LEDs</b></td><td>Power LED works; GPIO pins are not shorted.</td></tr>
+        <tr><td>3</td><td><b>6 — Logic/UART</b></td><td>DIP orientation, VCC/GND, unused inputs, and decouplers checked.</td></tr>
+        <tr><td>4</td><td><b>1 — RJ45/K1</b></td><td>Pass-through continuity correct with K1 unpowered.</td></tr>
+        <tr><td>5</td><td><b>2 — Input power</b></td><td>Polarity checked; VIN and GND have no short. Do not join standalone power yet.</td></tr>
+        <tr><td>6</td><td><b>4 — Monitor</b></td><td>Divider values and TREAD_OK pull resistors meter correctly.</td></tr>
+        <tr><td>7</td><td><b>5 — Relay driver</b></td><td>BC337 lead order and coil TVS checked; leave COIL POWER open.</td></tr>
+      </table>
+
+      <h2>Rail policy</h2>
+      <table class="small">
+        <tr><th>Rail/net</th><th>Where</th><th>Rule</th></tr>
+        <tr><td><b>GND</b></td><td>Both boards</td><td>Join boards with two short jumpers; all USB and treadmill grounds are common.</td></tr>
+        <tr><td><b>+8V_RAW</b></td><td>Zone 1 → zone 2 only</td><td>Do not run along the logic board.</td></tr>
+        <tr><td><b>VIN</b></td><td>Zones 2, 4, 5</td><td>Keep on treadmill/power board.</td></tr>
+        <tr><td><b>LOGIC_3V3</b></td><td>Zones 3, 4, 6, 7</td><td>Powered from DevKit USB during initial bring-up.</td></tr>
+        <tr><td><b>TSR_3V3</b></td><td>Zone 2</td><td>Join to LOGIC_3V3 only through removable STANDALONE POWER jumper.</td></tr>
+        <tr><td><b>+5V_RLY</b></td><td>Zone 5</td><td>Short local strip only; coil connection stays removable.</td></tr>
+      </table>
+    </div>
+
+    <div>
+      <h2>Major inter-zone jumpers</h2>
+      <table class="jump small">
+        <tr><th>Zones</th><th>Named nets / purpose</th></tr>
+        <tr><td>1 → 2</td><td><b>+8V_RAW, GND</b> — protected local-power input.</td></tr>
+        <tr><td>2 → 4</td><td><b>VIN, GND</b> — monitor supply and divider source.</td></tr>
+        <tr><td>2 ⇄ 3</td><td><b>STANDALONE POWER</b> — TSR_3V3 to LOGIC_3V3; install only when USB is absent.</td></tr>
+        <tr><td>3 ⇄ 4</td><td><b>LOGIC_3V3, TREAD_OK_MCU/GPIO6</b>.</td></tr>
+        <tr><td>4 → 6</td><td><b>TREAD_OK</b> — hardware permission to both AHC08 gates.</td></tr>
+        <tr><td>3 → 6</td><td><b>GPIO21 RELAY_CMD, GPIO15 TX_ENABLE, GPIO17 UART TX</b>.</td></tr>
+        <tr><td>6 → 5</td><td><b>RELAY_GATE</b> — gated command to TPS709 enable and BC337 base resistor.</td></tr>
+        <tr><td>5 ⇄ 1</td><td><b>K1 coil pins 1 and 16</b> — keep short; COIL POWER remains removable.</td></tr>
+        <tr><td>6 → 1</td><td><b>R_TX output to K1 pin 8</b> — switched ESP transmit.</td></tr>
+        <tr><td>1 → 3</td><td><b>CONSOLE pin 6 via 10k → GPIO18; pin-3 net via 10k → GPIO16</b>.</td></tr>
+        <tr><td>1 → 7</td><td><b>K1 pins 9, 11, 13</b> — NO/COM/NC feedback contacts.</td></tr>
+        <tr><td>7 ⇄ 3</td><td><b>GPIO4, GPIO5, GPIO7, GPIO38, 5V/VBUS, LOGIC_3V3</b>.</td></tr>
+      </table>
+
+      <h2>Fast physical rules</h2>
+      <ul class="check">
+        <li>Put every DIP IC across a breadboard center ditch, with notches pointing the same direction.</li>
+        <li>Put each 100 nF capacitor directly beside its IC supply pins.</li>
+        <li>Keep UV_SENSE and OV_SENSE resistor/capacitor nodes inside zone 4.</li>
+        <li>Keep BC337, its two resistors, coil TVS, and K1 coil pins together.</li>
+        <li>Use colored jumpers consistently: black GND, red raw/VIN, blue 3V3, yellow control, green feedback.</li>
+        <li>Label both ends of every jumper that crosses between boards.</li>
+      </ul>
+      <div class="warning">This page groups the circuit; it does not replace the 126-row From/To wiring list. Never infer a physical pin from package shape—meter or datasheet-verify it.</div>
+    </div>
+  </div>
+</section>
+</body>
+</html>
