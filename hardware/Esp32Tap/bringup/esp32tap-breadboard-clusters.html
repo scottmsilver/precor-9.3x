@@ -50,6 +50,16 @@ tr:nth-child(even) td { background: #f4f7fa; }
 .card p { margin: 4px 0 0; }
 .card .parts td:first-child { width: 31%; font-weight: bold; }
 .card .parts td:last-child { width: 42%; }
+.wireline { padding-top: 3px; border-top: 1px dashed #9aa7b8; }
+.wire { display: inline-block; margin: 0 1px; padding: 0 3px; border: 1px solid #64748b; border-radius: 3px; font-size: 8px; font-weight: bold; white-space: nowrap; }
+.w-black { background: #1f2937; border-color: #1f2937; color: #fff; }
+.w-red { background: #fee2e2; border-color: #b91c1c; color: #991b1b; }
+.w-orange { background: #ffedd5; border-color: #c2410c; color: #9a3412; }
+.w-blue { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; }
+.w-violet { background: #ede9fe; border-color: #7c3aed; color: #6d28d9; }
+.w-yellow { background: #fef9c3; border-color: #ca8a04; color: #854d0e; }
+.w-green { background: #dcfce7; border-color: #15803d; color: #166534; }
+.w-white { background: #fff; border-color: #64748b; color: #334155; }
 .check { margin: 5px 0 0; padding-left: 18px; }
 .check li { margin: 2px 0; }
 </style>
@@ -64,6 +74,11 @@ tr:nth-child(even) td { background: #f4f7fa; }
     <defs>
       <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#34445c"/></marker>
       <marker id="arrowSoft" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#68788e"/></marker>
+      <marker id="arrowRed" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#b91c1c"/></marker>
+      <marker id="arrowOrange" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c2410c"/></marker>
+      <marker id="arrowYellow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#a16207"/></marker>
+      <marker id="arrowViolet" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#7c3aed"/></marker>
+      <marker id="arrowGreen" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#15803d"/></marker>
     </defs>
 
     <text x="25" y="20" class="zt">Breadboard A — treadmill / power side</text>
@@ -154,17 +169,26 @@ tr:nth-child(even) td { background: #f4f7fa; }
     <text x="782" y="446" class="zb">• red power LED + 1k</text>
     <text x="782" y="463" class="zb">• C_LOGIC 100 nF</text>
 
-    <path d="M243 180 C260 180 260 180 277 180" class="arrow"/>
+    <path d="M243 180 C260 180 260 180 277 180" fill="none" stroke="#b91c1c" stroke-width="2" marker-end="url(#arrowRed)"/>
     <text x="245" y="169" class="net">+8V_RAW</text>
-    <path d="M377 283 C377 292 377 296 377 305" class="arrow"/>
+    <path d="M377 283 C377 292 377 296 377 305" fill="none" stroke="#c2410c" stroke-width="2" marker-end="url(#arrowOrange)"/>
     <text x="384" y="299" class="net">VIN</text>
-    <path d="M735 190 C747 190 756 190 768 190" class="arrow"/>
+    <path d="M735 190 C747 190 756 190 768 190" fill="none" stroke="#a16207" stroke-width="2" marker-end="url(#arrowYellow)"/>
     <text x="716" y="180" class="net">GPIOs</text>
-    <path d="M277 420 C250 420 250 245 225 245" class="arrow-soft"/>
+    <path d="M277 420 C250 420 250 245 225 245" fill="none" stroke="#7c3aed" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrowViolet)"/>
     <text x="248" y="337" class="net">K1 coil</text>
-    <path d="M768 430 C750 430 750 430 735 430" class="arrow"/>
+    <path d="M768 430 C750 430 750 430 735 430" fill="none" stroke="#15803d" stroke-width="2" marker-end="url(#arrowGreen)"/>
     <text x="704" y="420" class="net">GPIO4/5/7/38</text>
     <text x="507" y="424" class="rail-label" fill="#34445c" transform="rotate(-90 507 424)">INTER-BOARD JUMPERS: SEE PAGE 2</text>
+
+    <rect x="68" y="570" width="12" height="12" fill="#1f2937"/><text x="85" y="580" class="rail-label">BLACK GND</text>
+    <rect x="178" y="570" width="12" height="12" fill="#b91c1c"/><text x="195" y="580" class="rail-label">RED +8V_RAW</text>
+    <rect x="312" y="570" width="12" height="12" fill="#c2410c"/><text x="329" y="580" class="rail-label">ORANGE VIN</text>
+    <rect x="428" y="570" width="12" height="12" fill="#2563eb"/><text x="445" y="580" class="rail-label">BLUE 3V3</text>
+    <rect x="532" y="570" width="12" height="12" fill="#7c3aed"/><text x="549" y="580" class="rail-label">VIOLET RELAY/5V</text>
+    <rect x="660" y="570" width="12" height="12" fill="#eab308"/><text x="677" y="580" class="rail-label">YELLOW CTRL/TX</text>
+    <rect x="792" y="570" width="12" height="12" fill="#15803d"/><text x="809" y="580" class="rail-label">GREEN FB/RX</text>
+    <rect x="900" y="570" width="12" height="12" fill="#fff" stroke="#64748b"/><text x="917" y="580" class="rail-label">WHITE P/T</text>
   </svg>
 </section>
 
@@ -187,32 +211,32 @@ tr:nth-child(even) td { background: #f4f7fa; }
 
       <h2>Rail policy</h2>
       <table class="small">
-        <tr><th>Rail/net</th><th>Where</th><th>Rule</th></tr>
-        <tr><td><b>GND</b></td><td>Both boards</td><td>Join boards with two short jumpers; all USB and treadmill grounds are common.</td></tr>
-        <tr><td><b>+8V_RAW</b></td><td>Zone 1 → zone 2 only</td><td>Do not run along the logic board.</td></tr>
-        <tr><td><b>VIN</b></td><td>Zones 2, 4, 5</td><td>Keep on treadmill/power board.</td></tr>
-        <tr><td><b>LOGIC_3V3</b></td><td>Zones 3, 4, 6, 7</td><td>Powered from DevKit USB during initial bring-up.</td></tr>
-        <tr><td><b>TSR_3V3</b></td><td>Zone 2</td><td>Join to LOGIC_3V3 only through removable STANDALONE POWER jumper.</td></tr>
-        <tr><td><b>+5V_RLY</b></td><td>Zone 5</td><td>Short local strip only; coil connection stays removable.</td></tr>
+        <tr><th>Rail/net</th><th>Color</th><th>Where / rule</th></tr>
+        <tr><td><b>GND</b></td><td><span class="wire w-black">BLACK</span></td><td>Both boards; join with two short jumpers.</td></tr>
+        <tr><td><b>+8V_RAW</b></td><td><span class="wire w-red">RED</span></td><td>Zone 1 → 2 only; do not run along logic board.</td></tr>
+        <tr><td><b>VIN</b></td><td><span class="wire w-orange">ORANGE</span></td><td>Zones 2, 4, 5 on power board.</td></tr>
+        <tr><td><b>LOGIC_3V3</b></td><td><span class="wire w-blue">BLUE</span></td><td>Zones 3, 4, 6, 7; DevKit-powered initially.</td></tr>
+        <tr><td><b>TSR_3V3</b></td><td><span class="wire w-blue">BLUE</span></td><td>Zone 2; removable link to LOGIC_3V3.</td></tr>
+        <tr><td><b>+5V_RLY / coil</b></td><td><span class="wire w-violet">VIOLET</span></td><td>Zone 5 and short K1 coil jumpers only.</td></tr>
       </table>
     </div>
 
     <div>
       <h2>Major inter-zone jumpers</h2>
       <table class="jump small">
-        <tr><th>Zones</th><th>Named nets / purpose</th></tr>
-        <tr><td>1 → 2</td><td><b>+8V_RAW, GND</b> — protected local-power input.</td></tr>
-        <tr><td>2 → 4</td><td><b>VIN, GND</b> — monitor supply and divider source.</td></tr>
-        <tr><td>2 ⇄ 3</td><td><b>STANDALONE POWER</b> — TSR_3V3 to LOGIC_3V3; install only when USB is absent.</td></tr>
-        <tr><td>3 ⇄ 4</td><td><b>LOGIC_3V3, TREAD_OK_MCU/GPIO6</b>.</td></tr>
-        <tr><td>4 → 6</td><td><b>TREAD_OK</b> — hardware permission to both AHC08 gates.</td></tr>
-        <tr><td>3 → 6</td><td><b>GPIO21 RELAY_CMD, GPIO15 TX_ENABLE, GPIO17 UART TX</b>.</td></tr>
-        <tr><td>6 → 5</td><td><b>RELAY_GATE</b> — gated command to TPS709 enable and BC337 base resistor.</td></tr>
-        <tr><td>5 ⇄ 1</td><td><b>K1 coil pins 1 and 16</b> — keep short; COIL POWER remains removable.</td></tr>
-        <tr><td>6 → 1</td><td><b>R_TX output to K1 pin 8</b> — switched ESP transmit.</td></tr>
-        <tr><td>1 → 3</td><td><b>CONSOLE pin 6 via 10k → GPIO18; pin-3 net via 10k → GPIO16</b>.</td></tr>
-        <tr><td>1 → 7</td><td><b>K1 pins 9, 11, 13</b> — NO/COM/NC feedback contacts.</td></tr>
-        <tr><td>7 ⇄ 3</td><td><b>GPIO4, GPIO5, GPIO7, GPIO38, 5V/VBUS, LOGIC_3V3</b>.</td></tr>
+        <tr><th>Zones</th><th>Wire color</th><th>Named nets / purpose</th></tr>
+        <tr><td>1 → 2</td><td><span class="wire w-red">RED</span> <span class="wire w-black">BLACK</span></td><td><b>+8V_RAW, GND</b>.</td></tr>
+        <tr><td>2 → 4</td><td><span class="wire w-orange">ORANGE</span> <span class="wire w-black">BLACK</span></td><td><b>VIN, GND</b>.</td></tr>
+        <tr><td>2 ⇄ 3</td><td><span class="wire w-blue">BLUE</span></td><td><b>STANDALONE POWER</b>; install only when USB is absent.</td></tr>
+        <tr><td>3 ⇄ 4</td><td><span class="wire w-blue">BLUE</span> <span class="wire w-yellow">YELLOW</span></td><td><b>LOGIC_3V3, TREAD_OK_MCU/GPIO6</b>.</td></tr>
+        <tr><td>4 → 6</td><td><span class="wire w-yellow">YELLOW</span></td><td><b>TREAD_OK</b> hardware permission.</td></tr>
+        <tr><td>3 → 6</td><td><span class="wire w-yellow">YELLOW</span></td><td><b>RELAY_CMD, TX_ENABLE, UART TX</b>.</td></tr>
+        <tr><td>6 → 5</td><td><span class="wire w-yellow">YELLOW</span></td><td><b>RELAY_GATE</b>.</td></tr>
+        <tr><td>5 ⇄ 1</td><td><span class="wire w-violet">VIOLET</span></td><td><b>K1 coil pins 1/16</b>; keep short.</td></tr>
+        <tr><td>6 → 1</td><td><span class="wire w-yellow">YELLOW</span></td><td><b>R_TX output to K1 pin 8</b>.</td></tr>
+        <tr><td>1 → 3</td><td><span class="wire w-green">GREEN</span></td><td><b>CONSOLE pin 6 → GPIO18; pin 3 → GPIO16</b>.</td></tr>
+        <tr><td>1 → 7</td><td><span class="wire w-green">GREEN</span></td><td><b>K1 pins 9/11/13 feedback</b>.</td></tr>
+        <tr><td>7 ⇄ 3</td><td><span class="wire w-green">GREEN</span> <span class="wire w-violet">VIOLET</span> <span class="wire w-blue">BLUE</span></td><td><b>GPIO feedback/sense, 5V/VBUS, 3V3</b>.</td></tr>
       </table>
 
       <h2>Fast physical rules</h2>
@@ -221,7 +245,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <li>Put each 100 nF capacitor directly beside its IC supply pins.</li>
         <li>Keep UV_SENSE and OV_SENSE resistor/capacitor nodes inside zone 4.</li>
         <li>Keep BC337, its two resistors, coil TVS, and K1 coil pins together.</li>
-        <li>Use colored jumpers consistently: black GND, red raw/VIN, blue 3V3, yellow control, green feedback.</li>
+        <li>Reserve white wires for RJ45 pins 3/4/5 direct pass-through.</li>
         <li>Label both ends of every jumper that crosses between boards.</li>
       </ul>
       <div class="warning">This page groups the circuit; it does not replace the 126-row From/To wiring list. Never infer a physical pin from package shape—meter or datasheet-verify it.</div>
@@ -241,6 +265,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>RJ45 breakouts</td><td>2 × CONSOLE/MOTOR</td><td class="not-ordered">NOT ORDERED</td></tr>
       </table>
       <p><b>Assemble here:</b> RJ45 pins 1/7 to GND, 2/8 to +8V_RAW, pins 3/4/5 straight through; pin 6 uses K1 pins 4/6/8. Put K1 at the zone 1/5 boundary.</p>
+      <p class="wireline"><b>Wire:</b> <span class="wire w-black">BLACK GND</span> <span class="wire w-red">RED +8V</span> <span class="wire w-white">WHITE PASS-THROUGH</span> <span class="wire w-yellow">YELLOW PIN 6/TX</span> <span class="wire w-green">GREEN FEEDBACK</span></p>
     </div>
 
     <div class="card z2">
@@ -256,6 +281,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>Power jumper</td><td>1 × removable STANDALONE POWER</td><td class="not-ordered">NOT ORDERED</td></tr>
       </table>
       <p><b>Assemble here:</b> +8V_RAW → RXEF075 → 1N5822 → VIN. P6KE12A from VIN to GND. Electrolytic body stripe is negative.</p>
+      <p class="wireline"><b>Wire:</b> <span class="wire w-red">RED +8V_RAW</span> <span class="wire w-orange">ORANGE VIN</span> <span class="wire w-blue">BLUE TSR_3V3</span> <span class="wire w-black">BLACK GND</span></p>
     </div>
 
     <div class="card z3">
@@ -265,6 +291,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>DevKit</td><td>1 × ESP32-S3-DEVKITC-1-N8R8</td><td class="ordered">1965-ESP32-S3-DEVKITC-1-N8R8-ND</td></tr>
       </table>
       <p><b>Assemble here:</b> straddle the center ditch with USB facing the board edge. DevKit 3V3 feeds LOGIC_3V3 during USB bring-up; DevKit GND joins common GND.</p>
+      <p class="wireline"><b>Wire:</b> <span class="wire w-blue">BLUE 3V3</span> <span class="wire w-black">BLACK GND</span> <span class="wire w-yellow">YELLOW OUTPUT/CONTROL</span> <span class="wire w-green">GREEN INPUT/FEEDBACK</span> <span class="wire w-violet">VIOLET 5V/VBUS</span></p>
     </div>
 
     <div class="card z4">
@@ -283,6 +310,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>Bypass cap</td><td>1 × 100 nF 50 V X7R ceramic radial, non-polar</td><td class="ordered">BC1084CT-ND</td></tr>
       </table>
       <p><b>Assemble here:</b> keep UV_SENSE and OV_SENSE parts close to the adapter; tie TPS3700 outputs together at TREAD_OK.</p>
+      <p class="wireline"><b>Wire:</b> <span class="wire w-orange">ORANGE VIN</span> <span class="wire w-blue">BLUE 3V3</span> <span class="wire w-black">BLACK GND</span> <span class="wire w-yellow">YELLOW TREAD_OK</span> <span class="wire w-white">WHITE LOCAL SENSE</span></p>
     </div>
   </div>
 </section>
@@ -307,6 +335,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>Coil jumper</td><td>1 × removable COIL POWER</td><td class="not-ordered">NOT ORDERED</td></tr>
       </table>
       <p><b>Assemble here:</b> verify BC337 B/C/E leads; put TVS directly across K1 pins 1/16. Electrolytic body stripe is negative. Leave COIL POWER open.</p>
+      <p class="wireline"><b>Wire:</b> <span class="wire w-orange">ORANGE VIN</span> <span class="wire w-violet">VIOLET +5V/COIL</span> <span class="wire w-yellow">YELLOW RELAY_GATE</span> <span class="wire w-black">BLACK GND</span></p>
     </div>
 
     <div class="card z6">
@@ -320,6 +349,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>TX resistor</td><td>1 × 100 Ω series</td><td class="not-ordered">NOT ORDERED</td></tr>
       </table>
       <p><b>Assemble here:</b> both ICs straddle the ditch with notches aligned. Put each 100 nF capacitor at pins 14/7. Tie every unused input low.</p>
+      <p class="wireline"><b>Wire:</b> <span class="wire w-blue">BLUE VCC</span> <span class="wire w-black">BLACK GND</span> <span class="wire w-yellow">YELLOW CONTROL/TX</span> <span class="wire w-green">GREEN RX</span></p>
     </div>
 
     <div class="card z7">
@@ -335,6 +365,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>Logic bypass</td><td>1 × 100 nF 50 V X7R ceramic radial, non-polar</td><td class="ordered">BC1084CT-ND</td></tr>
       </table>
       <p><b>Assemble here:</b> meter-identify 2N7000 G/D/S. LED long lead is anode; short/flat-side lead goes toward GND.</p>
+      <p class="wireline"><b>Wire:</b> <span class="wire w-blue">BLUE 3V3</span> <span class="wire w-violet">VIOLET 5V/VBUS</span> <span class="wire w-green">GREEN FEEDBACK/SENSE</span> <span class="wire w-yellow">YELLOW LED SIGNAL</span> <span class="wire w-black">BLACK GND</span></p>
     </div>
 
     <div class="card">
@@ -344,7 +375,8 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <tr><td>Full-size breadboards</td><td>2, side-by-side</td><td class="not-ordered">NOT ORDERED</td></tr>
         <tr><td>Jumper-wire assortment</td><td>For 126 From/To connections</td><td class="not-ordered">NOT ORDERED</td></tr>
       </table>
-      <p><b>Color convention:</b> black GND, red raw/VIN, blue 3V3, yellow control, green feedback. Label both ends of every inter-board jumper.</p>
+      <p><b>Color convention:</b> <span class="wire w-black">BLACK GND</span> <span class="wire w-red">RED +8V</span> <span class="wire w-orange">ORANGE VIN</span> <span class="wire w-blue">BLUE 3V3</span> <span class="wire w-violet">VIOLET RELAY/5V</span> <span class="wire w-yellow">YELLOW CONTROL/TX</span> <span class="wire w-green">GREEN FEEDBACK/RX</span> <span class="wire w-white">WHITE PASS-THROUGH</span></p>
+      <p>Label both ends of every inter-board jumper. If a suggested color is unavailable, use another color and label both ends. Wire color is identification, not an electrical rating.</p>
       <div class="warning">Start unpowered. Leave STANDALONE POWER and COIL POWER removed until their bring-up steps explicitly install them.</div>
     </div>
   </div>
