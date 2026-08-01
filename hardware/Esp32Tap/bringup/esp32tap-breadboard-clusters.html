@@ -44,6 +44,12 @@ tr:nth-child(even) td { background: #f4f7fa; }
 .parts th, .parts td { padding: 3px 4px; }
 .ordered { color: #17643a; font-weight: bold; }
 .not-ordered { color: #a12b20; font-weight: bold; }
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.card { border: 2px solid #718096; border-radius: 8px; padding: 5px 7px; break-inside: avoid; }
+.card h2 { margin: 0 0 4px; padding-bottom: 3px; border-bottom: 1px solid #aeb8c8; }
+.card p { margin: 4px 0 0; }
+.card .parts td:first-child { width: 31%; font-weight: bold; }
+.card .parts td:last-child { width: 42%; }
 .check { margin: 5px 0 0; padding-left: 18px; }
 .check li { margin: 2px 0; }
 </style>
@@ -51,7 +57,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
 <body>
 <section class="page">
   <h1>Esp32Tap Breadboard — Logical Cluster Layout</h1>
-  <p class="sub">Approximate placement only. Use two full-size breadboards side-by-side; keep each zone compact, then connect zones by the named nets below. DigiKey order numbers and capacitor types are on page 3.</p>
+  <p class="sub">Approximate placement only. Use two full-size breadboards side-by-side; keep each zone compact, then connect zones by the named nets below. Self-contained cluster assembly cards are on pages 3–4.</p>
   <div class="warning">Start unpowered. Leave STANDALONE POWER and COIL POWER open. Meter-identify relay, transistor, regulator, and breakout pins before inserting them.</div>
 
   <svg viewBox="0 0 1000 600" role="img" aria-label="Two breadboards divided into seven logical wiring zones">
@@ -224,69 +230,122 @@ tr:nth-child(even) td { background: #f4f7fa; }
 </section>
 
 <section class="page">
-  <h1>DigiKey Order Cross-Reference</h1>
-  <p class="sub">Matched to DigiKey invoice <b>129832848</b>, sales order <b>100614250</b>, dated 27-Jul-2026. <span class="not-ordered">NOT ORDERED</span> means not present on this invoice; it does not mean you do not already own it.</p>
-  <div class="grid">
-    <div>
-      <h2>Ordered semiconductors, modules, and hardware</h2>
+  <h1>Cluster Assembly Cards — Zones 1–4</h1>
+  <p class="sub">All order references are from DigiKey invoice <b>129832848</b>. Use one card while assembling each cluster. <span class="not-ordered">NOT ORDERED</span> means absent from that invoice.</p>
+  <div class="cards">
+    <div class="card z1">
+      <h2>1 — RJ45 breakouts + relay contacts</h2>
       <table class="parts">
-        <tr><th>Zone / use</th><th>Manufacturer part</th><th>DigiKey part number</th></tr>
-        <tr><td>3 — DevKit</td><td>ESP32-S3-DEVKITC-1-N8R8</td><td class="ordered">1965-ESP32-S3-DEVKITC-1-N8R8-ND</td></tr>
-        <tr><td>4 — monitor</td><td>TPS3700DDCR</td><td class="ordered">296-30395-1-ND</td></tr>
-        <tr><td>4/5 — SOT-23 adapters (2)</td><td>LCQT-SOT23-6</td><td class="ordered">A879AR-ND</td></tr>
-        <tr><td>5 — relay regulator</td><td>TPS70950DBVR</td><td class="ordered">296-35484-1-ND</td></tr>
-        <tr><td>6 — AND gates</td><td>SN74AHC08N</td><td class="ordered">296-4524-5-ND</td></tr>
-        <tr><td>6 — tri-state buffer</td><td>SN74AHC126N</td><td class="ordered">296-4535-5-ND</td></tr>
-        <tr><td>1 — relay K1</td><td>G5V-2 DC5</td><td class="ordered">39-G5V-2DC5-ND</td></tr>
-        <tr><td>5 — relay transistor</td><td>BC337-40</td><td class="ordered">4878-BC337-40CT-ND</td></tr>
-        <tr><td>7 — VBUS MOSFET</td><td>2N7000</td><td class="ordered">4878-2N7000CT-ND</td></tr>
-        <tr><td>2 — Schottky diode</td><td>1N5822-TP</td><td class="ordered">1N5822-TPMSCT-ND</td></tr>
-        <tr><td>5 — coil TVS</td><td>P6KE6.8CA</td><td class="ordered">18-P6KE6.8CACT-ND</td></tr>
-        <tr><td>2 — resettable fuse</td><td>RXEF075</td><td class="ordered">RXEF075HF-ND</td></tr>
-        <tr><td>2 — 3.3 V converter</td><td>TSR 1-2433E</td><td class="ordered">1951-TSR1-2433E-ND</td></tr>
-        <tr><td>2 — input TVS</td><td>P6KE12A-TP</td><td class="ordered">P6KE12A-TPMSCT-ND</td></tr>
-        <tr><td>7 — green status LED</td><td>LTL-4233</td><td class="ordered">160-1130-ND</td></tr>
-        <tr><td>7 — red power LED</td><td>151051RS11000</td><td class="ordered">732-5016-ND</td></tr>
-        <tr><td>Adapter/header use</td><td>PRPC040SAAN-RC, 40-position</td><td class="ordered">S1011EC-40-ND</td></tr>
+        <tr><th>Part</th><th>Qty / description</th><th>DigiKey part number</th></tr>
+        <tr><td>K1</td><td>1 × G5V-2 DC5 DPDT relay</td><td class="ordered">39-G5V-2DC5-ND</td></tr>
+        <tr><td>RJ45 breakouts</td><td>2 × CONSOLE/MOTOR</td><td class="not-ordered">NOT ORDERED</td></tr>
       </table>
-
-      <h2>Ordered resistor values</h2>
-      <table class="parts">
-        <tr><th>Use</th><th>Value / type</th><th>DigiKey part number</th></tr>
-        <tr><td>BC337 base</td><td>560 Ω, 1%, 1/4 W axial</td><td class="ordered">MFR-25FBF52-560R-ND</td></tr>
-        <tr><td>UV divider top</td><td>150 kΩ, 1%, 1/4 W axial</td><td class="ordered">150KXBK-ND</td></tr>
-        <tr><td>OV divider top</td><td>255 kΩ, 1%, 1/4 W axial</td><td class="ordered">13-MFR-25FBF52-255K-ND</td></tr>
-      </table>
+      <p><b>Assemble here:</b> RJ45 pins 1/7 to GND, 2/8 to +8V_RAW, pins 3/4/5 straight through; pin 6 uses K1 pins 4/6/8. Put K1 at the zone 1/5 boundary.</p>
     </div>
 
-    <div>
-      <h2>Capacitors from the order</h2>
+    <div class="card z2">
+      <h2>2 — Protected input power</h2>
       <table class="parts">
-        <tr><th>Circuit use</th><th>Value and capacitor type</th><th>DigiKey part number</th></tr>
-        <tr><td>Logic/IC bypasses (4)</td><td>100 nF, 50 V, <b>X7R ceramic radial, non-polar</b></td><td class="ordered">BC1084CT-ND</td></tr>
-        <tr><td>TPS709 input (1)</td><td>1 µF, 25 V, <b>X7R ceramic radial, non-polar</b></td><td class="ordered">445-173583-1-ND</td></tr>
-        <tr><td>UV/OV filters (2)</td><td>1 nF, 50 V, <b>C0G ceramic radial, non-polar</b></td><td class="ordered">445-173473-1-ND</td></tr>
-        <tr><td>VIN bulk (1)</td><td>22 µF, 25 V, <b>aluminum electrolytic radial, polarized</b></td><td class="ordered">732-8821-1-ND</td></tr>
-        <tr><td>TSR input/output (2)</td><td>10 µF, 50 V, <b>aluminum electrolytic radial, polarized</b></td><td class="ordered">1189-2322-ND</td></tr>
-        <tr><td>TPS709 output (1)</td><td>4.7 µF, 50 V, <b>aluminum electrolytic radial, polarized</b></td><td class="ordered">732-8660-1-ND</td></tr>
+        <tr><th>Part</th><th>Qty / description</th><th>DigiKey part number</th></tr>
+        <tr><td>F1</td><td>1 × RXEF075 resettable fuse</td><td class="ordered">RXEF075HF-ND</td></tr>
+        <tr><td>D1</td><td>1 × 1N5822-TP Schottky</td><td class="ordered">1N5822-TPMSCT-ND</td></tr>
+        <tr><td>TVS</td><td>1 × P6KE12A-TP</td><td class="ordered">P6KE12A-TPMSCT-ND</td></tr>
+        <tr><td>DC/DC</td><td>1 × TSR 1-2433E</td><td class="ordered">1951-TSR1-2433E-ND</td></tr>
+        <tr><td>Bulk cap</td><td>1 × 22 µF 25 V aluminum electrolytic, polarized</td><td class="ordered">732-8821-1-ND</td></tr>
+        <tr><td>TSR caps</td><td>2 × 10 µF 50 V aluminum electrolytic, polarized</td><td class="ordered">1189-2322-ND</td></tr>
+        <tr><td>Power jumper</td><td>1 × removable STANDALONE POWER</td><td class="not-ordered">NOT ORDERED</td></tr>
       </table>
-      <p class="small"><b>Polarity:</b> electrolytic long lead is positive; the body stripe marks negative. The ceramic capacitors above are non-polar.</p>
+      <p><b>Assemble here:</b> +8V_RAW → RXEF075 → 1N5822 → VIN. P6KE12A from VIN to GND. Electrolytic body stripe is negative.</p>
+    </div>
 
-      <h2>Required but not on this DigiKey invoice</h2>
+    <div class="card z3">
+      <h2>3 — ESP32 DevKit</h2>
       <table class="parts">
-        <tr><th>Required item</th><th>Approx. quantity / use</th><th>Order status</th></tr>
-        <tr><td>10 kΩ resistors</td><td>12 — dividers, pulls, RX taps, feedback, VBUS</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>100 kΩ resistor</td><td>1 — TREAD_OK pull-down</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>4.7 kΩ resistor</td><td>1 — GPIO6 isolation</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>100 Ω resistor</td><td>1 — UART TX series resistor</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>330 Ω resistor</td><td>1 — green status LED</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>1 kΩ resistor</td><td>1 — red power LED</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>RJ45 breakout boards</td><td>2 — CONSOLE and MOTOR</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>Full-size breadboards</td><td>2 recommended for this layout</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>Jumper-wire assortment</td><td>126 point-to-point connections</td><td class="not-ordered">NOT ORDERED</td></tr>
-        <tr><td>Removable jumper/shunts</td><td>2 — STANDALONE POWER and COIL POWER</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><th>Part</th><th>Qty / description</th><th>DigiKey part number</th></tr>
+        <tr><td>DevKit</td><td>1 × ESP32-S3-DEVKITC-1-N8R8</td><td class="ordered">1965-ESP32-S3-DEVKITC-1-N8R8-ND</td></tr>
       </table>
-      <div class="warning">Do not substitute capacitor type or voltage rating casually. Preserve the listed ceramic dielectric and electrolytic polarity; use equal or higher voltage ratings.</div>
+      <p><b>Assemble here:</b> straddle the center ditch with USB facing the board edge. DevKit 3V3 feeds LOGIC_3V3 during USB bring-up; DevKit GND joins common GND.</p>
+    </div>
+
+    <div class="card z4">
+      <h2>4 — TPS3700 voltage monitor</h2>
+      <table class="parts">
+        <tr><th>Part</th><th>Qty / description</th><th>DigiKey part number</th></tr>
+        <tr><td>Monitor</td><td>1 × TPS3700DDCR</td><td class="ordered">296-30395-1-ND</td></tr>
+        <tr><td>Adapter</td><td>1 × LCQT-SOT23-6</td><td class="ordered">A879AR-ND</td></tr>
+        <tr><td>Header</td><td>Cut from PRPC040SAAN-RC</td><td class="ordered">S1011EC-40-ND</td></tr>
+        <tr><td>UV top</td><td>1 × 150 kΩ 1% axial</td><td class="ordered">150KXBK-ND</td></tr>
+        <tr><td>OV top</td><td>1 × 255 kΩ 1% axial</td><td class="ordered">13-MFR-25FBF52-255K-ND</td></tr>
+        <tr><td>10 kΩ</td><td>3 × UV/OV bottoms + TREAD_OK pull-up</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>100 kΩ</td><td>1 × TREAD_OK pull-down</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>4.7 kΩ</td><td>1 × GPIO6 isolation</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Filter caps</td><td>2 × 1 nF 50 V C0G ceramic radial, non-polar</td><td class="ordered">445-173473-1-ND</td></tr>
+        <tr><td>Bypass cap</td><td>1 × 100 nF 50 V X7R ceramic radial, non-polar</td><td class="ordered">BC1084CT-ND</td></tr>
+      </table>
+      <p><b>Assemble here:</b> keep UV_SENSE and OV_SENSE parts close to the adapter; tie TPS3700 outputs together at TREAD_OK.</p>
+    </div>
+  </div>
+</section>
+
+<section class="page">
+  <h1>Cluster Assembly Cards — Zones 5–7</h1>
+  <p class="sub">All capacitor construction, polarity, and purchase data is inline. Use equal or higher voltage ratings only.</p>
+  <div class="cards">
+    <div class="card z5">
+      <h2>5 — Relay supply and driver</h2>
+      <table class="parts">
+        <tr><th>Part</th><th>Qty / description</th><th>DigiKey part number</th></tr>
+        <tr><td>Regulator</td><td>1 × TPS70950DBVR</td><td class="ordered">296-35484-1-ND</td></tr>
+        <tr><td>Adapter</td><td>1 × LCQT-SOT23-6</td><td class="ordered">A879AR-ND</td></tr>
+        <tr><td>Header</td><td>Cut from PRPC040SAAN-RC</td><td class="ordered">S1011EC-40-ND</td></tr>
+        <tr><td>Q relay</td><td>1 × BC337-40</td><td class="ordered">4878-BC337-40CT-ND</td></tr>
+        <tr><td>Base resistor</td><td>1 × 560 Ω 1% 1/4 W axial</td><td class="ordered">MFR-25FBF52-560R-ND</td></tr>
+        <tr><td>Base pull-down</td><td>1 × 10 kΩ</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Coil TVS</td><td>1 × P6KE6.8CA bidirectional</td><td class="ordered">18-P6KE6.8CACT-ND</td></tr>
+        <tr><td>Input cap</td><td>1 × 1 µF 25 V X7R ceramic radial, non-polar</td><td class="ordered">445-173583-1-ND</td></tr>
+        <tr><td>Output cap</td><td>1 × 4.7 µF 50 V aluminum electrolytic, polarized</td><td class="ordered">732-8660-1-ND</td></tr>
+        <tr><td>Coil jumper</td><td>1 × removable COIL POWER</td><td class="not-ordered">NOT ORDERED</td></tr>
+      </table>
+      <p><b>Assemble here:</b> verify BC337 B/C/E leads; put TVS directly across K1 pins 1/16. Electrolytic body stripe is negative. Leave COIL POWER open.</p>
+    </div>
+
+    <div class="card z6">
+      <h2>6 — Hardware gating and UART</h2>
+      <table class="parts">
+        <tr><th>Part</th><th>Qty / description</th><th>DigiKey part number</th></tr>
+        <tr><td>AND gates</td><td>1 × SN74AHC08N PDIP-14</td><td class="ordered">296-4524-5-ND</td></tr>
+        <tr><td>Buffer</td><td>1 × SN74AHC126N PDIP-14</td><td class="ordered">296-4535-5-ND</td></tr>
+        <tr><td>Bypass caps</td><td>2 × 100 nF 50 V X7R ceramic radial, non-polar</td><td class="ordered">BC1084CT-ND</td></tr>
+        <tr><td>10 kΩ</td><td>4 × command pulls + two RX taps</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>TX resistor</td><td>1 × 100 Ω series</td><td class="not-ordered">NOT ORDERED</td></tr>
+      </table>
+      <p><b>Assemble here:</b> both ICs straddle the ditch with notches aligned. Put each 100 nF capacitor at pins 14/7. Tie every unused input low.</p>
+    </div>
+
+    <div class="card z7">
+      <h2>7 — Relay feedback, VBUS sense, and LEDs</h2>
+      <table class="parts">
+        <tr><th>Part</th><th>Qty / description</th><th>DigiKey part number</th></tr>
+        <tr><td>VBUS MOSFET</td><td>1 × 2N7000</td><td class="ordered">4878-2N7000CT-ND</td></tr>
+        <tr><td>Green LED</td><td>1 × LTL-4233</td><td class="ordered">160-1130-ND</td></tr>
+        <tr><td>Green resistor</td><td>1 × 330 Ω</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Red LED</td><td>1 × 151051RS11000</td><td class="ordered">732-5016-ND</td></tr>
+        <tr><td>Red resistor</td><td>1 × 1 kΩ</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>10 kΩ</td><td>4 × feedback/VBUS pulls</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Logic bypass</td><td>1 × 100 nF 50 V X7R ceramic radial, non-polar</td><td class="ordered">BC1084CT-ND</td></tr>
+      </table>
+      <p><b>Assemble here:</b> meter-identify 2N7000 G/D/S. LED long lead is anode; short/flat-side lead goes toward GND.</p>
+    </div>
+
+    <div class="card">
+      <h2>Common bench supplies</h2>
+      <table class="parts">
+        <tr><th>Item</th><th>Quantity / use</th><th>DigiKey order status</th></tr>
+        <tr><td>Full-size breadboards</td><td>2, side-by-side</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Jumper-wire assortment</td><td>For 126 From/To connections</td><td class="not-ordered">NOT ORDERED</td></tr>
+      </table>
+      <p><b>Color convention:</b> black GND, red raw/VIN, blue 3V3, yellow control, green feedback. Label both ends of every inter-board jumper.</p>
+      <div class="warning">Start unpowered. Leave STANDALONE POWER and COIL POWER removed until their bring-up steps explicitly install them.</div>
     </div>
   </div>
 </section>
