@@ -40,6 +40,10 @@ tr:nth-child(even) td { background: #f4f7fa; }
 .zone-tag { white-space: nowrap; font-weight: bold; }
 .jump td:first-child { width: 18%; font-weight: bold; }
 .small { font-size: 9px; }
+.parts { font-size: 8.4px; line-height: 1.18; }
+.parts th, .parts td { padding: 3px 4px; }
+.ordered { color: #17643a; font-weight: bold; }
+.not-ordered { color: #a12b20; font-weight: bold; }
 .check { margin: 5px 0 0; padding-left: 18px; }
 .check li { margin: 2px 0; }
 </style>
@@ -47,7 +51,7 @@ tr:nth-child(even) td { background: #f4f7fa; }
 <body>
 <section class="page">
   <h1>Esp32Tap Breadboard — Logical Cluster Layout</h1>
-  <p class="sub">Approximate placement only. Use two full-size breadboards side-by-side; keep each zone compact, then connect zones by the named nets below.</p>
+  <p class="sub">Approximate placement only. Use two full-size breadboards side-by-side; keep each zone compact, then connect zones by the named nets below. DigiKey order numbers and capacitor types are on page 3.</p>
   <div class="warning">Start unpowered. Leave STANDALONE POWER and COIL POWER open. Meter-identify relay, transistor, regulator, and breakout pins before inserting them.</div>
 
   <svg viewBox="0 0 1000 600" role="img" aria-label="Two breadboards divided into seven logical wiring zones">
@@ -215,6 +219,74 @@ tr:nth-child(even) td { background: #f4f7fa; }
         <li>Label both ends of every jumper that crosses between boards.</li>
       </ul>
       <div class="warning">This page groups the circuit; it does not replace the 126-row From/To wiring list. Never infer a physical pin from package shape—meter or datasheet-verify it.</div>
+    </div>
+  </div>
+</section>
+
+<section class="page">
+  <h1>DigiKey Order Cross-Reference</h1>
+  <p class="sub">Matched to DigiKey invoice <b>129832848</b>, sales order <b>100614250</b>, dated 27-Jul-2026. <span class="not-ordered">NOT ORDERED</span> means not present on this invoice; it does not mean you do not already own it.</p>
+  <div class="grid">
+    <div>
+      <h2>Ordered semiconductors, modules, and hardware</h2>
+      <table class="parts">
+        <tr><th>Zone / use</th><th>Manufacturer part</th><th>DigiKey part number</th></tr>
+        <tr><td>3 — DevKit</td><td>ESP32-S3-DEVKITC-1-N8R8</td><td class="ordered">1965-ESP32-S3-DEVKITC-1-N8R8-ND</td></tr>
+        <tr><td>4 — monitor</td><td>TPS3700DDCR</td><td class="ordered">296-30395-1-ND</td></tr>
+        <tr><td>4/5 — SOT-23 adapters (2)</td><td>LCQT-SOT23-6</td><td class="ordered">A879AR-ND</td></tr>
+        <tr><td>5 — relay regulator</td><td>TPS70950DBVR</td><td class="ordered">296-35484-1-ND</td></tr>
+        <tr><td>6 — AND gates</td><td>SN74AHC08N</td><td class="ordered">296-4524-5-ND</td></tr>
+        <tr><td>6 — tri-state buffer</td><td>SN74AHC126N</td><td class="ordered">296-4535-5-ND</td></tr>
+        <tr><td>1 — relay K1</td><td>G5V-2 DC5</td><td class="ordered">39-G5V-2DC5-ND</td></tr>
+        <tr><td>5 — relay transistor</td><td>BC337-40</td><td class="ordered">4878-BC337-40CT-ND</td></tr>
+        <tr><td>7 — VBUS MOSFET</td><td>2N7000</td><td class="ordered">4878-2N7000CT-ND</td></tr>
+        <tr><td>2 — Schottky diode</td><td>1N5822-TP</td><td class="ordered">1N5822-TPMSCT-ND</td></tr>
+        <tr><td>5 — coil TVS</td><td>P6KE6.8CA</td><td class="ordered">18-P6KE6.8CACT-ND</td></tr>
+        <tr><td>2 — resettable fuse</td><td>RXEF075</td><td class="ordered">RXEF075HF-ND</td></tr>
+        <tr><td>2 — 3.3 V converter</td><td>TSR 1-2433E</td><td class="ordered">1951-TSR1-2433E-ND</td></tr>
+        <tr><td>2 — input TVS</td><td>P6KE12A-TP</td><td class="ordered">P6KE12A-TPMSCT-ND</td></tr>
+        <tr><td>7 — green status LED</td><td>LTL-4233</td><td class="ordered">160-1130-ND</td></tr>
+        <tr><td>7 — red power LED</td><td>151051RS11000</td><td class="ordered">732-5016-ND</td></tr>
+        <tr><td>Adapter/header use</td><td>PRPC040SAAN-RC, 40-position</td><td class="ordered">S1011EC-40-ND</td></tr>
+      </table>
+
+      <h2>Ordered resistor values</h2>
+      <table class="parts">
+        <tr><th>Use</th><th>Value / type</th><th>DigiKey part number</th></tr>
+        <tr><td>BC337 base</td><td>560 Ω, 1%, 1/4 W axial</td><td class="ordered">MFR-25FBF52-560R-ND</td></tr>
+        <tr><td>UV divider top</td><td>150 kΩ, 1%, 1/4 W axial</td><td class="ordered">150KXBK-ND</td></tr>
+        <tr><td>OV divider top</td><td>255 kΩ, 1%, 1/4 W axial</td><td class="ordered">13-MFR-25FBF52-255K-ND</td></tr>
+      </table>
+    </div>
+
+    <div>
+      <h2>Capacitors from the order</h2>
+      <table class="parts">
+        <tr><th>Circuit use</th><th>Value and capacitor type</th><th>DigiKey part number</th></tr>
+        <tr><td>Logic/IC bypasses (4)</td><td>100 nF, 50 V, <b>X7R ceramic radial, non-polar</b></td><td class="ordered">BC1084CT-ND</td></tr>
+        <tr><td>TPS709 input (1)</td><td>1 µF, 25 V, <b>X7R ceramic radial, non-polar</b></td><td class="ordered">445-173583-1-ND</td></tr>
+        <tr><td>UV/OV filters (2)</td><td>1 nF, 50 V, <b>C0G ceramic radial, non-polar</b></td><td class="ordered">445-173473-1-ND</td></tr>
+        <tr><td>VIN bulk (1)</td><td>22 µF, 25 V, <b>aluminum electrolytic radial, polarized</b></td><td class="ordered">732-8821-1-ND</td></tr>
+        <tr><td>TSR input/output (2)</td><td>10 µF, 50 V, <b>aluminum electrolytic radial, polarized</b></td><td class="ordered">1189-2322-ND</td></tr>
+        <tr><td>TPS709 output (1)</td><td>4.7 µF, 50 V, <b>aluminum electrolytic radial, polarized</b></td><td class="ordered">732-8660-1-ND</td></tr>
+      </table>
+      <p class="small"><b>Polarity:</b> electrolytic long lead is positive; the body stripe marks negative. The ceramic capacitors above are non-polar.</p>
+
+      <h2>Required but not on this DigiKey invoice</h2>
+      <table class="parts">
+        <tr><th>Required item</th><th>Approx. quantity / use</th><th>Order status</th></tr>
+        <tr><td>10 kΩ resistors</td><td>12 — dividers, pulls, RX taps, feedback, VBUS</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>100 kΩ resistor</td><td>1 — TREAD_OK pull-down</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>4.7 kΩ resistor</td><td>1 — GPIO6 isolation</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>100 Ω resistor</td><td>1 — UART TX series resistor</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>330 Ω resistor</td><td>1 — green status LED</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>1 kΩ resistor</td><td>1 — red power LED</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>RJ45 breakout boards</td><td>2 — CONSOLE and MOTOR</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Full-size breadboards</td><td>2 recommended for this layout</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Jumper-wire assortment</td><td>126 point-to-point connections</td><td class="not-ordered">NOT ORDERED</td></tr>
+        <tr><td>Removable jumper/shunts</td><td>2 — STANDALONE POWER and COIL POWER</td><td class="not-ordered">NOT ORDERED</td></tr>
+      </table>
+      <div class="warning">Do not substitute capacitor type or voltage rating casually. Preserve the listed ceramic dielectric and electrolytic polarity; use equal or higher voltage ratings.</div>
     </div>
   </div>
 </section>
