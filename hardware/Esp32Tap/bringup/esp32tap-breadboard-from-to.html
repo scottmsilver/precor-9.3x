@@ -16,17 +16,32 @@ tr { break-inside: avoid; }
 th,td { border: 1px solid #aeb8c8; padding: 2.5px 4px; vertical-align: top; }
 th { background: #3f526f; color: white; text-align: left; }
 tbody tr:nth-child(even) { background: #f3f6fa; }
-.n { width: 4%; text-align: right; }
-.from,.to { width: 27%; }
-.part { width: 17%; }
-.note { width: 25%; }
+.step,.ref { width: 4%; text-align: right; }
+.color { width: 9%; }
+.from,.to { width: 23%; }
+.part { width: 15%; }
+.note { width: 22%; }
 .open { color: #9b2c1f; font-weight: bold; }
+.cluster-build { margin-top: 10px; }
+.force-page-break { break-before: page; page-break-before: always; }
+.color-key { margin: 5px 0 7px; display: flex; flex-wrap: wrap; gap: 3px 6px; }
+.wire { display: inline-block; padding: 1px 4px; border: 1px solid #64748b; border-radius: 3px; font-size: 8px; font-weight: bold; white-space: nowrap; }
+.wire-black { background: #1f2937; border-color: #1f2937; color: #fff; }
+.wire-red { background: #fee2e2; border-color: #b91c1c; color: #991b1b; }
+.wire-orange { background: #ffedd5; border-color: #c2410c; color: #9a3412; }
+.wire-blue { background: #dbeafe; border-color: #2563eb; color: #1d4ed8; }
+.wire-violet { background: #ede9fe; border-color: #7c3aed; color: #6d28d9; }
+.wire-yellow { background: #fef9c3; border-color: #ca8a04; color: #854d0e; }
+.wire-green { background: #dcfce7; border-color: #15803d; color: #166534; }
+.wire-white { background: #fff; border-color: #64748b; color: #334155; }
+.wire-no-wire { background: #e5e7eb; border-color: #6b7280; color: #374151; }
 </style>
 </head>
 <body>
-<h1>Esp32Tap Breadboard — Point-to-Point Wiring List</h1>
-<p>Each row is one physical connection. Map the RJ45 breakout terminals and SOT-23 adapters with a meter before using their labels.</p>
+<h1>Esp32Tap Breadboard — Cluster-Sorted Point-to-Point Wiring</h1>
+<p>Follow the Build Step column from top to bottom. Ref preserves the original 1–126 numbering. Map the RJ45 breakout terminals and SOT-23 adapters with a meter before using their labels.</p>
 <div class="warning">Start with all power disconnected. Leave STANDALONE POWER and COIL POWER removed. The relay datasheet pin drawing is a bottom view—meter-verify K1 before wiring.</div>
+<div class="color-key"><b>Wire colors:</b></div>
 
 <h2>A. RJ45 pass-through and relay contacts</h2>
 <table><thead><tr><th class="n">#</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody>
@@ -192,5 +207,100 @@ tbody tr:nth-child(even) { background: #f3f6fa; }
 <tr><td>STANDALONE POWER</td><td>Removed while UART USB is connected</td></tr>
 <tr><td>COIL POWER</td><td>Removed until the relay supply and driver are bench-tested</td></tr>
 </tbody></table>
+
+<script id="cluster-metadata" type="application/json">
+{
+  "cluster_order": [3, 7, 6, 1, 2, 4, 5],
+  "page_break_before": [6, 1, 4, 5],
+  "clusters": [
+    {"number": 3, "title": "ESP32 DevKit", "refs": [29, 30]},
+    {"number": 7, "title": "Feedback, VBUS, and LEDs", "refs": [105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126]},
+    {"number": 6, "title": "Hardware gating and UART", "refs": [58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104]},
+    {"number": 1, "title": "RJ45 and relay contacts", "refs": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]},
+    {"number": 2, "title": "Protected local power", "refs": [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 31]},
+    {"number": 4, "title": "TPS3700 voltage monitor", "refs": [32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57]},
+    {"number": 5, "title": "Relay supply and driver", "refs": [74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91]}
+  ],
+  "wire_colors": {
+    "BLACK": [1, 2, 3, 4, 19, 21, 24, 26, 28, 30, 33, 38, 40, 45, 47, 53, 57, 59, 62, 67, 70, 73, 75, 80, 82, 86, 87, 93, 97, 100, 105, 114, 115, 121, 124, 126],
+    "RED": [5, 6, 7, 8, 15, 16],
+    "ORANGE": [17, 18, 20, 23, 25, 32, 34, 41, 56, 74, 79],
+    "BLUE": [22, 27, 29, 31, 50, 58, 72, 92, 99, 107, 110, 117, 122, 125],
+    "VIOLET": [78, 81, 88, 89, 90, 91, 112, 113],
+    "YELLOW": [12, 13, 14, 48, 49, 51, 52, 54, 55, 60, 61, 63, 64, 65, 66, 68, 69, 76, 83, 84, 85, 94, 95, 96, 119, 120, 123],
+    "GREEN": [101, 102, 103, 104, 106, 108, 109, 111, 116, 118],
+    "WHITE": [9, 10, 11, 35, 36, 37, 39, 42, 43, 44, 46],
+    "NO WIRE": [71, 77, 98]
+  }
+}
+</script>
+<script>
+(() => {
+  const metadata = JSON.parse(document.getElementById('cluster-metadata').textContent);
+  const colorByRef = new Map();
+  for (const [color, refs] of Object.entries(metadata.wire_colors)) {
+    for (const ref of refs) colorByRef.set(ref, color);
+  }
+
+  const sourceRows = new Map();
+  for (const row of document.querySelectorAll('tbody tr')) {
+    const ref = Number(row.cells[0]?.textContent.trim());
+    if (Number.isInteger(ref)) sourceRows.set(ref, row);
+  }
+
+  const beforePowerHeading = [...document.querySelectorAll('h2')]
+    .find(heading => heading.textContent.startsWith('H.'));
+  if (!beforePowerHeading || sourceRows.size !== 126) {
+    throw new Error(`Expected 126 point-to-point rows; found ${sourceRows.size}`);
+  }
+
+  const fragment = document.createDocumentFragment();
+  let buildStep = 1;
+  metadata.clusters.forEach((cluster, orderIndex) => {
+    const heading = document.createElement('h2');
+    heading.className = 'cluster-build';
+    if (metadata.page_break_before.includes(cluster.number)) {
+      heading.classList.add('force-page-break');
+    }
+    heading.dataset.cluster = String(cluster.number);
+    heading.textContent = `Build ${orderIndex + 1} — Cluster ${cluster.number}: ${cluster.title}`;
+    fragment.appendChild(heading);
+
+    const table = document.createElement('table');
+    table.innerHTML = '<thead><tr><th class="step">Step</th><th class="ref">Ref</th><th class="color">Color</th><th class="from">From</th><th class="to">To</th><th class="part">Part</th><th class="note">Note</th></tr></thead><tbody></tbody>';
+    const body = table.tBodies[0];
+    for (const ref of cluster.refs) {
+      const source = sourceRows.get(ref);
+      const color = colorByRef.get(ref);
+      if (!source || !color) throw new Error(`Missing row or color for ref ${ref}`);
+      const row = document.createElement('tr');
+      row.dataset.originalRef = String(ref);
+      row.dataset.wireColor = color;
+      const colorClass = color.toLowerCase().replaceAll(' ', '-');
+      const originalCells = [...source.cells].slice(1).map(cell => cell.outerHTML).join('');
+      row.innerHTML = `<td class="step">${buildStep}</td><td class="ref">${ref}</td><td class="color"><span class="wire wire-${colorClass}">${color}</span></td>${originalCells}`;
+      body.appendChild(row);
+      buildStep += 1;
+    }
+    fragment.appendChild(table);
+  });
+
+  const oldHeadings = [...document.querySelectorAll('h2')].filter(heading => heading !== beforePowerHeading);
+  beforePowerHeading.before(fragment);
+  for (const heading of oldHeadings) {
+    const table = heading.nextElementSibling;
+    if (table?.tagName === 'TABLE') table.remove();
+    heading.remove();
+  }
+
+  const legend = document.querySelector('.color-key');
+  for (const color of Object.keys(metadata.wire_colors)) {
+    const badge = document.createElement('span');
+    badge.className = `wire wire-${color.toLowerCase().replaceAll(' ', '-')}`;
+    badge.textContent = color;
+    legend.appendChild(badge);
+  }
+})();
+</script>
 </body>
 </html>
