@@ -49,7 +49,13 @@ SUPERSESSION_REFERENCE_ALLOWLIST = {
     ROOT / "docs/superpowers/plans/2026-08-10-esp32tap-cluster-build-audit-guides.md",
 }
 PRESCRIBED_BREADBOARD_HOLE = re.compile(
-    r"(?<![A-Za-z0-9_.])(?:[a-j](?:[1-9]|[1-5]\d|6[0-3])|[A-J](?:[1-5]\d|6[0-3])|[+-](?:[1-5]\d|6[0-3]))(?![A-Za-z0-9_.])"
+    r"(?:"
+    r"(?<![A-Za-z0-9_.])[a-j](?:[1-9]|[1-5]\d|6[0-3])(?![A-Za-z0-9_.])"
+    r"|(?<![A-Za-z0-9_.])[+-](?:[1-9]|[1-5]\d|6[0-3])"
+    r"(?![A-Za-z0-9_.]|\s*(?:V|mV|A|mA)\b)"
+    r"|(?i:\b(?:hole|row|coordinate|breadboard)\b)\s*[:#-]?\s*[A-J](?:[1-9]|[1-5]\d|6[0-3])"
+    r"(?![A-Za-z0-9_.])"
+    r")"
 )
 
 BUILD_LABELS = (
@@ -700,16 +706,31 @@ def test_html_has_no_prescribed_breadboard_holes(path: Path):
 
 
 def test_breadboard_hole_pattern_distinguishes_holes_from_pins_and_voltages():
-    for hole in ("a1", "a29", "j63", "A29", "f36", "F36", "+52", "-52"):
+    for hole in ("a1", "a29", "j63", "f36", "+1", "+52", "-52"):
         assert PRESCRIBED_BREADBOARD_HOLE.fullmatch(hole)
+    for contextual_hole in (
+        "hole A1",
+        "row A29",
+        "coordinate: F36",
+        "breadboard J63",
+    ):
+        assert PRESCRIBED_BREADBOARD_HOLE.search(contextual_hole)
     for allowed in (
         "J1",
         "C1",
         "D1",
         "F1",
+        "A1",
+        "A29",
+        "C10",
+        "C11",
+        "C13",
+        "D12",
+        "F10",
         "GPIO29",
         "U6.29",
         "3.29 V",
+        "+8 V",
         "-5.2 V",
         "+8.00 V",
         "VIN_A29",
