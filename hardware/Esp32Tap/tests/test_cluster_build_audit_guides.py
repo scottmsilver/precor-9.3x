@@ -1127,6 +1127,74 @@ def test_command_net_provenance_crosses_devkit_posts_at_cluster_5():
     assert "jumper" in sources["TX_ENABLE"]["source_mapping"].lower()
 
 
+def test_netlist_required_terminals_have_explicit_build_connections():
+    clusters = {
+        cluster["number"]: cluster
+        for cluster in _guide_metadata(BUILD_HTML)["clusters"]
+    }
+    required = {
+        4: {
+            ("R_UV_TOP", "1", "VIN"),
+            ("R_UV_TOP", "2", "UV_SENSE"),
+            ("R_UV_BOTTOM", "1", "UV_SENSE"),
+            ("R_UV_BOTTOM", "2", "GND"),
+            ("C_UV", "1", "UV_SENSE"),
+            ("C_UV", "2", "GND"),
+            ("R_OV_TOP", "1", "VIN"),
+            ("R_OV_TOP", "2", "OV_SENSE"),
+            ("R_OV_BOTTOM", "1", "OV_SENSE"),
+            ("R_OV_BOTTOM", "2", "GND"),
+            ("C_OV", "1", "OV_SENSE"),
+            ("C_OV", "2", "GND"),
+            ("C_TPS3700", "1", "VIN"),
+            ("C_TPS3700", "2", "GND"),
+        },
+        5: {
+            ("R_RELAY_CMD_PD", "1", "RELAY_CMD"),
+            ("R_RELAY_CMD_PD", "2", "GND"),
+            ("R_TX_ENABLE_PD", "1", "TX_ENABLE"),
+            ("R_TX_ENABLE_PD", "2", "GND"),
+            ("C_AHC08", "1", "LOGIC_3V3"),
+            ("C_AHC08", "2", "GND"),
+            *(("U4", str(pin), "GND") for pin in (9, 10, 12, 13)),
+        },
+        6: {
+            ("C_TPS709_IN", "1", "VIN"),
+            ("C_TPS709_IN", "2", "GND"),
+            ("C_TPS709_OUT", "positive", "+5V_RLY"),
+            ("C_TPS709_OUT", "negative", "GND"),
+            ("R_BASE_PD", "1", "Q_BASE"),
+            ("R_BASE_PD", "2", "GND"),
+        },
+        7: {
+            ("R_FB_NC", "1", "LOGIC_3V3"),
+            ("R_FB_NC", "2", "K1_NC_FB"),
+            ("R_FB_NO", "1", "LOGIC_3V3"),
+            ("R_FB_NO", "2", "K1_NO_FB"),
+        },
+        8: {
+            ("C_AHC126", "1", "LOGIC_3V3"),
+            ("C_AHC126", "2", "GND"),
+            *(("U6", str(pin), "GND") for pin in (4, 5, 9, 10, 12, 13)),
+        },
+        9: {
+            ("R_VBUS_DISCHARGE", "1", "VBUS_SENSE"),
+            ("R_VBUS_DISCHARGE", "2", "GND"),
+            ("R_VBUS_PULLUP", "1", "LOGIC_3V3"),
+            ("R_VBUS_PULLUP", "2", "VBUS_PRESENT_N"),
+            ("DEVKIT", "GPIO7", "VBUS_PRESENT_N"),
+        },
+    }
+    for number, expected in required.items():
+        actual = {
+            (record["part"], record["pin"], record["net"])
+            for record in clusters[number]["wiring"]
+        }
+        assert expected <= actual, (
+            f"cluster {number} omits netlist terminals: {sorted(expected - actual)}"
+        )
+
+
 def test_audit_cluster_11_isolates_maps_and_restores_each_common_conductor():
     cluster = _guide_metadata(AUDIT_HTML)["clusters"][10]
     actions = cluster["actions"]

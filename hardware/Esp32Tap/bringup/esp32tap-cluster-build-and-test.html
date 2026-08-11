@@ -171,8 +171,8 @@
         bottom: 0;
       }
       .relay-page {
-        font-size: 8pt;
-        line-height: 1.15;
+        font-size: 7.6pt;
+        line-height: 1.1;
       }
       .relay-page p,
       .relay-page table {
@@ -196,6 +196,22 @@
         margin-bottom: 2px;
       }
       .uart-page .sign {
+        margin-bottom: 20px;
+      }
+      .dense-page {
+        font-size: 7.1pt;
+        line-height: 1.08;
+      }
+      .dense-page p,
+      .dense-page table {
+        margin-top: 1px;
+        margin-bottom: 2px;
+      }
+      .dense-page h3 {
+        margin-top: 3px;
+        margin-bottom: 2px;
+      }
+      .dense-page .sign {
         margin-bottom: 20px;
       }
       .force-page {
@@ -570,7 +586,7 @@
       <div class="footer">Cluster 3 · DevKit and logic source handoff</div>
     </section>
 
-    <section class="page">
+    <section class="page dense-page">
       <h2>Cluster 4 — TPS3700 voltage monitor</h2>
       <div class="boundary">
         <div>
@@ -607,25 +623,69 @@
         adapter and UV/OV networks · 150 kΩ/10 kΩ; 255 kΩ/10 kΩ; 1 nF; 100 nF ·
         296-30395-1-ND; A879AR-ND; 150KXBK-ND; 13-MFR-25FBF52-255K-ND;
         445-173473-1-ND; BC1084CT-ND; NOT ORDERED · meter-map adapter pin 1;
-        capacitors non-polar<br /><b>Operator wiring record:</b> U3 · pin 5 ·
-        VIN · ORANGE; U3 · pin 2 · GND · BLACK; U3 · pin 3 · UV_SENSE · WHITE;
-        U3 · pin 4 · OV_SENSE · WHITE; U3 · pins 1 and 6 · TREAD_OK · YELLOW;
-        TREAD_OK · pull-up · LOGIC_3V3 · BLUE; TREAD_OK · pull-down · GND ·
-        BLACK; TREAD_OK · through 4.7 kΩ · GPIO6 · YELLOW
+        capacitors non-polar<br /><b>Operator wiring record:</b> See numbered
+        point-to-point steps below.
       </p>
       <p class="small">
         <b>Operator header record:</b> HDR3 · PRPC040SAAN-RC header · cut header
         · S1011EC-40-ND · map before installation
       </p>
       <h3>Build — exact pin/net/color wiring</h3>
-      <p>1. Connect U3 pin 5 to VIN using ORANGE.</p>
-      <p>2. Connect U3 pin 2 to GND using BLACK.</p>
-      <p>3. Connect U3 pin 3 to UV_SENSE using WHITE.</p>
-      <p>4. Connect U3 pin 4 to OV_SENSE using WHITE.</p>
-      <p>5. Connect U3 pins 1 and 6 to TREAD_OK using YELLOW.</p>
-      <p>6. Connect the TREAD_OK pull-up to LOGIC_3V3 using BLUE.</p>
-      <p>7. Connect the TREAD_OK pull-down to GND using BLACK.</p>
-      <p>8. Connect TREAD_OK through 4.7 kΩ to GPIO6 using YELLOW.</p>
+      <p>1. Connect U3 pin 5 to VIN using ORANGE; record initials ____.</p>
+      <p>2. Connect U3 pin 2 to GND using BLACK; record initials ____.</p>
+      <p>3. Connect U3 pin 3 to UV_SENSE using WHITE; record initials ____.</p>
+      <p>4. Connect U3 pin 4 to OV_SENSE using WHITE; record initials ____.</p>
+      <p>5. Connect U3 pin 1 to TREAD_OK using YELLOW; record initials ____.</p>
+      <p>6. Connect U3 pin 6 to TREAD_OK using YELLOW; record initials ____.</p>
+      <p>7. Connect R_UV_TOP 1 to VIN using ORANGE; record initials ____.</p>
+      <p>
+        8. Connect R_UV_TOP 2 to UV_SENSE using WHITE; record initials ____.
+      </p>
+      <p>
+        9. Connect R_UV_BOTTOM 1 to UV_SENSE using WHITE; record initials ____.
+      </p>
+      <p>10. Connect R_UV_BOTTOM 2 to GND using BLACK; record initials ____.</p>
+      <p>11. Connect C_UV 1 to UV_SENSE using WHITE; record initials ____.</p>
+      <p>12. Connect C_UV 2 to GND using BLACK; record initials ____.</p>
+      <p>13. Connect R_OV_TOP 1 to VIN using ORANGE; record initials ____.</p>
+      <p>
+        14. Connect R_OV_TOP 2 to OV_SENSE using WHITE; record initials ____.
+      </p>
+      <p>
+        15. Connect R_OV_BOTTOM 1 to OV_SENSE using WHITE; record initials ____.
+      </p>
+      <p>16. Connect R_OV_BOTTOM 2 to GND using BLACK; record initials ____.</p>
+      <p>17. Connect C_OV 1 to OV_SENSE using WHITE; record initials ____.</p>
+      <p>18. Connect C_OV 2 to GND using BLACK; record initials ____.</p>
+      <p>
+        19. Connect R_TREAD_PULLUP 1 to LOGIC_3V3 using BLUE; record initials
+        ____.
+      </p>
+      <p>
+        20. Connect R_TREAD_PULLUP 2 to TREAD_OK using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        21. Connect R_TREAD_PULLDOWN 1 to TREAD_OK using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        22. Connect R_TREAD_PULLDOWN 2 to GND using BLACK; record initials ____.
+      </p>
+      <p>
+        23. Connect R_TREAD_MCU 1 to TREAD_OK using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        24. Connect R_TREAD_MCU 2 to TREAD_OK_MCU using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        25. Connect DEVKIT GPIO6 to TREAD_OK_MCU using YELLOW; record initials
+        ____.
+      </p>
+      <p>26. Connect C_TPS3700 1 to VIN using ORANGE; record initials ____.</p>
+      <p>27. Connect C_TPS3700 2 to GND using BLACK; record initials ____.</p>
       <h3>Unpowered test</h3>
       <table class="records">
         <tr>
@@ -680,7 +740,7 @@
       <div class="footer">Cluster 4 · TPS3700 monitor</div>
     </section>
 
-    <section class="page">
+    <section class="page dense-page">
       <h2>Cluster 5 — AHC08 permission logic</h2>
       <div class="boundary">
         <div>
@@ -709,11 +769,7 @@
         NOT ORDERED · notch verified; capacitor non-polar<br /><b
           >Operator wiring record:</b
         >
-        U4 · pin 14 · LOGIC_3V3 · BLUE; U4 · pin 7 · GND · BLACK; GPIO21 ·
-        jumper post · U4 pin 1 / RELAY_CMD · YELLOW; TREAD_OK · endpoint · U4
-        pin 2 · YELLOW; U4 · pin 3 · RELAY_GATE · YELLOW; GPIO15 · jumper post ·
-        U4 pin 4 / TX_ENABLE · YELLOW; TREAD_OK · endpoint · U4 pin 5 · YELLOW;
-        U4 · pin 6 · TX_GATE · YELLOW
+        See numbered point-to-point steps below.
       </p>
       <h3>Build — exact pin/net/color wiring</h3>
       <p>
@@ -721,18 +777,46 @@
         jumper ↔ TX_ENABLE / AHC08 pin 4. DevKit GPIO21 ↔ removable GPIO21
         jumper ↔ RELAY_CMD / AHC08 pin 1.
       </p>
-      <p>1. Connect U4 pin 14 to LOGIC_3V3 using BLUE.</p>
-      <p>2. Connect U4 pin 7 to GND using BLACK.</p>
+      <p>1. Connect U4 pin 14 to LOGIC_3V3 using BLUE; record initials ____.</p>
+      <p>2. Connect U4 pin 7 to GND using BLACK; record initials ____.</p>
       <p>
-        3. Connect the GPIO21 jumper post to U4 pin 1 / RELAY_CMD using YELLOW.
+        3. Connect GPIO21 jumper post endpoint to U4 pin 1 / RELAY_CMD using
+        YELLOW; record initials ____.
       </p>
-      <p>4. Connect TREAD_OK endpoint to U4 pin 2 using YELLOW.</p>
-      <p>5. Connect U4 pin 3 to RELAY_GATE using YELLOW.</p>
+      <p>4. Connect U4 pin 2 to TREAD_OK using YELLOW; record initials ____.</p>
       <p>
-        6. Connect the GPIO15 jumper post to U4 pin 4 / TX_ENABLE using YELLOW.
+        5. Connect U4 pin 3 to RELAY_GATE using YELLOW; record initials ____.
       </p>
-      <p>7. Connect TREAD_OK endpoint to U4 pin 5 using YELLOW.</p>
-      <p>8. Connect U4 pin 6 to TX_GATE using YELLOW.</p>
+      <p>
+        6. Connect GPIO15 jumper post endpoint to U4 pin 4 / TX_ENABLE using
+        YELLOW; record initials ____.
+      </p>
+      <p>7. Connect U4 pin 5 to TREAD_OK using YELLOW; record initials ____.</p>
+      <p>8. Connect U4 pin 6 to TX_GATE using YELLOW; record initials ____.</p>
+      <p>9. Connect U4 9 to GND using BLACK; record initials ____.</p>
+      <p>10. Connect U4 10 to GND using BLACK; record initials ____.</p>
+      <p>11. Connect U4 12 to GND using BLACK; record initials ____.</p>
+      <p>12. Connect U4 13 to GND using BLACK; record initials ____.</p>
+      <p>13. Leave U4 pin 8 at NC using NO WIRE; record initials ____.</p>
+      <p>14. Leave U4 pin 11 at NC using NO WIRE; record initials ____.</p>
+      <p>
+        15. Connect R_RELAY_CMD_PD 1 to RELAY_CMD using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        16. Connect R_RELAY_CMD_PD 2 to GND using BLACK; record initials ____.
+      </p>
+      <p>
+        17. Connect R_TX_ENABLE_PD 1 to TX_ENABLE using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        18. Connect R_TX_ENABLE_PD 2 to GND using BLACK; record initials ____.
+      </p>
+      <p>
+        19. Connect C_AHC08 1 to LOGIC_3V3 using BLUE; record initials ____.
+      </p>
+      <p>20. Connect C_AHC08 2 to GND using BLACK; record initials ____.</p>
       <h3>Unpowered test</h3>
       <table class="records">
         <tr>
@@ -785,7 +869,7 @@
       <div class="footer">Cluster 5 · AHC08 permissions</div>
     </section>
 
-    <section class="page">
+    <section class="page dense-page">
       <h2>Cluster 6 — TPS709 and BC337 driver</h2>
       <div class="boundary">
         <div>
@@ -811,27 +895,52 @@
         unloaded driver · 296-35484-1-ND; A879AR-ND; 4878-BC337-40CT-ND;
         MFR-25FBF52-560R-ND; 445-173583-1-ND; 732-8660-1-ND; NOT ORDERED ·
         adapter and Q1 leads mapped; electrolytic negative to GND; link
-        removed<br /><b>Operator wiring record:</b> U5 · pin 1 · VIN · ORANGE;
-        U5 · pin 2 · GND · BLACK; U5 · pin 3 · RELAY_GATE · YELLOW; U5 · pin 5 ·
-        +5V_RLY · VIOLET; RELAY_GATE · through 560 Ω · Q1 base · YELLOW; Q1 ·
-        emitter · GND · BLACK; Q1 · collector · RELAY_COIL− · VIOLET; JP2 ·
-        between · +5V_RLY and COIL POWER · VIOLET
+        removed<br /><b>Operator wiring record:</b> See numbered point-to-point
+        steps below.
       </p>
       <p class="small">
         <b>Operator header record:</b> HDR5 · PRPC040SAAN-RC header · cut header
         · S1011EC-40-ND · map before installation
       </p>
       <h3>Build — exact pin/net/color wiring</h3>
-      <p>1. Connect U5 pin 1 to VIN using ORANGE.</p>
-      <p>2. Connect U5 pin 2 to GND using BLACK.</p>
-      <p>3. Connect U5 pin 3 to RELAY_GATE using YELLOW.</p>
-      <p>4. Connect U5 pin 5 to +5V_RLY using VIOLET.</p>
-      <p>5. Connect RELAY_GATE through 560 Ω to Q1 base using YELLOW.</p>
-      <p>6. Connect Q1 emitter to GND using BLACK.</p>
-      <p>7. Connect Q1 collector to RELAY_COIL− using VIOLET.</p>
+      <p>1. Connect U5 pin 1 to VIN using ORANGE; record initials ____.</p>
+      <p>2. Connect U5 pin 2 to GND using BLACK; record initials ____.</p>
       <p>
-        8. Fit JP2 between +5V_RLY and COIL POWER using VIOLET; leave JP2
-        removed.
+        3. Connect U5 pin 3 to RELAY_GATE using YELLOW; record initials ____.
+      </p>
+      <p>4. Connect U5 pin 5 to +5V_RLY using VIOLET; record initials ____.</p>
+      <p>5. Leave U5 pin 4 at NC using NO WIRE; record initials ____.</p>
+      <p>6. Connect C_TPS709_IN 1 to VIN using ORANGE; record initials ____.</p>
+      <p>7. Connect C_TPS709_IN 2 to GND using BLACK; record initials ____.</p>
+      <p>
+        8. Connect C_TPS709_OUT positive to +5V_RLY using VIOLET; record
+        initials ____.
+      </p>
+      <p>
+        9. Connect C_TPS709_OUT negative to GND using BLACK; record initials
+        ____.
+      </p>
+      <p>
+        10. Connect R_BASE 1 to RELAY_GATE using YELLOW; record initials ____.
+      </p>
+      <p>11. Connect R_BASE 2 to Q_BASE using YELLOW; record initials ____.</p>
+      <p>12. Connect Q1 base to Q_BASE using YELLOW; record initials ____.</p>
+      <p>
+        13. Connect R_BASE_PD 1 to Q_BASE using YELLOW; record initials ____.
+      </p>
+      <p>14. Connect R_BASE_PD 2 to GND using BLACK; record initials ____.</p>
+      <p>15. Connect Q1 emitter to GND using BLACK; record initials ____.</p>
+      <p>
+        16. Connect Q1 collector to RELAY_COIL− using VIOLET; record initials
+        ____.
+      </p>
+      <p>
+        17. Connect JP2 supply side to +5V_RLY using VIOLET; record initials
+        ____.
+      </p>
+      <p>
+        18. Connect JP2 coil side to RELAY_COIL+ using VIOLET; record initials
+        ____.
       </p>
       <h3>Unpowered test</h3>
       <table class="records">
@@ -855,9 +964,8 @@
         </tr>
         <tr>
           <td>
-            Toggle gate unloaded · RELAY_GATE · +5V_RLY and Q1 base · record
-            enabled/disabled/discharge · TPS709 enabled 4.75–5.25 V; TPS709
-            disabled below 0.25 V
+            Test gate unloaded · RELAY_GATE · +5V_RLY/Q1 base · record on/off ·
+            TPS709 enabled 4.75–5.25 V; TPS709 disabled below 0.25 V
           </td>
           <td></td>
         </tr>
@@ -907,24 +1015,48 @@
         meter-map physical pins; TVS bidirectional<br /><b
           >Operator wiring record:</b
         >
-        JP2 · coil-side · K1 pin 1 · VIOLET; RELAY_COIL− · endpoint · K1 pin 16
-        · VIOLET; D3 · lead 1 · K1 pin 1 · VIOLET; D3 · lead 2 · K1 pin 16 ·
-        VIOLET; local · NC endpoint · K1 pin 4 · WHITE; local · COM endpoint ·
-        K1 pin 6 · WHITE; local · NO endpoint · K1 pin 8 · WHITE; K1 · pin 11 ·
-        GND · BLACK; K1 · pin 13 · GPIO4 / FB_NC · GREEN; K1 · pin 9 · GPIO5 /
-        FB_NO · GREEN
+        See numbered point-to-point steps below.
       </p>
       <h3>Build — exact pin/net/color wiring</h3>
-      <p>1. Connect JP2 coil-side to K1 pin 1 using VIOLET.</p>
-      <p>2. Connect RELAY_COIL− endpoint to K1 pin 16 using VIOLET.</p>
-      <p>3. Connect D3 lead 1 to K1 pin 1 using VIOLET.</p>
-      <p>4. Connect D3 lead 2 to K1 pin 16 using VIOLET.</p>
-      <p>5. Connect local NC endpoint to K1 pin 4 using WHITE.</p>
-      <p>6. Connect local COM endpoint to K1 pin 6 using WHITE.</p>
-      <p>7. Connect local NO endpoint to K1 pin 8 using WHITE.</p>
-      <p>8. Connect K1 pin 11 to GND using BLACK.</p>
-      <p>9. Connect K1 pin 13 to GPIO4 / FB_NC using GREEN.</p>
-      <p>10. Connect K1 pin 9 to GPIO5 / FB_NO using GREEN.</p>
+      <p>
+        1. Connect K1 pin 1 to RELAY_COIL+ using VIOLET; record initials ____.
+      </p>
+      <p>
+        2. Connect K1 pin 16 to RELAY_COIL− using VIOLET; record initials ____.
+      </p>
+      <p>
+        3. Connect D3 lead 1 to RELAY_COIL+ using VIOLET; record initials ____.
+      </p>
+      <p>
+        4. Connect D3 lead 2 to RELAY_COIL− using VIOLET; record initials ____.
+      </p>
+      <p>5. Connect K1 pin 4 to LOCAL_NC using WHITE; record initials ____.</p>
+      <p>
+        6. Connect K1 pin 6 to LOCAL_TX_SELECTED using WHITE; record initials
+        ____.
+      </p>
+      <p>7. Connect K1 pin 8 to LOCAL_NO using WHITE; record initials ____.</p>
+      <p>8. Connect K1 pin 11 to GND using BLACK; record initials ____.</p>
+      <p>9. Connect K1 pin 13 to K1_NC_FB using GREEN; record initials ____.</p>
+      <p>
+        10. Connect DEVKIT GPIO4 to K1_NC_FB using GREEN; record initials ____.
+      </p>
+      <p>11. Connect K1 pin 9 to K1_NO_FB using GREEN; record initials ____.</p>
+      <p>
+        12. Connect DEVKIT GPIO5 to K1_NO_FB using GREEN; record initials ____.
+      </p>
+      <p>
+        13. Connect R_FB_NC 1 to LOGIC_3V3 using BLUE; record initials ____.
+      </p>
+      <p>
+        14. Connect R_FB_NC 2 to K1_NC_FB using GREEN; record initials ____.
+      </p>
+      <p>
+        15. Connect R_FB_NO 1 to LOGIC_3V3 using BLUE; record initials ____.
+      </p>
+      <p>
+        16. Connect R_FB_NO 2 to K1_NO_FB using GREEN; record initials ____.
+      </p>
       <h3>Unpowered test</h3>
       <table class="records">
         <tr>
@@ -1063,35 +1195,73 @@
         <b>Operator part record:</b> U6/C6/R3/R4/R5 · SN74AHC126N; capacitor;
         series/tap resistors · PDIP-14; 100 nF; 100 Ω; two 10 kΩ ·
         296-4535-5-ND; BC1084CT-ND; NOT ORDERED · notch verified; capacitor
-        non-polar<br /><b>Operator wiring record:</b> U6 · pin 14 · LOGIC_3V3 ·
-        BLUE; U6 · pin 7 · GND · BLACK; TX_GATE · endpoint · U6 pin 1 · YELLOW;
-        GPIO17_TX · endpoint · U6 pin 2 · YELLOW; U6 · pin 3 through 100 Ω ·
-        TX_DRV · YELLOW; LOCAL_CONSOLE_6_STUB · through 10 kΩ · GPIO18_RX_LOCAL
-        · GREEN; LOCAL_PIN3_STUB · through 10 kΩ · GPIO16_RX_LOCAL · GREEN;
-        LOCAL_NC · / K1 pin 4 · LOCAL_CONSOLE_6_STUB · WHITE; LOCAL_NO · / K1
-        pin 8 · TX_DRV · YELLOW; K1 · pin 6 · LOCAL_TX_SELECTED · YELLOW
+        non-polar<br /><b>Operator wiring record:</b> See numbered
+        point-to-point steps below.
       </p>
       <h3>Build — exact pin/net/color wiring</h3>
       <p>
         <b>Local future-interface fixture only:</b> use a bounded UART/relay
         exerciser; no RJ45 or treadmill cable.
       </p>
-      <p>1. Connect U6 pin 14 to LOGIC_3V3 using BLUE.</p>
-      <p>2. Connect U6 pin 7 to GND using BLACK.</p>
-      <p>3. Connect TX_GATE endpoint to U6 pin 1 using YELLOW.</p>
-      <p>4. Connect GPIO17_TX endpoint to U6 pin 2 using YELLOW.</p>
-      <p>5. Connect U6 pin 3 through 100 Ω to TX_DRV using YELLOW.</p>
+      <p>1. Connect U6 pin 14 to LOGIC_3V3 using BLUE; record initials ____.</p>
+      <p>2. Connect U6 pin 7 to GND using BLACK; record initials ____.</p>
+      <p>3. Connect U6 pin 1 to TX_GATE using YELLOW; record initials ____.</p>
       <p>
-        6. Connect LOCAL_CONSOLE_6_STUB through 10 kΩ to GPIO18_RX_LOCAL using
-        GREEN.
+        4. Connect U6 pin 2 to GPIO17_TX using YELLOW; record initials ____.
+      </p>
+      <p>5. Connect U6 pin 3 to TX_BUF using YELLOW; record initials ____.</p>
+      <p>6. Connect R_TX 1 to TX_BUF using YELLOW; record initials ____.</p>
+      <p>7. Connect R_TX 2 to TX_DRV using YELLOW; record initials ____.</p>
+      <p>8. Connect U6 4 to GND using BLACK; record initials ____.</p>
+      <p>9. Connect U6 5 to GND using BLACK; record initials ____.</p>
+      <p>10. Connect U6 9 to GND using BLACK; record initials ____.</p>
+      <p>11. Connect U6 10 to GND using BLACK; record initials ____.</p>
+      <p>12. Connect U6 12 to GND using BLACK; record initials ____.</p>
+      <p>13. Connect U6 13 to GND using BLACK; record initials ____.</p>
+      <p>14. Leave U6 pin 6 at NC using NO WIRE; record initials ____.</p>
+      <p>15. Leave U6 pin 8 at NC using NO WIRE; record initials ____.</p>
+      <p>16. Leave U6 pin 11 at NC using NO WIRE; record initials ____.</p>
+      <p>
+        17. Connect C_AHC126 1 to LOGIC_3V3 using BLUE; record initials ____.
+      </p>
+      <p>18. Connect C_AHC126 2 to GND using BLACK; record initials ____.</p>
+      <p>
+        19. Connect R_CONS_RX 1 to LOCAL_CONSOLE_6_STUB using WHITE; record
+        initials ____.
       </p>
       <p>
-        7. Connect LOCAL_PIN3_STUB through 10 kΩ to GPIO16_RX_LOCAL using GREEN.
+        20. Connect R_CONS_RX 2 to GPIO18_RX_LOCAL using GREEN; record initials
+        ____.
       </p>
-      <p>8. Connect LOCAL_NC / K1 pin 4 to LOCAL_CONSOLE_6_STUB using WHITE.</p>
-      <p>9. Connect LOCAL_NO / K1 pin 8 to TX_DRV using YELLOW.</p>
-      <p>10. Connect K1 pin 6 to LOCAL_TX_SELECTED using YELLOW.</p>
-      <h3>Unpowered test</h3>
+      <p>
+        21. Connect DEVKIT GPIO18 to GPIO18_RX_LOCAL using GREEN; record
+        initials ____.
+      </p>
+      <p>
+        22. Connect R_PIN3_RX 1 to LOCAL_PIN3_STUB using WHITE; record initials
+        ____.
+      </p>
+      <p>
+        23. Connect R_PIN3_RX 2 to GPIO16_RX_LOCAL using GREEN; record initials
+        ____.
+      </p>
+      <p>
+        24. Connect DEVKIT GPIO16 to GPIO16_RX_LOCAL using GREEN; record
+        initials ____.
+      </p>
+      <p>
+        25. Connect K1 pin 4 / LOCAL_NC to LOCAL_CONSOLE_6_STUB using WHITE;
+        record initials ____.
+      </p>
+      <p>
+        26. Connect K1 pin 8 / LOCAL_NO to TX_DRV using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        27. Connect K1 pin 6 to LOCAL_TX_SELECTED using YELLOW; record initials
+        ____.
+      </p>
+      <h3 class="force-page">Unpowered test</h3>
       <table class="records">
         <tr>
           <th>Instruction / kind / points / expected</th>
@@ -1222,7 +1392,7 @@
       <div class="footer">Cluster 8 · UART isolation and observation</div>
     </section>
 
-    <section class="page">
+    <section class="page dense-page">
       <h2>Cluster 9 — Indicators and VBUS sensing</h2>
       <div class="boundary">
         <div>
@@ -1250,33 +1420,80 @@
         ORDERED · Q2 G/D/S mapped; LED long lead anode; flat side cathode<br /><b
           >Operator wiring record:</b
         >
-        DevKit · 5V/VBUS · Q2 gate · VIOLET; Q2 · source · GND · BLACK; Q2 ·
-        drain · GPIO7 / VBUS_PRESENT_N · GREEN; VBUS · pull-up · LOGIC_3V3 ·
-        BLUE; GPIO38 · through 330 Ω · the green LED anode · YELLOW; green · LED
-        cathode · GND · BLACK; LOGIC_3V3 · through 1 kΩ · the red LED anode ·
-        BLUE; red · LED cathode · GND · BLACK; C7 · lead 1 · LOGIC_3V3 · BLUE;
-        C7 · lead 2 · GND · BLACK
+        See numbered point-to-point steps below.
       </p>
       <p class="small">
         <b>Operator bypass wiring record:</b> C7 · leads 1/2 · LOGIC_3V3/GND ·
         BLUE/BLACK
       </p>
       <h3>Build — exact pin/net/color wiring</h3>
-      <p>1. Connect DevKit 5V/VBUS to Q2 gate using VIOLET.</p>
-      <p>2. Connect Q2 source to GND using BLACK.</p>
-      <p>3. Connect Q2 drain to GPIO7 / VBUS_PRESENT_N using GREEN.</p>
-      <p>4. Connect the VBUS pull-up to LOGIC_3V3 using BLUE.</p>
-      <p>
-        5. Connect GPIO38 through 330 Ω to the green LED anode using YELLOW.
-      </p>
-      <p>6. Connect the green LED cathode to GND using BLACK.</p>
-      <p>7. Connect LOGIC_3V3 through 1 kΩ to the red LED anode using BLUE.</p>
-      <p>8. Connect the red LED cathode to GND using BLACK.</p>
-      <p>9. Connect C7 lead 1 to LOGIC_3V3 using BLUE.</p>
-      <p>10. Connect C7 lead 2 to GND using BLACK.</p>
       <p class="small">
         Bypass summary: C7 lead 1 to LOGIC_3V3 and C7 lead 2 to GND.
       </p>
+      <p>
+        1. Connect DEVKIT 5V/VBUS to VBUS_SENSE using VIOLET; record initials
+        ____.
+      </p>
+      <p>
+        2. Connect Q2 gate to VBUS_SENSE using VIOLET; record initials ____.
+      </p>
+      <p>
+        3. Connect R_VBUS_DISCHARGE 1 to VBUS_SENSE using VIOLET; record
+        initials ____.
+      </p>
+      <p>
+        4. Connect R_VBUS_DISCHARGE 2 to GND using BLACK; record initials ____.
+      </p>
+      <p>5. Connect Q2 source to GND using BLACK; record initials ____.</p>
+      <p>
+        6. Connect Q2 drain to VBUS_PRESENT_N using GREEN; record initials ____.
+      </p>
+      <p>
+        7. Connect DEVKIT GPIO7 to VBUS_PRESENT_N using GREEN; record initials
+        ____.
+      </p>
+      <p>
+        8. Connect R_VBUS_PULLUP 1 to LOGIC_3V3 using BLUE; record initials
+        ____.
+      </p>
+      <p>
+        9. Connect R_VBUS_PULLUP 2 to VBUS_PRESENT_N using GREEN; record
+        initials ____.
+      </p>
+      <p>
+        10. Connect DEVKIT GPIO38 to STATUS_LED using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        11. Connect R_STATUS 1 to STATUS_LED using YELLOW; record initials ____.
+      </p>
+      <p>
+        12. Connect R_STATUS 2 to LED_GREEN_A using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        13. Connect LED_GREEN anode to LED_GREEN_A using YELLOW; record initials
+        ____.
+      </p>
+      <p>
+        14. Connect LED_GREEN cathode to GND using BLACK; record initials ____.
+      </p>
+      <p>
+        15. Connect R_POWER_LED 1 to LOGIC_3V3 using BLUE; record initials ____.
+      </p>
+      <p>
+        16. Connect R_POWER_LED 2 to LED_RED_A using BLUE; record initials ____.
+      </p>
+      <p>
+        17. Connect LED_RED anode to LED_RED_A using BLUE; record initials ____.
+      </p>
+      <p>
+        18. Connect LED_RED cathode to GND using BLACK; record initials ____.
+      </p>
+      <p>
+        19. Connect C_LOGIC 1 to LOGIC_3V3 using BLUE; record initials ____.
+      </p>
+      <p>20. Connect C_LOGIC 2 to GND using BLACK; record initials ____.</p>
       <h3>Unpowered test</h3>
       <table class="records">
         <tr>
@@ -2262,65 +2479,274 @@
               {
                 "connection_id": "C4-5",
                 "part": "U3",
-                "pin": "pins 1 and 6",
+                "pin": "pin 1",
                 "net": "TREAD_OK",
                 "color": "YELLOW"
               },
               {
                 "connection_id": "C4-6",
-                "part": "TREAD_OK",
-                "pin": "pull-up",
-                "net": "LOGIC_3V3",
-                "color": "BLUE"
+                "part": "U3",
+                "pin": "pin 6",
+                "net": "TREAD_OK",
+                "color": "YELLOW"
               },
               {
                 "connection_id": "C4-7",
-                "part": "TREAD_OK",
-                "pin": "pull-down",
+                "part": "R_UV_TOP",
+                "pin": "1",
+                "net": "VIN",
+                "color": "ORANGE"
+              },
+              {
+                "connection_id": "C4-8",
+                "part": "R_UV_TOP",
+                "pin": "2",
+                "net": "UV_SENSE",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C4-9",
+                "part": "R_UV_BOTTOM",
+                "pin": "1",
+                "net": "UV_SENSE",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C4-10",
+                "part": "R_UV_BOTTOM",
+                "pin": "2",
                 "net": "GND",
                 "color": "BLACK"
               },
               {
-                "connection_id": "C4-8",
-                "part": "TREAD_OK",
-                "pin": "through 4.7 kΩ",
-                "net": "GPIO6",
+                "connection_id": "C4-11",
+                "part": "C_UV",
+                "pin": "1",
+                "net": "UV_SENSE",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C4-12",
+                "part": "C_UV",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C4-13",
+                "part": "R_OV_TOP",
+                "pin": "1",
+                "net": "VIN",
+                "color": "ORANGE"
+              },
+              {
+                "connection_id": "C4-14",
+                "part": "R_OV_TOP",
+                "pin": "2",
+                "net": "OV_SENSE",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C4-15",
+                "part": "R_OV_BOTTOM",
+                "pin": "1",
+                "net": "OV_SENSE",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C4-16",
+                "part": "R_OV_BOTTOM",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C4-17",
+                "part": "C_OV",
+                "pin": "1",
+                "net": "OV_SENSE",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C4-18",
+                "part": "C_OV",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C4-19",
+                "part": "R_TREAD_PULLUP",
+                "pin": "1",
+                "net": "LOGIC_3V3",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C4-20",
+                "part": "R_TREAD_PULLUP",
+                "pin": "2",
+                "net": "TREAD_OK",
                 "color": "YELLOW"
+              },
+              {
+                "connection_id": "C4-21",
+                "part": "R_TREAD_PULLDOWN",
+                "pin": "1",
+                "net": "TREAD_OK",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C4-22",
+                "part": "R_TREAD_PULLDOWN",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C4-23",
+                "part": "R_TREAD_MCU",
+                "pin": "1",
+                "net": "TREAD_OK",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C4-24",
+                "part": "R_TREAD_MCU",
+                "pin": "2",
+                "net": "TREAD_OK_MCU",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C4-25",
+                "part": "DEVKIT",
+                "pin": "GPIO6",
+                "net": "TREAD_OK_MCU",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C4-26",
+                "part": "C_TPS3700",
+                "pin": "1",
+                "net": "VIN",
+                "color": "ORANGE"
+              },
+              {
+                "connection_id": "C4-27",
+                "part": "C_TPS3700",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
               }
             ],
             "actions": {
               "build": [
                 {
                   "connection_id": "C4-1",
-                  "instruction": "Connect U3 pin 5 to VIN using ORANGE."
+                  "instruction": "Connect U3 pin 5 to VIN using ORANGE; record initials ____."
                 },
                 {
                   "connection_id": "C4-2",
-                  "instruction": "Connect U3 pin 2 to GND using BLACK."
+                  "instruction": "Connect U3 pin 2 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C4-3",
-                  "instruction": "Connect U3 pin 3 to UV_SENSE using WHITE."
+                  "instruction": "Connect U3 pin 3 to UV_SENSE using WHITE; record initials ____."
                 },
                 {
                   "connection_id": "C4-4",
-                  "instruction": "Connect U3 pin 4 to OV_SENSE using WHITE."
+                  "instruction": "Connect U3 pin 4 to OV_SENSE using WHITE; record initials ____."
                 },
                 {
                   "connection_id": "C4-5",
-                  "instruction": "Connect U3 pins 1 and 6 to TREAD_OK using YELLOW."
+                  "instruction": "Connect U3 pin 1 to TREAD_OK using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C4-6",
-                  "instruction": "Connect the TREAD_OK pull-up to LOGIC_3V3 using BLUE."
+                  "instruction": "Connect U3 pin 6 to TREAD_OK using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C4-7",
-                  "instruction": "Connect the TREAD_OK pull-down to GND using BLACK."
+                  "instruction": "Connect R_UV_TOP 1 to VIN using ORANGE; record initials ____."
                 },
                 {
                   "connection_id": "C4-8",
-                  "instruction": "Connect TREAD_OK through 4.7 kΩ to GPIO6 using YELLOW."
+                  "instruction": "Connect R_UV_TOP 2 to UV_SENSE using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-9",
+                  "instruction": "Connect R_UV_BOTTOM 1 to UV_SENSE using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-10",
+                  "instruction": "Connect R_UV_BOTTOM 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C4-11",
+                  "instruction": "Connect C_UV 1 to UV_SENSE using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-12",
+                  "instruction": "Connect C_UV 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C4-13",
+                  "instruction": "Connect R_OV_TOP 1 to VIN using ORANGE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-14",
+                  "instruction": "Connect R_OV_TOP 2 to OV_SENSE using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-15",
+                  "instruction": "Connect R_OV_BOTTOM 1 to OV_SENSE using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-16",
+                  "instruction": "Connect R_OV_BOTTOM 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C4-17",
+                  "instruction": "Connect C_OV 1 to OV_SENSE using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-18",
+                  "instruction": "Connect C_OV 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C4-19",
+                  "instruction": "Connect R_TREAD_PULLUP 1 to LOGIC_3V3 using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-20",
+                  "instruction": "Connect R_TREAD_PULLUP 2 to TREAD_OK using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C4-21",
+                  "instruction": "Connect R_TREAD_PULLDOWN 1 to TREAD_OK using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C4-22",
+                  "instruction": "Connect R_TREAD_PULLDOWN 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C4-23",
+                  "instruction": "Connect R_TREAD_MCU 1 to TREAD_OK using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C4-24",
+                  "instruction": "Connect R_TREAD_MCU 2 to TREAD_OK_MCU using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C4-25",
+                  "instruction": "Connect DEVKIT GPIO6 to TREAD_OK_MCU using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C4-26",
+                  "instruction": "Connect C_TPS3700 1 to VIN using ORANGE; record initials ____."
+                },
+                {
+                  "connection_id": "C4-27",
+                  "instruction": "Connect C_TPS3700 2 to GND using BLACK; record initials ____."
                 }
               ],
               "unpowered_test": [
@@ -2423,16 +2849,16 @@
               },
               {
                 "connection_id": "C5-3",
-                "part": "GPIO21",
-                "pin": "jumper post",
+                "part": "GPIO21 jumper post",
+                "pin": "endpoint",
                 "net": "U4 pin 1 / RELAY_CMD",
                 "color": "YELLOW"
               },
               {
                 "connection_id": "C5-4",
-                "part": "TREAD_OK",
-                "pin": "endpoint",
-                "net": "U4 pin 2",
+                "part": "U4",
+                "pin": "pin 2",
+                "net": "TREAD_OK",
                 "color": "YELLOW"
               },
               {
@@ -2444,16 +2870,16 @@
               },
               {
                 "connection_id": "C5-6",
-                "part": "GPIO15",
-                "pin": "jumper post",
+                "part": "GPIO15 jumper post",
+                "pin": "endpoint",
                 "net": "U4 pin 4 / TX_ENABLE",
                 "color": "YELLOW"
               },
               {
                 "connection_id": "C5-7",
-                "part": "TREAD_OK",
-                "pin": "endpoint",
-                "net": "U4 pin 5",
+                "part": "U4",
+                "pin": "pin 5",
+                "net": "TREAD_OK",
                 "color": "YELLOW"
               },
               {
@@ -2462,41 +2888,173 @@
                 "pin": "pin 6",
                 "net": "TX_GATE",
                 "color": "YELLOW"
+              },
+              {
+                "connection_id": "C5-9",
+                "part": "U4",
+                "pin": "9",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C5-10",
+                "part": "U4",
+                "pin": "10",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C5-11",
+                "part": "U4",
+                "pin": "12",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C5-12",
+                "part": "U4",
+                "pin": "13",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C5-13",
+                "part": "U4",
+                "pin": "pin 8",
+                "net": "NC",
+                "color": "NO WIRE"
+              },
+              {
+                "connection_id": "C5-14",
+                "part": "U4",
+                "pin": "pin 11",
+                "net": "NC",
+                "color": "NO WIRE"
+              },
+              {
+                "connection_id": "C5-15",
+                "part": "R_RELAY_CMD_PD",
+                "pin": "1",
+                "net": "RELAY_CMD",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C5-16",
+                "part": "R_RELAY_CMD_PD",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C5-17",
+                "part": "R_TX_ENABLE_PD",
+                "pin": "1",
+                "net": "TX_ENABLE",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C5-18",
+                "part": "R_TX_ENABLE_PD",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C5-19",
+                "part": "C_AHC08",
+                "pin": "1",
+                "net": "LOGIC_3V3",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C5-20",
+                "part": "C_AHC08",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
               }
             ],
             "actions": {
               "build": [
                 {
                   "connection_id": "C5-1",
-                  "instruction": "Connect U4 pin 14 to LOGIC_3V3 using BLUE."
+                  "instruction": "Connect U4 pin 14 to LOGIC_3V3 using BLUE; record initials ____."
                 },
                 {
                   "connection_id": "C5-2",
-                  "instruction": "Connect U4 pin 7 to GND using BLACK."
+                  "instruction": "Connect U4 pin 7 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C5-3",
-                  "instruction": "Connect the GPIO21 jumper post to U4 pin 1 / RELAY_CMD using YELLOW."
+                  "instruction": "Connect GPIO21 jumper post endpoint to U4 pin 1 / RELAY_CMD using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C5-4",
-                  "instruction": "Connect TREAD_OK endpoint to U4 pin 2 using YELLOW."
+                  "instruction": "Connect U4 pin 2 to TREAD_OK using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C5-5",
-                  "instruction": "Connect U4 pin 3 to RELAY_GATE using YELLOW."
+                  "instruction": "Connect U4 pin 3 to RELAY_GATE using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C5-6",
-                  "instruction": "Connect the GPIO15 jumper post to U4 pin 4 / TX_ENABLE using YELLOW."
+                  "instruction": "Connect GPIO15 jumper post endpoint to U4 pin 4 / TX_ENABLE using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C5-7",
-                  "instruction": "Connect TREAD_OK endpoint to U4 pin 5 using YELLOW."
+                  "instruction": "Connect U4 pin 5 to TREAD_OK using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C5-8",
-                  "instruction": "Connect U4 pin 6 to TX_GATE using YELLOW."
+                  "instruction": "Connect U4 pin 6 to TX_GATE using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C5-9",
+                  "instruction": "Connect U4 9 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C5-10",
+                  "instruction": "Connect U4 10 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C5-11",
+                  "instruction": "Connect U4 12 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C5-12",
+                  "instruction": "Connect U4 13 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C5-13",
+                  "instruction": "Leave U4 pin 8 at NC using NO WIRE; record initials ____."
+                },
+                {
+                  "connection_id": "C5-14",
+                  "instruction": "Leave U4 pin 11 at NC using NO WIRE; record initials ____."
+                },
+                {
+                  "connection_id": "C5-15",
+                  "instruction": "Connect R_RELAY_CMD_PD 1 to RELAY_CMD using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C5-16",
+                  "instruction": "Connect R_RELAY_CMD_PD 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C5-17",
+                  "instruction": "Connect R_TX_ENABLE_PD 1 to TX_ENABLE using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C5-18",
+                  "instruction": "Connect R_TX_ENABLE_PD 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C5-19",
+                  "instruction": "Connect C_AHC08 1 to LOGIC_3V3 using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C5-20",
+                  "instruction": "Connect C_AHC08 2 to GND using BLACK; record initials ____."
                 }
               ],
               "unpowered_test": [
@@ -2593,30 +3151,100 @@
               },
               {
                 "connection_id": "C6-5",
-                "part": "RELAY_GATE",
-                "pin": "through 560 Ω",
-                "net": "Q1 base",
-                "color": "YELLOW"
+                "part": "U5",
+                "pin": "pin 4",
+                "net": "NC",
+                "color": "NO WIRE"
               },
               {
                 "connection_id": "C6-6",
+                "part": "C_TPS709_IN",
+                "pin": "1",
+                "net": "VIN",
+                "color": "ORANGE"
+              },
+              {
+                "connection_id": "C6-7",
+                "part": "C_TPS709_IN",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C6-8",
+                "part": "C_TPS709_OUT",
+                "pin": "positive",
+                "net": "+5V_RLY",
+                "color": "VIOLET"
+              },
+              {
+                "connection_id": "C6-9",
+                "part": "C_TPS709_OUT",
+                "pin": "negative",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C6-10",
+                "part": "R_BASE",
+                "pin": "1",
+                "net": "RELAY_GATE",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C6-11",
+                "part": "R_BASE",
+                "pin": "2",
+                "net": "Q_BASE",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C6-12",
+                "part": "Q1",
+                "pin": "base",
+                "net": "Q_BASE",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C6-13",
+                "part": "R_BASE_PD",
+                "pin": "1",
+                "net": "Q_BASE",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C6-14",
+                "part": "R_BASE_PD",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C6-15",
                 "part": "Q1",
                 "pin": "emitter",
                 "net": "GND",
                 "color": "BLACK"
               },
               {
-                "connection_id": "C6-7",
+                "connection_id": "C6-16",
                 "part": "Q1",
                 "pin": "collector",
                 "net": "RELAY_COIL−",
                 "color": "VIOLET"
               },
               {
-                "connection_id": "C6-8",
+                "connection_id": "C6-17",
                 "part": "JP2",
-                "pin": "between",
-                "net": "+5V_RLY and COIL POWER",
+                "pin": "supply side",
+                "net": "+5V_RLY",
+                "color": "VIOLET"
+              },
+              {
+                "connection_id": "C6-18",
+                "part": "JP2",
+                "pin": "coil side",
+                "net": "RELAY_COIL+",
                 "color": "VIOLET"
               }
             ],
@@ -2624,35 +3252,75 @@
               "build": [
                 {
                   "connection_id": "C6-1",
-                  "instruction": "Connect U5 pin 1 to VIN using ORANGE."
+                  "instruction": "Connect U5 pin 1 to VIN using ORANGE; record initials ____."
                 },
                 {
                   "connection_id": "C6-2",
-                  "instruction": "Connect U5 pin 2 to GND using BLACK."
+                  "instruction": "Connect U5 pin 2 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C6-3",
-                  "instruction": "Connect U5 pin 3 to RELAY_GATE using YELLOW."
+                  "instruction": "Connect U5 pin 3 to RELAY_GATE using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C6-4",
-                  "instruction": "Connect U5 pin 5 to +5V_RLY using VIOLET."
+                  "instruction": "Connect U5 pin 5 to +5V_RLY using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C6-5",
-                  "instruction": "Connect RELAY_GATE through 560 Ω to Q1 base using YELLOW."
+                  "instruction": "Leave U5 pin 4 at NC using NO WIRE; record initials ____."
                 },
                 {
                   "connection_id": "C6-6",
-                  "instruction": "Connect Q1 emitter to GND using BLACK."
+                  "instruction": "Connect C_TPS709_IN 1 to VIN using ORANGE; record initials ____."
                 },
                 {
                   "connection_id": "C6-7",
-                  "instruction": "Connect Q1 collector to RELAY_COIL− using VIOLET."
+                  "instruction": "Connect C_TPS709_IN 2 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C6-8",
-                  "instruction": "Fit JP2 between +5V_RLY and COIL POWER using VIOLET; leave JP2 removed."
+                  "instruction": "Connect C_TPS709_OUT positive to +5V_RLY using VIOLET; record initials ____."
+                },
+                {
+                  "connection_id": "C6-9",
+                  "instruction": "Connect C_TPS709_OUT negative to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C6-10",
+                  "instruction": "Connect R_BASE 1 to RELAY_GATE using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C6-11",
+                  "instruction": "Connect R_BASE 2 to Q_BASE using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C6-12",
+                  "instruction": "Connect Q1 base to Q_BASE using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C6-13",
+                  "instruction": "Connect R_BASE_PD 1 to Q_BASE using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C6-14",
+                  "instruction": "Connect R_BASE_PD 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C6-15",
+                  "instruction": "Connect Q1 emitter to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C6-16",
+                  "instruction": "Connect Q1 collector to RELAY_COIL− using VIOLET; record initials ____."
+                },
+                {
+                  "connection_id": "C6-17",
+                  "instruction": "Connect JP2 supply side to +5V_RLY using VIOLET; record initials ____."
+                },
+                {
+                  "connection_id": "C6-18",
+                  "instruction": "Connect JP2 coil side to RELAY_COIL+ using VIOLET; record initials ____."
                 }
               ],
               "unpowered_test": [
@@ -2665,10 +3333,10 @@
               ],
               "powered_test": [
                 {
-                  "instruction": "Toggle gate unloaded",
+                  "instruction": "Test gate unloaded",
                   "input": "RELAY_GATE",
-                  "output": "+5V_RLY and Q1 base",
-                  "evidence": "record enabled/disabled/discharge",
+                  "output": "+5V_RLY/Q1 base",
+                  "evidence": "record on/off",
                   "limits": "TPS709 enabled 4.75–5.25 V; TPS709 disabled below 0.25 V"
                 }
               ]
@@ -2731,51 +3399,51 @@
             "wiring": [
               {
                 "connection_id": "C7-1",
-                "part": "JP2",
-                "pin": "coil-side",
-                "net": "K1 pin 1",
+                "part": "K1",
+                "pin": "pin 1",
+                "net": "RELAY_COIL+",
                 "color": "VIOLET"
               },
               {
                 "connection_id": "C7-2",
-                "part": "RELAY_COIL−",
-                "pin": "endpoint",
-                "net": "K1 pin 16",
+                "part": "K1",
+                "pin": "pin 16",
+                "net": "RELAY_COIL−",
                 "color": "VIOLET"
               },
               {
                 "connection_id": "C7-3",
                 "part": "D3",
                 "pin": "lead 1",
-                "net": "K1 pin 1",
+                "net": "RELAY_COIL+",
                 "color": "VIOLET"
               },
               {
                 "connection_id": "C7-4",
                 "part": "D3",
                 "pin": "lead 2",
-                "net": "K1 pin 16",
+                "net": "RELAY_COIL−",
                 "color": "VIOLET"
               },
               {
                 "connection_id": "C7-5",
-                "part": "local",
-                "pin": "NC endpoint",
-                "net": "K1 pin 4",
+                "part": "K1",
+                "pin": "pin 4",
+                "net": "LOCAL_NC",
                 "color": "WHITE"
               },
               {
                 "connection_id": "C7-6",
-                "part": "local",
-                "pin": "COM endpoint",
-                "net": "K1 pin 6",
+                "part": "K1",
+                "pin": "pin 6",
+                "net": "LOCAL_TX_SELECTED",
                 "color": "WHITE"
               },
               {
                 "connection_id": "C7-7",
-                "part": "local",
-                "pin": "NO endpoint",
-                "net": "K1 pin 8",
+                "part": "K1",
+                "pin": "pin 8",
+                "net": "LOCAL_NO",
                 "color": "WHITE"
               },
               {
@@ -2789,14 +3457,56 @@
                 "connection_id": "C7-9",
                 "part": "K1",
                 "pin": "pin 13",
-                "net": "GPIO4 / FB_NC",
+                "net": "K1_NC_FB",
                 "color": "GREEN"
               },
               {
                 "connection_id": "C7-10",
+                "part": "DEVKIT",
+                "pin": "GPIO4",
+                "net": "K1_NC_FB",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C7-11",
                 "part": "K1",
                 "pin": "pin 9",
-                "net": "GPIO5 / FB_NO",
+                "net": "K1_NO_FB",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C7-12",
+                "part": "DEVKIT",
+                "pin": "GPIO5",
+                "net": "K1_NO_FB",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C7-13",
+                "part": "R_FB_NC",
+                "pin": "1",
+                "net": "LOGIC_3V3",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C7-14",
+                "part": "R_FB_NC",
+                "pin": "2",
+                "net": "K1_NC_FB",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C7-15",
+                "part": "R_FB_NO",
+                "pin": "1",
+                "net": "LOGIC_3V3",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C7-16",
+                "part": "R_FB_NO",
+                "pin": "2",
+                "net": "K1_NO_FB",
                 "color": "GREEN"
               }
             ],
@@ -2804,43 +3514,67 @@
               "build": [
                 {
                   "connection_id": "C7-1",
-                  "instruction": "Connect JP2 coil-side to K1 pin 1 using VIOLET."
+                  "instruction": "Connect K1 pin 1 to RELAY_COIL+ using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C7-2",
-                  "instruction": "Connect RELAY_COIL− endpoint to K1 pin 16 using VIOLET."
+                  "instruction": "Connect K1 pin 16 to RELAY_COIL− using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C7-3",
-                  "instruction": "Connect D3 lead 1 to K1 pin 1 using VIOLET."
+                  "instruction": "Connect D3 lead 1 to RELAY_COIL+ using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C7-4",
-                  "instruction": "Connect D3 lead 2 to K1 pin 16 using VIOLET."
+                  "instruction": "Connect D3 lead 2 to RELAY_COIL− using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C7-5",
-                  "instruction": "Connect local NC endpoint to K1 pin 4 using WHITE."
+                  "instruction": "Connect K1 pin 4 to LOCAL_NC using WHITE; record initials ____."
                 },
                 {
                   "connection_id": "C7-6",
-                  "instruction": "Connect local COM endpoint to K1 pin 6 using WHITE."
+                  "instruction": "Connect K1 pin 6 to LOCAL_TX_SELECTED using WHITE; record initials ____."
                 },
                 {
                   "connection_id": "C7-7",
-                  "instruction": "Connect local NO endpoint to K1 pin 8 using WHITE."
+                  "instruction": "Connect K1 pin 8 to LOCAL_NO using WHITE; record initials ____."
                 },
                 {
                   "connection_id": "C7-8",
-                  "instruction": "Connect K1 pin 11 to GND using BLACK."
+                  "instruction": "Connect K1 pin 11 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C7-9",
-                  "instruction": "Connect K1 pin 13 to GPIO4 / FB_NC using GREEN."
+                  "instruction": "Connect K1 pin 13 to K1_NC_FB using GREEN; record initials ____."
                 },
                 {
                   "connection_id": "C7-10",
-                  "instruction": "Connect K1 pin 9 to GPIO5 / FB_NO using GREEN."
+                  "instruction": "Connect DEVKIT GPIO4 to K1_NC_FB using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C7-11",
+                  "instruction": "Connect K1 pin 9 to K1_NO_FB using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C7-12",
+                  "instruction": "Connect DEVKIT GPIO5 to K1_NO_FB using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C7-13",
+                  "instruction": "Connect R_FB_NC 1 to LOGIC_3V3 using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C7-14",
+                  "instruction": "Connect R_FB_NC 2 to K1_NC_FB using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C7-15",
+                  "instruction": "Connect R_FB_NO 1 to LOGIC_3V3 using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C7-16",
+                  "instruction": "Connect R_FB_NO 2 to K1_NO_FB using GREEN; record initials ____."
                 }
               ],
               "unpowered_test": [
@@ -2956,55 +3690,174 @@
               },
               {
                 "connection_id": "C8-3",
-                "part": "TX_GATE",
-                "pin": "endpoint",
-                "net": "U6 pin 1",
+                "part": "U6",
+                "pin": "pin 1",
+                "net": "TX_GATE",
                 "color": "YELLOW"
               },
               {
                 "connection_id": "C8-4",
-                "part": "GPIO17_TX",
-                "pin": "endpoint",
-                "net": "U6 pin 2",
+                "part": "U6",
+                "pin": "pin 2",
+                "net": "GPIO17_TX",
                 "color": "YELLOW"
               },
               {
                 "connection_id": "C8-5",
                 "part": "U6",
-                "pin": "pin 3 through 100 Ω",
-                "net": "TX_DRV",
+                "pin": "pin 3",
+                "net": "TX_BUF",
                 "color": "YELLOW"
               },
               {
                 "connection_id": "C8-6",
-                "part": "LOCAL_CONSOLE_6_STUB",
-                "pin": "through 10 kΩ",
-                "net": "GPIO18_RX_LOCAL",
-                "color": "GREEN"
+                "part": "R_TX",
+                "pin": "1",
+                "net": "TX_BUF",
+                "color": "YELLOW"
               },
               {
                 "connection_id": "C8-7",
-                "part": "LOCAL_PIN3_STUB",
-                "pin": "through 10 kΩ",
-                "net": "GPIO16_RX_LOCAL",
-                "color": "GREEN"
-              },
-              {
-                "connection_id": "C8-8",
-                "part": "LOCAL_NC",
-                "pin": "/ K1 pin 4",
-                "net": "LOCAL_CONSOLE_6_STUB",
-                "color": "WHITE"
-              },
-              {
-                "connection_id": "C8-9",
-                "part": "LOCAL_NO",
-                "pin": "/ K1 pin 8",
+                "part": "R_TX",
+                "pin": "2",
                 "net": "TX_DRV",
                 "color": "YELLOW"
               },
               {
+                "connection_id": "C8-8",
+                "part": "U6",
+                "pin": "4",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C8-9",
+                "part": "U6",
+                "pin": "5",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
                 "connection_id": "C8-10",
+                "part": "U6",
+                "pin": "9",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C8-11",
+                "part": "U6",
+                "pin": "10",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C8-12",
+                "part": "U6",
+                "pin": "12",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C8-13",
+                "part": "U6",
+                "pin": "13",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C8-14",
+                "part": "U6",
+                "pin": "pin 6",
+                "net": "NC",
+                "color": "NO WIRE"
+              },
+              {
+                "connection_id": "C8-15",
+                "part": "U6",
+                "pin": "pin 8",
+                "net": "NC",
+                "color": "NO WIRE"
+              },
+              {
+                "connection_id": "C8-16",
+                "part": "U6",
+                "pin": "pin 11",
+                "net": "NC",
+                "color": "NO WIRE"
+              },
+              {
+                "connection_id": "C8-17",
+                "part": "C_AHC126",
+                "pin": "1",
+                "net": "LOGIC_3V3",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C8-18",
+                "part": "C_AHC126",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C8-19",
+                "part": "R_CONS_RX",
+                "pin": "1",
+                "net": "LOCAL_CONSOLE_6_STUB",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C8-20",
+                "part": "R_CONS_RX",
+                "pin": "2",
+                "net": "GPIO18_RX_LOCAL",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C8-21",
+                "part": "DEVKIT",
+                "pin": "GPIO18",
+                "net": "GPIO18_RX_LOCAL",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C8-22",
+                "part": "R_PIN3_RX",
+                "pin": "1",
+                "net": "LOCAL_PIN3_STUB",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C8-23",
+                "part": "R_PIN3_RX",
+                "pin": "2",
+                "net": "GPIO16_RX_LOCAL",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C8-24",
+                "part": "DEVKIT",
+                "pin": "GPIO16",
+                "net": "GPIO16_RX_LOCAL",
+                "color": "GREEN"
+              },
+              {
+                "connection_id": "C8-25",
+                "part": "K1",
+                "pin": "pin 4 / LOCAL_NC",
+                "net": "LOCAL_CONSOLE_6_STUB",
+                "color": "WHITE"
+              },
+              {
+                "connection_id": "C8-26",
+                "part": "K1",
+                "pin": "pin 8 / LOCAL_NO",
+                "net": "TX_DRV",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C8-27",
                 "part": "K1",
                 "pin": "pin 6",
                 "net": "LOCAL_TX_SELECTED",
@@ -3015,43 +3868,111 @@
               "build": [
                 {
                   "connection_id": "C8-1",
-                  "instruction": "Connect U6 pin 14 to LOGIC_3V3 using BLUE."
+                  "instruction": "Connect U6 pin 14 to LOGIC_3V3 using BLUE; record initials ____."
                 },
                 {
                   "connection_id": "C8-2",
-                  "instruction": "Connect U6 pin 7 to GND using BLACK."
+                  "instruction": "Connect U6 pin 7 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C8-3",
-                  "instruction": "Connect TX_GATE endpoint to U6 pin 1 using YELLOW."
+                  "instruction": "Connect U6 pin 1 to TX_GATE using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C8-4",
-                  "instruction": "Connect GPIO17_TX endpoint to U6 pin 2 using YELLOW."
+                  "instruction": "Connect U6 pin 2 to GPIO17_TX using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C8-5",
-                  "instruction": "Connect U6 pin 3 through 100 Ω to TX_DRV using YELLOW."
+                  "instruction": "Connect U6 pin 3 to TX_BUF using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C8-6",
-                  "instruction": "Connect LOCAL_CONSOLE_6_STUB through 10 kΩ to GPIO18_RX_LOCAL using GREEN."
+                  "instruction": "Connect R_TX 1 to TX_BUF using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C8-7",
-                  "instruction": "Connect LOCAL_PIN3_STUB through 10 kΩ to GPIO16_RX_LOCAL using GREEN."
+                  "instruction": "Connect R_TX 2 to TX_DRV using YELLOW; record initials ____."
                 },
                 {
                   "connection_id": "C8-8",
-                  "instruction": "Connect LOCAL_NC / K1 pin 4 to LOCAL_CONSOLE_6_STUB using WHITE."
+                  "instruction": "Connect U6 4 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C8-9",
-                  "instruction": "Connect LOCAL_NO / K1 pin 8 to TX_DRV using YELLOW."
+                  "instruction": "Connect U6 5 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C8-10",
-                  "instruction": "Connect K1 pin 6 to LOCAL_TX_SELECTED using YELLOW."
+                  "instruction": "Connect U6 9 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C8-11",
+                  "instruction": "Connect U6 10 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C8-12",
+                  "instruction": "Connect U6 12 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C8-13",
+                  "instruction": "Connect U6 13 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C8-14",
+                  "instruction": "Leave U6 pin 6 at NC using NO WIRE; record initials ____."
+                },
+                {
+                  "connection_id": "C8-15",
+                  "instruction": "Leave U6 pin 8 at NC using NO WIRE; record initials ____."
+                },
+                {
+                  "connection_id": "C8-16",
+                  "instruction": "Leave U6 pin 11 at NC using NO WIRE; record initials ____."
+                },
+                {
+                  "connection_id": "C8-17",
+                  "instruction": "Connect C_AHC126 1 to LOGIC_3V3 using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C8-18",
+                  "instruction": "Connect C_AHC126 2 to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C8-19",
+                  "instruction": "Connect R_CONS_RX 1 to LOCAL_CONSOLE_6_STUB using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C8-20",
+                  "instruction": "Connect R_CONS_RX 2 to GPIO18_RX_LOCAL using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C8-21",
+                  "instruction": "Connect DEVKIT GPIO18 to GPIO18_RX_LOCAL using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C8-22",
+                  "instruction": "Connect R_PIN3_RX 1 to LOCAL_PIN3_STUB using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C8-23",
+                  "instruction": "Connect R_PIN3_RX 2 to GPIO16_RX_LOCAL using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C8-24",
+                  "instruction": "Connect DEVKIT GPIO16 to GPIO16_RX_LOCAL using GREEN; record initials ____."
+                },
+                {
+                  "connection_id": "C8-25",
+                  "instruction": "Connect K1 pin 4 / LOCAL_NC to LOCAL_CONSOLE_6_STUB using WHITE; record initials ____."
+                },
+                {
+                  "connection_id": "C8-26",
+                  "instruction": "Connect K1 pin 8 / LOCAL_NO to TX_DRV using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C8-27",
+                  "instruction": "Connect K1 pin 6 to LOCAL_TX_SELECTED using YELLOW; record initials ____."
                 }
               ],
               "unpowered_test": [
@@ -3152,71 +4073,141 @@
             "wiring": [
               {
                 "connection_id": "C9-1",
-                "part": "DevKit",
+                "part": "DEVKIT",
                 "pin": "5V/VBUS",
-                "net": "Q2 gate",
+                "net": "VBUS_SENSE",
                 "color": "VIOLET"
               },
               {
                 "connection_id": "C9-2",
+                "part": "Q2",
+                "pin": "gate",
+                "net": "VBUS_SENSE",
+                "color": "VIOLET"
+              },
+              {
+                "connection_id": "C9-3",
+                "part": "R_VBUS_DISCHARGE",
+                "pin": "1",
+                "net": "VBUS_SENSE",
+                "color": "VIOLET"
+              },
+              {
+                "connection_id": "C9-4",
+                "part": "R_VBUS_DISCHARGE",
+                "pin": "2",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C9-5",
                 "part": "Q2",
                 "pin": "source",
                 "net": "GND",
                 "color": "BLACK"
               },
               {
-                "connection_id": "C9-3",
+                "connection_id": "C9-6",
                 "part": "Q2",
                 "pin": "drain",
-                "net": "GPIO7 / VBUS_PRESENT_N",
+                "net": "VBUS_PRESENT_N",
                 "color": "GREEN"
               },
               {
-                "connection_id": "C9-4",
-                "part": "VBUS",
-                "pin": "pull-up",
-                "net": "LOGIC_3V3",
-                "color": "BLUE"
-              },
-              {
-                "connection_id": "C9-5",
-                "part": "GPIO38",
-                "pin": "through 330 Ω",
-                "net": "the green LED anode",
-                "color": "YELLOW"
-              },
-              {
-                "connection_id": "C9-6",
-                "part": "green",
-                "pin": "LED cathode",
-                "net": "GND",
-                "color": "BLACK"
-              },
-              {
                 "connection_id": "C9-7",
-                "part": "LOGIC_3V3",
-                "pin": "through 1 kΩ",
-                "net": "the red LED anode",
-                "color": "BLUE"
+                "part": "DEVKIT",
+                "pin": "GPIO7",
+                "net": "VBUS_PRESENT_N",
+                "color": "GREEN"
               },
               {
                 "connection_id": "C9-8",
-                "part": "red",
-                "pin": "LED cathode",
-                "net": "GND",
-                "color": "BLACK"
-              },
-              {
-                "connection_id": "C9-9",
-                "part": "C7",
-                "pin": "lead 1",
+                "part": "R_VBUS_PULLUP",
+                "pin": "1",
                 "net": "LOGIC_3V3",
                 "color": "BLUE"
               },
               {
+                "connection_id": "C9-9",
+                "part": "R_VBUS_PULLUP",
+                "pin": "2",
+                "net": "VBUS_PRESENT_N",
+                "color": "GREEN"
+              },
+              {
                 "connection_id": "C9-10",
-                "part": "C7",
-                "pin": "lead 2",
+                "part": "DEVKIT",
+                "pin": "GPIO38",
+                "net": "STATUS_LED",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C9-11",
+                "part": "R_STATUS",
+                "pin": "1",
+                "net": "STATUS_LED",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C9-12",
+                "part": "R_STATUS",
+                "pin": "2",
+                "net": "LED_GREEN_A",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C9-13",
+                "part": "LED_GREEN",
+                "pin": "anode",
+                "net": "LED_GREEN_A",
+                "color": "YELLOW"
+              },
+              {
+                "connection_id": "C9-14",
+                "part": "LED_GREEN",
+                "pin": "cathode",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C9-15",
+                "part": "R_POWER_LED",
+                "pin": "1",
+                "net": "LOGIC_3V3",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C9-16",
+                "part": "R_POWER_LED",
+                "pin": "2",
+                "net": "LED_RED_A",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C9-17",
+                "part": "LED_RED",
+                "pin": "anode",
+                "net": "LED_RED_A",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C9-18",
+                "part": "LED_RED",
+                "pin": "cathode",
+                "net": "GND",
+                "color": "BLACK"
+              },
+              {
+                "connection_id": "C9-19",
+                "part": "C_LOGIC",
+                "pin": "1",
+                "net": "LOGIC_3V3",
+                "color": "BLUE"
+              },
+              {
+                "connection_id": "C9-20",
+                "part": "C_LOGIC",
+                "pin": "2",
                 "net": "GND",
                 "color": "BLACK"
               }
@@ -3225,43 +4216,83 @@
               "build": [
                 {
                   "connection_id": "C9-1",
-                  "instruction": "Connect DevKit 5V/VBUS to Q2 gate using VIOLET."
+                  "instruction": "Connect DEVKIT 5V/VBUS to VBUS_SENSE using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C9-2",
-                  "instruction": "Connect Q2 source to GND using BLACK."
+                  "instruction": "Connect Q2 gate to VBUS_SENSE using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C9-3",
-                  "instruction": "Connect Q2 drain to GPIO7 / VBUS_PRESENT_N using GREEN."
+                  "instruction": "Connect R_VBUS_DISCHARGE 1 to VBUS_SENSE using VIOLET; record initials ____."
                 },
                 {
                   "connection_id": "C9-4",
-                  "instruction": "Connect the VBUS pull-up to LOGIC_3V3 using BLUE."
+                  "instruction": "Connect R_VBUS_DISCHARGE 2 to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C9-5",
-                  "instruction": "Connect GPIO38 through 330 Ω to the green LED anode using YELLOW."
+                  "instruction": "Connect Q2 source to GND using BLACK; record initials ____."
                 },
                 {
                   "connection_id": "C9-6",
-                  "instruction": "Connect the green LED cathode to GND using BLACK."
+                  "instruction": "Connect Q2 drain to VBUS_PRESENT_N using GREEN; record initials ____."
                 },
                 {
                   "connection_id": "C9-7",
-                  "instruction": "Connect LOGIC_3V3 through 1 kΩ to the red LED anode using BLUE."
+                  "instruction": "Connect DEVKIT GPIO7 to VBUS_PRESENT_N using GREEN; record initials ____."
                 },
                 {
                   "connection_id": "C9-8",
-                  "instruction": "Connect the red LED cathode to GND using BLACK."
+                  "instruction": "Connect R_VBUS_PULLUP 1 to LOGIC_3V3 using BLUE; record initials ____."
                 },
                 {
                   "connection_id": "C9-9",
-                  "instruction": "Connect C7 lead 1 to LOGIC_3V3 using BLUE."
+                  "instruction": "Connect R_VBUS_PULLUP 2 to VBUS_PRESENT_N using GREEN; record initials ____."
                 },
                 {
                   "connection_id": "C9-10",
-                  "instruction": "Connect C7 lead 2 to GND using BLACK."
+                  "instruction": "Connect DEVKIT GPIO38 to STATUS_LED using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C9-11",
+                  "instruction": "Connect R_STATUS 1 to STATUS_LED using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C9-12",
+                  "instruction": "Connect R_STATUS 2 to LED_GREEN_A using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C9-13",
+                  "instruction": "Connect LED_GREEN anode to LED_GREEN_A using YELLOW; record initials ____."
+                },
+                {
+                  "connection_id": "C9-14",
+                  "instruction": "Connect LED_GREEN cathode to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C9-15",
+                  "instruction": "Connect R_POWER_LED 1 to LOGIC_3V3 using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C9-16",
+                  "instruction": "Connect R_POWER_LED 2 to LED_RED_A using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C9-17",
+                  "instruction": "Connect LED_RED anode to LED_RED_A using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C9-18",
+                  "instruction": "Connect LED_RED cathode to GND using BLACK; record initials ____."
+                },
+                {
+                  "connection_id": "C9-19",
+                  "instruction": "Connect C_LOGIC 1 to LOGIC_3V3 using BLUE; record initials ____."
+                },
+                {
+                  "connection_id": "C9-20",
+                  "instruction": "Connect C_LOGIC 2 to GND using BLACK; record initials ____."
                 }
               ],
               "unpowered_test": [
