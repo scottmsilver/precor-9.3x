@@ -848,7 +848,12 @@ def test_build_cluster_8_does_not_consume_unbuilt_rj45_state():
     cluster = clusters[8]
     forbidden = {"CONSOLE.6", "PIN3", "MOTOR.6"}
     assert forbidden.isdisjoint(cluster["inputs"])
-    assert all(source["source_cluster"] != 7 for source in cluster["input_sources"])
+    cluster_7_inputs = {
+        source["input"]
+        for source in cluster["input_sources"]
+        if source["source_cluster"] == 7
+    }
+    assert cluster_7_inputs == {"LOCAL_NC", "LOCAL_NO"}
     assert "RJ45" not in " ".join(cluster["inputs"] + cluster["outputs"])
 
 
@@ -912,3 +917,80 @@ def test_build_adapter_headers_formulas_and_logic_bypass_are_explicit():
     assert "OV_SENSE = VIN × 10 kΩ / (255 kΩ + 10 kΩ) = VIN / 26.5" in text
     assert "continuity-map adapter pins 1–6 to the header before installation" in text
     assert "C7 lead 1 to LOGIC_3V3 and C7 lead 2 to GND" in text
+
+
+def test_build_cluster_8_proves_local_future_interface_without_connectors():
+    cluster = _guide_metadata(BUILD_HTML)["clusters"][7]
+    assert 7 in cluster["dependencies"]
+    assert {"LOCAL_NC", "LOCAL_NO"} <= set(cluster["inputs"])
+    assert {"GPIO18_RX_LOCAL", "GPIO16_RX_LOCAL", "LOCAL_TX_SELECTED"} <= set(
+        cluster["outputs"]
+    )
+    provenance = {
+        source["input"]: source["source_cluster"]
+        for source in cluster["input_sources"]
+    }
+    assert provenance["LOCAL_NC"] == provenance["LOCAL_NO"] == 7
+    rendered = _normalize_text(
+        json.dumps(cluster["actions"], ensure_ascii=False) + " " + _cluster_sections(
+            _visible_html_text(BUILD_HTML), BUILD_HTML.name
+        )[8]
+    )
+    for required in (
+        "LOCAL_CONSOLE_6_STUB",
+        "LOCAL_PIN3_STUB",
+        "GPIO18_RX_LOCAL",
+        "GPIO16_RX_LOCAL",
+        "LOCAL_TX_SELECTED",
+        "bounded UART/relay exerciser",
+    ):
+        assert required in rendered
+    assert "RJ45" not in " ".join(cluster["inputs"] + cluster["outputs"])
+
+
+def test_complete_command_jumpers_are_constructed_in_cluster_5_only():
+    sections = _cluster_sections(_visible_html_text(BUILD_HTML), BUILD_HTML.name)
+    complete_gpio15 = (
+        "DevKit GPIO15 ↔ removable GPIO15 jumper ↔ TX_ENABLE / AHC08 pin 4"
+    )
+    complete_gpio21 = (
+        "DevKit GPIO21 ↔ removable GPIO21 jumper ↔ RELAY_CMD / AHC08 pin 1"
+    )
+    assert complete_gpio15 not in sections[3]
+    assert complete_gpio21 not in sections[3]
+    assert complete_gpio15 in sections[5]
+    assert complete_gpio21 in sections[5]
+    assert "DevKit-side GPIO15 jumper post" in sections[3]
+    assert "DevKit-side GPIO21 jumper post" in sections[3]
+
+
+def test_cluster_11_records_isolated_map_before_commoning():
+    section = _cluster_sections(_visible_html_text(BUILD_HTML), BUILD_HTML.name)[11]
+    map_step = section.index("Isolated mapping first")
+    evidence = section.index("Independent isolated-map evidence")
+    common_step = section.index("Common only after isolated-map PASS")
+    assert map_step < evidence < common_step
+    post_common = section[common_step:]
+    assert "unrelated pins open" not in post_common
+
+
+def test_each_build_connection_has_one_numbered_wiring_record():
+    metadata = _guide_metadata(BUILD_HTML)
+    for cluster in metadata["clusters"]:
+        wiring = cluster["wiring"]
+        build = cluster["actions"]["build"]
+        assert len(wiring) >= 3, f"cluster {cluster['number']} needs explicit connections"
+        assert len(build) == len(wiring), (
+            f"cluster {cluster['number']} build/wiring mismatch"
+        )
+        wiring_ids = [record.get("connection_id") for record in wiring]
+        build_ids = [record.get("connection_id") for record in build]
+        assert wiring_ids == build_ids
+        assert wiring_ids == [
+            f"C{cluster['number']}-{index}" for index in range(1, len(wiring) + 1)
+        ]
+        section = _cluster_sections(
+            _visible_html_text(BUILD_HTML), BUILD_HTML.name
+        )[cluster["number"]]
+        for index, instruction in enumerate(build, 1):
+            assert f"{index}. {instruction['instruction']}" in section
