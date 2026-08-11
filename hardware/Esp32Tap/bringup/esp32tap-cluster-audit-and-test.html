@@ -698,6 +698,20 @@
 <td><div class="blank">Measured:</div></td>
 </tr>
 </table>
+<h3>Step / state ledger &mdash; re-arm before every destructive release</h3>
+<table class="records state-ledger">
+<tr><th>Stage &middot; required state &middot; action &middot; evidence</th><th>Operator record</th></tr>
+<tr><td>rearm_usb_loss &middot; USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware &middot; Install COIL POWER under limit; boot exact bounded relay exerciser firmware and command energized state &middot; Confirm relay energized; feedback (1,0); local NO selected</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>release_usb &middot; Re-arm evidence signed; passive scope armed; no external command fixture &middot; Disconnect USB logic power; do not apply external drive &middot; Record NC return and USB logic release within 100 ms</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>rearm_gpio21 &middot; USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware &middot; Restore USB logic power; boot exact firmware; command energized state again &middot; Confirm relay energized; feedback (1,0); local NO selected</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>release_gpio21 &middot; Re-arm evidence signed; USB logic remains powered; passive scope armed &middot; Have firmware deassert GPIO21; do not remove power or inject externally &middot; Record NC return and GPIO21 release within 100 ms</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>rearm_tread_ok &middot; USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware &middot; Return VIN to 8.00 V; verify TREAD_OK high; command energized state again &middot; Confirm relay energized; feedback (1,0); local NO selected</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>release_tread_ok &middot; Re-arm evidence signed; USB logic remains powered; passive scope armed &middot; Lower protected VIN below UV to remove TREAD_OK; never drive an unpowered AHC08 &middot; Record NC return and TREAD_OK release within 100 ms</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>rearm_vin &middot; USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware &middot; Return VIN to 8.00 V; verify TREAD_OK high; command energized state again &middot; Confirm relay energized; feedback (1,0); local NO selected</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>release_vin &middot; Re-arm evidence signed; USB logic remains powered; passive scope armed &middot; Switch bench VIN off; leave GPIO21 under powered firmware control &middot; Record NC return and VIN release within 100 ms</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>rearm_thermal &middot; USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware &middot; Restore USB, VIN, TREAD_OK, firmware command, and loaded current limit &middot; Confirm relay energized; feedback (1,0); local NO selected</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>thermal_hold &middot; Re-arm evidence signed; ambient recorded; no treadmill/RJ45 cable &middot; Run bounded five-minute firmware hold, then command relay off &middot; Record ambient, TPS709, BC337, coil, feedback, and final NC return</td><td><div class="blank">Initial:</div></td></tr>
+</table>
 <h3>Measure &mdash; powered / observed</h3>
 <table class="records">
 <tr>
@@ -793,7 +807,7 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>Disconnect both RJ45 breakouts and remove the exact GPIO15 jumper before any local TX_ENABLE drive; retain only local stubs and relay contacts. &middot; GPIO15 jumper</td>
+<td>Disconnect both RJ45 breakouts and remove the exact GPIO15 jumper before manual TX_ENABLE drive; GPIO21 jumper remains installed for bounded relay exerciser firmware. &middot; GPIO15 jumper</td>
 <td><div class="blank">Boundary / state:</div></td>
 </tr>
 </table>
@@ -828,15 +842,15 @@
 <th>Recorded evidence</th>
 </tr>
 <tr>
-<td>Drive LOCAL_CONSOLE_6_STUB low/high and observe only GPIO18_RX_LOCAL. &middot; U6/R-tap &middot; receive input/output channel and GPIO18 &middot; LOCAL_CONSOLE_6_STUB &rarr; GPIO18_RX_LOCAL &middot; Bounded UART exerciser low/high pattern &middot; GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser &middot; Exact bounded UART/relay exerciser identity &middot; Treadmill and RJ45 absent; local receive only &middot; GPIO18_RX_LOCAL follows valid low/high without loading source</td>
+<td>Drive LOCAL_CONSOLE_6_STUB low/high and observe only GPIO18_RX_LOCAL. &middot; U6/R-tap &middot; receive input/output channel and GPIO18 &middot; LOCAL_CONSOLE_6_STUB &rarr; GPIO18_RX_LOCAL &middot; Bounded UART exerciser low/high pattern &middot; GPIO15 jumper removed; GPIO21 jumper remains installed for firmware relay control &middot; Exact bounded UART and relay exerciser firmware identities &middot; Treadmill and RJ45 absent; local receive only &middot; GPIO18_RX_LOCAL follows valid low/high without loading source</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Drive LOCAL_PIN3_STUB low/high and observe only GPIO16_RX_LOCAL. &middot; U6/R-tap &middot; receive input/output channel and GPIO16 &middot; LOCAL_PIN3_STUB &rarr; GPIO16_RX_LOCAL &middot; Bounded UART exerciser low/high pattern &middot; GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser &middot; Exact bounded UART/relay exerciser identity &middot; Treadmill and RJ45 absent; local receive only &middot; GPIO16_RX_LOCAL follows valid low/high without loading source</td>
+<td>Drive LOCAL_PIN3_STUB low/high and observe only GPIO16_RX_LOCAL. &middot; U6/R-tap &middot; receive input/output channel and GPIO16 &middot; LOCAL_PIN3_STUB &rarr; GPIO16_RX_LOCAL &middot; Bounded UART exerciser low/high pattern &middot; GPIO15 jumper removed; GPIO21 jumper remains installed for firmware relay control &middot; Exact bounded UART and relay exerciser firmware identities &middot; Treadmill and RJ45 absent; local receive only &middot; GPIO16_RX_LOCAL follows valid low/high without loading source</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Prove TX_DRV high impedance while disabled, then bounded following and relay-selected local TX on each local contact state. &middot; U6/K1 &middot; TX input, enable, TX_DRV, local NC/NO contacts &middot; TX_GATE + GPIO17_TX &rarr; TX_DRV &rarr; LOCAL_TX_SELECTED &middot; Bounded UART waveform plus bounded local relay selection &middot; GPIO15 jumper removed before TX_ENABLE drive; GPIO21 jumper removed before relay drive &middot; Exact bounded UART/relay exerciser identity &middot; Local-only TX load; no connector-side wire &middot; TX_DRV high impedance disabled; enabled waveform follows; LOCAL_TX_SELECTED matches NC then NO selection</td>
+<td>Prove TX_DRV high impedance while disabled, then bounded following and relay-selected local TX on each local contact state. &middot; U1/U4/U6/K1 &middot; GPIO21, TX input, enable, TX_DRV, local NC/NO contacts &middot; TX_GATE + GPIO17_TX &rarr; TX_DRV &rarr; LOCAL_TX_SELECTED &middot; Bounded UART waveform plus bounded relay exerciser firmware toggling GPIO21 &middot; GPIO15 jumper removed before manual TX_ENABLE drive; GPIO21 jumper remains installed for firmware relay transfer &middot; Exact bounded UART and relay exerciser firmware identities &middot; Local-only TX load; no connector-side wire; firmware is sole relay command source &middot; TX_DRV high impedance disabled; enabled waveform follows; LOCAL_TX_SELECTED matches NC then NO selection</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 </table>
@@ -866,7 +880,7 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>Remove all fixture drive and power, then restore the exact GPIO15 jumper; restore GPIO21 only if this audit opened it and no external drive remains. &middot; GPIO15 jumper</td>
+<td>Remove manual TX drive and all power, then restore the exact GPIO15 jumper; leave GPIO21 installed in its unchanged incoming state. &middot; GPIO15 jumper</td>
 <td><div class="blank">Restored / verified:</div></td>
 </tr>
 </table>
@@ -1133,6 +1147,21 @@
 <td><div class="blank">Measured:</div></td>
 </tr>
 </table>
+<h3>Step / state ledger &mdash; ground return, harness, and +8V restoration</h3>
+<table class="records state-ledger">
+<tr><th>Stage &middot; required state &middot; action &middot; evidence</th><th>Operator record</th></tr>
+<tr><td>map_complete &middot; All sources off; four common links open; fused-DMM harness absent &middot; Complete eight independent maps before restoring any common link &middot; Signed map; unrelated pins open; CONSOLE.6 &harr; MOTOR.6 NC path proven</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>restore_ground_1 &middot; All sources off; mapping signed; both +8V_RAW links remain open &middot; All sources off after mapping: restore the first exact GND common link. &middot; CONSOLE.1 &harr; MOTOR.1 GND link; signed restoration</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>restore_ground_7 &middot; All sources off; first GND link restored; both +8V_RAW links remain open &middot; All sources off after mapping: restore the second exact GND common link. &middot; CONSOLE.7 &harr; MOTOR.7 GND link; signed restoration</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>verify_ground_return &middot; All sources off; both GND links restored; both +8V_RAW links open; harness absent &middot; Verify end-to-end ground return continuity and unrelated-pin isolation &middot; Ground return resistance ______ &Omega;; continuity PASS signed</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>install_harness &middot; All sources off; GND links restored; +8V_RAW direct links open; treadmill power remains off &middot; Install reviewed fused DMM harness across +8V_RAW paths only; verify fuses, polarity, and strain relief &middot; Harness identity and installation PASS signed before power</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>apply_treadmill_power &middot; Observer verified; USB absent; standalone installed; relay off; TX disabled &middot; Apply treadmill power for bypass-only current measurement &middot; Current no more than 500 mA; no reset, transfer, or TX</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>power_off &middot; Current evidence signed; treadmill power present only through reviewed harness &middot; Remove treadmill power and confirm all sources off before changing harness &middot; Zero volts confirmed at both +8V_RAW paths</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>remove_harness &middot; All sources off; both GND links remain restored; +8V_RAW direct links remain open &middot; Remove fused DMM harness; inspect both fused leads and terminals &middot; Harness removed with no heat or damage</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>restore_plus8_2 &middot; All sources off; harness removed; GND return verified &middot; All sources off before removal of harness; after harness removal, restore the first exact +8V_RAW common link. &middot; CONSOLE.2 &harr; MOTOR.2 +8V_RAW link; signed restoration</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>restore_plus8_8 &middot; All sources off; harness removed; first +8V_RAW link restored &middot; All sources off after removal of harness: restore the second exact +8V_RAW common link. &middot; CONSOLE.8 &harr; MOTOR.8 +8V_RAW link; both direct paths verified</td><td><div class="blank">Initial:</div></td></tr>
+</table>
+<h2 class="continued">Cluster 11 &mdash; RJ45 pass-through and treadmill bypass (powered evidence)</h2>
 <h3>Measure &mdash; powered / observed</h3>
 <table class="records">
 <tr>
@@ -1144,15 +1173,11 @@
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Install the reviewed dual-pin fused-DMM harness with all sources off; treadmill power remains off until fuse, polarity, and strain-relief evidence is signed. &middot; Fused-DMM harness/CONSOLE/MOTOR &middot; both independent +8V pins, fused leads, and GND return &middot; isolated common links &rarr; fused current path &middot; All sources off; treadmill power remains off &middot; USB absent; STANDALONE POWER installed only after harness verification; relay off; TX disabled &middot; Exact observer and reviewed harness identities &middot; Harness installed and independently checked before treadmill power &middot; Both fuses correct; polarity correct; no exposed conductor; no treadmill power</td>
-<td><div class="blank">Value / trace:</div></td>
-</tr>
-<tr>
 <td>Run bypass-only current measurement through the reviewed dual-pin fused-DMM harness. &middot; Fused-DMM harness/CONSOLE/MOTOR &middot; both independent +8V pins and GND return &middot; source &rarr; state &rarr; harness &rarr; direct-path sequence &middot; Apply treadmill power for bypass-only operation after signed harness installation &middot; USB absent; STANDALONE POWER installed; observer verified; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest and harness review identity recorded &middot; Treadmill current separately measured no more than 500 mA; current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Power off before harness removal; restore all four common links, then measure supply and ground-return drops. &middot; CONSOLE/MOTOR &middot; restored supply and ground endpoints &middot; restored direct paths &rarr; voltage drop &middot; Bypass-only treadmill after direct-path restoration &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest; all four common links restored before drop &middot; Supply drop no more than 50 mV; ground-return drop no more than 50 mV</td>
+<td>After power-off, harness removal, and both +8V_RAW restorations, measure supply and ground-return drops. &middot; CONSOLE/MOTOR &middot; restored supply and ground endpoints &middot; restored direct paths &rarr; voltage drop &middot; Bypass-only treadmill after direct-path restoration &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest; GND links restored before harness; +8V links restored after harness removal &middot; Supply drop no more than 50 mV; ground-return drop no more than 50 mV</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
@@ -1187,19 +1212,11 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>All sources off before removal of the fused-DMM harness; restore the first exact GND common link. &middot; CONSOLE.1 &harr; MOTOR.1 GND link</td>
+<td>All sources off before removal of harness; after harness removal, restore the first exact +8V_RAW common link. &middot; CONSOLE.2 &harr; MOTOR.2 +8V_RAW link</td>
 <td><div class="blank">Restored / verified:</div></td>
 </tr>
 <tr>
-<td>With all sources still off, restore the second exact GND common link. &middot; CONSOLE.7 &harr; MOTOR.7 GND link</td>
-<td><div class="blank">Restored / verified:</div></td>
-</tr>
-<tr>
-<td>With all sources still off, restore the first exact +8V_RAW common link. &middot; CONSOLE.2 &harr; MOTOR.2 +8V_RAW link</td>
-<td><div class="blank">Restored / verified:</div></td>
-</tr>
-<tr>
-<td>With all sources still off, restore the second exact +8V_RAW common link; verify all four common links before any drop or thermal test. &middot; CONSOLE.8 &harr; MOTOR.8 +8V_RAW link</td>
+<td>All sources off after removal of harness: restore the second exact +8V_RAW common link. &middot; CONSOLE.8 &harr; MOTOR.8 +8V_RAW link</td>
 <td><div class="blank">Restored / verified:</div></td>
 </tr>
 </table>
@@ -2000,6 +2017,68 @@
             "expected": "Coil finite and not shorted; local COM→NC continuity; feedback reports bypass"
           }
         ],
+        "state_sequence": [
+          {
+            "stage": "rearm_usb_loss",
+            "state": "USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware",
+            "action": "Install COIL POWER under limit; boot exact bounded relay exerciser firmware and command energized state",
+            "evidence": "Confirm relay energized; feedback (1,0); local NO selected"
+          },
+          {
+            "stage": "release_usb",
+            "state": "Re-arm evidence signed; passive scope armed; no external command fixture",
+            "action": "Disconnect USB logic power; do not apply external drive",
+            "evidence": "Record NC return and USB logic release within 100 ms"
+          },
+          {
+            "stage": "rearm_gpio21",
+            "state": "USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware",
+            "action": "Restore USB logic power; boot exact firmware; command energized state again",
+            "evidence": "Confirm relay energized; feedback (1,0); local NO selected"
+          },
+          {
+            "stage": "release_gpio21",
+            "state": "Re-arm evidence signed; USB logic remains powered; passive scope armed",
+            "action": "Have firmware deassert GPIO21; do not remove power or inject externally",
+            "evidence": "Record NC return and GPIO21 release within 100 ms"
+          },
+          {
+            "stage": "rearm_tread_ok",
+            "state": "USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware",
+            "action": "Return VIN to 8.00 V; verify TREAD_OK high; command energized state again",
+            "evidence": "Confirm relay energized; feedback (1,0); local NO selected"
+          },
+          {
+            "stage": "release_tread_ok",
+            "state": "Re-arm evidence signed; USB logic remains powered; passive scope armed",
+            "action": "Lower protected VIN below UV to remove TREAD_OK; never drive an unpowered AHC08",
+            "evidence": "Record NC return and TREAD_OK release within 100 ms"
+          },
+          {
+            "stage": "rearm_vin",
+            "state": "USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware",
+            "action": "Return VIN to 8.00 V; verify TREAD_OK high; command energized state again",
+            "evidence": "Confirm relay energized; feedback (1,0); local NO selected"
+          },
+          {
+            "stage": "release_vin",
+            "state": "Re-arm evidence signed; USB logic remains powered; passive scope armed",
+            "action": "Switch bench VIN off; leave GPIO21 under powered firmware control",
+            "evidence": "Record NC return and VIN release within 100 ms"
+          },
+          {
+            "stage": "rearm_thermal",
+            "state": "USB logic powered; VIN 8.00 V; TREAD_OK high; GPIO21 asserted by bounded firmware",
+            "action": "Restore USB, VIN, TREAD_OK, firmware command, and loaded current limit",
+            "evidence": "Confirm relay energized; feedback (1,0); local NO selected"
+          },
+          {
+            "stage": "thermal_hold",
+            "state": "Re-arm evidence signed; ambient recorded; no treadmill/RJ45 cable",
+            "action": "Run bounded five-minute firmware hold, then command relay off",
+            "evidence": "Record ambient, TPS709, BC337, coil, feedback, and final NC return"
+          }
+        ],
         "measure": [
           {
             "instruction": "Install COIL POWER under the loaded limit and command one bounded local energization.",
@@ -2167,7 +2246,7 @@
       "actions": {
         "isolate": [
           {
-            "instruction": "Disconnect both RJ45 breakouts and remove the exact GPIO15 jumper before any local TX_ENABLE drive; retain only local stubs and relay contacts.",
+            "instruction": "Disconnect both RJ45 breakouts and remove the exact GPIO15 jumper before manual TX_ENABLE drive; GPIO21 jumper remains installed for bounded relay exerciser firmware.",
             "opens_link": true,
             "link": "GPIO15 jumper"
           }
@@ -2196,8 +2275,8 @@
             "pin": "receive input/output channel and GPIO18",
             "net": "LOCAL_CONSOLE_6_STUB → GPIO18_RX_LOCAL",
             "stimulus": "Bounded UART exerciser low/high pattern",
-            "jumper_state": "GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser",
-            "firmware_identity": "Exact bounded UART/relay exerciser identity",
+            "jumper_state": "GPIO15 jumper removed; GPIO21 jumper remains installed for firmware relay control",
+            "firmware_identity": "Exact bounded UART and relay exerciser firmware identities",
             "observation_state": "Treadmill and RJ45 absent; local receive only",
             "limits": "GPIO18_RX_LOCAL follows valid low/high without loading source"
           },
@@ -2207,20 +2286,20 @@
             "pin": "receive input/output channel and GPIO16",
             "net": "LOCAL_PIN3_STUB → GPIO16_RX_LOCAL",
             "stimulus": "Bounded UART exerciser low/high pattern",
-            "jumper_state": "GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser",
-            "firmware_identity": "Exact bounded UART/relay exerciser identity",
+            "jumper_state": "GPIO15 jumper removed; GPIO21 jumper remains installed for firmware relay control",
+            "firmware_identity": "Exact bounded UART and relay exerciser firmware identities",
             "observation_state": "Treadmill and RJ45 absent; local receive only",
             "limits": "GPIO16_RX_LOCAL follows valid low/high without loading source"
           },
           {
             "instruction": "Prove TX_DRV high impedance while disabled, then bounded following and relay-selected local TX on each local contact state.",
-            "device": "U6/K1",
-            "pin": "TX input, enable, TX_DRV, local NC/NO contacts",
+            "device": "U1/U4/U6/K1",
+            "pin": "GPIO21, TX input, enable, TX_DRV, local NC/NO contacts",
             "net": "TX_GATE + GPIO17_TX → TX_DRV → LOCAL_TX_SELECTED",
-            "stimulus": "Bounded UART waveform plus bounded local relay selection",
-            "jumper_state": "GPIO15 jumper removed before TX_ENABLE drive; GPIO21 jumper removed before relay drive",
-            "firmware_identity": "Exact bounded UART/relay exerciser identity",
-            "observation_state": "Local-only TX load; no connector-side wire",
+            "stimulus": "Bounded UART waveform plus bounded relay exerciser firmware toggling GPIO21",
+            "jumper_state": "GPIO15 jumper removed before manual TX_ENABLE drive; GPIO21 jumper remains installed for firmware relay transfer",
+            "firmware_identity": "Exact bounded UART and relay exerciser firmware identities",
+            "observation_state": "Local-only TX load; no connector-side wire; firmware is sole relay command source",
             "limits": "TX_DRV high impedance disabled; enabled waveform follows; LOCAL_TX_SELECTED matches NC then NO selection"
           }
         ],
@@ -2240,7 +2319,7 @@
         ],
         "restore": [
           {
-            "instruction": "Remove all fixture drive and power, then restore the exact GPIO15 jumper; restore GPIO21 only if this audit opened it and no external drive remains.",
+            "instruction": "Remove manual TX drive and all power, then restore the exact GPIO15 jumper; leave GPIO21 installed in its unchanged incoming state.",
             "restores_link": true,
             "link": "GPIO15 jumper"
           }
@@ -2614,6 +2693,68 @@
             "expected": "Eight exact maps pass; unrelated pins open during isolated mapping; CONSOLE.6 ↔ MOTOR.6 is NC bypass"
           }
         ],
+        "state_sequence": [
+          {
+            "stage": "map_complete",
+            "state": "All sources off; four common links open; fused-DMM harness absent",
+            "action": "Complete eight independent maps before restoring any common link",
+            "evidence": "Signed map; unrelated pins open; CONSOLE.6 ↔ MOTOR.6 NC path proven"
+          },
+          {
+            "stage": "restore_ground_1",
+            "state": "All sources off; mapping signed; both +8V_RAW links remain open",
+            "action": "All sources off after mapping: restore the first exact GND common link.",
+            "evidence": "CONSOLE.1 ↔ MOTOR.1 GND link; signed restoration"
+          },
+          {
+            "stage": "restore_ground_7",
+            "state": "All sources off; first GND link restored; both +8V_RAW links remain open",
+            "action": "All sources off after mapping: restore the second exact GND common link.",
+            "evidence": "CONSOLE.7 ↔ MOTOR.7 GND link; signed restoration"
+          },
+          {
+            "stage": "verify_ground_return",
+            "state": "All sources off; both GND links restored; both +8V_RAW links open; harness absent",
+            "action": "Verify end-to-end ground return continuity and unrelated-pin isolation",
+            "evidence": "Ground return resistance ______ Ω; continuity PASS signed"
+          },
+          {
+            "stage": "install_harness",
+            "state": "All sources off; GND links restored; +8V_RAW direct links open; treadmill power remains off",
+            "action": "Install reviewed fused DMM harness across +8V_RAW paths only; verify fuses, polarity, and strain relief",
+            "evidence": "Harness identity and installation PASS signed before power"
+          },
+          {
+            "stage": "apply_treadmill_power",
+            "state": "Observer verified; USB absent; standalone installed; relay off; TX disabled",
+            "action": "Apply treadmill power for bypass-only current measurement",
+            "evidence": "Current no more than 500 mA; no reset, transfer, or TX"
+          },
+          {
+            "stage": "power_off",
+            "state": "Current evidence signed; treadmill power present only through reviewed harness",
+            "action": "Remove treadmill power and confirm all sources off before changing harness",
+            "evidence": "Zero volts confirmed at both +8V_RAW paths"
+          },
+          {
+            "stage": "remove_harness",
+            "state": "All sources off; both GND links remain restored; +8V_RAW direct links remain open",
+            "action": "Remove fused DMM harness; inspect both fused leads and terminals",
+            "evidence": "Harness removed with no heat or damage"
+          },
+          {
+            "stage": "restore_plus8_2",
+            "state": "All sources off; harness removed; GND return verified",
+            "action": "All sources off before removal of harness; after harness removal, restore the first exact +8V_RAW common link.",
+            "evidence": "CONSOLE.2 ↔ MOTOR.2 +8V_RAW link; signed restoration"
+          },
+          {
+            "stage": "restore_plus8_8",
+            "state": "All sources off; harness removed; first +8V_RAW link restored",
+            "action": "All sources off after removal of harness: restore the second exact +8V_RAW common link.",
+            "evidence": "CONSOLE.8 ↔ MOTOR.8 +8V_RAW link; both direct paths verified"
+          }
+        ],
         "measure": [
           {
             "instruction": "Perform receive-only mapping observation with no transmit and no relay transfer.",
@@ -2627,17 +2768,6 @@
             "limits": "Receive-only activity observed; no MCU TX and no treadmill relay transfer"
           },
           {
-            "instruction": "Install the reviewed dual-pin fused-DMM harness with all sources off; treadmill power remains off until fuse, polarity, and strain-relief evidence is signed.",
-            "device": "Fused-DMM harness/CONSOLE/MOTOR",
-            "pin": "both independent +8V pins, fused leads, and GND return",
-            "net": "isolated common links → fused current path",
-            "stimulus": "All sources off; treadmill power remains off",
-            "jumper_state": "USB absent; STANDALONE POWER installed only after harness verification; relay off; TX disabled",
-            "firmware_identity": "Exact observer and reviewed harness identities",
-            "observation_state": "Harness installed and independently checked before treadmill power",
-            "limits": "Both fuses correct; polarity correct; no exposed conductor; no treadmill power"
-          },
-          {
             "instruction": "Run bypass-only current measurement through the reviewed dual-pin fused-DMM harness.",
             "device": "Fused-DMM harness/CONSOLE/MOTOR",
             "pin": "both independent +8V pins and GND return",
@@ -2649,14 +2779,14 @@
             "limits": "Treadmill current separately measured no more than 500 mA; current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate"
           },
           {
-            "instruction": "Power off before harness removal; restore all four common links, then measure supply and ground-return drops.",
+            "instruction": "After power-off, harness removal, and both +8V_RAW restorations, measure supply and ground-return drops.",
             "device": "CONSOLE/MOTOR",
             "pin": "restored supply and ground endpoints",
             "net": "restored direct paths → voltage drop",
             "stimulus": "Bypass-only treadmill after direct-path restoration",
             "jumper_state": "USB absent; STANDALONE POWER installed; relay off; TX disabled",
             "firmware_identity": "Exact observer identity",
-            "observation_state": "Observer manifest; all four common links restored before drop",
+            "observation_state": "Observer manifest; GND links restored before harness; +8V links restored after harness removal",
             "limits": "Supply drop no more than 50 mV; ground-return drop no more than 50 mV"
           },
           {
@@ -2687,22 +2817,22 @@
         ],
         "restore": [
           {
-            "instruction": "All sources off before removal of the fused-DMM harness; restore the first exact GND common link.",
+            "instruction": "All sources off after mapping: restore the first exact GND common link.",
             "restores_link": true,
             "link": "CONSOLE.1 ↔ MOTOR.1 GND link"
           },
           {
-            "instruction": "With all sources still off, restore the second exact GND common link.",
+            "instruction": "All sources off after mapping: restore the second exact GND common link.",
             "restores_link": true,
             "link": "CONSOLE.7 ↔ MOTOR.7 GND link"
           },
           {
-            "instruction": "With all sources still off, restore the first exact +8V_RAW common link.",
+            "instruction": "All sources off before removal of harness; after harness removal, restore the first exact +8V_RAW common link.",
             "restores_link": true,
             "link": "CONSOLE.2 ↔ MOTOR.2 +8V_RAW link"
           },
           {
-            "instruction": "With all sources still off, restore the second exact +8V_RAW common link; verify all four common links before any drop or thermal test.",
+            "instruction": "All sources off after removal of harness: restore the second exact +8V_RAW common link.",
             "restores_link": true,
             "link": "CONSOLE.8 ↔ MOTOR.8 +8V_RAW link"
           }

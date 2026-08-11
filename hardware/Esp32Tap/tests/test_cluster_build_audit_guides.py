@@ -367,6 +367,12 @@ def _operator_record_groups(
         )
         add("likely cause", actions["likely_causes"], ("stage", "instruction"))
         add("restore", actions["restore"], ("instruction", "link"))
+        if actions.get("state_sequence"):
+            add(
+                "state sequence",
+                actions["state_sequence"],
+                ("stage", "state", "action", "evidence"),
+            )
     return groups
 
 
@@ -1171,28 +1177,23 @@ def test_audit_cluster_6_exercises_relay_cmd_through_ahc08_and_restores_gpio21()
 
 
 def test_audit_cluster_11_installs_fused_dmm_harness_before_treadmill_power():
-    measures = _guide_metadata(AUDIT_HTML)["clusters"][10]["actions"]["measure"]
+    actions = _guide_metadata(AUDIT_HTML)["clusters"][10]["actions"]
+    sequence = actions["state_sequence"]
     install_index = next(
-        index
-        for index, record in enumerate(measures)
-        if "install" in record["instruction"].lower()
-        and "fused-DMM harness" in record["instruction"]
+        index for index, record in enumerate(sequence)
+        if record["stage"] == "install_harness"
     )
-    install = _normalize_text(json.dumps(measures[install_index], ensure_ascii=False))
+    install = _normalize_text(json.dumps(sequence[install_index], ensure_ascii=False))
     assert "all sources off" in install.lower()
     assert re.search(r"treadmill power.{0,30}(?:off|absent)", install, re.IGNORECASE)
 
     powered_index = next(
-        index
-        for index, record in enumerate(measures)
-        if "treadmill power"
-        in _normalize_text(json.dumps(record, ensure_ascii=False)).lower()
-        and index != install_index
+        index for index, record in enumerate(sequence)
+        if record["stage"] == "apply_treadmill_power"
     )
     assert install_index < powered_index
     restore_text = " ".join(
-        step["instruction"]
-        for step in _guide_metadata(AUDIT_HTML)["clusters"][10]["actions"]["restore"]
+        step["instruction"] for step in actions["restore"]
     )
     assert re.search(
         r"(?:power|all sources).{0,30}off.{0,80}before.{0,30}(?:remove|removal).{0,30}harness",
@@ -1238,3 +1239,92 @@ def test_audit_cluster_7_uses_firmware_gpio21_without_external_fixture_drive():
         record for record in actions["measure"] if "VIN removal" in record["net"]
     )
     assert "USB logic remains powered" in vin_release["observation_state"]
+
+
+def test_audit_cluster_11_state_sequence_restores_ground_before_harness():
+    actions = _guide_metadata(AUDIT_HTML)["clusters"][10]["actions"]
+    sequence = actions["state_sequence"]
+    expected_stages = [
+        "map_complete",
+        "restore_ground_1",
+        "restore_ground_7",
+        "verify_ground_return",
+        "install_harness",
+        "apply_treadmill_power",
+        "power_off",
+        "remove_harness",
+        "restore_plus8_2",
+        "restore_plus8_8",
+    ]
+    assert [step["stage"] for step in sequence] == expected_stages
+    for step in sequence[:5]:
+        assert "all sources off" in step["state"].lower()
+
+    ground_check = sequence[3]
+    assert "ground return continuity" in (
+        ground_check["action"] + " " + ground_check["evidence"]
+    ).lower()
+    harness = sequence[4]
+    assert "+8" in harness["action"]
+    assert "GND" not in harness["action"]
+    assert "treadmill power remains off" in harness["state"].lower()
+
+    plus8_links = {
+        "CONSOLE.2 ↔ MOTOR.2 +8V_RAW link",
+        "CONSOLE.8 ↔ MOTOR.8 +8V_RAW link",
+    }
+    restored = {
+        step["link"]: step["instruction"] for step in actions["restore"]
+    }
+    for link in plus8_links:
+        assert re.search(
+            r"(?:remove|removal).{0,30}harness.{0,100}restor",
+            restored[link],
+            re.IGNORECASE,
+        )
+
+
+def test_audit_cluster_7_rearms_before_every_destructive_release():
+    actions = _guide_metadata(AUDIT_HTML)["clusters"][6]["actions"]
+    sequence = actions["state_sequence"]
+    expected_stages = [
+        "rearm_usb_loss",
+        "release_usb",
+        "rearm_gpio21",
+        "release_gpio21",
+        "rearm_tread_ok",
+        "release_tread_ok",
+        "rearm_vin",
+        "release_vin",
+        "rearm_thermal",
+        "thermal_hold",
+    ]
+    assert [step["stage"] for step in sequence] == expected_stages
+    for step in sequence[::2]:
+        state = step["state"]
+        assert "USB logic powered" in state
+        assert "VIN 8.00 V" in state
+        assert "TREAD_OK high" in state
+        assert "GPIO21 asserted by bounded firmware" in state
+        assert "relay energized" in step["evidence"]
+    assert "disconnect usb" in sequence[1]["action"].lower()
+    assert "firmware deassert GPIO21" in sequence[3]["action"]
+    assert "below UV" in sequence[5]["action"]
+    assert "switch bench vin off" in sequence[7]["action"].lower()
+    assert "five-minute" in sequence[9]["action"]
+
+
+def test_audit_cluster_8_keeps_gpio21_connected_for_firmware_relay_transfer():
+    actions = _guide_metadata(AUDIT_HTML)["clusters"][7]["actions"]
+    isolation = _normalize_text(json.dumps(actions["isolate"], ensure_ascii=False))
+    measurements = _normalize_text(json.dumps(actions["measure"], ensure_ascii=False))
+    assert "GPIO21 jumper remains installed" in isolation
+    assert "GPIO21 jumper remains installed" in measurements
+    assert "bounded relay exerciser firmware" in measurements.lower()
+    assert "GPIO21 jumper removed" not in isolation + " " + measurements
+
+    opened = {step["link"] for step in actions["isolate"] if step["opens_link"]}
+    restored = {
+        step["link"] for step in actions["restore"] if step["restores_link"]
+    }
+    assert opened == restored == {"GPIO15 jumper"}
