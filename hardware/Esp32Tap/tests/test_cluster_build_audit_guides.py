@@ -1118,3 +1118,123 @@ def test_command_net_provenance_crosses_devkit_posts_at_cluster_5():
     assert sources["TX_ENABLE"]["source_output"] == "GPIO15_TX_ENABLE_POST"
     assert "jumper" in sources["RELAY_CMD"]["source_mapping"].lower()
     assert "jumper" in sources["TX_ENABLE"]["source_mapping"].lower()
+
+
+def test_audit_cluster_11_isolates_maps_and_restores_each_common_conductor():
+    cluster = _guide_metadata(AUDIT_HTML)["clusters"][10]
+    actions = cluster["actions"]
+    expected_links = {
+        "CONSOLE.1 ↔ MOTOR.1 GND link",
+        "CONSOLE.7 ↔ MOTOR.7 GND link",
+        "CONSOLE.2 ↔ MOTOR.2 +8V_RAW link",
+        "CONSOLE.8 ↔ MOTOR.8 +8V_RAW link",
+    }
+    opened = {
+        step["link"]: step["instruction"]
+        for step in actions["isolate"]
+        if step["opens_link"]
+    }
+    restored = {
+        step["link"]: step["instruction"]
+        for step in actions["restore"]
+        if step["restores_link"]
+    }
+    assert expected_links <= opened.keys()
+    assert expected_links <= restored.keys()
+    assert all("all sources off" in opened[link].lower() for link in expected_links)
+    assert all(
+        re.search(r"(?:all sources|power).{0,20}off", restored[link], re.IGNORECASE)
+        for link in expected_links
+    )
+    mapping = " ".join(
+        record["instruction"] + " " + record["expected"]
+        for record in actions["unpowered_evidence"]
+    ).lower()
+    assert "map" in mapping and "before" in mapping and "restor" in mapping
+
+
+def test_audit_cluster_6_exercises_relay_cmd_through_ahc08_and_restores_gpio21():
+    cluster = _guide_metadata(AUDIT_HTML)["clusters"][5]
+    actions = cluster["actions"]
+    opened = {step["link"] for step in actions["isolate"] if step["opens_link"]}
+    restored = {step["link"] for step in actions["restore"] if step["restores_link"]}
+    assert "GPIO21 jumper" in opened
+    assert "GPIO21 jumper" in restored
+
+    measurement = actions["measure"][0]
+    rendered = _normalize_text(json.dumps(measurement, ensure_ascii=False))
+    assert "bounded RELAY_CMD injection" in rendered
+    assert "RELAY_CMD → RELAY_GATE" in rendered
+    assert "GPIO21 jumper removed" in rendered
+    assert "valid TREAD_OK" in rendered
+    assert "manual RELAY_GATE injection" not in rendered
+
+
+def test_audit_cluster_11_installs_fused_dmm_harness_before_treadmill_power():
+    measures = _guide_metadata(AUDIT_HTML)["clusters"][10]["actions"]["measure"]
+    install_index = next(
+        index
+        for index, record in enumerate(measures)
+        if "install" in record["instruction"].lower()
+        and "fused-DMM harness" in record["instruction"]
+    )
+    install = _normalize_text(json.dumps(measures[install_index], ensure_ascii=False))
+    assert "all sources off" in install.lower()
+    assert re.search(r"treadmill power.{0,30}(?:off|absent)", install, re.IGNORECASE)
+
+    powered_index = next(
+        index
+        for index, record in enumerate(measures)
+        if "treadmill power"
+        in _normalize_text(json.dumps(record, ensure_ascii=False)).lower()
+        and index != install_index
+    )
+    assert install_index < powered_index
+    restore_text = " ".join(
+        step["instruction"]
+        for step in _guide_metadata(AUDIT_HTML)["clusters"][10]["actions"]["restore"]
+    )
+    assert re.search(
+        r"(?:power|all sources).{0,30}off.{0,80}before.{0,30}(?:remove|removal).{0,30}harness",
+        restore_text,
+        re.IGNORECASE,
+    )
+
+
+def test_audit_cluster_7_uses_firmware_gpio21_without_external_fixture_drive():
+    cluster = _guide_metadata(AUDIT_HTML)["clusters"][6]
+    actions = cluster["actions"]
+    isolation = _normalize_text(json.dumps(actions["isolate"], ensure_ascii=False))
+    assert "GPIO21 jumper remains installed" in isolation
+    assert not any(
+        step["opens_link"] and step.get("link") == "GPIO21 jumper"
+        for step in actions["isolate"]
+    )
+
+    rendered = _normalize_text(json.dumps(actions["measure"], ensure_ascii=False))
+    assert "fixture" not in rendered.lower()
+    assert "GPIO21 jumper removed" not in rendered
+    assert "manual injection" not in rendered.lower()
+    assert all(
+        "bounded relay exerciser firmware" in record["firmware_identity"].lower()
+        for record in actions["measure"]
+    )
+
+    usb_release = next(
+        record for record in actions["measure"] if "USB logic" in record["net"]
+    )
+    assert "disconnect USB" in usb_release["stimulus"]
+    assert "removes GPIO21 drive" in usb_release["observation_state"]
+    gpio_release = next(
+        record for record in actions["measure"] if "GPIO21 command" in record["net"]
+    )
+    assert "firmware deassert" in gpio_release["stimulus"].lower()
+    assert "logic powered" in gpio_release["observation_state"].lower()
+    tread_release = next(
+        record for record in actions["measure"] if "TREAD_OK removal" in record["net"]
+    )
+    assert "USB logic remains powered" in tread_release["observation_state"]
+    vin_release = next(
+        record for record in actions["measure"] if "VIN removal" in record["net"]
+    )
+    assert "USB logic remains powered" in vin_release["observation_state"]

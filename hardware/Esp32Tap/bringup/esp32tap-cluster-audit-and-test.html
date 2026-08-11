@@ -571,6 +571,10 @@
 <td>Verify the named COIL POWER link is open; do not disturb the assembled regulator or BC337 wiring. &middot; COIL POWER &mdash; verified open, not newly opened</td>
 <td><div class="blank">Boundary / state:</div></td>
 </tr>
+<tr>
+<td>All sources off: remove the exact GPIO21 jumper before bounded RELAY_CMD injection. &middot; GPIO21 jumper</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
 </table>
 <h3>Inspect</h3>
 <table class="records">
@@ -603,7 +607,7 @@
 <th>Recorded evidence</th>
 </tr>
 <tr>
-<td>Measure disabled then enabled regulator output and base/collector behavior with the coil isolated. &middot; U5/Q1 &middot; enable, output, base, collector, emitter &middot; RELAY_GATE &rarr; +5V_RLY and BC337 base drive &middot; Isolated RELAY_GATE low then high from bounded fixture &middot; COIL POWER open; GPIO21 jumper removed before any manual injection &middot; Exact bounded relay exerciser identity &middot; No relay coil load; treadmill absent &middot; TPS709 enabled 4.75&ndash;5.25 V; TPS709 disabled below 0.25 V; output discharges</td>
+<td>Measure disabled then enabled regulator output and base/collector behavior with the coil isolated. &middot; U4/U5/Q1 &middot; RELAY_CMD input, RELAY_GATE output, regulator enable/output, BC337 base/collector/emitter &middot; RELAY_CMD &rarr; RELAY_GATE &rarr; +5V_RLY and BC337 base drive &middot; Bounded RELAY_CMD injection, 0/3.3 V through 1 k&Omega;, with valid TREAD_OK high &middot; COIL POWER open; GPIO21 jumper removed before bounded RELAY_CMD injection &middot; Bench injector identity; output current limited by 1 k&Omega; &middot; AHC08 remains powered at valid TREAD_OK; no relay coil load; treadmill absent &middot; TPS709 enabled 4.75&ndash;5.25 V; TPS709 disabled below 0.25 V; output discharges</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 </table>
@@ -614,7 +618,7 @@
 <th>Evidence</th>
 </tr>
 <tr>
-<td>source &middot; Verify VIN, LOGIC_3V3, GND, RELAY_GATE stimulus, and COIL POWER open.</td>
+<td>source &middot; Verify VIN, LOGIC_3V3, GND, bounded RELAY_CMD stimulus, valid TREAD_OK, and COIL POWER open.</td>
 <td><div class="blank">Finding:</div></td>
 </tr>
 <tr>
@@ -633,7 +637,11 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>Remove fixture drive and all power; restore no coil connection&mdash;leave COIL POWER in the documented incoming open state. &middot; COIL POWER &mdash; remains open</td>
+<td>Remove bounded RELAY_CMD injection and all power; leave COIL POWER in the documented incoming open state. &middot; COIL POWER &mdash; remains open</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+<tr>
+<td>With injection absent and all sources off, restore the exact GPIO21 jumper. &middot; GPIO21 jumper</td>
 <td><div class="blank">Restored / verified:</div></td>
 </tr>
 </table>
@@ -662,7 +670,7 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>Disconnect treadmill/RJ45 cables and remove the exact GPIO21 jumper before the bounded relay exerciser drives RELAY_CMD locally. &middot; GPIO21 jumper</td>
+<td>Disconnect treadmill/RJ45 cables; verify GPIO21 jumper remains installed so bounded relay exerciser firmware is the sole RELAY_CMD source. &middot; GPIO21 jumper remains installed</td>
 <td><div class="blank">Boundary / state:</div></td>
 </tr>
 </table>
@@ -697,27 +705,35 @@
 <th>Recorded evidence</th>
 </tr>
 <tr>
-<td>Install COIL POWER under the loaded limit and command one bounded local energization. &middot; K1/U5/Q1 &middot; coil terminals, Q1 collector/emitter, feedback contacts &middot; RELAY_GATE &rarr; coil and local contacts &middot; Bounded relay exerciser single pulse then off &middot; GPIO21 jumper removed exactly; GPIO15 untouched &middot; Exact bounded relay exerciser identity and SHA &middot; Local-only; treadmill/RJ45 absent; loaded limit no more than 500 mA &middot; Coil 90&ndash;110 mA; coil voltage at least 4.50 V; BC337 VCE no more than 0.30 V; feedback (1,0) energized and (0,1) bypass; 00 or 11 fault</td>
+<td>Install COIL POWER under the loaded limit and command one bounded local energization. &middot; U1/U4/K1/U5/Q1 &middot; GPIO21, RELAY_CMD, RELAY_GATE, coil terminals, Q1 collector/emitter, feedback contacts &middot; GPIO21 &rarr; RELAY_CMD &rarr; RELAY_GATE &rarr; coil and local contacts &middot; Bounded relay exerciser firmware asserts GPIO21 for one timed pulse then deasserts &middot; GPIO21 jumper remains installed; GPIO15 untouched; COIL POWER installed under limit &middot; Exact bounded relay exerciser firmware identity and SHA &middot; Local-only; treadmill/RJ45 absent; loaded limit no more than 500 mA &middot; Coil 90&ndash;110 mA; coil voltage at least 4.50 V; BC337 VCE no more than 0.30 V; feedback (1,0) energized and (0,1) bypass; 00 or 11 fault</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Measure release after removing USB logic power. &middot; K1 &middot; local COM/NC and feedback pins &middot; USB logic removal &rarr; NC bypass &middot; Bounded exerciser energized before source removal &middot; GPIO21 jumper removed; COIL POWER installed only for bounded test &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; USB logic release within 100 ms</td>
+<td>Measure release after removing USB logic power. &middot; U1/U4/K1 &middot; GPIO21, local COM/NC, feedback pins &middot; USB logic removal &rarr; GPIO21 drive loss &rarr; NC bypass &middot; Bounded relay exerciser firmware asserts GPIO21; disconnect USB logic power while energized &middot; GPIO21 jumper remains installed; COIL POWER installed only for bounded test &middot; Exact bounded relay exerciser firmware identity and SHA &middot; USB disconnect removes GPIO21 drive and AHC08 logic power; passive scope on local contact; treadmill absent &middot; USB logic release within 100 ms</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Measure release after removing GPIO21 command. &middot; K1 &middot; local COM/NC and feedback pins &middot; GPIO21 command removal &rarr; NC bypass &middot; Bounded exerciser energized before command removal &middot; GPIO21 jumper removed; command supplied only by bounded fixture &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; GPIO21 release within 100 ms</td>
+<td>Measure release after removing GPIO21 command. &middot; U1/U4/K1 &middot; GPIO21, local COM/NC, feedback pins &middot; GPIO21 command removal &rarr; NC bypass &middot; Bounded relay exerciser firmware deasserts GPIO21 while USB logic remains powered &middot; GPIO21 jumper remains installed; COIL POWER installed &middot; Exact bounded relay exerciser firmware identity and SHA &middot; USB logic powered; AHC08 active; passive scope on local contact; treadmill absent &middot; GPIO21 release within 100 ms</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h2 class="continued">Cluster 7 &mdash; Relay coil, local contacts, and feedback (continued)</h2>
+<h3>Measure &mdash; powered release / thermal evidence (continued)</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Measure release after removing TREAD_OK. &middot; U1/U3/U4/K1 &middot; GPIO21, TREAD_OK, local COM/NC, feedback pins &middot; TREAD_OK removal &rarr; NC bypass &middot; Firmware holds GPIO21 high; lower protected bench VIN below UV to deassert TREAD_OK &middot; GPIO21 jumper remains installed; COIL POWER installed &middot; Exact bounded relay exerciser firmware identity and SHA &middot; USB logic remains powered; AHC08 observes TREAD_OK low; passive scope on local contact &middot; TREAD_OK release within 100 ms</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Measure release after removing TREAD_OK. &middot; K1/U4 &middot; local COM/NC and feedback pins &middot; TREAD_OK removal &rarr; NC bypass &middot; Bounded exerciser energized before safety-input removal &middot; GPIO21 jumper removed; COIL POWER installed &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; TREAD_OK release within 100 ms</td>
+<td>Measure release after removing VIN. &middot; U1/U3/U4/U5/K1 &middot; GPIO21, VIN, local COM/NC, feedback pins &middot; VIN removal &rarr; NC bypass &middot; Firmware holds GPIO21 high; switch bench VIN off while USB logic remains powered &middot; GPIO21 jumper remains installed; COIL POWER installed &middot; Exact bounded relay exerciser firmware identity and SHA &middot; USB logic remains powered; AHC08 is never externally driven unpowered; passive scope on local contact &middot; VIN release within 100 ms</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Measure release after removing VIN. &middot; K1/U5 &middot; local COM/NC and feedback pins &middot; VIN removal &rarr; NC bypass &middot; Bounded exerciser energized before VIN removal &middot; GPIO21 jumper removed; COIL POWER installed &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; VIN release within 100 ms</td>
-<td><div class="blank">Value / trace:</div></td>
-</tr>
-<tr>
-<td>Run the five-minute local thermal hold and record all temperatures. &middot; U5/Q1/K1 &middot; regulator case, BC337 case, coil terminals &middot; Sustained bounded local relay command &middot; Five-minute hold under no more than 500 mA source limit &middot; GPIO21 jumper removed; COIL POWER installed; treadmill absent &middot; Exact bounded relay exerciser identity &middot; Ambient, TPS709, BC337, and relay observed &middot; TPS709 and BC337 no more than 45&deg;C and no more than 10&deg;C over ambient</td>
+<td>Run the five-minute local thermal hold and record all temperatures. &middot; U1/U4/U5/Q1/K1 &middot; GPIO21, regulator case, BC337 case, coil terminals &middot; Sustained bounded firmware GPIO21 command &middot; Bounded relay exerciser firmware five-minute hold under no more than 500 mA source limit &middot; GPIO21 jumper remains installed; COIL POWER installed; treadmill absent &middot; Exact bounded relay exerciser firmware identity and SHA &middot; Ambient, TPS709, BC337, and relay observed &middot; TPS709 and BC337 no more than 45&deg;C and no more than 10&deg;C over ambient</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 </table>
@@ -747,7 +763,7 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>All power off: remove COIL POWER if it was installed for the test, then restore the exact GPIO21 jumper with no external drive present. &middot; GPIO21 jumper</td>
+<td>All power off: remove COIL POWER if it was installed; leave the GPIO21 jumper installed in its documented incoming state. &middot; GPIO21 jumper remains installed</td>
 <td><div class="blank">Restored / verified:</div></td>
 </tr>
 </table>
@@ -1077,11 +1093,19 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>All sources off before RJ45 or harness changes: disconnect both RJ45 cables, remove the fused-DMM harness, and isolate both independent direct +8V paths for individual mapping. &middot; CONSOLE.2 &harr; MOTOR.2 direct +8V path</td>
+<td>All sources off: remove the fused-DMM harness and open the first GND common link before individual mapping. &middot; CONSOLE.1 &harr; MOTOR.1 GND link</td>
 <td><div class="blank">Boundary / state:</div></td>
 </tr>
 <tr>
-<td>Keep all sources off and isolate the second independent power conductor before mapping. &middot; CONSOLE.8 &harr; MOTOR.8 direct +8V path</td>
+<td>Keep all sources off and open the second GND common link before individual mapping. &middot; CONSOLE.7 &harr; MOTOR.7 GND link</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+<tr>
+<td>Keep all sources off and open the first +8V_RAW common link before individual mapping. &middot; CONSOLE.2 &harr; MOTOR.2 +8V_RAW link</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+<tr>
+<td>Keep all sources off and open the second +8V_RAW common link before individual mapping. &middot; CONSOLE.8 &harr; MOTOR.8 +8V_RAW link</td>
 <td><div class="blank">Boundary / state:</div></td>
 </tr>
 </table>
@@ -1120,11 +1144,15 @@
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Run bypass-only current measurement through the reviewed dual-pin fused-DMM harness. &middot; Fused-DMM harness/CONSOLE/MOTOR &middot; both independent +8V pins and GND return &middot; source &rarr; state &rarr; harness &rarr; direct-path sequence &middot; Treadmill bypass-only operation &middot; USB absent; STANDALONE POWER installed; observer verified; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest and harness review identity recorded &middot; Treadmill current separately measured no more than 500 mA; current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate</td>
+<td>Install the reviewed dual-pin fused-DMM harness with all sources off; treadmill power remains off until fuse, polarity, and strain-relief evidence is signed. &middot; Fused-DMM harness/CONSOLE/MOTOR &middot; both independent +8V pins, fused leads, and GND return &middot; isolated common links &rarr; fused current path &middot; All sources off; treadmill power remains off &middot; USB absent; STANDALONE POWER installed only after harness verification; relay off; TX disabled &middot; Exact observer and reviewed harness identities &middot; Harness installed and independently checked before treadmill power &middot; Both fuses correct; polarity correct; no exposed conductor; no treadmill power</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
-<td>Power off before harness removal; restore both direct paths, then measure supply and ground-return drops. &middot; CONSOLE/MOTOR &middot; restored supply and ground endpoints &middot; restored direct paths &rarr; voltage drop &middot; Bypass-only treadmill after direct-path restoration &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest; direct paths restored before drop &middot; Supply drop no more than 50 mV; ground-return drop no more than 50 mV</td>
+<td>Run bypass-only current measurement through the reviewed dual-pin fused-DMM harness. &middot; Fused-DMM harness/CONSOLE/MOTOR &middot; both independent +8V pins and GND return &middot; source &rarr; state &rarr; harness &rarr; direct-path sequence &middot; Apply treadmill power for bypass-only operation after signed harness installation &middot; USB absent; STANDALONE POWER installed; observer verified; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest and harness review identity recorded &middot; Treadmill current separately measured no more than 500 mA; current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Power off before harness removal; restore all four common links, then measure supply and ground-return drops. &middot; CONSOLE/MOTOR &middot; restored supply and ground endpoints &middot; restored direct paths &rarr; voltage drop &middot; Bypass-only treadmill after direct-path restoration &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest; all four common links restored before drop &middot; Supply drop no more than 50 mV; ground-return drop no more than 50 mV</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
@@ -1159,11 +1187,19 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>Power off before removing the fused-DMM harness; restore the first exact independent +8V direct path. &middot; CONSOLE.2 &harr; MOTOR.2 direct +8V path</td>
+<td>All sources off before removal of the fused-DMM harness; restore the first exact GND common link. &middot; CONSOLE.1 &harr; MOTOR.1 GND link</td>
 <td><div class="blank">Restored / verified:</div></td>
 </tr>
 <tr>
-<td>With power still off, restore the second exact independent +8V direct path; verify both independent +8V paths before any drop or thermal test. &middot; CONSOLE.8 &harr; MOTOR.8 direct +8V path</td>
+<td>With all sources still off, restore the second exact GND common link. &middot; CONSOLE.7 &harr; MOTOR.7 GND link</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+<tr>
+<td>With all sources still off, restore the first exact +8V_RAW common link. &middot; CONSOLE.2 &harr; MOTOR.2 +8V_RAW link</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+<tr>
+<td>With all sources still off, restore the second exact +8V_RAW common link; verify all four common links before any drop or thermal test. &middot; CONSOLE.8 &harr; MOTOR.8 +8V_RAW link</td>
 <td><div class="blank">Restored / verified:</div></td>
 </tr>
 </table>
@@ -1815,6 +1851,11 @@
             "instruction": "Verify the named COIL POWER link is open; do not disturb the assembled regulator or BC337 wiring.",
             "opens_link": false,
             "link": "COIL POWER — verified open, not newly opened"
+          },
+          {
+            "instruction": "All sources off: remove the exact GPIO21 jumper before bounded RELAY_CMD injection.",
+            "opens_link": true,
+            "link": "GPIO21 jumper"
           }
         ],
         "inspect": [
@@ -1837,20 +1878,20 @@
         "measure": [
           {
             "instruction": "Measure disabled then enabled regulator output and base/collector behavior with the coil isolated.",
-            "device": "U5/Q1",
-            "pin": "enable, output, base, collector, emitter",
-            "net": "RELAY_GATE → +5V_RLY and BC337 base drive",
-            "stimulus": "Isolated RELAY_GATE low then high from bounded fixture",
-            "jumper_state": "COIL POWER open; GPIO21 jumper removed before any manual injection",
-            "firmware_identity": "Exact bounded relay exerciser identity",
-            "observation_state": "No relay coil load; treadmill absent",
+            "device": "U4/U5/Q1",
+            "pin": "RELAY_CMD input, RELAY_GATE output, regulator enable/output, BC337 base/collector/emitter",
+            "net": "RELAY_CMD → RELAY_GATE → +5V_RLY and BC337 base drive",
+            "stimulus": "Bounded RELAY_CMD injection, 0/3.3 V through 1 kΩ, with valid TREAD_OK high",
+            "jumper_state": "COIL POWER open; GPIO21 jumper removed before bounded RELAY_CMD injection",
+            "firmware_identity": "Bench injector identity; output current limited by 1 kΩ",
+            "observation_state": "AHC08 remains powered at valid TREAD_OK; no relay coil load; treadmill absent",
             "limits": "TPS709 enabled 4.75–5.25 V; TPS709 disabled below 0.25 V; output discharges"
           }
         ],
         "likely_causes": [
           {
             "stage": "source",
-            "instruction": "Verify VIN, LOGIC_3V3, GND, RELAY_GATE stimulus, and COIL POWER open."
+            "instruction": "Verify VIN, LOGIC_3V3, GND, bounded RELAY_CMD stimulus, valid TREAD_OK, and COIL POWER open."
           },
           {
             "stage": "component",
@@ -1863,9 +1904,14 @@
         ],
         "restore": [
           {
-            "instruction": "Remove fixture drive and all power; restore no coil connection—leave COIL POWER in the documented incoming open state.",
+            "instruction": "Remove bounded RELAY_CMD injection and all power; leave COIL POWER in the documented incoming open state.",
             "restores_link": false,
             "link": "COIL POWER — remains open"
+          },
+          {
+            "instruction": "With injection absent and all sources off, restore the exact GPIO21 jumper.",
+            "restores_link": true,
+            "link": "GPIO21 jumper"
           }
         ]
       }
@@ -1932,9 +1978,9 @@
       "actions": {
         "isolate": [
           {
-            "instruction": "Disconnect treadmill/RJ45 cables and remove the exact GPIO21 jumper before the bounded relay exerciser drives RELAY_CMD locally.",
-            "opens_link": true,
-            "link": "GPIO21 jumper"
+            "instruction": "Disconnect treadmill/RJ45 cables; verify GPIO21 jumper remains installed so bounded relay exerciser firmware is the sole RELAY_CMD source.",
+            "opens_link": false,
+            "link": "GPIO21 jumper remains installed"
           }
         ],
         "inspect": [
@@ -1957,67 +2003,67 @@
         "measure": [
           {
             "instruction": "Install COIL POWER under the loaded limit and command one bounded local energization.",
-            "device": "K1/U5/Q1",
-            "pin": "coil terminals, Q1 collector/emitter, feedback contacts",
-            "net": "RELAY_GATE → coil and local contacts",
-            "stimulus": "Bounded relay exerciser single pulse then off",
-            "jumper_state": "GPIO21 jumper removed exactly; GPIO15 untouched",
-            "firmware_identity": "Exact bounded relay exerciser identity and SHA",
+            "device": "U1/U4/K1/U5/Q1",
+            "pin": "GPIO21, RELAY_CMD, RELAY_GATE, coil terminals, Q1 collector/emitter, feedback contacts",
+            "net": "GPIO21 → RELAY_CMD → RELAY_GATE → coil and local contacts",
+            "stimulus": "Bounded relay exerciser firmware asserts GPIO21 for one timed pulse then deasserts",
+            "jumper_state": "GPIO21 jumper remains installed; GPIO15 untouched; COIL POWER installed under limit",
+            "firmware_identity": "Exact bounded relay exerciser firmware identity and SHA",
             "observation_state": "Local-only; treadmill/RJ45 absent; loaded limit no more than 500 mA",
             "limits": "Coil 90–110 mA; coil voltage at least 4.50 V; BC337 VCE no more than 0.30 V; feedback (1,0) energized and (0,1) bypass; 00 or 11 fault"
           },
           {
             "instruction": "Measure release after removing USB logic power.",
-            "device": "K1",
-            "pin": "local COM/NC and feedback pins",
-            "net": "USB logic removal → NC bypass",
-            "stimulus": "Bounded exerciser energized before source removal",
-            "jumper_state": "GPIO21 jumper removed; COIL POWER installed only for bounded test",
-            "firmware_identity": "Exact bounded relay exerciser identity",
-            "observation_state": "Scope on local contact only; treadmill absent",
+            "device": "U1/U4/K1",
+            "pin": "GPIO21, local COM/NC, feedback pins",
+            "net": "USB logic removal → GPIO21 drive loss → NC bypass",
+            "stimulus": "Bounded relay exerciser firmware asserts GPIO21; disconnect USB logic power while energized",
+            "jumper_state": "GPIO21 jumper remains installed; COIL POWER installed only for bounded test",
+            "firmware_identity": "Exact bounded relay exerciser firmware identity and SHA",
+            "observation_state": "USB disconnect removes GPIO21 drive and AHC08 logic power; passive scope on local contact; treadmill absent",
             "limits": "USB logic release within 100 ms"
           },
           {
             "instruction": "Measure release after removing GPIO21 command.",
-            "device": "K1",
-            "pin": "local COM/NC and feedback pins",
+            "device": "U1/U4/K1",
+            "pin": "GPIO21, local COM/NC, feedback pins",
             "net": "GPIO21 command removal → NC bypass",
-            "stimulus": "Bounded exerciser energized before command removal",
-            "jumper_state": "GPIO21 jumper removed; command supplied only by bounded fixture",
-            "firmware_identity": "Exact bounded relay exerciser identity",
-            "observation_state": "Scope on local contact only; treadmill absent",
+            "stimulus": "Bounded relay exerciser firmware deasserts GPIO21 while USB logic remains powered",
+            "jumper_state": "GPIO21 jumper remains installed; COIL POWER installed",
+            "firmware_identity": "Exact bounded relay exerciser firmware identity and SHA",
+            "observation_state": "USB logic powered; AHC08 active; passive scope on local contact; treadmill absent",
             "limits": "GPIO21 release within 100 ms"
           },
           {
             "instruction": "Measure release after removing TREAD_OK.",
-            "device": "K1/U4",
-            "pin": "local COM/NC and feedback pins",
+            "device": "U1/U3/U4/K1",
+            "pin": "GPIO21, TREAD_OK, local COM/NC, feedback pins",
             "net": "TREAD_OK removal → NC bypass",
-            "stimulus": "Bounded exerciser energized before safety-input removal",
-            "jumper_state": "GPIO21 jumper removed; COIL POWER installed",
-            "firmware_identity": "Exact bounded relay exerciser identity",
-            "observation_state": "Scope on local contact only; treadmill absent",
+            "stimulus": "Firmware holds GPIO21 high; lower protected bench VIN below UV to deassert TREAD_OK",
+            "jumper_state": "GPIO21 jumper remains installed; COIL POWER installed",
+            "firmware_identity": "Exact bounded relay exerciser firmware identity and SHA",
+            "observation_state": "USB logic remains powered; AHC08 observes TREAD_OK low; passive scope on local contact",
             "limits": "TREAD_OK release within 100 ms"
           },
           {
             "instruction": "Measure release after removing VIN.",
-            "device": "K1/U5",
-            "pin": "local COM/NC and feedback pins",
+            "device": "U1/U3/U4/U5/K1",
+            "pin": "GPIO21, VIN, local COM/NC, feedback pins",
             "net": "VIN removal → NC bypass",
-            "stimulus": "Bounded exerciser energized before VIN removal",
-            "jumper_state": "GPIO21 jumper removed; COIL POWER installed",
-            "firmware_identity": "Exact bounded relay exerciser identity",
-            "observation_state": "Scope on local contact only; treadmill absent",
+            "stimulus": "Firmware holds GPIO21 high; switch bench VIN off while USB logic remains powered",
+            "jumper_state": "GPIO21 jumper remains installed; COIL POWER installed",
+            "firmware_identity": "Exact bounded relay exerciser firmware identity and SHA",
+            "observation_state": "USB logic remains powered; AHC08 is never externally driven unpowered; passive scope on local contact",
             "limits": "VIN release within 100 ms"
           },
           {
             "instruction": "Run the five-minute local thermal hold and record all temperatures.",
-            "device": "U5/Q1/K1",
-            "pin": "regulator case, BC337 case, coil terminals",
-            "net": "Sustained bounded local relay command",
-            "stimulus": "Five-minute hold under no more than 500 mA source limit",
-            "jumper_state": "GPIO21 jumper removed; COIL POWER installed; treadmill absent",
-            "firmware_identity": "Exact bounded relay exerciser identity",
+            "device": "U1/U4/U5/Q1/K1",
+            "pin": "GPIO21, regulator case, BC337 case, coil terminals",
+            "net": "Sustained bounded firmware GPIO21 command",
+            "stimulus": "Bounded relay exerciser firmware five-minute hold under no more than 500 mA source limit",
+            "jumper_state": "GPIO21 jumper remains installed; COIL POWER installed; treadmill absent",
+            "firmware_identity": "Exact bounded relay exerciser firmware identity and SHA",
             "observation_state": "Ambient, TPS709, BC337, and relay observed",
             "limits": "TPS709 and BC337 no more than 45°C and no more than 10°C over ambient"
           }
@@ -2038,9 +2084,9 @@
         ],
         "restore": [
           {
-            "instruction": "All power off: remove COIL POWER if it was installed for the test, then restore the exact GPIO21 jumper with no external drive present.",
-            "restores_link": true,
-            "link": "GPIO21 jumper"
+            "instruction": "All power off: remove COIL POWER if it was installed; leave the GPIO21 jumper installed in its documented incoming state.",
+            "restores_link": false,
+            "link": "GPIO21 jumper remains installed"
           }
         ]
       }
@@ -2531,14 +2577,24 @@
       "actions": {
         "isolate": [
           {
-            "instruction": "All sources off before RJ45 or harness changes: disconnect both RJ45 cables, remove the fused-DMM harness, and isolate both independent direct +8V paths for individual mapping.",
+            "instruction": "All sources off: remove the fused-DMM harness and open the first GND common link before individual mapping.",
             "opens_link": true,
-            "link": "CONSOLE.2 ↔ MOTOR.2 direct +8V path"
+            "link": "CONSOLE.1 ↔ MOTOR.1 GND link"
           },
           {
-            "instruction": "Keep all sources off and isolate the second independent power conductor before mapping.",
+            "instruction": "Keep all sources off and open the second GND common link before individual mapping.",
             "opens_link": true,
-            "link": "CONSOLE.8 ↔ MOTOR.8 direct +8V path"
+            "link": "CONSOLE.7 ↔ MOTOR.7 GND link"
+          },
+          {
+            "instruction": "Keep all sources off and open the first +8V_RAW common link before individual mapping.",
+            "opens_link": true,
+            "link": "CONSOLE.2 ↔ MOTOR.2 +8V_RAW link"
+          },
+          {
+            "instruction": "Keep all sources off and open the second +8V_RAW common link before individual mapping.",
+            "opens_link": true,
+            "link": "CONSOLE.8 ↔ MOTOR.8 +8V_RAW link"
           }
         ],
         "inspect": [
@@ -2571,25 +2627,36 @@
             "limits": "Receive-only activity observed; no MCU TX and no treadmill relay transfer"
           },
           {
+            "instruction": "Install the reviewed dual-pin fused-DMM harness with all sources off; treadmill power remains off until fuse, polarity, and strain-relief evidence is signed.",
+            "device": "Fused-DMM harness/CONSOLE/MOTOR",
+            "pin": "both independent +8V pins, fused leads, and GND return",
+            "net": "isolated common links → fused current path",
+            "stimulus": "All sources off; treadmill power remains off",
+            "jumper_state": "USB absent; STANDALONE POWER installed only after harness verification; relay off; TX disabled",
+            "firmware_identity": "Exact observer and reviewed harness identities",
+            "observation_state": "Harness installed and independently checked before treadmill power",
+            "limits": "Both fuses correct; polarity correct; no exposed conductor; no treadmill power"
+          },
+          {
             "instruction": "Run bypass-only current measurement through the reviewed dual-pin fused-DMM harness.",
             "device": "Fused-DMM harness/CONSOLE/MOTOR",
             "pin": "both independent +8V pins and GND return",
             "net": "source → state → harness → direct-path sequence",
-            "stimulus": "Treadmill bypass-only operation",
+            "stimulus": "Apply treadmill power for bypass-only operation after signed harness installation",
             "jumper_state": "USB absent; STANDALONE POWER installed; observer verified; relay off; TX disabled",
             "firmware_identity": "Exact observer identity",
             "observation_state": "Observer manifest and harness review identity recorded",
             "limits": "Treadmill current separately measured no more than 500 mA; current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate"
           },
           {
-            "instruction": "Power off before harness removal; restore both direct paths, then measure supply and ground-return drops.",
+            "instruction": "Power off before harness removal; restore all four common links, then measure supply and ground-return drops.",
             "device": "CONSOLE/MOTOR",
             "pin": "restored supply and ground endpoints",
             "net": "restored direct paths → voltage drop",
             "stimulus": "Bypass-only treadmill after direct-path restoration",
             "jumper_state": "USB absent; STANDALONE POWER installed; relay off; TX disabled",
             "firmware_identity": "Exact observer identity",
-            "observation_state": "Observer manifest; direct paths restored before drop",
+            "observation_state": "Observer manifest; all four common links restored before drop",
             "limits": "Supply drop no more than 50 mV; ground-return drop no more than 50 mV"
           },
           {
@@ -2620,14 +2687,24 @@
         ],
         "restore": [
           {
-            "instruction": "Power off before removing the fused-DMM harness; restore the first exact independent +8V direct path.",
+            "instruction": "All sources off before removal of the fused-DMM harness; restore the first exact GND common link.",
             "restores_link": true,
-            "link": "CONSOLE.2 ↔ MOTOR.2 direct +8V path"
+            "link": "CONSOLE.1 ↔ MOTOR.1 GND link"
           },
           {
-            "instruction": "With power still off, restore the second exact independent +8V direct path; verify both independent +8V paths before any drop or thermal test.",
+            "instruction": "With all sources still off, restore the second exact GND common link.",
             "restores_link": true,
-            "link": "CONSOLE.8 ↔ MOTOR.8 direct +8V path"
+            "link": "CONSOLE.7 ↔ MOTOR.7 GND link"
+          },
+          {
+            "instruction": "With all sources still off, restore the first exact +8V_RAW common link.",
+            "restores_link": true,
+            "link": "CONSOLE.2 ↔ MOTOR.2 +8V_RAW link"
+          },
+          {
+            "instruction": "With all sources still off, restore the second exact +8V_RAW common link; verify all four common links before any drop or thermal test.",
+            "restores_link": true,
+            "link": "CONSOLE.8 ↔ MOTOR.8 +8V_RAW link"
           }
         ]
       }
