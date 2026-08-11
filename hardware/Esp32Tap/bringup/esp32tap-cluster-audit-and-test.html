@@ -583,7 +583,7 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>Inspect U5 orientation, Q1 BC337 C/B/E mapping, D3 polarity, and C5/C6 polarity before the unloaded audit. &middot; U5 pin 1 mark verified; BC337 collector/base/emitter physically mapped; D3 cathode toward +5V_RLY</td>
+<td>Inspect U5 orientation, Q1 BC337 C/B/E mapping, bidirectional D3 placement, and C5/C6 polarity before the unloaded audit. &middot; U5 pin 1 mark verified; BC337 collector/base/emitter physically mapped; bidirectional TVS has no cathode orientation</td>
 <td><div class="blank">Visual evidence:</div></td>
 </tr>
 </table>
@@ -594,8 +594,8 @@
 <th>Recorded evidence</th>
 </tr>
 <tr>
-<td>Map regulator enable/output, base resistor, BC337 pins, diode, and the open coil boundary. &middot; U5/Q1/D3 &middot; enable/output and C/B/E pins &middot; RELAY_GATE, +5V_RLY, COIL_LOW, GND &middot; Exact device-pin/net map; coil remains isolated; no +5V_RLY short<div class="detail">
-<b>device:</b> U5/Q1/D3 &middot; <b>pin:</b> enable/output and C/B/E pins &middot; <b>net:</b> RELAY_GATE, +5V_RLY, COIL_LOW, GND &middot; <b>evidence:</b> Record continuity, transistor map, and COIL POWER isolation</div>
+<td>Map regulator enable/output, base resistor, BC337 pins, diode, and the open coil boundary. &middot; U5/Q1/D3 &middot; enable/output and C/B/E pins &middot; RELAY_GATE, +5V_RLY, RELAY_COIL−, GND &middot; Exact device-pin/net map; coil remains isolated; no +5V_RLY short<div class="detail">
+<b>device:</b> U5/Q1/D3 &middot; <b>pin:</b> enable/output and C/B/E pins &middot; <b>net:</b> RELAY_GATE, +5V_RLY, RELAY_COIL−, GND &middot; <b>evidence:</b> Record continuity, transistor map, and COIL POWER isolation</div>
 </td>
 <td><div class="blank">Measured:</div></td>
 </tr>
@@ -622,7 +622,7 @@
 <td><div class="blank">Finding:</div></td>
 </tr>
 <tr>
-<td>component &middot; Check U5 orientation/thermal pad, Q1 C/B/E map, D3 polarity, resistors, and capacitors.</td>
+<td>component &middot; Check U5 orientation/thermal pad, Q1 C/B/E map, bidirectional D3 placement, resistors, and capacitor polarity.</td>
 <td><div class="blank">Finding:</div></td>
 </tr>
 <tr>
@@ -681,7 +681,7 @@
 <th>Operator evidence</th>
 </tr>
 <tr>
-<td>Inspect K1 orientation, coil diode polarity, local NC/NO/COM labels, feedback contact mapping, and coil terminals. &middot; K1 pin map and contact symbols verified; flyback diode cathode toward +5V_RLY; local endpoints labeled</td>
+<td>Inspect K1 orientation, bidirectional D3 placement, local NC/NO/COM labels, feedback contact mapping, and coil terminals. &middot; Bidirectional TVS has no cathode orientation; verify D3 directly across K1 pins 1 and 16 / +5V_RLY and RELAY_COIL−; local endpoints labeled</td>
 <td><div class="blank">Visual evidence:</div></td>
 </tr>
 </table>
@@ -692,8 +692,8 @@
 <th>Recorded evidence</th>
 </tr>
 <tr>
-<td>Map the coil, local contact sets, and feedback contacts with COIL POWER open. &middot; K1/D3/Q1 &middot; coil pins, COM/NC/NO pins, feedback pins &middot; +5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO &middot; Coil finite and not shorted; local COM&rarr;NC continuity; feedback reports bypass<div class="detail">
-<b>device:</b> K1/D3/Q1 &middot; <b>pin:</b> coil pins, COM/NC/NO pins, feedback pins &middot; <b>net:</b> +5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO &middot; <b>evidence:</b> Record coil resistance and each de-energized contact map</div>
+<td>Map the coil, local contact sets, and feedback contacts with COIL POWER open. &middot; K1/D3/Q1 &middot; coil pins, COM/NC/NO pins, feedback pins &middot; +5V_RLY, RELAY_COIL−, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO &middot; Coil finite and not shorted; local COM&rarr;NC continuity; feedback reports bypass<div class="detail">
+<b>device:</b> K1/D3/Q1 &middot; <b>pin:</b> coil pins, COM/NC/NO pins, feedback pins &middot; <b>net:</b> +5V_RLY, RELAY_COIL−, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO &middot; <b>evidence:</b> Record coil resistance and each de-energized contact map</div>
 </td>
 <td><div class="blank">Measured:</div></td>
 </tr>
@@ -1879,8 +1879,8 @@
         ],
         "inspect": [
           {
-            "instruction": "Inspect U5 orientation, Q1 BC337 C/B/E mapping, D3 polarity, and C5/C6 polarity before the unloaded audit.",
-            "orientation": "U5 pin 1 mark verified; BC337 collector/base/emitter physically mapped; D3 cathode toward +5V_RLY"
+            "instruction": "Inspect U5 orientation, Q1 BC337 C/B/E mapping, bidirectional D3 placement, and C5/C6 polarity before the unloaded audit.",
+            "orientation": "U5 pin 1 mark verified; BC337 collector/base/emitter physically mapped; bidirectional TVS has no cathode orientation"
           }
         ],
         "unpowered_evidence": [
@@ -1888,9 +1888,9 @@
             "instruction": "Map regulator enable/output, base resistor, BC337 pins, diode, and the open coil boundary.",
             "device": "U5/Q1/D3",
             "pin": "enable/output and C/B/E pins",
-            "net": "RELAY_GATE, +5V_RLY, COIL_LOW, GND",
+            "net": "RELAY_GATE, +5V_RLY, RELAY_COIL−, GND",
             "evidence": "Record continuity, transistor map, and COIL POWER isolation",
-            "points": "U5/Q1/D3 · enable/output and C/B/E pins · RELAY_GATE, +5V_RLY, COIL_LOW, GND",
+            "points": "U5/Q1/D3 · enable/output and C/B/E pins · RELAY_GATE, +5V_RLY, RELAY_COIL−, GND",
             "expected": "Exact device-pin/net map; coil remains isolated; no +5V_RLY short"
           }
         ],
@@ -1914,7 +1914,7 @@
           },
           {
             "stage": "component",
-            "instruction": "Check U5 orientation/thermal pad, Q1 C/B/E map, D3 polarity, resistors, and capacitors."
+            "instruction": "Check U5 orientation/thermal pad, Q1 C/B/E map, bidirectional D3 placement, resistors, and capacitor polarity."
           },
           {
             "stage": "output",
@@ -2004,8 +2004,8 @@
         ],
         "inspect": [
           {
-            "instruction": "Inspect K1 orientation, coil diode polarity, local NC/NO/COM labels, feedback contact mapping, and coil terminals.",
-            "orientation": "K1 pin map and contact symbols verified; flyback diode cathode toward +5V_RLY; local endpoints labeled"
+            "instruction": "Inspect K1 orientation, bidirectional D3 placement, local NC/NO/COM labels, feedback contact mapping, and coil terminals.",
+            "orientation": "Bidirectional TVS has no cathode orientation; verify D3 directly across K1 pins 1 and 16 / +5V_RLY and RELAY_COIL−; local endpoints labeled"
           }
         ],
         "unpowered_evidence": [
@@ -2013,9 +2013,9 @@
             "instruction": "Map the coil, local contact sets, and feedback contacts with COIL POWER open.",
             "device": "K1/D3/Q1",
             "pin": "coil pins, COM/NC/NO pins, feedback pins",
-            "net": "+5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO",
+            "net": "+5V_RLY, RELAY_COIL−, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO",
             "evidence": "Record coil resistance and each de-energized contact map",
-            "points": "K1/D3/Q1 · coil pins, COM/NC/NO pins, feedback pins · +5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO",
+            "points": "K1/D3/Q1 · coil pins, COM/NC/NO pins, feedback pins · +5V_RLY, RELAY_COIL−, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO",
             "expected": "Coil finite and not shorted; local COM→NC continuity; feedback reports bypass"
           }
         ],

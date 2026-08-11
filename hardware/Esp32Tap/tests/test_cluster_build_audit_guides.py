@@ -1437,3 +1437,20 @@ def test_audit_c7_c11_measurements_are_evidence_only_and_keyed_to_ledgers():
     assert "relay off" in powered_contract
     assert "tx disabled" in powered_contract
     assert "receive-only" in powered_contract
+
+
+def test_guides_use_canonical_relay_coil_net_and_audit_c7_bidirectional_tvs():
+    for path in (BUILD_HTML, AUDIT_HTML):
+        assert "COIL_LOW" not in path.read_text()
+    for path in (BUILD_PDF, AUDIT_PDF):
+        assert "COIL_LOW" not in _pdf_text(path)
+
+    cluster7 = _guide_metadata(AUDIT_HTML)["clusters"][6]
+    inspection = _normalize_text(
+        json.dumps(cluster7["actions"]["inspect"], ensure_ascii=False)
+    )
+    assert "bidirectional tvs has no cathode orientation" in inspection.lower()
+    assert "K1 pins 1 and 16" in inspection
+    assert "+5V_RLY" in inspection
+    assert "RELAY_COIL−" in inspection
+    assert "cathode toward +5V_RLY" not in inspection
