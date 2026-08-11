@@ -841,3 +841,74 @@ def test_pdf_preserves_contracts_and_has_letter_page_size(
     assert all(
         (float(width), float(height)) == (612.0, 792.0) for width, height in sizes
     ), f"{path.name}: every page must be US Letter (612 x 792 pts)"
+
+
+def test_build_cluster_8_does_not_consume_unbuilt_rj45_state():
+    clusters = {cluster["number"]: cluster for cluster in _guide_metadata(BUILD_HTML)["clusters"]}
+    cluster = clusters[8]
+    forbidden = {"CONSOLE.6", "PIN3", "MOTOR.6"}
+    assert forbidden.isdisjoint(cluster["inputs"])
+    assert all(source["source_cluster"] != 7 for source in cluster["input_sources"])
+    assert "RJ45" not in " ".join(cluster["inputs"] + cluster["outputs"])
+
+
+def test_build_cluster_11_maps_isolated_conductors_before_common_links():
+    cluster = _guide_metadata(BUILD_HTML)["clusters"][10]
+    instructions = [step["instruction"] for step in cluster["actions"]["build"]]
+    assert len(instructions) >= 2
+    rendered = " ".join(instructions)
+    map_position = rendered.index("map each conductor independently")
+    join_position = rendered.index("join pins 1/7 and 2/8")
+    assert map_position < join_position
+    assert "unrelated pins open" in rendered[map_position:join_position]
+
+
+def test_build_has_dedicated_measurement_evidence_fields():
+    clusters = {cluster["number"]: cluster for cluster in _guide_metadata(BUILD_HTML)["clusters"]}
+    required = {
+        7: {
+            "usb_logic_release_ms", "gpio21_release_ms", "tread_ok_release_ms",
+            "vin_release_ms", "ambient_temp_c", "tps709_temp_c", "bc337_temp_c",
+        },
+        10: {"gpio16_idle_v", "gpio18_idle_v"},
+        11: {
+            "treadmill_current_ma", "supply_drop_mv", "ground_return_drop_mv",
+            "plus_8v_endpoint_temp_c", "gnd_endpoint_temp_c",
+            *(f"console_{pin}_temp_c" for pin in range(1, 9)),
+            *(f"motor_{pin}_temp_c" for pin in range(1, 9)),
+        },
+    }
+    for number, fields in required.items():
+        assert fields <= set(clusters[number]["evidence_fields"])
+
+    visible = _visible_html_text(BUILD_HTML)
+    for label in (
+        "USB logic release (ms)", "GPIO21 release (ms)", "TREAD_OK release (ms)",
+        "VIN release (ms)", "TPS709 temperature (°C)", "BC337 temperature (°C)",
+        "GPIO16 UART idle (V)", "GPIO18 UART idle (V)", "Treadmill current (mA)",
+        "Supply drop (mV)", "Ground-return drop (mV)", "CONSOLE temperature (°C)",
+        "MOTOR temperature (°C)", "+8V endpoint temperature (°C)",
+        "GND endpoint temperature (°C)",
+    ):
+        assert label in visible
+
+
+def test_build_records_exact_command_jumper_endpoints():
+    text = _visible_html_text(BUILD_HTML)
+    assert "DevKit GPIO15 ↔ removable GPIO15 jumper ↔ TX_ENABLE / AHC08 pin 4" in text
+    assert "DevKit GPIO21 ↔ removable GPIO21 jumper ↔ RELAY_CMD / AHC08 pin 1" in text
+
+
+def test_build_adapter_headers_formulas_and_logic_bypass_are_explicit():
+    metadata = _guide_metadata(BUILD_HTML)
+    clusters = {cluster["number"]: cluster for cluster in metadata["clusters"]}
+    for number in (4, 6):
+        assert any(
+            "S1011EC-40-ND" in part["ordered_part_number"]
+            for part in clusters[number]["parts"]
+        )
+    text = _visible_html_text(BUILD_HTML)
+    assert "UV_SENSE = VIN × 10 kΩ / (150 kΩ + 10 kΩ) = VIN / 16" in text
+    assert "OV_SENSE = VIN × 10 kΩ / (255 kΩ + 10 kΩ) = VIN / 26.5" in text
+    assert "continuity-map adapter pins 1–6 to the header before installation" in text
+    assert "C7 lead 1 to LOGIC_3V3 and C7 lead 2 to GND" in text
