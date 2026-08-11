@@ -1341,7 +1341,7 @@ def test_audit_c7_c11_measurements_are_evidence_only_and_keyed_to_ledgers():
     }
     expected_measure_stages = {
         7: [1, 2, 4, 6, 8, 10],
-        11: [5, 6, 11, 12],
+        11: [6, 6, 11, 12],
     }
     for number, expected in expected_measure_stages.items():
         actions = clusters[number]["actions"]
@@ -1357,3 +1357,15 @@ def test_audit_c7_c11_measurements_are_evidence_only_and_keyed_to_ledgers():
             assert record["stimulus"].startswith(
                 f"Captured during Ledger stage {stage}:"
             )
+
+    c11_actions = clusters[11]["actions"]
+    receive_only = c11_actions["measure"][0]
+    receive_stage = c11_actions["state_sequence"][receive_only["ledger_stage"] - 1]
+    powered_contract = " ".join(
+        str(receive_stage[field]) for field in ("state", "action", "evidence")
+    ).lower()
+    assert "treadmill power" in powered_contract
+    assert "observer" in powered_contract
+    assert "relay off" in powered_contract
+    assert "tx disabled" in powered_contract
+    assert "receive-only" in powered_contract

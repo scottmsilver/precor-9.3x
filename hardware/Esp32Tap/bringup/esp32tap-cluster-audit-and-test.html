@@ -1155,7 +1155,7 @@
 <tr><td>3 &middot; restore_ground_7 &middot; All sources off; first GND link restored; both +8V_RAW links remain open &middot; All sources off after mapping: restore the second exact GND common link. &middot; CONSOLE.7 ↔ MOTOR.7 GND link; signed restoration</td><td><div class="blank">Initial:</div></td></tr>
 <tr><td>4 &middot; verify_ground_return &middot; All sources off; both GND links restored; both +8V_RAW links open; harness absent &middot; Verify end-to-end ground return continuity and unrelated-pin isolation &middot; Ground return resistance ______ Ω; continuity PASS signed</td><td><div class="blank">Initial:</div></td></tr>
 <tr><td>5 &middot; install_harness &middot; All sources off; GND links restored; +8V_RAW direct links open; treadmill power remains off &middot; Install reviewed fused DMM harness across +8V_RAW paths only; verify fuses, polarity, and strain relief &middot; Harness identity and installation PASS signed before power</td><td><div class="blank">Initial:</div></td></tr>
-<tr><td>6 &middot; apply_treadmill_power &middot; Observer verified; USB absent; standalone installed; relay off; TX disabled &middot; Apply treadmill power for bypass current measurement &middot; Current no more than 500 mA; no reset, transfer, or TX</td><td><div class="blank">Initial:</div></td></tr>
+<tr><td>6 &middot; apply_treadmill_power &middot; Identified observer firmware active; USB absent; standalone installed; relay off; TX disabled &middot; Apply treadmill power for bypass current measurement and passive receive-only UART observation &middot; Current no more than 500 mA; receive-only activity observed; no reset, relay transfer, or TX</td><td><div class="blank">Initial:</div></td></tr>
 <tr><td>7 &middot; power_off &middot; Current evidence signed; treadmill power present only through reviewed harness &middot; Remove treadmill power and confirm all sources off before changing harness &middot; Zero volts confirmed at both +8V_RAW paths</td><td><div class="blank">Initial:</div></td></tr>
 <tr><td>8 &middot; remove_harness &middot; All sources off; both GND links remain restored; +8V_RAW direct links remain open &middot; Remove fused DMM harness; inspect both fused leads and terminals &middot; Harness removed with no heat or damage</td><td><div class="blank">Initial:</div></td></tr>
 <tr><td>9 &middot; restore_plus8_2 &middot; All sources off; harness removed; GND return verified &middot; All sources off before removal of harness; after harness removal, restore the first exact +8V_RAW common link. &middot; CONSOLE.2 ↔ MOTOR.2 +8V_RAW link; signed restoration</td><td><div class="blank">Initial:</div></td></tr>
@@ -1171,7 +1171,7 @@
 <th>Recorded evidence</th>
 </tr>
 <tr>
-<td>Evidence only — do not repeat operations; enter result captured during Ledger stage 5. &middot; 5 &middot; U1/U6 &middot; GPIO16, GPIO18, RX tap pins &middot; CONSOLE receive paths → GPIO16/GPIO18 &middot; Captured during Ledger stage 5: all-sources-off +8V_RAW harness installation topology &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest proves relay and TX disabled &middot; Receive-only activity observed; no MCU TX and no treadmill relay transfer</td>
+<td>Evidence only — do not repeat operations; enter result captured during Ledger stage 6. &middot; 6 &middot; U1/U6 &middot; GPIO16, GPIO18, RX tap pins &middot; CONSOLE receive paths → GPIO16/GPIO18 &middot; Captured during Ledger stage 6: powered bypass receive-only UART observation &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest proves relay and TX disabled &middot; Receive-only activity observed; no MCU TX and no treadmill relay transfer</td>
 <td><div class="blank">Value / trace:</div></td>
 </tr>
 <tr>
@@ -2750,9 +2750,9 @@
           {
             "step": 6,
             "stage": "apply_treadmill_power",
-            "state": "Observer verified; USB absent; standalone installed; relay off; TX disabled",
-            "action": "Apply treadmill power for bypass current measurement",
-            "evidence": "Current no more than 500 mA; no reset, transfer, or TX"
+            "state": "Identified observer firmware active; USB absent; standalone installed; relay off; TX disabled",
+            "action": "Apply treadmill power for bypass current measurement and passive receive-only UART observation",
+            "evidence": "Current no more than 500 mA; receive-only activity observed; no reset, relay transfer, or TX"
           },
           {
             "step": 7,
@@ -2799,16 +2799,16 @@
         ],
         "measure": [
           {
-            "instruction": "Evidence only — do not repeat operations; enter result captured during Ledger stage 5.",
+            "instruction": "Evidence only — do not repeat operations; enter result captured during Ledger stage 6.",
             "device": "U1/U6",
             "pin": "GPIO16, GPIO18, RX tap pins",
             "net": "CONSOLE receive paths → GPIO16/GPIO18",
-            "stimulus": "Captured during Ledger stage 5: all-sources-off +8V_RAW harness installation topology",
+            "stimulus": "Captured during Ledger stage 6: powered bypass receive-only UART observation",
             "jumper_state": "USB absent; STANDALONE POWER installed; relay off; TX disabled",
             "firmware_identity": "Exact observer identity",
             "observation_state": "Observer manifest proves relay and TX disabled",
             "limits": "Receive-only activity observed; no MCU TX and no treadmill relay transfer",
-            "ledger_stage": 5
+            "ledger_stage": 6
           },
           {
             "instruction": "Evidence only — do not repeat operations; enter result captured during Ledger stage 6.",
