@@ -49,7 +49,7 @@ SUPERSESSION_REFERENCE_ALLOWLIST = {
     ROOT / "docs/superpowers/plans/2026-08-10-esp32tap-cluster-build-audit-guides.md",
 }
 PRESCRIBED_BREADBOARD_HOLE = re.compile(
-    r"(?<![A-Za-z0-9_.])(?:[a-jA-J](?:[1-9]|[1-5]\d|6[0-3])|[+-](?:[1-5]\d|6[0-3]))(?![A-Za-z0-9_.])"
+    r"(?<![A-Za-z0-9_.])(?:[a-j](?:[1-9]|[1-5]\d|6[0-3])|[A-J](?:[1-5]\d|6[0-3])|[+-](?:[1-5]\d|6[0-3]))(?![A-Za-z0-9_.])"
 )
 
 BUILD_LABELS = (
@@ -280,17 +280,41 @@ def _assert_shared_metadata_values_render(
             )
 
 
-def _operator_metadata_values(cluster: dict, mode: str) -> set[str]:
-    actions = cluster["actions"]
-    selected: list[object] = []
+def _scalar_render_pattern(value: str) -> str:
+    escaped = re.escape(value).replace(r"\ ", r"\s+")
+    prefix = r"(?<![A-Za-z0-9_.])" if value[0].isalnum() else ""
+    suffix = r"(?![A-Za-z0-9_.])" if value[-1].isalnum() else ""
+    return prefix + escaped + suffix
 
-    def select(records: list[dict], fields: tuple[str, ...]) -> None:
-        selected.extend(
-            record[field] for record in records for field in fields if field in record
-        )
+
+def _record_render_pattern(record: dict, fields: tuple[str, ...]) -> str:
+    values = [
+        value
+        for field in fields
+        if field in record
+        for value in _metadata_values(record[field])
+        if value
+    ]
+    assert values, f"operator record has no renderable values for {fields!r}"
+    separator = r".{0,96}?"
+    return separator.join(_scalar_render_pattern(value) for value in values)
+
+
+def _operator_record_groups(
+    cluster: dict, mode: str
+) -> dict[str, list[tuple[str, str]]]:
+    actions = cluster["actions"]
+    groups: dict[str, list[tuple[str, str]]] = {}
+
+    def add(group: str, records: list[dict], fields: tuple[str, ...]) -> None:
+        groups[group] = [
+            (f"{group} record {index}", _record_render_pattern(record, fields))
+            for index, record in enumerate(records, 1)
+        ]
 
     if mode == "empty_board_build":
-        select(
+        add(
+            "part",
             cluster["parts"],
             (
                 "reference",
@@ -300,24 +324,28 @@ def _operator_metadata_values(cluster: dict, mode: str) -> set[str]:
                 "polarity_orientation",
             ),
         )
-        select(cluster["wiring"], ("part", "pin", "net", "color"))
-        select(actions["build"], ("instruction",))
-        select(
+        add("wiring", cluster["wiring"], ("part", "pin", "net", "color"))
+        add("build", actions["build"], ("instruction",))
+        add(
+            "unpowered test",
             actions["unpowered_test"],
             ("instruction", "check_kind", "points", "expected"),
         )
-        select(
+        add(
+            "powered test",
             actions["powered_test"],
             ("instruction", "input", "output", "evidence", "limits"),
         )
     else:
-        select(actions["isolate"], ("instruction", "link"))
-        select(actions["inspect"], ("instruction", "orientation"))
-        select(
+        add("isolate", actions["isolate"], ("instruction", "link"))
+        add("inspect", actions["inspect"], ("instruction", "orientation"))
+        add(
+            "unpowered evidence",
             actions["unpowered_evidence"],
             ("instruction", "points", "expected"),
         )
-        select(
+        add(
+            "measurement",
             actions["measure"],
             (
                 "instruction",
@@ -331,11 +359,9 @@ def _operator_metadata_values(cluster: dict, mode: str) -> set[str]:
                 "limits",
             ),
         )
-        select(actions["likely_causes"], ("instruction", "stage"))
-        select(actions["restore"], ("instruction", "link"))
-    return {
-        value for subtree in selected for value in _metadata_values(subtree) if value
-    }
+        add("likely cause", actions["likely_causes"], ("stage", "instruction"))
+        add("restore", actions["restore"], ("instruction", "link"))
+    return groups
 
 
 def _assert_operator_metadata_values_render(
@@ -345,12 +371,16 @@ def _assert_operator_metadata_values_render(
     for cluster in metadata["clusters"]:
         number = cluster["number"]
         section = sections[number]
-        values = _operator_metadata_values(cluster, metadata["mode"])
-        assert values, f"{guide_name} cluster {number}: no operator metadata values"
-        for value in values:
-            assert value in section, (
-                f"{guide_name} cluster {number}: operator value {value!r} is hidden from visible {medium}"
-            )
+        groups = _operator_record_groups(cluster, metadata["mode"])
+        assert groups, f"{guide_name} cluster {number}: no operator metadata records"
+        for group, contracts in groups.items():
+            cursor = 0
+            for label, pattern in contracts:
+                match = re.search(pattern, section[cursor:], re.IGNORECASE)
+                assert match, (
+                    f"{guide_name} cluster {number}: {label} is absent or incomplete in visible {medium}"
+                )
+                cursor += match.end()
 
 
 def _assert_contract_language(text: str, guide_name: str) -> None:
@@ -670,9 +700,20 @@ def test_html_has_no_prescribed_breadboard_holes(path: Path):
 
 
 def test_breadboard_hole_pattern_distinguishes_holes_from_pins_and_voltages():
-    for hole in ("a29", "A29", "f36", "F36", "-52"):
+    for hole in ("a1", "a29", "j63", "A29", "f36", "F36", "+52", "-52"):
         assert PRESCRIBED_BREADBOARD_HOLE.fullmatch(hole)
-    for allowed in ("GPIO29", "U6.29", "3.29 V", "-5.2 V", "+8.00 V", "VIN_A29"):
+    for allowed in (
+        "J1",
+        "C1",
+        "D1",
+        "F1",
+        "GPIO29",
+        "U6.29",
+        "3.29 V",
+        "-5.2 V",
+        "+8.00 V",
+        "VIN_A29",
+    ):
         assert PRESCRIBED_BREADBOARD_HOLE.search(allowed) is None
 
 
