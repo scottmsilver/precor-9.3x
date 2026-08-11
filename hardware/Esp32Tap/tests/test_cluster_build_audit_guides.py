@@ -1099,3 +1099,22 @@ def test_build_pdf_has_two_substantive_cluster_11_pages():
     assert all(len(page) >= 1000 for page in cluster_11_pages)
     assert "Bypass-only controlled sequence" in cluster_11_pages[1]
     assert "dedicated bypass and thermal evidence" in cluster_11_pages[1]
+
+
+def test_command_net_provenance_crosses_devkit_posts_at_cluster_5():
+    clusters = {
+        cluster["number"]: cluster
+        for cluster in _guide_metadata(BUILD_HTML)["clusters"]
+    }
+    assert {"GPIO21_CMD_POST", "GPIO15_TX_ENABLE_POST"} <= set(
+        clusters[3]["outputs"]
+    )
+    assert {"RELAY_CMD", "TX_ENABLE"}.isdisjoint(clusters[3]["outputs"])
+
+    sources = {
+        source["input"]: source for source in clusters[5]["input_sources"]
+    }
+    assert sources["RELAY_CMD"]["source_output"] == "GPIO21_CMD_POST"
+    assert sources["TX_ENABLE"]["source_output"] == "GPIO15_TX_ENABLE_POST"
+    assert "jumper" in sources["RELAY_CMD"]["source_mapping"].lower()
+    assert "jumper" in sources["TX_ENABLE"]["source_mapping"].lower()

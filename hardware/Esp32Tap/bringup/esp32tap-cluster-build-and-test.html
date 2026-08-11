@@ -475,10 +475,12 @@
           TSR_3V3, USB_5V, GND
         </div>
         <div>
-          <b>Outputs:</b> LOGIC_3V3, DevKit GND, RELAY_CMD, TX_ENABLE,
-          GPIO17_TX, GPIO38, USB_5V<br /><b>Source state:</b> First USB-only
-          with STANDALONE POWER removed; then USB physically disconnected before
-          standalone link installation
+          <b>Outputs:</b> LOGIC_3V3, DevKit GND, GPIO21_CMD_POST,
+          GPIO15_TX_ENABLE_POST, GPIO17_TX, GPIO38, USB_5V<br /><b
+            >Source state:</b
+          >
+          First USB-only with STANDALONE POWER removed; then USB physically
+          disconnected before standalone link installation
         </div>
       </div>
       <h3>Parts</h3>
@@ -2032,8 +2034,8 @@
             "outputs": [
               "LOGIC_3V3",
               "DevKit GND",
-              "RELAY_CMD",
-              "TX_ENABLE",
+              "GPIO21_CMD_POST",
+              "GPIO15_TX_ENABLE_POST",
               "GPIO17_TX",
               "GPIO38",
               "USB_5V"
@@ -2375,12 +2377,16 @@
               {
                 "input": "RELAY_CMD",
                 "source_cluster": 3,
-                "verified": true
+                "verified": true,
+                "source_output": "GPIO21_CMD_POST",
+                "source_mapping": "Cluster 5 GPIO21 removable jumper maps GPIO21_CMD_POST to RELAY_CMD"
               },
               {
                 "input": "TX_ENABLE",
                 "source_cluster": 3,
-                "verified": true
+                "verified": true,
+                "source_output": "GPIO15_TX_ENABLE_POST",
+                "source_mapping": "Cluster 5 GPIO15 removable jumper maps GPIO15_TX_ENABLE_POST to TX_ENABLE"
               },
               {
                 "input": "GND",
