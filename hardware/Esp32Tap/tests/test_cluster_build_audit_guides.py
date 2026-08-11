@@ -280,6 +280,79 @@ def _assert_shared_metadata_values_render(
             )
 
 
+def _operator_metadata_values(cluster: dict, mode: str) -> set[str]:
+    actions = cluster["actions"]
+    selected: list[object] = []
+
+    def select(records: list[dict], fields: tuple[str, ...]) -> None:
+        selected.extend(
+            record[field] for record in records for field in fields if field in record
+        )
+
+    if mode == "empty_board_build":
+        select(
+            cluster["parts"],
+            (
+                "reference",
+                "part",
+                "value",
+                "ordered_part_number",
+                "polarity_orientation",
+            ),
+        )
+        select(cluster["wiring"], ("part", "pin", "net", "color"))
+        select(actions["build"], ("instruction",))
+        select(
+            actions["unpowered_test"],
+            ("instruction", "check_kind", "points", "expected"),
+        )
+        select(
+            actions["powered_test"],
+            ("instruction", "input", "output", "evidence", "limits"),
+        )
+    else:
+        select(actions["isolate"], ("instruction", "link"))
+        select(actions["inspect"], ("instruction", "orientation"))
+        select(
+            actions["unpowered_evidence"],
+            ("instruction", "points", "expected"),
+        )
+        select(
+            actions["measure"],
+            (
+                "instruction",
+                "device",
+                "pin",
+                "net",
+                "stimulus",
+                "jumper_state",
+                "firmware_identity",
+                "observation_state",
+                "limits",
+            ),
+        )
+        select(actions["likely_causes"], ("instruction", "stage"))
+        select(actions["restore"], ("instruction", "link"))
+    return {
+        value for subtree in selected for value in _metadata_values(subtree) if value
+    }
+
+
+def _assert_operator_metadata_values_render(
+    text: str, metadata: dict, guide_name: str, medium: str
+) -> None:
+    sections = _cluster_sections(text, guide_name)
+    for cluster in metadata["clusters"]:
+        number = cluster["number"]
+        section = sections[number]
+        values = _operator_metadata_values(cluster, metadata["mode"])
+        assert values, f"{guide_name} cluster {number}: no operator metadata values"
+        for value in values:
+            assert value in section, (
+                f"{guide_name} cluster {number}: operator value {value!r} is hidden from visible {medium}"
+            )
+
+
 def _assert_contract_language(text: str, guide_name: str) -> None:
     for label in SOURCE_AND_SAFETY_LABELS:
         assert label in text, f"{guide_name}: missing {label!r}"
@@ -415,7 +488,7 @@ def _assert_build_actions(cluster: dict, guide_name: str) -> set[str]:
         actions.get("powered_test"), f"{guide_name} cluster {number} powered_test"
     )
     for measurement in powered:
-        for field in ("input", "output", "limits"):
+        for field in ("input", "output", "evidence", "limits"):
             assert measurement.get(field), (
                 f"{guide_name} cluster {number}: powered measurements need {field}"
             )
@@ -611,6 +684,7 @@ def test_html_contains_mode_workflow_and_safety_contracts(
     path: Path, labels: tuple[str, ...]
 ):
     text = _visible_html_text(path)
+    metadata = _guide_metadata(path)
     _assert_headings_in_order(text, path.name)
     for label in labels:
         assert label in text, f"{path.name}: missing {label!r} workflow label"
@@ -620,6 +694,7 @@ def test_html_contains_mode_workflow_and_safety_contracts(
         )
     per_cluster_labels = labels[:-1] if path == BUILD_HTML else labels
     _assert_each_cluster_has_workflow_and_evidence(text, path.name, per_cluster_labels)
+    _assert_operator_metadata_values_render(text, metadata, path.name, "HTML")
     _assert_contract_language(text, path.name)
     _assert_bypass_sequence_contracts(text, path.name)
 
@@ -681,6 +756,7 @@ def test_pdf_preserves_contracts_and_has_letter_page_size(
                 f"{path.name} cluster {number}: missing rendered {label!r}"
             )
     _assert_shared_metadata_values_render(text, metadata, path.name)
+    _assert_operator_metadata_values_render(text, metadata, path.name, "PDF")
     _assert_contract_language(text, path.name)
     _assert_bypass_sequence_contracts(text, path.name)
     assert re.search(r"file:///|/home/|[A-Za-z]:\\", text, re.IGNORECASE) is None
