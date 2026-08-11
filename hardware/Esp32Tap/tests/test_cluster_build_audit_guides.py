@@ -93,6 +93,16 @@ RENDERED_IDENTITY_LABELS = (
     "Observer identity",
     "Observer manifest",
 )
+UNPOWERED_CHECK_KINDS = {"continuity", "resistance", "mapping", "polarity"}
+BYPASS_SEQUENCE_CONTRACTS = {
+    "bypass-only source sequence": r"USB.{0,30}(?:absent|disconnected|removed).{0,80}standalone.{0,30}(?:installed|connected).{0,80}observer.{0,30}verified.{0,80}relay.{0,20}off.{0,80}TX.{0,20}disabled",
+    "power removed before harness removal": r"(?:power.{0,30}(?:off|removed|disconnected)|(?:remove|disconnect).{0,20}power).{0,80}before.{0,30}(?:remove|removal|disconnect).{0,30}harness",
+    "both independent +8V paths restored": r"restore.{0,80}(?:both|two).{0,50}independent.{0,30}\+8V.{0,30}paths",
+    "voltage drop after direct-path restoration": r"(?:direct.?path.{0,40}restor(?:e|ed|ation).{0,100}(?:before|then).{0,80}(?:voltage )?drop|(?:voltage )?drop.{0,80}(?:only )?after.{0,50}direct.?path.{0,40}restor(?:e|ed|ation))",
+    "thermal test after direct-path restoration": r"(?:direct.?path.{0,40}restor(?:e|ed|ation).{0,100}(?:before|then).{0,80}thermal|thermal.{0,80}(?:only )?after.{0,50}direct.?path.{0,40}restor(?:e|ed|ation))",
+    "no-control diagnostic cannot pass relay exercise": r"(?:no.?control.{0,80}(?:diagnostic|current)|current.{0,30}no.?control.{0,30}diagnostic).{0,120}(?:cannot|does not|must not).{0,80}relay.{0,30}exercise.{0,30}(?:gate|PASS)",
+    "no-control diagnostic cannot pass UART exercise": r"(?:no.?control.{0,80}(?:diagnostic|current)|current.{0,30}no.?control.{0,30}diagnostic).{0,120}(?:cannot|does not|must not).{0,80}UART.{0,30}exercise.{0,30}(?:gate|PASS)",
+}
 
 # Each expression is intentionally about an observable bench contract, rather
 # than an exact sentence, so formatting and explanatory prose may evolve.
@@ -195,21 +205,79 @@ def _assert_headings_in_order(text: str, guide_name: str) -> None:
     )
 
 
-def _assert_each_cluster_has_workflow_and_evidence(
-    text: str, guide_name: str, workflow_labels: tuple[str, ...]
-) -> None:
+def _cluster_sections(text: str, guide_name: str) -> dict[int, str]:
     heading_matches = [
         re.search(rf"Cluster\s+{number}\s*(?:—|-)\s*{re.escape(name)}", text)
         for number, name in EXPECTED_CLUSTERS.items()
     ]
     assert all(heading_matches), f"{guide_name}: cannot identify every cluster section"
     starts = [match.start() for match in heading_matches if match]
-    for index, (number, _) in enumerate(EXPECTED_CLUSTERS.items()):
-        section = text[
+    return {
+        number: text[
             starts[index] : starts[index + 1] if index + 1 < len(starts) else None
         ]
+        for index, number in enumerate(EXPECTED_CLUSTERS)
+    }
+
+
+def _assert_each_cluster_has_workflow_and_evidence(
+    text: str, guide_name: str, workflow_labels: tuple[str, ...]
+) -> None:
+    for number, section in _cluster_sections(text, guide_name).items():
         for label in (*workflow_labels, "Operator", "Date", "Signed PASS"):
             assert label in section, f"{guide_name} cluster {number}: missing {label!r}"
+
+
+def _assert_bypass_sequence_contracts(text: str, guide_name: str) -> None:
+    sections = _cluster_sections(text, guide_name)
+    bypass_section = sections[11]
+    for contract, expression in BYPASS_SEQUENCE_CONTRACTS.items():
+        assert re.search(expression, bypass_section, re.IGNORECASE), (
+            f"{guide_name} cluster 11: missing {contract} contract"
+        )
+    for number in (7, 8):
+        assert "Relay exerciser identity" in sections[number], (
+            f"{guide_name} cluster {number}: relay exerciser identity must be local to the cluster"
+        )
+    for number in (10, 11):
+        assert "Observer identity" in sections[number], (
+            f"{guide_name} cluster {number}: observer identity must be local to the cluster"
+        )
+        assert "Observer manifest" in sections[number], (
+            f"{guide_name} cluster {number}: observer manifest must be local to the cluster"
+        )
+
+
+def _metadata_values(value: object) -> list[str]:
+    if isinstance(value, dict):
+        return [token for child in value.values() for token in _metadata_values(child)]
+    if isinstance(value, list):
+        return [token for child in value for token in _metadata_values(child)]
+    if value is None or isinstance(value, bool):
+        return []
+    return [_normalize_text(str(value))]
+
+
+def _assert_shared_metadata_values_render(
+    text: str, metadata: dict, guide_name: str
+) -> None:
+    sections = _cluster_sections(text, guide_name)
+    for cluster in metadata["clusters"]:
+        number = cluster["number"]
+        section = sections[number]
+        fields = ("inputs", "outputs", "source_state", "stop_gate", "pass_gate")
+        for field in fields:
+            for value in _metadata_values(cluster[field]):
+                assert value in section, (
+                    f"{guide_name} cluster {number}: {field} value {value!r} is absent from the PDF"
+                )
+        for dependency in cluster["dependencies"]:
+            rendered = (
+                f"Cluster {dependency}" if isinstance(dependency, int) else dependency
+            )
+            assert rendered in section, (
+                f"{guide_name} cluster {number}: dependency {rendered!r} is absent from the PDF"
+            )
 
 
 def _assert_contract_language(text: str, guide_name: str) -> None:
@@ -282,18 +350,32 @@ def _assert_instruction_steps(steps: object, label: str) -> list[dict]:
     return steps
 
 
-def _assert_build_actions(cluster: dict, guide_name: str) -> None:
+def _assert_build_actions(cluster: dict, guide_name: str) -> set[str]:
     number = cluster["number"]
     parts = cluster.get("parts")
     assert isinstance(parts, list) and parts, (
         f"{guide_name} cluster {number}: parts must be nonempty"
     )
-    assert all(
-        isinstance(part, dict) and part.get("reference") and part.get("part")
-        for part in parts
-    ), (
-        f"{guide_name} cluster {number}: every part needs an exact reference and part identity"
-    )
+    for part in parts:
+        assert isinstance(part, dict), (
+            f"{guide_name} cluster {number}: every part must be a structured object"
+        )
+        for field in (
+            "reference",
+            "part",
+            "value",
+            "ordered_part_number",
+            "polarity_orientation",
+        ):
+            assert part.get(field), (
+                f"{guide_name} cluster {number}: every part needs {field}"
+            )
+        order_identity = part["ordered_part_number"]
+        assert isinstance(order_identity, str) and (
+            order_identity == "NOT ORDERED" or re.search(r"[A-Za-z0-9]", order_identity)
+        ), (
+            f"{guide_name} cluster {number}: ordered_part_number needs a real identity or NOT ORDERED"
+        )
 
     wiring = cluster.get("wiring")
     assert isinstance(wiring, list) and wiring, (
@@ -311,10 +393,33 @@ def _assert_build_actions(cluster: dict, guide_name: str) -> None:
     assert isinstance(actions, dict), (
         f"{guide_name} cluster {number}: actions must be an object"
     )
-    for action in ("build", "unpowered_test", "powered_test"):
-        _assert_instruction_steps(
-            actions.get(action), f"{guide_name} cluster {number} {action}"
+    _assert_instruction_steps(
+        actions.get("build"), f"{guide_name} cluster {number} build"
+    )
+    unpowered = _assert_instruction_steps(
+        actions.get("unpowered_test"),
+        f"{guide_name} cluster {number} unpowered_test",
+    )
+    kinds = set()
+    for check in unpowered:
+        kind = check.get("check_kind")
+        assert kind in UNPOWERED_CHECK_KINDS, (
+            f"{guide_name} cluster {number}: invalid unpowered check_kind {kind!r}"
         )
+        assert check.get("points") and check.get("expected"), (
+            f"{guide_name} cluster {number}: unpowered checks need points and expected evidence"
+        )
+        kinds.add(kind)
+
+    powered = _assert_instruction_steps(
+        actions.get("powered_test"), f"{guide_name} cluster {number} powered_test"
+    )
+    for measurement in powered:
+        for field in ("input", "output", "limits"):
+            assert measurement.get(field), (
+                f"{guide_name} cluster {number}: powered measurements need {field}"
+            )
+    return kinds
 
 
 def _assert_audit_actions(cluster: dict, guide_name: str) -> None:
@@ -327,8 +432,41 @@ def _assert_audit_actions(cluster: dict, guide_name: str) -> None:
         action: _assert_instruction_steps(
             actions.get(action), f"{guide_name} cluster {number} {action}"
         )
-        for action in ("isolate", "inspect", "measure", "likely_causes", "restore")
+        for action in (
+            "isolate",
+            "inspect",
+            "unpowered_evidence",
+            "measure",
+            "likely_causes",
+            "restore",
+        )
     }
+
+    assert any(step.get("orientation") for step in structured["inspect"]), (
+        f"{guide_name} cluster {number}: inspection needs explicit orientation evidence"
+    )
+    for evidence in structured["unpowered_evidence"]:
+        assert evidence.get("points") and evidence.get("expected"), (
+            f"{guide_name} cluster {number}: unpowered audit evidence needs points and expected result"
+        )
+    for measurement in structured["measure"]:
+        for field in (
+            "device",
+            "pin",
+            "net",
+            "stimulus",
+            "jumper_state",
+            "firmware_identity",
+            "observation_state",
+            "limits",
+        ):
+            assert measurement.get(field), (
+                f"{guide_name} cluster {number}: audit measurements need exact {field}"
+            )
+    cause_stages = [cause.get("stage") for cause in structured["likely_causes"]]
+    assert cause_stages == ["source", "component", "output"], (
+        f"{guide_name} cluster {number}: likely causes must be ordered source -> component -> output"
+    )
 
     for step in structured["isolate"]:
         assert isinstance(step.get("opens_link"), bool), (
@@ -391,6 +529,7 @@ def test_html_metadata_defines_ordered_cluster_contracts(
         (cluster.get("number"), cluster.get("name")) for cluster in clusters
     ] == list(EXPECTED_CLUSTERS.items())
 
+    unpowered_check_kinds = set()
     for cluster in clusters:
         assert SHARED_CLUSTER_FIELDS <= cluster.keys(), (
             f"{path.name} cluster {cluster.get('number')}: incomplete shared contract"
@@ -426,7 +565,11 @@ def test_html_metadata_defines_ordered_cluster_contracts(
         if expected_mode == "assembled_board_audit":
             _assert_audit_actions(cluster, path.name)
         else:
-            _assert_build_actions(cluster, path.name)
+            unpowered_check_kinds.update(_assert_build_actions(cluster, path.name))
+    if expected_mode == "empty_board_build":
+        assert UNPOWERED_CHECK_KINDS <= unpowered_check_kinds, (
+            f"{path.name}: build metadata must cover continuity, resistance, mapping, and polarity checks"
+        )
 
 
 def test_build_and_audit_metadata_share_the_same_cluster_contracts():
@@ -478,6 +621,7 @@ def test_html_contains_mode_workflow_and_safety_contracts(
     per_cluster_labels = labels[:-1] if path == BUILD_HTML else labels
     _assert_each_cluster_has_workflow_and_evidence(text, path.name, per_cluster_labels)
     _assert_contract_language(text, path.name)
+    _assert_bypass_sequence_contracts(text, path.name)
 
 
 def test_superseded_checklist_has_no_operational_references():
@@ -510,16 +654,20 @@ def test_superseded_checklist_has_no_operational_references():
 
 
 @pytest.mark.parametrize(
-    ("path", "mode_label", "workflow_labels"),
+    ("path", "html_path", "mode_label", "workflow_labels"),
     (
-        (BUILD_PDF, "Empty-board build", BUILD_LABELS[:-1]),
-        (AUDIT_PDF, "Assembled-board audit", AUDIT_LABELS),
+        (BUILD_PDF, BUILD_HTML, "Empty-board build", BUILD_LABELS[:-1]),
+        (AUDIT_PDF, AUDIT_HTML, "Assembled-board audit", AUDIT_LABELS),
     ),
 )
 def test_pdf_preserves_contracts_and_has_letter_page_size(
-    path: Path, mode_label: str, workflow_labels: tuple[str, ...]
+    path: Path,
+    html_path: Path,
+    mode_label: str,
+    workflow_labels: tuple[str, ...],
 ):
     text = _pdf_text(path)
+    metadata = _guide_metadata(html_path)
     _assert_headings_in_order(text, path.name)
     assert mode_label in text, f"{path.name}: missing mode label"
     for label in (*workflow_labels, *IDENTITY_AND_MANIFEST_LABELS, "STOP", "PASS"):
@@ -527,21 +675,14 @@ def test_pdf_preserves_contracts_and_has_letter_page_size(
     _assert_each_cluster_has_workflow_and_evidence(text, path.name, workflow_labels)
     for label in RENDERED_IDENTITY_LABELS:
         assert label in text, f"{path.name}: missing rendered {label!r}"
-    for number, name in EXPECTED_CLUSTERS.items():
-        start = re.search(rf"Cluster\s+{number}\s*(?:—|-)\s*{re.escape(name)}", text)
-        next_number = number + 1
-        next_start = (
-            re.search(rf"Cluster\s+{next_number}\s*(?:—|-)", text)
-            if next_number in EXPECTED_CLUSTERS
-            else None
-        )
-        assert start
-        section = text[start.start() : next_start.start() if next_start else None]
+    for number, section in _cluster_sections(text, path.name).items():
         for label in RENDERED_BOUNDARY_LABELS:
             assert label in section, (
                 f"{path.name} cluster {number}: missing rendered {label!r}"
             )
+    _assert_shared_metadata_values_render(text, metadata, path.name)
     _assert_contract_language(text, path.name)
+    _assert_bypass_sequence_contracts(text, path.name)
     assert re.search(r"file:///|/home/|[A-Za-z]:\\", text, re.IGNORECASE) is None
     assert str(ROOT) not in text
 
