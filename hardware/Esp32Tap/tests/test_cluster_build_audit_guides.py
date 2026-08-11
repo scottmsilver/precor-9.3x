@@ -412,7 +412,9 @@ def _assert_operator_evidence(cluster: dict, guide_name: str) -> None:
     )
 
 
-def _assert_dependency_contract(cluster: dict, guide_name: str) -> None:
+def _assert_dependency_contract(
+    cluster: dict, clusters: list[dict], guide_name: str
+) -> None:
     number = cluster["number"]
     dependencies = cluster["dependencies"]
     assert isinstance(dependencies, list) and dependencies, (
@@ -443,9 +445,36 @@ def _assert_dependency_contract(cluster: dict, guide_name: str) -> None:
             f"{guide_name} cluster {number}: input {source['input']!r} consumes unverified upstream state"
         )
         upstream = source["source_cluster"]
-        assert upstream is None or upstream in dependencies, (
+        assert upstream is None or (
+            isinstance(upstream, int)
+            and not isinstance(upstream, bool)
+            and upstream in dependencies
+        ), (
             f"{guide_name} cluster {number}: input source {upstream!r} is not a declared dependency"
         )
+        if upstream is None:
+            assert isinstance(source.get("source_name"), str) and source[
+                "source_name"
+            ].strip(), (
+                f"{guide_name} cluster {number}: external input {source['input']!r} needs a clear source_name prerequisite"
+            )
+            assert "source_output" not in source
+        else:
+            upstream_cluster = clusters[upstream - 1]
+            assert upstream_cluster["number"] == upstream
+            source_output = source.get("source_output", source["input"])
+            assert source_output in upstream_cluster["outputs"], (
+                f"{guide_name} cluster {number}: input {source['input']!r} falsely claims Cluster {upstream}; "
+                f"source output {source_output!r} is absent from Cluster {upstream} outputs"
+            )
+            if source_output != source["input"]:
+                assert "source_output" in source
+                assert isinstance(source.get("source_mapping"), str) and source[
+                    "source_mapping"
+                ].strip(), (
+                    f"{guide_name} cluster {number}: renamed source output {source_output!r} "
+                    f"needs an explicit mapping to input {source['input']!r}"
+                )
     assert {source["input"] for source in sources} == set(cluster["inputs"]), (
         f"{guide_name} cluster {number}: every input must have exactly one provenance record"
     )
@@ -670,7 +699,7 @@ def test_html_metadata_defines_ordered_cluster_contracts(
                 f"{path.name} cluster {cluster['number']}: {field} must be nonempty"
             )
         _assert_operator_evidence(cluster, path.name)
-        _assert_dependency_contract(cluster, path.name)
+        _assert_dependency_contract(cluster, data["clusters"], path.name)
         if expected_mode == "assembled_board_audit":
             _assert_audit_actions(cluster, path.name)
         else:

@@ -475,9 +475,10 @@
           TSR_3V3, USB_5V, GND
         </div>
         <div>
-          <b>Outputs:</b> LOGIC_3V3, DevKit GND<br /><b>Source state:</b> First
-          USB-only with STANDALONE POWER removed; then USB physically
-          disconnected before standalone link installation
+          <b>Outputs:</b> LOGIC_3V3, DevKit GND, RELAY_CMD, TX_ENABLE,
+          GPIO17_TX, GPIO38, USB_5V<br /><b>Source state:</b> First USB-only
+          with STANDALONE POWER removed; then USB physically disconnected before
+          standalone link installation
         </div>
       </div>
       <h3>Parts</h3>
@@ -1346,8 +1347,9 @@
         </div>
         <div>
           <b>Outputs:</b> standalone boot, Wi-Fi observation, event log, UART
-          idle evidence<br /><b>Source state:</b> USB physically absent;
-          STANDALONE POWER installed; observer verified; relay off; TX disabled
+          idle evidence, verified observer state<br /><b>Source state:</b> USB
+          physically absent; STANDALONE POWER installed; observer verified;
+          relay off; TX disabled
         </div>
       </div>
       <p class="small">
@@ -1747,11 +1749,13 @@
               {
                 "input": "+8V_RAW",
                 "source_cluster": null,
+                "source_name": "Current-limited 8.00 V bench source",
                 "verified": true
               },
               {
                 "input": "GND",
                 "source_cluster": null,
+                "source_name": "Verified common bench GND",
                 "verified": true
               }
             ],
@@ -1894,7 +1898,8 @@
               },
               {
                 "input": "GND",
-                "source_cluster": 1,
+                "source_cluster": null,
+                "source_name": "Verified common bench GND",
                 "verified": true
               }
             ],
@@ -2024,7 +2029,15 @@
             "number": 3,
             "name": "DevKit and logic supply",
             "inputs": ["TSR_3V3", "USB_5V", "GND"],
-            "outputs": ["LOGIC_3V3", "DevKit GND"],
+            "outputs": [
+              "LOGIC_3V3",
+              "DevKit GND",
+              "RELAY_CMD",
+              "TX_ENABLE",
+              "GPIO17_TX",
+              "GPIO38",
+              "USB_5V"
+            ],
             "dependencies": [2, "Verified USB bench source"],
             "source_state": "First USB-only with STANDALONE POWER removed; then USB physically disconnected before standalone link installation",
             "stop_gate": "Sources overlap, either source backfeeds the other, LOGIC_3V3 is outside 3.20–3.40 V, or DevKit boot is unstable.",
@@ -2037,12 +2050,14 @@
               },
               {
                 "input": "USB_5V",
-                "source_cluster": "Verified USB bench source",
+                "source_cluster": null,
+                "source_name": "Verified USB bench source",
                 "verified": true
               },
               {
                 "input": "GND",
-                "source_cluster": 2,
+                "source_cluster": null,
+                "source_name": "Verified common bench GND",
                 "verified": true
               }
             ],
@@ -2191,7 +2206,9 @@
               {
                 "input": "GND",
                 "source_cluster": 3,
-                "verified": true
+                "verified": true,
+                "source_output": "DevKit GND",
+                "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
               }
             ],
             "evidence_fields": ["operator", "date", "signed_pass"],
@@ -2368,7 +2385,9 @@
               {
                 "input": "GND",
                 "source_cluster": 3,
-                "verified": true
+                "verified": true,
+                "source_output": "DevKit GND",
+                "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
               }
             ],
             "evidence_fields": ["operator", "date", "signed_pass"],
@@ -2515,7 +2534,8 @@
               },
               {
                 "input": "GND",
-                "source_cluster": 5,
+                "source_cluster": null,
+                "source_name": "Verified common bench GND",
                 "verified": true
               }
             ],
@@ -2676,7 +2696,9 @@
               {
                 "input": "GND",
                 "source_cluster": 3,
-                "verified": true
+                "verified": true,
+                "source_output": "DevKit GND",
+                "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
               }
             ],
             "evidence_fields": [
@@ -2886,7 +2908,9 @@
               {
                 "input": "GND",
                 "source_cluster": 3,
-                "verified": true
+                "verified": true,
+                "source_output": "DevKit GND",
+                "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
               }
             ],
             "evidence_fields": [
@@ -3104,7 +3128,9 @@
               {
                 "input": "GND",
                 "source_cluster": 3,
-                "verified": true
+                "verified": true,
+                "source_output": "DevKit GND",
+                "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
               }
             ],
             "evidence_fields": ["operator", "date", "signed_pass"],
@@ -3259,7 +3285,8 @@
               "standalone boot",
               "Wi-Fi observation",
               "event log",
-              "UART idle evidence"
+              "UART idle evidence",
+              "verified observer state"
             ],
             "dependencies": [1, 2, 3, 4, 5, 6, 7, 8, 9],
             "source_state": "USB physically absent; STANDALONE POWER installed; observer verified; relay off; TX disabled",
@@ -3268,17 +3295,20 @@
             "input_sources": [
               {
                 "input": "+8V_RAW",
-                "source_cluster": 1,
+                "source_cluster": null,
+                "source_name": "Current-limited 8.00 V bench source",
                 "verified": true
               },
               {
                 "input": "GND",
-                "source_cluster": 1,
+                "source_cluster": null,
+                "source_name": "Verified common bench GND",
                 "verified": true
               },
               {
                 "input": "observer firmware",
-                "source_cluster": 9,
+                "source_cluster": null,
+                "source_name": "Verified observer firmware image and manifest",
                 "verified": true
               }
             ],
@@ -3382,12 +3412,14 @@
             "input_sources": [
               {
                 "input": "CONSOLE.1–8",
-                "source_cluster": 7,
+                "source_cluster": null,
+                "source_name": "Isolated CONSOLE RJ45 breakout and cable",
                 "verified": true
               },
               {
                 "input": "MOTOR.1–8",
-                "source_cluster": 7,
+                "source_cluster": null,
+                "source_name": "Isolated MOTOR RJ45 breakout and cable",
                 "verified": true
               },
               {
