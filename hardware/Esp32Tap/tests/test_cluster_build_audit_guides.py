@@ -355,6 +355,7 @@ def _operator_record_groups(
             actions["measure"],
             (
                 "instruction",
+                "ledger_stage",
                 "device",
                 "pin",
                 "net",
@@ -371,7 +372,7 @@ def _operator_record_groups(
             add(
                 "state sequence",
                 actions["state_sequence"],
-                ("stage", "state", "action", "evidence"),
+                ("step", "stage", "state", "action", "evidence"),
             )
     return groups
 
@@ -1224,12 +1225,14 @@ def test_audit_cluster_7_uses_firmware_gpio21_without_external_fixture_drive():
     usb_release = next(
         record for record in actions["measure"] if "USB logic" in record["net"]
     )
-    assert "disconnect USB" in usb_release["stimulus"]
+    assert usb_release["ledger_stage"] == 2
+    assert "disconnect usb" in actions["state_sequence"][1]["action"].lower()
     assert "removes GPIO21 drive" in usb_release["observation_state"]
     gpio_release = next(
         record for record in actions["measure"] if "GPIO21 command" in record["net"]
     )
-    assert "firmware deassert" in gpio_release["stimulus"].lower()
+    assert gpio_release["ledger_stage"] == 4
+    assert "firmware deassert" in actions["state_sequence"][3]["action"].lower()
     assert "logic powered" in gpio_release["observation_state"].lower()
     tread_release = next(
         record for record in actions["measure"] if "TREAD_OK removal" in record["net"]
@@ -1255,6 +1258,8 @@ def test_audit_cluster_11_state_sequence_restores_ground_before_harness():
         "remove_harness",
         "restore_plus8_2",
         "restore_plus8_8",
+        "drop_test",
+        "thermal_hold",
     ]
     assert [step["stage"] for step in sequence] == expected_stages
     for step in sequence[:5]:
@@ -1328,3 +1333,27 @@ def test_audit_cluster_8_keeps_gpio21_connected_for_firmware_relay_transfer():
         step["link"] for step in actions["restore"] if step["restores_link"]
     }
     assert opened == restored == {"GPIO15 jumper"}
+
+
+def test_audit_c7_c11_measurements_are_evidence_only_and_keyed_to_ledgers():
+    clusters = {
+        cluster["number"]: cluster for cluster in _guide_metadata(AUDIT_HTML)["clusters"]
+    }
+    expected_measure_stages = {
+        7: [1, 2, 4, 6, 8, 10],
+        11: [5, 6, 11, 12],
+    }
+    for number, expected in expected_measure_stages.items():
+        actions = clusters[number]["actions"]
+        steps = actions["state_sequence"]
+        assert [step["step"] for step in steps] == list(range(1, len(steps) + 1))
+        measurements = actions["measure"]
+        assert [record["ledger_stage"] for record in measurements] == expected
+        for record in measurements:
+            stage = record["ledger_stage"]
+            assert record["instruction"].startswith(
+                "Evidence only — do not repeat operations; enter result captured during Ledger stage "
+            )
+            assert record["stimulus"].startswith(
+                f"Captured during Ledger stage {stage}:"
+            )
