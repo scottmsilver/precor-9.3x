@@ -11,10 +11,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 BRINGUP = ROOT / "hardware/Esp32Tap/bringup"
-BUILD_HTML = BRINGUP / "esp32tap-cluster-build-guide.html"
-BUILD_PDF = BRINGUP / "esp32tap-cluster-build-guide.pdf"
-AUDIT_HTML = BRINGUP / "esp32tap-cluster-audit-guide.html"
-AUDIT_PDF = BRINGUP / "esp32tap-cluster-audit-guide.pdf"
+BUILD_HTML = BRINGUP / "esp32tap-cluster-build-and-test.html"
+BUILD_PDF = BRINGUP / "esp32tap-cluster-build-and-test.pdf"
+AUDIT_HTML = BRINGUP / "esp32tap-cluster-audit-and-test.html"
+AUDIT_PDF = BRINGUP / "esp32tap-cluster-audit-and-test.pdf"
 OLD_HTML = BRINGUP / "esp32tap-module-test-checklist.html"
 OLD_PDF = BRINGUP / "esp32tap-module-test-checklist.pdf"
 
@@ -49,7 +49,7 @@ SUPERSESSION_REFERENCE_ALLOWLIST = {
     ROOT / "docs/superpowers/plans/2026-08-10-esp32tap-cluster-build-audit-guides.md",
 }
 PRESCRIBED_BREADBOARD_HOLE = re.compile(
-    r"(?<![A-Za-z0-9_.])(?:[a-j](?:[1-9]|[1-5]\d|6[0-3])|[+-](?:[1-5]\d|6[0-3]))(?![A-Za-z0-9_.])"
+    r"(?<![A-Za-z0-9_.])(?:[a-jA-J](?:[1-9]|[1-5]\d|6[0-3])|[+-](?:[1-5]\d|6[0-3]))(?![A-Za-z0-9_.])"
 )
 
 BUILD_LABELS = (
@@ -77,6 +77,22 @@ IDENTITY_AND_MANIFEST_LABELS = (
     "Source manifest",
 )
 SOURCE_AND_SAFETY_LABELS = ("Source contract", "Safety contract")
+RENDERED_BOUNDARY_LABELS = (
+    "Dependencies",
+    "Inputs",
+    "Outputs",
+    "Source state",
+    "STOP gate",
+    "PASS gate",
+)
+RENDERED_IDENTITY_LABELS = (
+    "GPIO15 jumper",
+    "GPIO21 jumper",
+    "Firmware identity",
+    "Relay exerciser identity",
+    "Observer identity",
+    "Observer manifest",
+)
 
 # Each expression is intentionally about an observable bench contract, rather
 # than an exact sentence, so formatting and explanatory prose may evolve.
@@ -87,7 +103,7 @@ COMMON_SAFETY_AND_EVIDENCE = {
     "VIN window": r"VIN.{0,30}7\.20\s*[–-]\s*7\.90\s*V",
     "LOGIC_3V3 window": r"LOGIC_3V3.{0,30}3\.20\s*[–-]\s*3\.40\s*V",
     "TREAD_OK three-state behavior": r"TREAD_OK.{0,180}low.{0,50}(?:below|under).{0,30}UV.{0,80}high.{0,50}8\.00\s*V.{0,80}low.{0,50}(?:above|over).{0,30}OV",
-    "UV threshold": r"UV.{0,40}6\.25\s*[–-]\s*6\.55\s*V",
+    "rising UV threshold": r"UV.{0,30}rising.{0,30}6\.25\s*[–-]\s*6\.55\s*V|rising.{0,30}UV.{0,30}6\.25\s*[–-]\s*6\.55\s*V",
     "OV falling threshold": r"OV.{0,30}falling.{0,30}10\.30\s*[–-]\s*10\.90\s*V",
     "TPS709 enabled output": r"TPS709.{0,50}(?:enabled|enable).{0,40}4\.75\s*[–-]\s*5\.25\s*V",
     "TPS709 disabled output": r"TPS709.{0,50}(?:disabled|disable).{0,40}(?:below|<)\s*0\.25\s*V",
@@ -96,10 +112,15 @@ COMMON_SAFETY_AND_EVIDENCE = {
     "relay coil voltage": r"coil.{0,40}(?:≥|>=|at least)\s*4\.50\s*V",
     "BC337 saturation": r"BC337.{0,40}VCE.{0,20}(?:≤|<=|no more than)\s*0\.30\s*V",
     "feedback truth table": r"\(1\s*,\s*0\).{0,40}energized.{0,80}\(0\s*,\s*1\).{0,40}bypass.{0,100}(?:00|0\s*,\s*0).{0,40}(?:11|1\s*,\s*1).{0,40}fault",
-    "relay release time": r"release.{0,30}(?:≤|<=|no more than)\s*100\s*ms",
+    "USB logic power removal releases relay": r"(?:remove|removal|loss).{0,30}USB.{0,30}logic power.{0,200}(?:release|NC.{0,20}bypass)|(?:release|NC.{0,20}bypass).{0,200}(?:remove|removal|loss).{0,30}USB.{0,30}logic power",
+    "GPIO21 command removal releases relay": r"(?:remove|removal|loss).{0,30}GPIO21.{0,30}command.{0,200}(?:release|NC.{0,20}bypass)|(?:release|NC.{0,20}bypass).{0,200}(?:remove|removal|loss).{0,30}GPIO21.{0,30}command",
+    "TREAD_OK removal releases relay": r"(?:remove|removal|loss).{0,30}TREAD_OK.{0,200}(?:release|NC.{0,20}bypass)|(?:release|NC.{0,20}bypass).{0,200}(?:remove|removal|loss).{0,30}TREAD_OK",
+    "VIN removal releases relay": r"(?:remove|removal|loss).{0,30}VIN.{0,200}(?:release|NC.{0,20}bypass)|(?:release|NC.{0,20}bypass).{0,200}(?:remove|removal|loss).{0,30}VIN",
+    "NC bypass release time": r"NC.{0,30}bypass.{0,50}(?:≤|<=|no more than|within)\s*100\s*ms",
     "five-minute thermal hold": r"(?:five|5)[ -]minute.{0,80}(?:≤|<=|no more than)\s*45\s*°?C.{0,80}(?:≤|<=|no more than)\s*10\s*°?C.{0,30}(?:over|above)\s*ambient",
     "separate treadmill current": r"treadmill.{0,40}current.{0,40}(?:separate|separately).{0,40}(?:≤|<=|no more than)\s*500\s*mA|(?:separate|separately).{0,40}treadmill.{0,40}current.{0,40}(?:≤|<=|no more than)\s*500\s*mA",
-    "pass-through voltage drops": r"drop(?:s)?.{0,40}(?:≤|<=|no more than)\s*50\s*mV",
+    "pass-through supply drop": r"(?:supply.{0,30}drop|drop.{0,30}supply).{0,40}(?:≤|<=|no more than)\s*50\s*mV",
+    "pass-through ground-return drop": r"(?:ground.?return.{0,30}drop|drop.{0,30}ground.?return).{0,40}(?:≤|<=|no more than)\s*50\s*mV",
     "fifteen-minute thermal hold": r"(?:fifteen|15)[ -]minute.{0,80}(?:≤|<=|no more than)\s*40\s*°?C.{0,80}(?:≤|<=|no more than)\s*10\s*°?C.{0,30}(?:over|above)\s*ambient",
     "mutually exclusive power sources": r"USB.{0,50}STANDALONE POWER.{0,60}(?:mutual(?:ly)? exclusive|never.{0,20}(?:together|simultaneous)|one source only)",
     "coil power remains open": r"COIL POWER.{0,50}(?:open|disconnected).{0,80}unloaded test",
@@ -111,6 +132,13 @@ COMMON_SAFETY_AND_EVIDENCE = {
     "cluster 7 is local-only": r"Cluster\s*7.{0,100}local.?only",
     "cluster 11 is end-to-end": r"Cluster\s*11.{0,100}end.?to.?end.{0,80}CONSOLE\.6.{0,20}(?:↔|<->|to).{0,20}MOTOR\.6",
     "active-low isolated VBUS sense": r"VBUS.{0,80}active.?low.{0,100}(?:no|never).{0,30}(?:join|connect).{0,40}VBUS.{0,30}local rail",
+    "no treadmill cable before clusters 1 through 10": r"(?:no|do not connect).{0,30}treadmill cable.{0,50}(?:(?:before|through).{0,30}clusters?\s*1\s*[–-]\s*10|until.{0,30}cluster\s*11)",
+    "GPIO15 jumper removed before manual injection": r"(?:remove|removed).{0,30}GPIO15.{0,30}jumper.{0,80}before.{0,30}manual injection|before.{0,30}manual injection.{0,80}(?:remove|removed).{0,30}GPIO15.{0,30}jumper",
+    "GPIO21 jumper removed before manual injection": r"(?:remove|removed).{0,30}GPIO21.{0,30}jumper.{0,80}before.{0,30}manual injection|before.{0,30}manual injection.{0,80}(?:remove|removed).{0,30}GPIO21.{0,30}jumper",
+    "bounded relay exerciser": r"relay exerciser.{0,80}bounded|bounded.{0,80}relay exerciser",
+    "bypass-only observation": r"bypass.?only",
+    "bypass observation sequence": r"source.{0,50}state.{0,50}harness.{0,50}direct.?path",
+    "future qualified firmware and production evidence gate": r"future.{0,80}qualified functional[ -]firmware.{0,160}production safety evidence|qualified functional[ -]firmware.{0,160}production safety evidence.{0,80}future",
 }
 
 
@@ -207,6 +235,129 @@ def _assert_operator_evidence(cluster: dict, guide_name: str) -> None:
     )
 
 
+def _assert_dependency_contract(cluster: dict, guide_name: str) -> None:
+    number = cluster["number"]
+    dependencies = cluster["dependencies"]
+    assert isinstance(dependencies, list) and dependencies, (
+        f"{guide_name} cluster {number}: dependencies must be a nonempty list"
+    )
+    for dependency in dependencies:
+        assert (
+            isinstance(dependency, int)
+            and not isinstance(dependency, bool)
+            and 1 <= dependency < number
+        ) or (isinstance(dependency, str) and dependency.strip()), (
+            f"{guide_name} cluster {number}: dependency {dependency!r} is not an earlier cluster or named prerequisite"
+        )
+
+    sources = cluster.get("input_sources")
+    assert isinstance(sources, list) and len(sources) == len(cluster["inputs"]), (
+        f"{guide_name} cluster {number}: input_sources must map every input"
+    )
+    for source in sources:
+        assert (
+            isinstance(source, dict)
+            and {"input", "source_cluster", "verified"} <= source.keys()
+        ), (
+            f"{guide_name} cluster {number}: each input source needs input, source_cluster, and verified"
+        )
+        assert source["input"] in cluster["inputs"]
+        assert source["verified"] is True, (
+            f"{guide_name} cluster {number}: input {source['input']!r} consumes unverified upstream state"
+        )
+        upstream = source["source_cluster"]
+        assert upstream is None or upstream in dependencies, (
+            f"{guide_name} cluster {number}: input source {upstream!r} is not a declared dependency"
+        )
+    assert {source["input"] for source in sources} == set(cluster["inputs"]), (
+        f"{guide_name} cluster {number}: every input must have exactly one provenance record"
+    )
+
+
+def _assert_instruction_steps(steps: object, label: str) -> list[dict]:
+    assert isinstance(steps, list) and steps, f"{label} must be a nonempty list"
+    assert all(isinstance(step, dict) and step.get("instruction") for step in steps), (
+        f"{label} steps must be structured objects with nonempty instructions"
+    )
+    return steps
+
+
+def _assert_build_actions(cluster: dict, guide_name: str) -> None:
+    number = cluster["number"]
+    parts = cluster.get("parts")
+    assert isinstance(parts, list) and parts, (
+        f"{guide_name} cluster {number}: parts must be nonempty"
+    )
+    assert all(
+        isinstance(part, dict) and part.get("reference") and part.get("part")
+        for part in parts
+    ), (
+        f"{guide_name} cluster {number}: every part needs an exact reference and part identity"
+    )
+
+    wiring = cluster.get("wiring")
+    assert isinstance(wiring, list) and wiring, (
+        f"{guide_name} cluster {number}: wiring must be nonempty"
+    )
+    assert all(
+        isinstance(connection, dict)
+        and all(connection.get(field) for field in ("part", "pin", "net", "color"))
+        for connection in wiring
+    ), (
+        f"{guide_name} cluster {number}: every wiring record needs exact part, pin, net, and color"
+    )
+
+    actions = cluster.get("actions")
+    assert isinstance(actions, dict), (
+        f"{guide_name} cluster {number}: actions must be an object"
+    )
+    for action in ("build", "unpowered_test", "powered_test"):
+        _assert_instruction_steps(
+            actions.get(action), f"{guide_name} cluster {number} {action}"
+        )
+
+
+def _assert_audit_actions(cluster: dict, guide_name: str) -> None:
+    number = cluster["number"]
+    actions = cluster.get("actions")
+    assert isinstance(actions, dict), (
+        f"{guide_name} cluster {number}: actions must be an object"
+    )
+    structured = {
+        action: _assert_instruction_steps(
+            actions.get(action), f"{guide_name} cluster {number} {action}"
+        )
+        for action in ("isolate", "inspect", "measure", "likely_causes", "restore")
+    }
+
+    for step in structured["isolate"]:
+        assert isinstance(step.get("opens_link"), bool), (
+            f"{guide_name} cluster {number}: every isolation step must declare opens_link"
+        )
+        if step["opens_link"]:
+            assert step.get("link"), (
+                f"{guide_name} cluster {number}: link-opening isolation steps must name the link"
+            )
+    for step in structured["restore"]:
+        assert isinstance(step.get("restores_link"), bool), (
+            f"{guide_name} cluster {number}: every restore step must declare restores_link"
+        )
+        if step["restores_link"]:
+            assert step.get("link"), (
+                f"{guide_name} cluster {number}: link-restoring steps must name the link"
+            )
+    opened_links = {
+        step["link"] for step in structured["isolate"] if step["opens_link"]
+    }
+    restored_links = {
+        step["link"] for step in structured["restore"] if step["restores_link"]
+    }
+    assert opened_links <= restored_links, (
+        f"{guide_name} cluster {number}: opened audit links not restored: "
+        + ", ".join(sorted(opened_links - restored_links))
+    )
+
+
 def test_new_build_and_audit_artifacts_exist():
     missing = [
         path.relative_to(ROOT).as_posix()
@@ -244,20 +395,38 @@ def test_html_metadata_defines_ordered_cluster_contracts(
         assert SHARED_CLUSTER_FIELDS <= cluster.keys(), (
             f"{path.name} cluster {cluster.get('number')}: incomplete shared contract"
         )
-        for field in ("inputs", "outputs", "stop_gate", "pass_gate"):
+        assert isinstance(cluster["inputs"], list), (
+            f"{path.name} cluster {cluster['number']}: inputs must be a list"
+        )
+        assert isinstance(cluster["outputs"], list), (
+            f"{path.name} cluster {cluster['number']}: outputs must be a list"
+        )
+        assert all(isinstance(item, str) and item for item in cluster["inputs"]), (
+            f"{path.name} cluster {cluster['number']}: inputs must be named"
+        )
+        assert len(set(cluster["inputs"])) == len(cluster["inputs"]), (
+            f"{path.name} cluster {cluster['number']}: inputs must be unique"
+        )
+        assert all(isinstance(item, str) and item for item in cluster["outputs"]), (
+            f"{path.name} cluster {cluster['number']}: outputs must be named"
+        )
+        for field in (
+            "inputs",
+            "outputs",
+            "dependencies",
+            "source_state",
+            "stop_gate",
+            "pass_gate",
+        ):
             assert cluster[field], (
                 f"{path.name} cluster {cluster['number']}: {field} must be nonempty"
             )
         _assert_operator_evidence(cluster, path.name)
+        _assert_dependency_contract(cluster, path.name)
         if expected_mode == "assembled_board_audit":
-            actions = cluster.get("actions")
-            assert isinstance(actions, dict), (
-                f"{path.name} cluster {cluster['number']}: actions must be an object"
-            )
-            for action in ("isolate", "measure", "restore"):
-                assert actions.get(action), (
-                    f"{path.name} cluster {cluster['number']}: {action} action must be nonempty"
-                )
+            _assert_audit_actions(cluster, path.name)
+        else:
+            _assert_build_actions(cluster, path.name)
 
 
 def test_build_and_audit_metadata_share_the_same_cluster_contracts():
@@ -285,9 +454,9 @@ def test_html_has_no_prescribed_breadboard_holes(path: Path):
 
 
 def test_breadboard_hole_pattern_distinguishes_holes_from_pins_and_voltages():
-    for hole in ("a29", "f36", "-52"):
+    for hole in ("a29", "A29", "f36", "F36", "-52"):
         assert PRESCRIBED_BREADBOARD_HOLE.fullmatch(hole)
-    for allowed in ("A29", "GPIO29", "U6.29", "3.29 V", "-5.2 V", "+8.00 V", "VIN_A29"):
+    for allowed in ("GPIO29", "U6.29", "3.29 V", "-5.2 V", "+8.00 V", "VIN_A29"):
         assert PRESCRIBED_BREADBOARD_HOLE.search(allowed) is None
 
 
@@ -302,6 +471,10 @@ def test_html_contains_mode_workflow_and_safety_contracts(
     _assert_headings_in_order(text, path.name)
     for label in labels:
         assert label in text, f"{path.name}: missing {label!r} workflow label"
+    for label in RENDERED_IDENTITY_LABELS:
+        assert label in text, (
+            f"{path.name}: missing {label!r} identity or manifest field"
+        )
     per_cluster_labels = labels[:-1] if path == BUILD_HTML else labels
     _assert_each_cluster_has_workflow_and_evidence(text, path.name, per_cluster_labels)
     _assert_contract_language(text, path.name)
@@ -352,6 +525,22 @@ def test_pdf_preserves_contracts_and_has_letter_page_size(
     for label in (*workflow_labels, *IDENTITY_AND_MANIFEST_LABELS, "STOP", "PASS"):
         assert label in text, f"{path.name}: missing {label!r}"
     _assert_each_cluster_has_workflow_and_evidence(text, path.name, workflow_labels)
+    for label in RENDERED_IDENTITY_LABELS:
+        assert label in text, f"{path.name}: missing rendered {label!r}"
+    for number, name in EXPECTED_CLUSTERS.items():
+        start = re.search(rf"Cluster\s+{number}\s*(?:—|-)\s*{re.escape(name)}", text)
+        next_number = number + 1
+        next_start = (
+            re.search(rf"Cluster\s+{next_number}\s*(?:—|-)", text)
+            if next_number in EXPECTED_CLUSTERS
+            else None
+        )
+        assert start
+        section = text[start.start() : next_start.start() if next_start else None]
+        for label in RENDERED_BOUNDARY_LABELS:
+            assert label in section, (
+                f"{path.name} cluster {number}: missing rendered {label!r}"
+            )
     _assert_contract_language(text, path.name)
     assert re.search(r"file:///|/home/|[A-Za-z]:\\", text, re.IGNORECASE) is None
     assert str(ROOT) not in text
