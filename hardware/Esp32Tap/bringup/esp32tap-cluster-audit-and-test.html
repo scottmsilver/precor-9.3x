@@ -1,0 +1,2639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta charset="utf-8">
+<title>Esp32Tap Assembled-Board Cluster Audit and Test Guide</title>
+<style>
+      @page { size: letter portrait; margin: 0.42in; }
+      * { box-sizing: border-box; }
+      body { margin: 0; color: #172033; font: 8.25pt/1.18 Arial, sans-serif; }
+      h1 { margin: 0 0 4px; color: #10264f; font-size: 21pt; }
+      h2 { margin: 0 0 5px; padding: 5px 8px; background: #2458a6; color: white; font-size: 13pt; }
+      h3 { margin: 5px 0 2px; color: #183c70; font-size: 9.5pt; }
+      p, ul, ol { margin: 2px 0 4px; } ul, ol { padding-left: 18px; } li { margin: 1px 0; }
+      .page { break-after: page; page-break-after: always; min-height: 9.5in; position: relative; }
+      .page:last-of-type { break-after: auto; page-break-after: auto; }
+      .subtitle { color: #4b5b72; font-size: 10.5pt; }
+      .warning,.stop,.pass,.state { padding: 5px 7px; margin: 5px 0; }
+      .warning,.stop { border: 1.7px solid #a13b28; background: #fff1ed; } .stop { border-left-width: 6px; }
+      .pass { border: 1.7px solid #2f6b46; background: #eef9f1; }
+      .state { border-left: 5px solid #2563eb; background: #eef5ff; }
+      .boundary { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 4px 0; }
+      .boundary.single { grid-template-columns: 1fr; }
+      .boundary > div { border: 1px solid #93a0b2; padding: 4px 5px; }
+      table { width: 100%; border-collapse: collapse; margin: 3px 0 5px; table-layout: fixed; }
+      tr { break-inside: avoid; } th,td { border: 1px solid #9eabba; padding: 2.5px 3px; vertical-align: top; overflow-wrap: anywhere; }
+      th { background: #3f526f; color: white; text-align: left; } tbody tr:nth-child(even) { background: #f3f6fa; }
+      .records th:last-child, .records td:last-child { width: 17%; min-height: 24px; }
+      .records td:last-child .blank { font-size: 0; }
+      .write td:last-child { width: 58%; height: 28px; }
+      .detail { color: #45556b; font-size: 7.2pt; }
+      .sign { display: grid; grid-template-columns: 1fr .7fr 1fr; gap: 8px; margin-top: 6px; }
+      .blank { min-height: 24px; border-bottom: 1px solid #45556b; padding: 3px; }
+      .small { font-size: 7.1pt; } .compact { font-size: 7.4pt; line-height: 1.08; }
+      .continued { break-before: page; page-break-before: always; margin-top: 0; }
+      .footer { position: absolute; bottom: 0; left: 0; right: 0; border-top: 1px solid #b5bfcc; padding-top: 3px; color: #687589; font-size: 7.2pt; }
+</style>
+</head>
+<body>
+<section class="page"><h1>Esp32Tap &mdash; Assembled-Board Cluster Audit and Test</h1>
+<p class="subtitle"><b>Guide mode:</b> Assembled-board audit &middot; Isolate the smallest safe boundary, inspect, measure forward, restore exactly, then sign.</p>
+<div class="warning">Audit the assembled board without wholesale disassembly. No treadmill cable before clusters 1&ndash;10; do not connect a treadmill cable until Cluster 11. Never externally drive connected GPIO15 or GPIO21: remove the exact named jumper first. No physical placement or hole coordinate is prescribed.</div>
+<div class="boundary">
+<div>
+<b>Device serial:</b><br><br><b>Hardware revision:</b>
+</div>
+<div>
+<b>Operator:</b><br><br><b>Date:</b>
+</div>
+</div>
+<p><b>Source manifest:</b> esp32tap-breadboard-netlist.csv; esp32tap-breadboard-clusters.html; esp32tap-breadboard-from-to.html; DigiKey invoice 129832848; build-guide cluster metadata.</p>
+<div class="boundary">
+<div>
+<b>GPIO15 jumper:</b> ____________________<br><b>GPIO21 jumper:</b> ____________________<br><b>Firmware identity:</b> ____________________</div>
+<div>
+<b>Relay exerciser identity:</b> ____________________<br><b>Observer identity:</b> ____________________<br><b>Observer manifest:</b> ____________________</div>
+</div>
+<h3>Source contract</h3>
+<div class="state">
+<b>Mutually exclusive source rule:</b> USB and STANDALONE POWER are mutually exclusive&mdash;one source only. USB connected means STANDALONE POWER physically removed. STANDALONE POWER installed means USB physically disconnected. VBUS sensing is active-low; never join or connect VBUS to a local rail. All sources off before any RJ45 attachment/removal, harness change, or direct-path change. COIL POWER stays open through the unloaded test.</div>
+<h3>Safety contract</h3>
+<ul>
+<li>Initial source: 8.00 V, initial 250 mA current limit; coil-open current below 50 mA. VIN 7.20&ndash;7.90 V; LOGIC_3V3 3.20&ndash;3.40 V.</li>
+<li>TREAD_OK is low below UV, high at 8.00 V, and low above OV. UV rising 6.25&ndash;6.55 V; OV falling 10.30&ndash;10.90 V.</li>
+<li>TPS709 enabled 4.75&ndash;5.25 V; TPS709 disabled below 0.25 V. Loaded relay limit no more than 500 mA; coil 90&ndash;110 mA and at least 4.50 V; BC337 VCE no more than 0.30 V.</li>
+<li>Feedback (1,0) energized and (0,1) bypass; 00 or 11 fault. Remove USB logic power: NC bypass releases within 100 ms. Remove GPIO21 command: NC bypass releases within 100 ms. Remove TREAD_OK: NC bypass releases within 100 ms. Remove VIN: NC bypass releases within 100 ms.</li>
+<li>Five-minute hold: TPS709 and BC337 no more than 45&deg;C and no more than 10&deg;C over ambient. Fifteen-minute bypass hold: every endpoint no more than 40&deg;C and no more than 10&deg;C over ambient. Any unexpected reset is a STOP.</li>
+</ul>
+<div class="warning">
+<b>Firmware:</b> The current no-control diagnostic cannot pass a relay exercise gate and cannot pass a UART exercise gate. Coil/local TX tests require an exact bounded relay exerciser identity. Standalone/bypass requires observer identity and manifest proving relay and TX disabled. Cluster 7 is local-only. Cluster 11 is end-to-end: CONSOLE.6 &harr; MOTOR.6. No treadmill relay transfer or MCU TX. A future qualified functional-firmware identity and matching production safety evidence are required by a separate procedure.</div>
+<div class="footer">Esp32Tap assembled-board audit &middot; Identity, source, and safety contract</div></section><section class="page"><h2>Cluster 1 &mdash; Raw protection</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Empty board and verified bench equipment<br><b>Inputs:</b> +8V_RAW, GND</div>
+<div>
+<b>Outputs:</b> VIN, FUSED_8V<br><b>Source state:</b> USB absent; STANDALONE POWER removed; COIL POWER removed; bench 8.00 V, initial 250 mA limit</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Verify STANDALONE POWER and COIL POWER are open. &middot; No link opened &mdash; named downstream links verified open</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect F1, D1, D2, and CIN against board marks; D1 cathode stripe faces VIN, D2 cathode faces VIN, and CIN negative faces GND. &middot; D1/D2 cathode stripes toward VIN; CIN negative stripe toward GND; F1 non-polar</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Check protection input-to-output path and absence of a VIN-to-GND short. &middot; F1/D1/D2/CIN &middot; leads and terminals &middot; +8V_RAW, FUSED_8V, VIN, GND &middot; Forward path present; reverse/open behavior and no rail short<div class="detail">
+<b>device:</b> F1/D1/D2/CIN &middot; <b>pin:</b> leads and terminals &middot; <b>net:</b> +8V_RAW, FUSED_8V, VIN, GND &middot; <b>evidence:</b> Record continuity direction and VIN&ndash;GND resistance</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Apply the smallest safe source and measure forward through F1 and D1. &middot; F1/D1 &middot; input, output, anode, cathode &middot; +8V_RAW &rarr; FUSED_8V &rarr; VIN &middot; Bench 8.00 V, initial 250 mA limit &middot; STANDALONE POWER removed; COIL POWER removed; GPIO15 and GPIO21 untouched &middot; Meter identity; firmware not required &middot; USB absent; treadmill absent; coil open &middot; VIN 7.20&ndash;7.90 V; coil-open current below 50 mA</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify bench polarity, current limit, and GND reference.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check F1 heating/continuity, D1 direction/drop, D2 leakage, and CIN polarity.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Trace FUSED_8V then VIN; stop at the first missing or current-limited node.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Remove bench power and leave the verified STANDALONE POWER and COIL POWER links in their documented incoming state. &middot; No link opened</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; bench_voltage_v &middot; input_current_ma &middot; fused_8v_v &middot; vin_v</p>
+<div class="stop">
+<b>STOP gate:</b> Current approaches 250 mA, VIN is outside 7.20&ndash;7.90 V, polarity is wrong, or anything warms. Remove power; do not build Cluster 2.</div>
+<div class="pass">
+<b>PASS gate:</b> Protection chain, polarity, VIN window, and coil-open current pass. PASS &mdash; continue to Cluster 2 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 1 &middot; Raw protection</div></section><section class="page"><h2>Cluster 2 &mdash; TSR supply</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 1<br><b>Inputs:</b> VIN, GND</div>
+<div>
+<b>Outputs:</b> TSR_3V3<br><b>Source state:</b> Cluster 1 source state retained; STANDALONE POWER remains removed</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>With all sources off, open the named STANDALONE POWER link to isolate LOGIC_3V3; leave U2 and its capacitors assembled. &middot; STANDALONE POWER</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect U2 pin order and C2/C3 polarity without removing them; input is VIN, common is GND, output is TSR_3V3. &middot; U2 pins 1/2/3 = VIN/GND/TSR_3V3; C2/C3 negative stripes to GND</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Prove TSR_3V3 is isolated from LOGIC_3V3 and neither rail is shorted to GND. &middot; U2/C2/C3 &middot; pins 1/2/3 and capacitor leads &middot; VIN, GND, TSR_3V3, LOGIC_3V3 &middot; TSR_3V3 not joined to LOGIC_3V3; no rail short<div class="detail">
+<b>device:</b> U2/C2/C3 &middot; <b>pin:</b> pins 1/2/3 and capacitor leads &middot; <b>net:</b> VIN, GND, TSR_3V3, LOGIC_3V3 &middot; <b>evidence:</b> Record resistance and link-open continuity</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Apply verified VIN and measure U2 input, common, then output. &middot; U2 &middot; pin 1, pin 2, pin 3 &middot; VIN, GND, TSR_3V3 &middot; Verified Cluster 1 VIN &middot; STANDALONE POWER open; COIL POWER removed; GPIO15 and GPIO21 untouched &middot; Meter identity; firmware not required &middot; USB absent; treadmill absent &middot; TSR_3V3 3.20&ndash;3.40 V; LOGIC_3V3 remains unpowered</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify Cluster 1 VIN at U2 pin 1 and GND at pin 2.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check U2 orientation, C2/C3 polarity, and solder joints.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Measure pin 3 directly, then trace TSR_3V3 to the open STANDALONE POWER boundary.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Remove power, then restore the exact named STANDALONE POWER link to its recorded incoming state. &middot; STANDALONE POWER</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; vin_v &middot; tsr_3v3_v &middot; logic_3v3_isolation_ohm</p>
+<div class="stop">
+<b>STOP gate:</b> TSR_3V3 is outside 3.20&ndash;3.40 V, polarity is wrong, LOGIC_3V3 is energized across the removed link, or current/temperature rises.</div>
+<div class="pass">
+<b>PASS gate:</b> Verified Cluster 1 VIN produces isolated TSR_3V3 in range. PASS &mdash; continue to Cluster 3 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 2 &middot; TSR supply</div></section><section class="page"><h2>Cluster 3 &mdash; DevKit and logic supply</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 2; Verified USB bench source<br><b>Inputs:</b> TSR_3V3, USB_5V, GND</div>
+<div>
+<b>Outputs:</b> LOGIC_3V3, DevKit GND, GPIO21_CMD_POST, GPIO15_TX_ENABLE_POST, GPIO17_TX, GPIO38, USB_5V<br><b>Source state:</b> First USB-only with STANDALONE POWER removed; then USB physically disconnected before standalone link installation</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>All sources off: open the named STANDALONE POWER link before USB-only checks; physically disconnect USB before the standalone-only check. &middot; STANDALONE POWER</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect DevKit orientation, antenna clearance, USB connector identity, C4 placement, and both removable command jumper posts. &middot; DevKit USB end and antenna match assembly drawing; C4 spans LOGIC_3V3/GND; command posts labeled</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Confirm grounds map, STANDALONE POWER is open, and USB VBUS is not joined to LOGIC_3V3. &middot; U1/C4/JP1 &middot; 3V3, GND, 5V, command posts, link terminals &middot; LOGIC_3V3, GND, USB_5V, TSR_3V3 &middot; GND common; TSR_3V3 isolated from LOGIC_3V3; VBUS not tied to local 3.3 V<div class="detail">
+<b>device:</b> U1/C4/JP1 &middot; <b>pin:</b> 3V3, GND, 5V, command posts, link terminals &middot; <b>net:</b> LOGIC_3V3, GND, USB_5V, TSR_3V3 &middot; <b>evidence:</b> Record mapping and resistance</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Boot USB-only and record the logic rail and boot stability. &middot; U1 &middot; 3V3, GND, USB connector &middot; USB_5V &rarr; LOGIC_3V3 &middot; Verified USB bench source &middot; STANDALONE POWER open; command jumpers installed but never externally driven &middot; Exact observer build identity &middot; USB-only; bench VIN absent &middot; LOGIC_3V3 3.20&ndash;3.40 V; stable boot; no backfeed</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Disconnect USB, install STANDALONE POWER, and repeat the boot observation. &middot; U1/JP1 &middot; 3V3 and link terminals &middot; TSR_3V3 &rarr; LOGIC_3V3 &middot; Verified Cluster 2 TSR_3V3 &middot; USB physically disconnected; STANDALONE POWER installed; GPIO15/GPIO21 not driven &middot; Exact observer build identity &middot; Standalone-only; relay off; TX disabled &middot; LOGIC_3V3 3.20&ndash;3.40 V; stable boot; USB_5V unpowered</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify exactly one source is present and the source handoff order was followed.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check JP1 contact, C4, DevKit seating/orientation, and USB cable/source.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Probe LOGIC_3V3 at U1, then USB_5V and the two command posts for unexpected drive.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>All sources off: restore the exact STANDALONE POWER link to its documented incoming state; reconnect no source during restoration. &middot; STANDALONE POWER</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; usb_logic_3v3_v &middot; standalone_logic_3v3_v &middot; boot_observation</p>
+<div class="stop">
+<b>STOP gate:</b> Sources overlap, either source backfeeds the other, LOGIC_3V3 is outside 3.20&ndash;3.40 V, or DevKit boot is unstable.</div>
+<div class="pass">
+<b>PASS gate:</b> USB-only and standalone-only handoff both pass, with the other source physically absent. PASS &mdash; continue to Cluster 4 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 3 &middot; DevKit and logic supply</div></section><section class="page"><h2>Cluster 4 &mdash; TPS3700 voltage monitor</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 1; Cluster 3<br><b>Inputs:</b> VIN, LOGIC_3V3, GND</div>
+<div>
+<b>Outputs:</b> UV_SENSE, OV_SENSE, TREAD_OK, TREAD_OK_MCU<br><b>Source state:</b> USB logic only; STANDALONE POWER removed; bench source swept at protected VIN</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Keep command jumpers connected for observation only; open no assembled divider link and sweep only protected VIN with USB logic supplied. &middot; No link opened &mdash; GPIO6 observation only</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect U3 notch/pin 1, divider resistor identities, adapter mapping, and pull-up orientation before power. &middot; U3 notch and pin 1 mark verified; UV and OV divider populations match labels; adapter map recorded</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Measure each divider leg and map adapter pins to U3 and GPIO6. &middot; U3/R-divider/adapter &middot; U3 sense/output pins and adapter pins &middot; VIN, UV_SENSE, OV_SENSE, TREAD_OK, GPIO6 &middot; UV path implements VIN / 16; OV path implements VIN / 26.5; output reaches GPIO6<div class="detail">
+<b>device:</b> U3/R-divider/adapter &middot; <b>pin:</b> U3 sense/output pins and adapter pins &middot; <b>net:</b> VIN, UV_SENSE, OV_SENSE, TREAD_OK, GPIO6 &middot; <b>evidence:</b> Record resistance ratios and continuity map</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Sweep protected VIN upward and downward while observing both sense pins and TREAD_OK. &middot; U3 &middot; sense pins, output pin &middot; VIN, UV_SENSE, OV_SENSE, TREAD_OK &middot; Protected VIN sweep below UV &rarr; 8.00 V &rarr; above OV &rarr; downward &middot; STANDALONE POWER removed; GPIO15/GPIO21 untouched &middot; Exact observer build identity &middot; USB logic only; GPIO6 is high-impedance observation &middot; TREAD_OK low below UV, high at 8.00 V, low above OV; UV rising 6.25&ndash;6.55 V; OV falling 10.30&ndash;10.90 V</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify protected VIN sweep, USB logic rail, and common GND.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check divider values, U3 orientation, pull-up, and adapter mapping.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Probe UV_SENSE and OV_SENSE before TREAD_OK, then GPIO6.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Return VIN to zero, remove all power, and leave the unchanged observation wiring in its recorded incoming state. &middot; No link opened</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; uv_rising_v &middot; ov_falling_v &middot; tread_ok_low_v &middot; tread_ok_high_v</p>
+<div class="stop">
+<b>STOP gate:</b> TREAD_OK three-state behavior or thresholds fail; never exceed protected VIN about 11.1 V; stop if TVS draws appreciable current or warms.</div>
+<div class="pass">
+<b>PASS gate:</b> Both sweep directions and GPIO6 isolated observation match limits. PASS &mdash; continue to Cluster 5 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 4 &middot; TPS3700 voltage monitor</div></section><section class="page"><h2>Cluster 5 &mdash; AHC08 permission logic</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 3; Cluster 4<br><b>Inputs:</b> LOGIC_3V3, TREAD_OK, RELAY_CMD, TX_ENABLE, GND</div>
+<div>
+<b>Outputs:</b> RELAY_GATE, TX_GATE<br><b>Source state:</b> USB logic and bench VIN; remove the corresponding DevKit command jumper before manual injection</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>All sources off: remove the exact GPIO21 jumper before any RELAY_CMD manual injection; remove the exact GPIO15 jumper before any TX_ENABLE manual injection. &middot; GPIO21 jumper</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+<tr>
+<td>Keep sources off and remove the second named command boundary before its manual truth-table injection. &middot; GPIO15 jumper</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect U4 notch/pin 1, decoupling, pull-downs, and labeled jumper endpoints; never externally drive a connected DevKit GPIO. &middot; U4 notch and pin 1 verified; GPIO21 &harr; RELAY_CMD and GPIO15 &harr; TX_ENABLE endpoints labeled</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Map permission-logic inputs and outputs with both command jumpers removed. &middot; U4 &middot; input and output pins &middot; RELAY_CMD, TX_ENABLE, TREAD_OK, RELAY_GATE, TX_GATE &middot; Exact map; command inputs default low; no output short<div class="detail">
+<b>device:</b> U4 &middot; <b>pin:</b> input and output pins &middot; <b>net:</b> RELAY_CMD, TX_ENABLE, TREAD_OK, RELAY_GATE, TX_GATE &middot; <b>evidence:</b> Record pin/net map and pull-down resistance</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Inject only at the isolated RELAY_CMD side and execute the four-state gate table. &middot; U4 &middot; RELAY_CMD input, TREAD_OK input, RELAY_GATE output &middot; RELAY_CMD + TREAD_OK &rarr; RELAY_GATE &middot; Current-limited 0 V/3.3 V manual injection &middot; GPIO21 jumper removed exactly; GPIO15 jumper remains removed during paired audit &middot; Meter/scope identity; firmware not used to source the input &middot; DevKit disconnected from injected node &middot; RELAY_GATE high only when both inputs are high</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Inject only at the isolated TX_ENABLE side and execute the four-state gate table. &middot; U4 &middot; TX_ENABLE input, TREAD_OK input, TX_GATE output &middot; TX_ENABLE + TREAD_OK &rarr; TX_GATE &middot; Current-limited 0 V/3.3 V manual injection &middot; GPIO15 jumper removed exactly; GPIO21 jumper remains removed during paired audit &middot; Meter/scope identity; firmware not used to source the input &middot; DevKit disconnected from injected node &middot; TX_GATE high only when both inputs are high</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify LOGIC_3V3, GND, TREAD_OK state, and that the exact command jumper is removed.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check U4 orientation, decoupling, pull-downs, and pin map.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Probe each isolated input at U4, then its gate output; stop at first mismatch.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>All injection and sources off: restore the exact GPIO21 jumper and verify RELAY_CMD is no longer externally driven. &middot; GPIO21 jumper</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+<tr>
+<td>With injection absent, restore the exact GPIO15 jumper and verify TX_ENABLE is no longer externally driven. &middot; GPIO15 jumper</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; relay_truth_table &middot; tx_truth_table &middot; gpio21_jumper_restore &middot; gpio15_jumper_restore</p>
+<div class="stop">
+<b>STOP gate:</b> Any gate rises without both inputs, a command GPIO remains connected during manual drive, or supply/reset behavior is abnormal.</div>
+<div class="pass">
+<b>PASS gate:</b> Both four-state truth tables pass and temporary drives are removed. PASS &mdash; continue to Cluster 6 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 5 &middot; AHC08 permission logic</div></section><section class="page"><h2>Cluster 6 &mdash; TPS709 and BC337 driver</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 1; Cluster 5<br><b>Inputs:</b> VIN, RELAY_GATE, GND</div>
+<div>
+<b>Outputs:</b> +5V_RLY, RELAY_COIL&minus;<br><b>Source state:</b> Valid VIN/TREAD_OK; COIL POWER remains removed for the unloaded test</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Verify the named COIL POWER link is open; do not disturb the assembled regulator or BC337 wiring. &middot; COIL POWER &mdash; verified open, not newly opened</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect U5 orientation, Q1 BC337 C/B/E mapping, D3 polarity, and C5/C6 polarity before the unloaded audit. &middot; U5 pin 1 mark verified; BC337 collector/base/emitter physically mapped; D3 cathode toward +5V_RLY</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Map regulator enable/output, base resistor, BC337 pins, diode, and the open coil boundary. &middot; U5/Q1/D3 &middot; enable/output and C/B/E pins &middot; RELAY_GATE, +5V_RLY, COIL_LOW, GND &middot; Exact device-pin/net map; coil remains isolated; no +5V_RLY short<div class="detail">
+<b>device:</b> U5/Q1/D3 &middot; <b>pin:</b> enable/output and C/B/E pins &middot; <b>net:</b> RELAY_GATE, +5V_RLY, COIL_LOW, GND &middot; <b>evidence:</b> Record continuity, transistor map, and COIL POWER isolation</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Measure disabled then enabled regulator output and base/collector behavior with the coil isolated. &middot; U5/Q1 &middot; enable, output, base, collector, emitter &middot; RELAY_GATE &rarr; +5V_RLY and BC337 base drive &middot; Isolated RELAY_GATE low then high from bounded fixture &middot; COIL POWER open; GPIO21 jumper removed before any manual injection &middot; Exact bounded relay exerciser identity &middot; No relay coil load; treadmill absent &middot; TPS709 enabled 4.75&ndash;5.25 V; TPS709 disabled below 0.25 V; output discharges</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify VIN, LOGIC_3V3, GND, RELAY_GATE stimulus, and COIL POWER open.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check U5 orientation/thermal pad, Q1 C/B/E map, D3 polarity, resistors, and capacitors.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Probe U5 enable then +5V_RLY, Q1 base, collector, and emitter in order.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Remove fixture drive and all power; restore no coil connection&mdash;leave COIL POWER in the documented incoming open state. &middot; COIL POWER &mdash; remains open</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; tps709_disabled_v &middot; tps709_enabled_v &middot; bc337_base_v &middot; coil_power_open</p>
+<div class="stop">
+<b>STOP gate:</b> COIL POWER is installed, enabled or disabled limits fail, output does not discharge below 0.25 V, or Q1/U5 heats.</div>
+<div class="pass">
+<b>PASS gate:</b> Unloaded regulator and base drive pass with coil isolated. PASS &mdash; continue to Cluster 7 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 6 &middot; TPS709 and BC337 driver</div></section><section class="page compact"><h2>Cluster 7 &mdash; Relay coil, local contacts, and feedback</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 6; Cluster 3<br><b>Inputs:</b> +5V_RLY, RELAY_COIL&minus;, LOGIC_3V3, GND</div>
+<div>
+<b>Outputs:</b> LOCAL_NC, LOCAL_NO, FB_NC, FB_NO<br><b>Source state:</b> Local-only bench exercise; treadmill/RJ45 cables absent; bounded relay exerciser verified; loaded relay limit no more than 500 mA</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Disconnect treadmill/RJ45 cables and remove the exact GPIO21 jumper before the bounded relay exerciser drives RELAY_CMD locally. &middot; GPIO21 jumper</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect K1 orientation, coil diode polarity, local NC/NO/COM labels, feedback contact mapping, and coil terminals. &middot; K1 pin map and contact symbols verified; flyback diode cathode toward +5V_RLY; local endpoints labeled</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Map the coil, local contact sets, and feedback contacts with COIL POWER open. &middot; K1/D3/Q1 &middot; coil pins, COM/NC/NO pins, feedback pins &middot; +5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO &middot; Coil finite and not shorted; local COM&rarr;NC continuity; feedback reports bypass<div class="detail">
+<b>device:</b> K1/D3/Q1 &middot; <b>pin:</b> coil pins, COM/NC/NO pins, feedback pins &middot; <b>net:</b> +5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO &middot; <b>evidence:</b> Record coil resistance and each de-energized contact map</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Install COIL POWER under the loaded limit and command one bounded local energization. &middot; K1/U5/Q1 &middot; coil terminals, Q1 collector/emitter, feedback contacts &middot; RELAY_GATE &rarr; coil and local contacts &middot; Bounded relay exerciser single pulse then off &middot; GPIO21 jumper removed exactly; GPIO15 untouched &middot; Exact bounded relay exerciser identity and SHA &middot; Local-only; treadmill/RJ45 absent; loaded limit no more than 500 mA &middot; Coil 90&ndash;110 mA; coil voltage at least 4.50 V; BC337 VCE no more than 0.30 V; feedback (1,0) energized and (0,1) bypass; 00 or 11 fault</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Measure release after removing USB logic power. &middot; K1 &middot; local COM/NC and feedback pins &middot; USB logic removal &rarr; NC bypass &middot; Bounded exerciser energized before source removal &middot; GPIO21 jumper removed; COIL POWER installed only for bounded test &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; USB logic release within 100 ms</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Measure release after removing GPIO21 command. &middot; K1 &middot; local COM/NC and feedback pins &middot; GPIO21 command removal &rarr; NC bypass &middot; Bounded exerciser energized before command removal &middot; GPIO21 jumper removed; command supplied only by bounded fixture &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; GPIO21 release within 100 ms</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Measure release after removing TREAD_OK. &middot; K1/U4 &middot; local COM/NC and feedback pins &middot; TREAD_OK removal &rarr; NC bypass &middot; Bounded exerciser energized before safety-input removal &middot; GPIO21 jumper removed; COIL POWER installed &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; TREAD_OK release within 100 ms</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Measure release after removing VIN. &middot; K1/U5 &middot; local COM/NC and feedback pins &middot; VIN removal &rarr; NC bypass &middot; Bounded exerciser energized before VIN removal &middot; GPIO21 jumper removed; COIL POWER installed &middot; Exact bounded relay exerciser identity &middot; Scope on local contact only; treadmill absent &middot; VIN release within 100 ms</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Run the five-minute local thermal hold and record all temperatures. &middot; U5/Q1/K1 &middot; regulator case, BC337 case, coil terminals &middot; Sustained bounded local relay command &middot; Five-minute hold under no more than 500 mA source limit &middot; GPIO21 jumper removed; COIL POWER installed; treadmill absent &middot; Exact bounded relay exerciser identity &middot; Ambient, TPS709, BC337, and relay observed &middot; TPS709 and BC337 no more than 45&deg;C and no more than 10&deg;C over ambient</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify loaded current limit, valid VIN/TREAD_OK, logic power, and bounded exerciser identity.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check K1 coil/contact pin map, U5 output, Q1 C/B/E, diode, and feedback wiring.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Measure +5V_RLY, coil voltage/current, local contact transfer, then feedback outputs.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>All power off: remove COIL POWER if it was installed for the test, then restore the exact GPIO21 jumper with no external drive present. &middot; GPIO21 jumper</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; relay_exerciser_identity &middot; usb_logic_release_ms &middot; gpio21_release_ms &middot; tread_ok_release_ms &middot; vin_release_ms &middot; ambient_temp_c &middot; tps709_temp_c &middot; bc337_temp_c</p>
+<p class="small"><b>Dedicated release / thermal evidence:</b> Relay exerciser identity ______ &middot; USB logic release (ms) ______ &middot; GPIO21 release (ms) ______ &middot; TREAD_OK release (ms) ______ &middot; VIN release (ms) ______ &middot; Ambient temperature (&deg;C) ______ &middot; TPS709 temperature (&deg;C) ______ &middot; BC337 temperature (&deg;C) ______</p>
+<div class="stop">
+<b>STOP gate:</b> Any electrical, feedback, release, reset, or five-minute thermal gate fails. Cluster 7 is local-only; it makes no end-to-end RJ45 claim.</div>
+<div class="pass">
+<b>PASS gate:</b> Local contacts, feedback, current, voltage, release, and thermal evidence all pass. PASS &mdash; continue to Cluster 8 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 7 &middot; Relay coil, local contacts, and feedback</div></section><section class="page compact"><h2>Cluster 8 &mdash; AHC126 and UART taps</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 3; Cluster 5; Cluster 7<br><b>Inputs:</b> LOGIC_3V3, TX_GATE, GPIO17_TX, LOCAL_NC, LOCAL_NO, GND</div>
+<div>
+<b>Outputs:</b> TX_DRV, UART_BUFFER_HIGH_Z, UART_BUFFER_FOLLOWS, GPIO18_RX_LOCAL, GPIO16_RX_LOCAL, LOCAL_TX_SELECTED<br><b>Source state:</b> Local future-interface fixture only; treadmill and both RJ45 breakouts absent; bounded UART/relay exerciser identity recorded</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Disconnect both RJ45 breakouts and remove the exact GPIO15 jumper before any local TX_ENABLE drive; retain only local stubs and relay contacts. &middot; GPIO15 jumper</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect U6 notch/pin 1, output-enable polarity, 10 k&Omega; receive-tap resistors, and local stub/contact labels. &middot; U6 notch and pin 1 verified; receive resistors are 10 k&Omega;; local NC/NO destinations identified</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Map receive-tap resistors and the relay-selected local TX path with connector sides absent. &middot; U6/R-taps/K1 &middot; AHC126 channels, resistor ends, local relay contacts &middot; LOCAL_CONSOLE_6_STUB, LOCAL_PIN3_STUB, GPIO18_RX_LOCAL, GPIO16_RX_LOCAL, LOCAL_TX_SELECTED &middot; Each receive tap passes through 10 k&Omega; and stays isolated; TX selection maps only local contacts<div class="detail">
+<b>device:</b> U6/R-taps/K1 &middot; <b>pin:</b> AHC126 channels, resistor ends, local relay contacts &middot; <b>net:</b> LOCAL_CONSOLE_6_STUB, LOCAL_PIN3_STUB, GPIO18_RX_LOCAL, GPIO16_RX_LOCAL, LOCAL_TX_SELECTED &middot; <b>evidence:</b> Record isolation, resistance, and local contact map</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Drive LOCAL_CONSOLE_6_STUB low/high and observe only GPIO18_RX_LOCAL. &middot; U6/R-tap &middot; receive input/output channel and GPIO18 &middot; LOCAL_CONSOLE_6_STUB &rarr; GPIO18_RX_LOCAL &middot; Bounded UART exerciser low/high pattern &middot; GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser &middot; Exact bounded UART/relay exerciser identity &middot; Treadmill and RJ45 absent; local receive only &middot; GPIO18_RX_LOCAL follows valid low/high without loading source</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Drive LOCAL_PIN3_STUB low/high and observe only GPIO16_RX_LOCAL. &middot; U6/R-tap &middot; receive input/output channel and GPIO16 &middot; LOCAL_PIN3_STUB &rarr; GPIO16_RX_LOCAL &middot; Bounded UART exerciser low/high pattern &middot; GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser &middot; Exact bounded UART/relay exerciser identity &middot; Treadmill and RJ45 absent; local receive only &middot; GPIO16_RX_LOCAL follows valid low/high without loading source</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Prove TX_DRV high impedance while disabled, then bounded following and relay-selected local TX on each local contact state. &middot; U6/K1 &middot; TX input, enable, TX_DRV, local NC/NO contacts &middot; TX_GATE + GPIO17_TX &rarr; TX_DRV &rarr; LOCAL_TX_SELECTED &middot; Bounded UART waveform plus bounded local relay selection &middot; GPIO15 jumper removed before TX_ENABLE drive; GPIO21 jumper removed before relay drive &middot; Exact bounded UART/relay exerciser identity &middot; Local-only TX load; no connector-side wire &middot; TX_DRV high impedance disabled; enabled waveform follows; LOCAL_TX_SELECTED matches NC then NO selection</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify LOGIC_3V3, TREAD_OK, bounded exerciser identity, and both command-jumper states.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check U6 orientation/OE polarity, 10 k&Omega; taps, and K1 local contact map.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Probe local input stub, receive GPIO, TX_DRV, then LOCAL_TX_SELECTED in signal order.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Remove all fixture drive and power, then restore the exact GPIO15 jumper; restore GPIO21 only if this audit opened it and no external drive remains. &middot; GPIO15 jumper</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; relay_exerciser_identity &middot; gpio18_rx_local_low_v &middot; gpio18_rx_local_high_v &middot; gpio16_rx_local_low_v &middot; gpio16_rx_local_high_v &middot; local_tx_selected_nc_ohm &middot; local_tx_selected_no_ohm</p>
+<p class="small"><b>Dedicated local interface evidence:</b> GPIO18_RX_LOCAL low (V) ______ high (V) ______ &middot; GPIO16_RX_LOCAL low (V) ______ high (V) ______ &middot; LOCAL_TX_SELECTED NC (&Omega;) ______ NO (&Omega;) ______ &middot; Relay exerciser identity ______</p>
+<div class="stop">
+<b>STOP gate:</b> TX_DRV drives while disabled, enabled waveform does not follow, either receive tap fails, local relay selection fails, any connector-side wire is installed, or exerciser identity is absent.</div>
+<div class="pass">
+<b>PASS gate:</b> Local high impedance, following, receive taps, and relay-selected TX pass; connector-side checks remain deferred. PASS &mdash; continue to Cluster 9 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 8 &middot; AHC126 and UART taps</div></section><section class="page"><h2>Cluster 9 &mdash; Indicators and VBUS sensing</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 3<br><b>Inputs:</b> LOGIC_3V3, GPIO38, USB_5V, GND</div>
+<div>
+<b>Outputs:</b> POWER_LED, STATUS_LED, VBUS_PRESENT_N<br><b>Source state:</b> USB-only test then standalone-only test; never join VBUS to a local rail</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Open the named STANDALONE POWER link for USB-only observation; never join VBUS to any local rail. &middot; STANDALONE POWER</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect Q2 orientation, D4/D5 polarity, LED resistors, C7, and the VBUS active-low sense divider. &middot; Q2 G/D/S mapped; LED cathodes face GND; C7 spans LOGIC_3V3/GND; VBUS path remains isolated</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Map LED branches and prove VBUS is isolated from VIN, +5V_RLY, and LOGIC_3V3. &middot; Q2/D4/D5/C7 &middot; transistor pins, LED leads, resistor ends, capacitor leads &middot; USB_5V, USB_SENSE_N, LOGIC_3V3, GPIO38, GND &middot; LED polarity correct; VBUS has no power-rail continuity; active-low sense path only<div class="detail">
+<b>device:</b> Q2/D4/D5/C7 &middot; <b>pin:</b> transistor pins, LED leads, resistor ends, capacitor leads &middot; <b>net:</b> USB_5V, USB_SENSE_N, LOGIC_3V3, GPIO38, GND &middot; <b>evidence:</b> Record polarity, mapping, and cross-rail resistance</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Observe power and status LEDs plus the active-low USB presence input under USB-only then standalone-only sources. &middot; Q2/D4/D5/U1 &middot; LED nodes, USB sense node, GPIO input &middot; USB_5V present/absent and GPIO38 state &middot; USB-only, then physically disconnected before standalone-only &middot; STANDALONE POWER open for USB-only; installed only after USB removal; command jumpers untouched &middot; Exact observer build identity &middot; One source only; relay off; TX disabled &middot; LOGIC_3V3 3.20&ndash;3.40 V; LED polarity/current limiting correct; VBUS sense active-low; no VBUS backfeed</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify exclusive source state, USB cable presence, and LOGIC_3V3.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check Q2 G/D/S, LED polarity/resistors, C7, and sense-divider parts.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Probe USB_5V, USB_SENSE_N, GPIO input, then each LED node.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>All sources off: restore the exact STANDALONE POWER link to its documented incoming state and leave USB physically disconnected if installed. &middot; STANDALONE POWER</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; power_led_observation &middot; status_led_observation &middot; vbus_present_logic &middot; vbus_absent_logic</p>
+<div class="stop">
+<b>STOP gate:</b> VBUS joins a local rail, active-low truth is wrong, LED polarity/current limiting is wrong, or sources overlap.</div>
+<div class="pass">
+<b>PASS gate:</b> Both LEDs and isolated active-low VBUS sense pass under exclusive sources. PASS &mdash; continue to Cluster 10 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 9 &middot; Indicators and VBUS sensing</div></section><section class="page compact"><h2>Cluster 10 &mdash; Whole-device standalone bench test</h2>
+<div class="boundary">
+<div>
+<b>Dependencies:</b> Cluster 1; Cluster 2; Cluster 3; Cluster 4; Cluster 5; Cluster 6; Cluster 7; Cluster 8; Cluster 9<br><b>Inputs:</b> +8V_RAW, GND, observer firmware</div>
+<div>
+<b>Outputs:</b> standalone boot, Wi-Fi observation, event log, UART idle evidence, verified observer state<br><b>Source state:</b> USB physically absent; STANDALONE POWER installed; observer verified; relay off; TX disabled</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Physically disconnect USB; install STANDALONE POWER only after USB is absent; leave COIL POWER in its documented state and attach no treadmill cable. &middot; No link opened &mdash; exclusive source boundary established</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect source-link labels, observer manifest identity, antenna clearance, and UART probe points before standalone boot. &middot; USB absent; STANDALONE POWER identity verified; GPIO16/GPIO18 probe points labeled; relay/TX disabled manifest available</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Confirm USB VBUS is absent and the standalone path maps TSR_3V3 to LOGIC_3V3 without shorts. &middot; U1/JP1/UART taps &middot; USB, link terminals, 3V3/GND, GPIO16/GPIO18 &middot; USB_5V, TSR_3V3, LOGIC_3V3, GND &middot; USB physically absent; standalone link map correct; no rail short<div class="detail">
+<b>device:</b> U1/JP1/UART taps &middot; <b>pin:</b> USB, link terminals, 3V3/GND, GPIO16/GPIO18 &middot; <b>net:</b> USB_5V, TSR_3V3, LOGIC_3V3, GND &middot; <b>evidence:</b> Record source isolation and rail resistance</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Boot the identified observer standalone and record rails, Wi-Fi/event-log observation, relay state, and feedback. &middot; U1/U2/U4/K1 &middot; 3V3, GPIO controls, feedback inputs &middot; TSR_3V3 &rarr; LOGIC_3V3 &rarr; passive observer &middot; Standalone bench VIN with observer boot &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest proves relay and TX disabled &middot; LOGIC_3V3 3.20&ndash;3.40 V; Wi-Fi/event log present; no reset; feedback (0,1) bypass</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Measure GPIO16 UART idle without transmitting. &middot; U1 &middot; GPIO16 &middot; GPIO16_RX_LOCAL idle &middot; Passive high-impedance meter/scope only &middot; USB absent; STANDALONE POWER installed; no jumper removed or external drive &middot; Exact observer identity &middot; Observer manifest; relay off; TX disabled &middot; Record stable GPIO16 UART idle level; no transmitted waveform</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Measure GPIO18 UART idle without transmitting. &middot; U1 &middot; GPIO18 &middot; GPIO18_RX_LOCAL idle &middot; Passive high-impedance meter/scope only &middot; USB absent; STANDALONE POWER installed; no jumper removed or external drive &middot; Exact observer identity &middot; Observer manifest; relay off; TX disabled &middot; Record stable GPIO18 UART idle level; no transmitted waveform</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify standalone VIN, source exclusivity, observer identity, and manifest.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check U2/JP1/U1 seating, reset cause, antenna, and passive probe loading.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Measure TSR_3V3 then LOGIC_3V3, boot/event log, GPIO16/GPIO18 idle, and feedback.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Power off and return STANDALONE POWER to its documented incoming state; leave USB and treadmill cables disconnected. &middot; No link opened</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; observer_identity &middot; observer_manifest &middot; logic_3v3_v &middot; gpio16_idle_v &middot; gpio18_idle_v &middot; wifi_event_log &middot; feedback_state</p>
+<p class="small"><b>Dedicated standalone evidence:</b> Observer identity ______ &middot; Observer manifest ______ &middot; GPIO16 UART idle (V) ______ &middot; GPIO18 UART idle (V) ______</p>
+<div class="stop">
+<b>STOP gate:</b> Identity/manifest missing, rail out of range, reset, Wi-Fi/event-log failure, UART idle missing, relay enables, TX enables, or feedback differs from (0,1).</div>
+<div class="pass">
+<b>PASS gate:</b> Identified observer boots standalone and all passive observations pass. PASS &mdash; continue to Cluster 11 only. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 10 &middot; Whole-device standalone bench test</div></section><section class="page compact"><h2>Cluster 11 &mdash; RJ45 pass-through and treadmill bypass</h2>
+<div class="boundary single">
+<div>
+<b>Dependencies:</b> Cluster 7; Cluster 8; Cluster 10<br><b>Inputs:</b> CONSOLE.1&ndash;8, MOTOR.1&ndash;8, verified observer state</div>
+<div>
+<b>Outputs:</b> eight mapped conductors, end-to-end CONSOLE.6 &harr; MOTOR.6 NC bypass, bypass-only treadmill evidence<br><b>Source state:</b> USB absent; standalone installed; observer verified; relay off; TX disabled; source &rarr; state &rarr; harness &rarr; direct-path sequence</div>
+</div>
+<h3>Isolate</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>All sources off before RJ45 or harness changes: disconnect both RJ45 cables, remove the fused-DMM harness, and isolate both independent direct +8V paths for individual mapping. &middot; CONSOLE.2 &harr; MOTOR.2 direct +8V path</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+<tr>
+<td>Keep all sources off and isolate the second independent power conductor before mapping. &middot; CONSOLE.8 &harr; MOTOR.8 direct +8V path</td>
+<td><div class="blank">Boundary / state:</div></td>
+</tr>
+</table>
+<h3>Inspect</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; orientation</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Inspect CONSOLE/MOTOR identities, pin numbering, dual-pin fused-DMM harness fuses/polarity, strain relief, and every terminal before attachment. &middot; Both connector orientations and pins 1&ndash;8 independently identified; harness review identity recorded; no heat/discoloration</td>
+<td><div class="blank">Visual evidence:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; unpowered evidence</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; points &middot; expected</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Map all eight conductors independently before any common links are restored. &middot; CONSOLE/MOTOR/K1 &middot; pins 1&ndash;8 and local relay contacts &middot; all eight connector paths including CONSOLE.6 &harr; MOTOR.6 &middot; Eight exact maps pass; unrelated pins open during isolated mapping; CONSOLE.6 &harr; MOTOR.6 is NC bypass<div class="detail">
+<b>device:</b> CONSOLE/MOTOR/K1 &middot; <b>pin:</b> pins 1&ndash;8 and local relay contacts &middot; <b>net:</b> all eight connector paths including CONSOLE.6 &harr; MOTOR.6 &middot; <b>evidence:</b> Record each end-to-end map and unrelated-pin isolation</div>
+</td>
+<td><div class="blank">Measured:</div></td>
+</tr>
+</table>
+<h3>Measure &mdash; powered / observed</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; device &middot; pin &middot; net &middot; stimulus &middot; jumper state &middot; firmware identity &middot; observation &middot; limits</th>
+<th>Recorded evidence</th>
+</tr>
+<tr>
+<td>Perform receive-only mapping observation with no transmit and no relay transfer. &middot; U1/U6 &middot; GPIO16, GPIO18, RX tap pins &middot; CONSOLE receive paths &rarr; GPIO16/GPIO18 &middot; Identified observer; treadmill initially unpowered &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest proves relay and TX disabled &middot; Receive-only activity observed; no MCU TX and no treadmill relay transfer</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Run bypass-only current measurement through the reviewed dual-pin fused-DMM harness. &middot; Fused-DMM harness/CONSOLE/MOTOR &middot; both independent +8V pins and GND return &middot; source &rarr; state &rarr; harness &rarr; direct-path sequence &middot; Treadmill bypass-only operation &middot; USB absent; STANDALONE POWER installed; observer verified; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest and harness review identity recorded &middot; Treadmill current separately measured no more than 500 mA; current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>Power off before harness removal; restore both direct paths, then measure supply and ground-return drops. &middot; CONSOLE/MOTOR &middot; restored supply and ground endpoints &middot; restored direct paths &rarr; voltage drop &middot; Bypass-only treadmill after direct-path restoration &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest; direct paths restored before drop &middot; Supply drop no more than 50 mV; ground-return drop no more than 50 mV</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+<tr>
+<td>After direct-path restoration, run the fifteen-minute bypass thermal test at every terminal. &middot; CONSOLE/MOTOR/power endpoints &middot; CONSOLE pins 1&ndash;8, MOTOR pins 1&ndash;8, +8V and GND endpoints &middot; restored direct paths &rarr; terminal temperatures &middot; Fifteen-minute bypass treadmill hold &middot; USB absent; STANDALONE POWER installed; relay off; TX disabled &middot; Exact observer identity &middot; Observer manifest; no transfer and no TX &middot; Every terminal and power-path endpoint no more than 40&deg;C and no more than 10&deg;C over ambient</td>
+<td><div class="blank">Value / trace:</div></td>
+</tr>
+</table>
+<h2 class="continued">Cluster 11 &mdash; RJ45 pass-through and treadmill bypass (continued)</h2>
+<h3>Likely causes &mdash; ordered source &rarr; component &rarr; output</h3>
+<table class="records">
+<tr>
+<th>Stage &middot; diagnostic</th>
+<th>Evidence</th>
+</tr>
+<tr>
+<td>source &middot; Verify bypass-only source sequence, observer/manifest, harness identity, fuses, and all-sources-off transition records.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>component &middot; Check connector orientation/terminals, independent +8V conductors, GND returns, relay NC contact, and tap resistors.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+<tr>
+<td>output &middot; Trace source &rarr; component &rarr; output: each pin map, CONSOLE.6 through local NC to MOTOR.6, current harness, restored drops, then thermal endpoints.</td>
+<td><div class="blank">Finding:</div></td>
+</tr>
+</table>
+<h3>Restore</h3>
+<table class="records">
+<tr>
+<th>Instruction &middot; exact named link</th>
+<th>Operator evidence</th>
+</tr>
+<tr>
+<td>Power off before removing the fused-DMM harness; restore the first exact independent +8V direct path. &middot; CONSOLE.2 &harr; MOTOR.2 direct +8V path</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+<tr>
+<td>With power still off, restore the second exact independent +8V direct path; verify both independent +8V paths before any drop or thermal test. &middot; CONSOLE.8 &harr; MOTOR.8 direct +8V path</td>
+<td><div class="blank">Restored / verified:</div></td>
+</tr>
+</table>
+<p class="small"><b>Dedicated evidence fields:</b> operator &middot; date &middot; signed_pass &middot; observer_identity &middot; observer_manifest &middot; harness_identity &middot; treadmill_current_ma &middot; supply_drop_mv &middot; ground_return_drop_mv &middot; plus_8v_endpoint_temp_c &middot; gnd_endpoint_temp_c &middot; console_1_temp_c &middot; console_2_temp_c &middot; console_3_temp_c &middot; console_4_temp_c &middot; console_5_temp_c &middot; console_6_temp_c &middot; console_7_temp_c &middot; console_8_temp_c &middot; motor_1_temp_c &middot; motor_2_temp_c &middot; motor_3_temp_c &middot; motor_4_temp_c &middot; motor_5_temp_c &middot; motor_6_temp_c &middot; motor_7_temp_c &middot; motor_8_temp_c</p>
+<p class="small"><b>Dedicated bypass and thermal evidence:</b> Observer identity ______ &middot; Observer manifest ______ &middot; Treadmill current (mA) ______ &middot; Supply drop (mV) ______ &middot; Ground-return drop (mV) ______ &middot; CONSOLE temperature (&deg;C), pins 1&ndash;8 ____________________ &middot; MOTOR temperature (&deg;C), pins 1&ndash;8 ____________________ &middot; +8V endpoint temperature (&deg;C) ______ &middot; GND endpoint temperature (&deg;C) ______</p>
+<table class="write"><tr><th>Dedicated C11 record</th><th>Writable evidence</th></tr><tr><td>Eight independent pin maps and unrelated-pin isolation</td><td></td></tr><tr><td>Treadmill current; supply and ground-return drops</td><td></td></tr><tr><td>CONSOLE pins 1&ndash;8 temperatures</td><td></td></tr><tr><td>MOTOR pins 1&ndash;8; +8V and GND endpoint temperatures</td><td></td></tr></table>
+<div class="warning">
+<b>Bypass-only controlled sequence:</b> USB absent &rarr; STANDALONE POWER installed &rarr; observer verified &rarr; relay off &rarr; TX disabled. All sources off before RJ45, harness, or path changes. Power removed before harness removal. Restore both independent +8V paths; voltage drop only after direct-path restoration; thermal only after direct-path restoration. Current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate. No treadmill transfer and no MCU TX.</div>
+<div class="stop">
+<b>STOP gate:</b> Any map, identity, current, drop, receive-only UART, bypass, thermal, or reset check fails. Power off; do not transfer the relay or transmit.</div>
+<div class="pass">
+<b>PASS gate:</b> All eight paths, NC bypass, current, restored-path drop, receive-only observation, and thermal evidence pass. PASS &mdash; continue only to documentation closeout, never to treadmill control. <b>PASS &mdash; continue</b>
+</div>
+<div class="sign">
+<div class="blank">Operator:</div>
+<div class="blank">Date:</div>
+<div class="blank">Signed PASS:</div>
+</div>
+<div class="footer">Cluster 11 &middot; RJ45 pass-through and treadmill bypass</div></section><script id="guide-metadata" type="application/json">
+{
+  "mode": "assembled_board_audit",
+  "clusters": [
+    {
+      "number": 1,
+      "name": "Raw protection",
+      "inputs": [
+        "+8V_RAW",
+        "GND"
+      ],
+      "outputs": [
+        "VIN",
+        "FUSED_8V"
+      ],
+      "dependencies": [
+        "Empty board and verified bench equipment"
+      ],
+      "source_state": "USB absent; STANDALONE POWER removed; COIL POWER removed; bench 8.00 V, initial 250 mA limit",
+      "stop_gate": "Current approaches 250 mA, VIN is outside 7.20–7.90 V, polarity is wrong, or anything warms. Remove power; do not build Cluster 2.",
+      "pass_gate": "Protection chain, polarity, VIN window, and coil-open current pass. PASS — continue to Cluster 2 only.",
+      "input_sources": [
+        {
+          "input": "+8V_RAW",
+          "source_cluster": null,
+          "source_name": "Current-limited 8.00 V bench source",
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": null,
+          "source_name": "Verified common bench GND",
+          "verified": true
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "bench_voltage_v",
+        "input_current_ma",
+        "fused_8v_v",
+        "vin_v"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "Verify STANDALONE POWER and COIL POWER are open.",
+            "opens_link": false,
+            "link": "No link opened — named downstream links verified open"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect F1, D1, D2, and CIN against board marks; D1 cathode stripe faces VIN, D2 cathode faces VIN, and CIN negative faces GND.",
+            "orientation": "D1/D2 cathode stripes toward VIN; CIN negative stripe toward GND; F1 non-polar"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Check protection input-to-output path and absence of a VIN-to-GND short.",
+            "device": "F1/D1/D2/CIN",
+            "pin": "leads and terminals",
+            "net": "+8V_RAW, FUSED_8V, VIN, GND",
+            "evidence": "Record continuity direction and VIN–GND resistance",
+            "points": "F1/D1/D2/CIN · leads and terminals · +8V_RAW, FUSED_8V, VIN, GND",
+            "expected": "Forward path present; reverse/open behavior and no rail short"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Apply the smallest safe source and measure forward through F1 and D1.",
+            "device": "F1/D1",
+            "pin": "input, output, anode, cathode",
+            "net": "+8V_RAW → FUSED_8V → VIN",
+            "stimulus": "Bench 8.00 V, initial 250 mA limit",
+            "jumper_state": "STANDALONE POWER removed; COIL POWER removed; GPIO15 and GPIO21 untouched",
+            "firmware_identity": "Meter identity; firmware not required",
+            "observation_state": "USB absent; treadmill absent; coil open",
+            "limits": "VIN 7.20–7.90 V; coil-open current below 50 mA"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify bench polarity, current limit, and GND reference."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check F1 heating/continuity, D1 direction/drop, D2 leakage, and CIN polarity."
+          },
+          {
+            "stage": "output",
+            "instruction": "Trace FUSED_8V then VIN; stop at the first missing or current-limited node."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "Remove bench power and leave the verified STANDALONE POWER and COIL POWER links in their documented incoming state.",
+            "restores_link": false,
+            "link": "No link opened"
+          }
+        ]
+      }
+    },
+    {
+      "number": 2,
+      "name": "TSR supply",
+      "inputs": [
+        "VIN",
+        "GND"
+      ],
+      "outputs": [
+        "TSR_3V3"
+      ],
+      "dependencies": [
+        1
+      ],
+      "source_state": "Cluster 1 source state retained; STANDALONE POWER remains removed",
+      "stop_gate": "TSR_3V3 is outside 3.20–3.40 V, polarity is wrong, LOGIC_3V3 is energized across the removed link, or current/temperature rises.",
+      "pass_gate": "Verified Cluster 1 VIN produces isolated TSR_3V3 in range. PASS — continue to Cluster 3 only.",
+      "input_sources": [
+        {
+          "input": "VIN",
+          "source_cluster": 1,
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": null,
+          "source_name": "Verified common bench GND",
+          "verified": true
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "vin_v",
+        "tsr_3v3_v",
+        "logic_3v3_isolation_ohm"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "With all sources off, open the named STANDALONE POWER link to isolate LOGIC_3V3; leave U2 and its capacitors assembled.",
+            "opens_link": true,
+            "link": "STANDALONE POWER"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect U2 pin order and C2/C3 polarity without removing them; input is VIN, common is GND, output is TSR_3V3.",
+            "orientation": "U2 pins 1/2/3 = VIN/GND/TSR_3V3; C2/C3 negative stripes to GND"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Prove TSR_3V3 is isolated from LOGIC_3V3 and neither rail is shorted to GND.",
+            "device": "U2/C2/C3",
+            "pin": "pins 1/2/3 and capacitor leads",
+            "net": "VIN, GND, TSR_3V3, LOGIC_3V3",
+            "evidence": "Record resistance and link-open continuity",
+            "points": "U2/C2/C3 · pins 1/2/3 and capacitor leads · VIN, GND, TSR_3V3, LOGIC_3V3",
+            "expected": "TSR_3V3 not joined to LOGIC_3V3; no rail short"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Apply verified VIN and measure U2 input, common, then output.",
+            "device": "U2",
+            "pin": "pin 1, pin 2, pin 3",
+            "net": "VIN, GND, TSR_3V3",
+            "stimulus": "Verified Cluster 1 VIN",
+            "jumper_state": "STANDALONE POWER open; COIL POWER removed; GPIO15 and GPIO21 untouched",
+            "firmware_identity": "Meter identity; firmware not required",
+            "observation_state": "USB absent; treadmill absent",
+            "limits": "TSR_3V3 3.20–3.40 V; LOGIC_3V3 remains unpowered"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify Cluster 1 VIN at U2 pin 1 and GND at pin 2."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check U2 orientation, C2/C3 polarity, and solder joints."
+          },
+          {
+            "stage": "output",
+            "instruction": "Measure pin 3 directly, then trace TSR_3V3 to the open STANDALONE POWER boundary."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "Remove power, then restore the exact named STANDALONE POWER link to its recorded incoming state.",
+            "restores_link": true,
+            "link": "STANDALONE POWER"
+          }
+        ]
+      }
+    },
+    {
+      "number": 3,
+      "name": "DevKit and logic supply",
+      "inputs": [
+        "TSR_3V3",
+        "USB_5V",
+        "GND"
+      ],
+      "outputs": [
+        "LOGIC_3V3",
+        "DevKit GND",
+        "GPIO21_CMD_POST",
+        "GPIO15_TX_ENABLE_POST",
+        "GPIO17_TX",
+        "GPIO38",
+        "USB_5V"
+      ],
+      "dependencies": [
+        2,
+        "Verified USB bench source"
+      ],
+      "source_state": "First USB-only with STANDALONE POWER removed; then USB physically disconnected before standalone link installation",
+      "stop_gate": "Sources overlap, either source backfeeds the other, LOGIC_3V3 is outside 3.20–3.40 V, or DevKit boot is unstable.",
+      "pass_gate": "USB-only and standalone-only handoff both pass, with the other source physically absent. PASS — continue to Cluster 4 only.",
+      "input_sources": [
+        {
+          "input": "TSR_3V3",
+          "source_cluster": 2,
+          "verified": true
+        },
+        {
+          "input": "USB_5V",
+          "source_cluster": null,
+          "source_name": "Verified USB bench source",
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": null,
+          "source_name": "Verified common bench GND",
+          "verified": true
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "usb_logic_3v3_v",
+        "standalone_logic_3v3_v",
+        "boot_observation"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "All sources off: open the named STANDALONE POWER link before USB-only checks; physically disconnect USB before the standalone-only check.",
+            "opens_link": true,
+            "link": "STANDALONE POWER"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect DevKit orientation, antenna clearance, USB connector identity, C4 placement, and both removable command jumper posts.",
+            "orientation": "DevKit USB end and antenna match assembly drawing; C4 spans LOGIC_3V3/GND; command posts labeled"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Confirm grounds map, STANDALONE POWER is open, and USB VBUS is not joined to LOGIC_3V3.",
+            "device": "U1/C4/JP1",
+            "pin": "3V3, GND, 5V, command posts, link terminals",
+            "net": "LOGIC_3V3, GND, USB_5V, TSR_3V3",
+            "evidence": "Record mapping and resistance",
+            "points": "U1/C4/JP1 · 3V3, GND, 5V, command posts, link terminals · LOGIC_3V3, GND, USB_5V, TSR_3V3",
+            "expected": "GND common; TSR_3V3 isolated from LOGIC_3V3; VBUS not tied to local 3.3 V"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Boot USB-only and record the logic rail and boot stability.",
+            "device": "U1",
+            "pin": "3V3, GND, USB connector",
+            "net": "USB_5V → LOGIC_3V3",
+            "stimulus": "Verified USB bench source",
+            "jumper_state": "STANDALONE POWER open; command jumpers installed but never externally driven",
+            "firmware_identity": "Exact observer build identity",
+            "observation_state": "USB-only; bench VIN absent",
+            "limits": "LOGIC_3V3 3.20–3.40 V; stable boot; no backfeed"
+          },
+          {
+            "instruction": "Disconnect USB, install STANDALONE POWER, and repeat the boot observation.",
+            "device": "U1/JP1",
+            "pin": "3V3 and link terminals",
+            "net": "TSR_3V3 → LOGIC_3V3",
+            "stimulus": "Verified Cluster 2 TSR_3V3",
+            "jumper_state": "USB physically disconnected; STANDALONE POWER installed; GPIO15/GPIO21 not driven",
+            "firmware_identity": "Exact observer build identity",
+            "observation_state": "Standalone-only; relay off; TX disabled",
+            "limits": "LOGIC_3V3 3.20–3.40 V; stable boot; USB_5V unpowered"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify exactly one source is present and the source handoff order was followed."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check JP1 contact, C4, DevKit seating/orientation, and USB cable/source."
+          },
+          {
+            "stage": "output",
+            "instruction": "Probe LOGIC_3V3 at U1, then USB_5V and the two command posts for unexpected drive."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "All sources off: restore the exact STANDALONE POWER link to its documented incoming state; reconnect no source during restoration.",
+            "restores_link": true,
+            "link": "STANDALONE POWER"
+          }
+        ]
+      }
+    },
+    {
+      "number": 4,
+      "name": "TPS3700 voltage monitor",
+      "inputs": [
+        "VIN",
+        "LOGIC_3V3",
+        "GND"
+      ],
+      "outputs": [
+        "UV_SENSE",
+        "OV_SENSE",
+        "TREAD_OK",
+        "TREAD_OK_MCU"
+      ],
+      "dependencies": [
+        1,
+        3
+      ],
+      "source_state": "USB logic only; STANDALONE POWER removed; bench source swept at protected VIN",
+      "stop_gate": "TREAD_OK three-state behavior or thresholds fail; never exceed protected VIN about 11.1 V; stop if TVS draws appreciable current or warms.",
+      "pass_gate": "Both sweep directions and GPIO6 isolated observation match limits. PASS — continue to Cluster 5 only.",
+      "input_sources": [
+        {
+          "input": "VIN",
+          "source_cluster": 1,
+          "verified": true
+        },
+        {
+          "input": "LOGIC_3V3",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": 3,
+          "verified": true,
+          "source_output": "DevKit GND",
+          "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "uv_rising_v",
+        "ov_falling_v",
+        "tread_ok_low_v",
+        "tread_ok_high_v"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "Keep command jumpers connected for observation only; open no assembled divider link and sweep only protected VIN with USB logic supplied.",
+            "opens_link": false,
+            "link": "No link opened — GPIO6 observation only"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect U3 notch/pin 1, divider resistor identities, adapter mapping, and pull-up orientation before power.",
+            "orientation": "U3 notch and pin 1 mark verified; UV and OV divider populations match labels; adapter map recorded"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Measure each divider leg and map adapter pins to U3 and GPIO6.",
+            "device": "U3/R-divider/adapter",
+            "pin": "U3 sense/output pins and adapter pins",
+            "net": "VIN, UV_SENSE, OV_SENSE, TREAD_OK, GPIO6",
+            "evidence": "Record resistance ratios and continuity map",
+            "points": "U3/R-divider/adapter · U3 sense/output pins and adapter pins · VIN, UV_SENSE, OV_SENSE, TREAD_OK, GPIO6",
+            "expected": "UV path implements VIN / 16; OV path implements VIN / 26.5; output reaches GPIO6"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Sweep protected VIN upward and downward while observing both sense pins and TREAD_OK.",
+            "device": "U3",
+            "pin": "sense pins, output pin",
+            "net": "VIN, UV_SENSE, OV_SENSE, TREAD_OK",
+            "stimulus": "Protected VIN sweep below UV → 8.00 V → above OV → downward",
+            "jumper_state": "STANDALONE POWER removed; GPIO15/GPIO21 untouched",
+            "firmware_identity": "Exact observer build identity",
+            "observation_state": "USB logic only; GPIO6 is high-impedance observation",
+            "limits": "TREAD_OK low below UV, high at 8.00 V, low above OV; UV rising 6.25–6.55 V; OV falling 10.30–10.90 V"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify protected VIN sweep, USB logic rail, and common GND."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check divider values, U3 orientation, pull-up, and adapter mapping."
+          },
+          {
+            "stage": "output",
+            "instruction": "Probe UV_SENSE and OV_SENSE before TREAD_OK, then GPIO6."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "Return VIN to zero, remove all power, and leave the unchanged observation wiring in its recorded incoming state.",
+            "restores_link": false,
+            "link": "No link opened"
+          }
+        ]
+      }
+    },
+    {
+      "number": 5,
+      "name": "AHC08 permission logic",
+      "inputs": [
+        "LOGIC_3V3",
+        "TREAD_OK",
+        "RELAY_CMD",
+        "TX_ENABLE",
+        "GND"
+      ],
+      "outputs": [
+        "RELAY_GATE",
+        "TX_GATE"
+      ],
+      "dependencies": [
+        3,
+        4
+      ],
+      "source_state": "USB logic and bench VIN; remove the corresponding DevKit command jumper before manual injection",
+      "stop_gate": "Any gate rises without both inputs, a command GPIO remains connected during manual drive, or supply/reset behavior is abnormal.",
+      "pass_gate": "Both four-state truth tables pass and temporary drives are removed. PASS — continue to Cluster 6 only.",
+      "input_sources": [
+        {
+          "input": "LOGIC_3V3",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "TREAD_OK",
+          "source_cluster": 4,
+          "verified": true
+        },
+        {
+          "input": "RELAY_CMD",
+          "source_cluster": 3,
+          "verified": true,
+          "source_output": "GPIO21_CMD_POST",
+          "source_mapping": "Cluster 5 GPIO21 removable jumper maps GPIO21_CMD_POST to RELAY_CMD"
+        },
+        {
+          "input": "TX_ENABLE",
+          "source_cluster": 3,
+          "verified": true,
+          "source_output": "GPIO15_TX_ENABLE_POST",
+          "source_mapping": "Cluster 5 GPIO15 removable jumper maps GPIO15_TX_ENABLE_POST to TX_ENABLE"
+        },
+        {
+          "input": "GND",
+          "source_cluster": 3,
+          "verified": true,
+          "source_output": "DevKit GND",
+          "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "relay_truth_table",
+        "tx_truth_table",
+        "gpio21_jumper_restore",
+        "gpio15_jumper_restore"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "All sources off: remove the exact GPIO21 jumper before any RELAY_CMD manual injection; remove the exact GPIO15 jumper before any TX_ENABLE manual injection.",
+            "opens_link": true,
+            "link": "GPIO21 jumper"
+          },
+          {
+            "instruction": "Keep sources off and remove the second named command boundary before its manual truth-table injection.",
+            "opens_link": true,
+            "link": "GPIO15 jumper"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect U4 notch/pin 1, decoupling, pull-downs, and labeled jumper endpoints; never externally drive a connected DevKit GPIO.",
+            "orientation": "U4 notch and pin 1 verified; GPIO21 ↔ RELAY_CMD and GPIO15 ↔ TX_ENABLE endpoints labeled"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Map permission-logic inputs and outputs with both command jumpers removed.",
+            "device": "U4",
+            "pin": "input and output pins",
+            "net": "RELAY_CMD, TX_ENABLE, TREAD_OK, RELAY_GATE, TX_GATE",
+            "evidence": "Record pin/net map and pull-down resistance",
+            "points": "U4 · input and output pins · RELAY_CMD, TX_ENABLE, TREAD_OK, RELAY_GATE, TX_GATE",
+            "expected": "Exact map; command inputs default low; no output short"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Inject only at the isolated RELAY_CMD side and execute the four-state gate table.",
+            "device": "U4",
+            "pin": "RELAY_CMD input, TREAD_OK input, RELAY_GATE output",
+            "net": "RELAY_CMD + TREAD_OK → RELAY_GATE",
+            "stimulus": "Current-limited 0 V/3.3 V manual injection",
+            "jumper_state": "GPIO21 jumper removed exactly; GPIO15 jumper remains removed during paired audit",
+            "firmware_identity": "Meter/scope identity; firmware not used to source the input",
+            "observation_state": "DevKit disconnected from injected node",
+            "limits": "RELAY_GATE high only when both inputs are high"
+          },
+          {
+            "instruction": "Inject only at the isolated TX_ENABLE side and execute the four-state gate table.",
+            "device": "U4",
+            "pin": "TX_ENABLE input, TREAD_OK input, TX_GATE output",
+            "net": "TX_ENABLE + TREAD_OK → TX_GATE",
+            "stimulus": "Current-limited 0 V/3.3 V manual injection",
+            "jumper_state": "GPIO15 jumper removed exactly; GPIO21 jumper remains removed during paired audit",
+            "firmware_identity": "Meter/scope identity; firmware not used to source the input",
+            "observation_state": "DevKit disconnected from injected node",
+            "limits": "TX_GATE high only when both inputs are high"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify LOGIC_3V3, GND, TREAD_OK state, and that the exact command jumper is removed."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check U4 orientation, decoupling, pull-downs, and pin map."
+          },
+          {
+            "stage": "output",
+            "instruction": "Probe each isolated input at U4, then its gate output; stop at first mismatch."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "All injection and sources off: restore the exact GPIO21 jumper and verify RELAY_CMD is no longer externally driven.",
+            "restores_link": true,
+            "link": "GPIO21 jumper"
+          },
+          {
+            "instruction": "With injection absent, restore the exact GPIO15 jumper and verify TX_ENABLE is no longer externally driven.",
+            "restores_link": true,
+            "link": "GPIO15 jumper"
+          }
+        ]
+      }
+    },
+    {
+      "number": 6,
+      "name": "TPS709 and BC337 driver",
+      "inputs": [
+        "VIN",
+        "RELAY_GATE",
+        "GND"
+      ],
+      "outputs": [
+        "+5V_RLY",
+        "RELAY_COIL−"
+      ],
+      "dependencies": [
+        1,
+        5
+      ],
+      "source_state": "Valid VIN/TREAD_OK; COIL POWER remains removed for the unloaded test",
+      "stop_gate": "COIL POWER is installed, enabled or disabled limits fail, output does not discharge below 0.25 V, or Q1/U5 heats.",
+      "pass_gate": "Unloaded regulator and base drive pass with coil isolated. PASS — continue to Cluster 7 only.",
+      "input_sources": [
+        {
+          "input": "VIN",
+          "source_cluster": 1,
+          "verified": true
+        },
+        {
+          "input": "RELAY_GATE",
+          "source_cluster": 5,
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": null,
+          "source_name": "Verified common bench GND",
+          "verified": true
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "tps709_disabled_v",
+        "tps709_enabled_v",
+        "bc337_base_v",
+        "coil_power_open"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "Verify the named COIL POWER link is open; do not disturb the assembled regulator or BC337 wiring.",
+            "opens_link": false,
+            "link": "COIL POWER — verified open, not newly opened"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect U5 orientation, Q1 BC337 C/B/E mapping, D3 polarity, and C5/C6 polarity before the unloaded audit.",
+            "orientation": "U5 pin 1 mark verified; BC337 collector/base/emitter physically mapped; D3 cathode toward +5V_RLY"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Map regulator enable/output, base resistor, BC337 pins, diode, and the open coil boundary.",
+            "device": "U5/Q1/D3",
+            "pin": "enable/output and C/B/E pins",
+            "net": "RELAY_GATE, +5V_RLY, COIL_LOW, GND",
+            "evidence": "Record continuity, transistor map, and COIL POWER isolation",
+            "points": "U5/Q1/D3 · enable/output and C/B/E pins · RELAY_GATE, +5V_RLY, COIL_LOW, GND",
+            "expected": "Exact device-pin/net map; coil remains isolated; no +5V_RLY short"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Measure disabled then enabled regulator output and base/collector behavior with the coil isolated.",
+            "device": "U5/Q1",
+            "pin": "enable, output, base, collector, emitter",
+            "net": "RELAY_GATE → +5V_RLY and BC337 base drive",
+            "stimulus": "Isolated RELAY_GATE low then high from bounded fixture",
+            "jumper_state": "COIL POWER open; GPIO21 jumper removed before any manual injection",
+            "firmware_identity": "Exact bounded relay exerciser identity",
+            "observation_state": "No relay coil load; treadmill absent",
+            "limits": "TPS709 enabled 4.75–5.25 V; TPS709 disabled below 0.25 V; output discharges"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify VIN, LOGIC_3V3, GND, RELAY_GATE stimulus, and COIL POWER open."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check U5 orientation/thermal pad, Q1 C/B/E map, D3 polarity, resistors, and capacitors."
+          },
+          {
+            "stage": "output",
+            "instruction": "Probe U5 enable then +5V_RLY, Q1 base, collector, and emitter in order."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "Remove fixture drive and all power; restore no coil connection—leave COIL POWER in the documented incoming open state.",
+            "restores_link": false,
+            "link": "COIL POWER — remains open"
+          }
+        ]
+      }
+    },
+    {
+      "number": 7,
+      "name": "Relay coil, local contacts, and feedback",
+      "inputs": [
+        "+5V_RLY",
+        "RELAY_COIL−",
+        "LOGIC_3V3",
+        "GND"
+      ],
+      "outputs": [
+        "LOCAL_NC",
+        "LOCAL_NO",
+        "FB_NC",
+        "FB_NO"
+      ],
+      "dependencies": [
+        6,
+        3
+      ],
+      "source_state": "Local-only bench exercise; treadmill/RJ45 cables absent; bounded relay exerciser verified; loaded relay limit no more than 500 mA",
+      "stop_gate": "Any electrical, feedback, release, reset, or five-minute thermal gate fails. Cluster 7 is local-only; it makes no end-to-end RJ45 claim.",
+      "pass_gate": "Local contacts, feedback, current, voltage, release, and thermal evidence all pass. PASS — continue to Cluster 8 only.",
+      "input_sources": [
+        {
+          "input": "+5V_RLY",
+          "source_cluster": 6,
+          "verified": true
+        },
+        {
+          "input": "RELAY_COIL−",
+          "source_cluster": 6,
+          "verified": true
+        },
+        {
+          "input": "LOGIC_3V3",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": 3,
+          "verified": true,
+          "source_output": "DevKit GND",
+          "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "relay_exerciser_identity",
+        "usb_logic_release_ms",
+        "gpio21_release_ms",
+        "tread_ok_release_ms",
+        "vin_release_ms",
+        "ambient_temp_c",
+        "tps709_temp_c",
+        "bc337_temp_c"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "Disconnect treadmill/RJ45 cables and remove the exact GPIO21 jumper before the bounded relay exerciser drives RELAY_CMD locally.",
+            "opens_link": true,
+            "link": "GPIO21 jumper"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect K1 orientation, coil diode polarity, local NC/NO/COM labels, feedback contact mapping, and coil terminals.",
+            "orientation": "K1 pin map and contact symbols verified; flyback diode cathode toward +5V_RLY; local endpoints labeled"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Map the coil, local contact sets, and feedback contacts with COIL POWER open.",
+            "device": "K1/D3/Q1",
+            "pin": "coil pins, COM/NC/NO pins, feedback pins",
+            "net": "+5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO",
+            "evidence": "Record coil resistance and each de-energized contact map",
+            "points": "K1/D3/Q1 · coil pins, COM/NC/NO pins, feedback pins · +5V_RLY, COIL_LOW, LOCAL_NC, LOCAL_NO, RELAY_FB_NC, RELAY_FB_NO",
+            "expected": "Coil finite and not shorted; local COM→NC continuity; feedback reports bypass"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Install COIL POWER under the loaded limit and command one bounded local energization.",
+            "device": "K1/U5/Q1",
+            "pin": "coil terminals, Q1 collector/emitter, feedback contacts",
+            "net": "RELAY_GATE → coil and local contacts",
+            "stimulus": "Bounded relay exerciser single pulse then off",
+            "jumper_state": "GPIO21 jumper removed exactly; GPIO15 untouched",
+            "firmware_identity": "Exact bounded relay exerciser identity and SHA",
+            "observation_state": "Local-only; treadmill/RJ45 absent; loaded limit no more than 500 mA",
+            "limits": "Coil 90–110 mA; coil voltage at least 4.50 V; BC337 VCE no more than 0.30 V; feedback (1,0) energized and (0,1) bypass; 00 or 11 fault"
+          },
+          {
+            "instruction": "Measure release after removing USB logic power.",
+            "device": "K1",
+            "pin": "local COM/NC and feedback pins",
+            "net": "USB logic removal → NC bypass",
+            "stimulus": "Bounded exerciser energized before source removal",
+            "jumper_state": "GPIO21 jumper removed; COIL POWER installed only for bounded test",
+            "firmware_identity": "Exact bounded relay exerciser identity",
+            "observation_state": "Scope on local contact only; treadmill absent",
+            "limits": "USB logic release within 100 ms"
+          },
+          {
+            "instruction": "Measure release after removing GPIO21 command.",
+            "device": "K1",
+            "pin": "local COM/NC and feedback pins",
+            "net": "GPIO21 command removal → NC bypass",
+            "stimulus": "Bounded exerciser energized before command removal",
+            "jumper_state": "GPIO21 jumper removed; command supplied only by bounded fixture",
+            "firmware_identity": "Exact bounded relay exerciser identity",
+            "observation_state": "Scope on local contact only; treadmill absent",
+            "limits": "GPIO21 release within 100 ms"
+          },
+          {
+            "instruction": "Measure release after removing TREAD_OK.",
+            "device": "K1/U4",
+            "pin": "local COM/NC and feedback pins",
+            "net": "TREAD_OK removal → NC bypass",
+            "stimulus": "Bounded exerciser energized before safety-input removal",
+            "jumper_state": "GPIO21 jumper removed; COIL POWER installed",
+            "firmware_identity": "Exact bounded relay exerciser identity",
+            "observation_state": "Scope on local contact only; treadmill absent",
+            "limits": "TREAD_OK release within 100 ms"
+          },
+          {
+            "instruction": "Measure release after removing VIN.",
+            "device": "K1/U5",
+            "pin": "local COM/NC and feedback pins",
+            "net": "VIN removal → NC bypass",
+            "stimulus": "Bounded exerciser energized before VIN removal",
+            "jumper_state": "GPIO21 jumper removed; COIL POWER installed",
+            "firmware_identity": "Exact bounded relay exerciser identity",
+            "observation_state": "Scope on local contact only; treadmill absent",
+            "limits": "VIN release within 100 ms"
+          },
+          {
+            "instruction": "Run the five-minute local thermal hold and record all temperatures.",
+            "device": "U5/Q1/K1",
+            "pin": "regulator case, BC337 case, coil terminals",
+            "net": "Sustained bounded local relay command",
+            "stimulus": "Five-minute hold under no more than 500 mA source limit",
+            "jumper_state": "GPIO21 jumper removed; COIL POWER installed; treadmill absent",
+            "firmware_identity": "Exact bounded relay exerciser identity",
+            "observation_state": "Ambient, TPS709, BC337, and relay observed",
+            "limits": "TPS709 and BC337 no more than 45°C and no more than 10°C over ambient"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify loaded current limit, valid VIN/TREAD_OK, logic power, and bounded exerciser identity."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check K1 coil/contact pin map, U5 output, Q1 C/B/E, diode, and feedback wiring."
+          },
+          {
+            "stage": "output",
+            "instruction": "Measure +5V_RLY, coil voltage/current, local contact transfer, then feedback outputs."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "All power off: remove COIL POWER if it was installed for the test, then restore the exact GPIO21 jumper with no external drive present.",
+            "restores_link": true,
+            "link": "GPIO21 jumper"
+          }
+        ]
+      }
+    },
+    {
+      "number": 8,
+      "name": "AHC126 and UART taps",
+      "inputs": [
+        "LOGIC_3V3",
+        "TX_GATE",
+        "GPIO17_TX",
+        "LOCAL_NC",
+        "LOCAL_NO",
+        "GND"
+      ],
+      "outputs": [
+        "TX_DRV",
+        "UART_BUFFER_HIGH_Z",
+        "UART_BUFFER_FOLLOWS",
+        "GPIO18_RX_LOCAL",
+        "GPIO16_RX_LOCAL",
+        "LOCAL_TX_SELECTED"
+      ],
+      "dependencies": [
+        3,
+        5,
+        7
+      ],
+      "source_state": "Local future-interface fixture only; treadmill and both RJ45 breakouts absent; bounded UART/relay exerciser identity recorded",
+      "stop_gate": "TX_DRV drives while disabled, enabled waveform does not follow, either receive tap fails, local relay selection fails, any connector-side wire is installed, or exerciser identity is absent.",
+      "pass_gate": "Local high impedance, following, receive taps, and relay-selected TX pass; connector-side checks remain deferred. PASS — continue to Cluster 9 only.",
+      "input_sources": [
+        {
+          "input": "LOGIC_3V3",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "TX_GATE",
+          "source_cluster": 5,
+          "verified": true
+        },
+        {
+          "input": "GPIO17_TX",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "LOCAL_NC",
+          "source_cluster": 7,
+          "verified": true
+        },
+        {
+          "input": "LOCAL_NO",
+          "source_cluster": 7,
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": 3,
+          "verified": true,
+          "source_output": "DevKit GND",
+          "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "relay_exerciser_identity",
+        "gpio18_rx_local_low_v",
+        "gpio18_rx_local_high_v",
+        "gpio16_rx_local_low_v",
+        "gpio16_rx_local_high_v",
+        "local_tx_selected_nc_ohm",
+        "local_tx_selected_no_ohm"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "Disconnect both RJ45 breakouts and remove the exact GPIO15 jumper before any local TX_ENABLE drive; retain only local stubs and relay contacts.",
+            "opens_link": true,
+            "link": "GPIO15 jumper"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect U6 notch/pin 1, output-enable polarity, 10 kΩ receive-tap resistors, and local stub/contact labels.",
+            "orientation": "U6 notch and pin 1 verified; receive resistors are 10 kΩ; local NC/NO destinations identified"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Map receive-tap resistors and the relay-selected local TX path with connector sides absent.",
+            "device": "U6/R-taps/K1",
+            "pin": "AHC126 channels, resistor ends, local relay contacts",
+            "net": "LOCAL_CONSOLE_6_STUB, LOCAL_PIN3_STUB, GPIO18_RX_LOCAL, GPIO16_RX_LOCAL, LOCAL_TX_SELECTED",
+            "evidence": "Record isolation, resistance, and local contact map",
+            "points": "U6/R-taps/K1 · AHC126 channels, resistor ends, local relay contacts · LOCAL_CONSOLE_6_STUB, LOCAL_PIN3_STUB, GPIO18_RX_LOCAL, GPIO16_RX_LOCAL, LOCAL_TX_SELECTED",
+            "expected": "Each receive tap passes through 10 kΩ and stays isolated; TX selection maps only local contacts"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Drive LOCAL_CONSOLE_6_STUB low/high and observe only GPIO18_RX_LOCAL.",
+            "device": "U6/R-tap",
+            "pin": "receive input/output channel and GPIO18",
+            "net": "LOCAL_CONSOLE_6_STUB → GPIO18_RX_LOCAL",
+            "stimulus": "Bounded UART exerciser low/high pattern",
+            "jumper_state": "GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser",
+            "firmware_identity": "Exact bounded UART/relay exerciser identity",
+            "observation_state": "Treadmill and RJ45 absent; local receive only",
+            "limits": "GPIO18_RX_LOCAL follows valid low/high without loading source"
+          },
+          {
+            "instruction": "Drive LOCAL_PIN3_STUB low/high and observe only GPIO16_RX_LOCAL.",
+            "device": "U6/R-tap",
+            "pin": "receive input/output channel and GPIO16",
+            "net": "LOCAL_PIN3_STUB → GPIO16_RX_LOCAL",
+            "stimulus": "Bounded UART exerciser low/high pattern",
+            "jumper_state": "GPIO15 jumper removed; GPIO21 state controlled only by bounded exerciser",
+            "firmware_identity": "Exact bounded UART/relay exerciser identity",
+            "observation_state": "Treadmill and RJ45 absent; local receive only",
+            "limits": "GPIO16_RX_LOCAL follows valid low/high without loading source"
+          },
+          {
+            "instruction": "Prove TX_DRV high impedance while disabled, then bounded following and relay-selected local TX on each local contact state.",
+            "device": "U6/K1",
+            "pin": "TX input, enable, TX_DRV, local NC/NO contacts",
+            "net": "TX_GATE + GPIO17_TX → TX_DRV → LOCAL_TX_SELECTED",
+            "stimulus": "Bounded UART waveform plus bounded local relay selection",
+            "jumper_state": "GPIO15 jumper removed before TX_ENABLE drive; GPIO21 jumper removed before relay drive",
+            "firmware_identity": "Exact bounded UART/relay exerciser identity",
+            "observation_state": "Local-only TX load; no connector-side wire",
+            "limits": "TX_DRV high impedance disabled; enabled waveform follows; LOCAL_TX_SELECTED matches NC then NO selection"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify LOGIC_3V3, TREAD_OK, bounded exerciser identity, and both command-jumper states."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check U6 orientation/OE polarity, 10 kΩ taps, and K1 local contact map."
+          },
+          {
+            "stage": "output",
+            "instruction": "Probe local input stub, receive GPIO, TX_DRV, then LOCAL_TX_SELECTED in signal order."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "Remove all fixture drive and power, then restore the exact GPIO15 jumper; restore GPIO21 only if this audit opened it and no external drive remains.",
+            "restores_link": true,
+            "link": "GPIO15 jumper"
+          }
+        ]
+      }
+    },
+    {
+      "number": 9,
+      "name": "Indicators and VBUS sensing",
+      "inputs": [
+        "LOGIC_3V3",
+        "GPIO38",
+        "USB_5V",
+        "GND"
+      ],
+      "outputs": [
+        "POWER_LED",
+        "STATUS_LED",
+        "VBUS_PRESENT_N"
+      ],
+      "dependencies": [
+        3
+      ],
+      "source_state": "USB-only test then standalone-only test; never join VBUS to a local rail",
+      "stop_gate": "VBUS joins a local rail, active-low truth is wrong, LED polarity/current limiting is wrong, or sources overlap.",
+      "pass_gate": "Both LEDs and isolated active-low VBUS sense pass under exclusive sources. PASS — continue to Cluster 10 only.",
+      "input_sources": [
+        {
+          "input": "LOGIC_3V3",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "GPIO38",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "USB_5V",
+          "source_cluster": 3,
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": 3,
+          "verified": true,
+          "source_output": "DevKit GND",
+          "source_mapping": "Cluster 3 DevKit GND maps to the shared GND input"
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "power_led_observation",
+        "status_led_observation",
+        "vbus_present_logic",
+        "vbus_absent_logic"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "Open the named STANDALONE POWER link for USB-only observation; never join VBUS to any local rail.",
+            "opens_link": true,
+            "link": "STANDALONE POWER"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect Q2 orientation, D4/D5 polarity, LED resistors, C7, and the VBUS active-low sense divider.",
+            "orientation": "Q2 G/D/S mapped; LED cathodes face GND; C7 spans LOGIC_3V3/GND; VBUS path remains isolated"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Map LED branches and prove VBUS is isolated from VIN, +5V_RLY, and LOGIC_3V3.",
+            "device": "Q2/D4/D5/C7",
+            "pin": "transistor pins, LED leads, resistor ends, capacitor leads",
+            "net": "USB_5V, USB_SENSE_N, LOGIC_3V3, GPIO38, GND",
+            "evidence": "Record polarity, mapping, and cross-rail resistance",
+            "points": "Q2/D4/D5/C7 · transistor pins, LED leads, resistor ends, capacitor leads · USB_5V, USB_SENSE_N, LOGIC_3V3, GPIO38, GND",
+            "expected": "LED polarity correct; VBUS has no power-rail continuity; active-low sense path only"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Observe power and status LEDs plus the active-low USB presence input under USB-only then standalone-only sources.",
+            "device": "Q2/D4/D5/U1",
+            "pin": "LED nodes, USB sense node, GPIO input",
+            "net": "USB_5V present/absent and GPIO38 state",
+            "stimulus": "USB-only, then physically disconnected before standalone-only",
+            "jumper_state": "STANDALONE POWER open for USB-only; installed only after USB removal; command jumpers untouched",
+            "firmware_identity": "Exact observer build identity",
+            "observation_state": "One source only; relay off; TX disabled",
+            "limits": "LOGIC_3V3 3.20–3.40 V; LED polarity/current limiting correct; VBUS sense active-low; no VBUS backfeed"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify exclusive source state, USB cable presence, and LOGIC_3V3."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check Q2 G/D/S, LED polarity/resistors, C7, and sense-divider parts."
+          },
+          {
+            "stage": "output",
+            "instruction": "Probe USB_5V, USB_SENSE_N, GPIO input, then each LED node."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "All sources off: restore the exact STANDALONE POWER link to its documented incoming state and leave USB physically disconnected if installed.",
+            "restores_link": true,
+            "link": "STANDALONE POWER"
+          }
+        ]
+      }
+    },
+    {
+      "number": 10,
+      "name": "Whole-device standalone bench test",
+      "inputs": [
+        "+8V_RAW",
+        "GND",
+        "observer firmware"
+      ],
+      "outputs": [
+        "standalone boot",
+        "Wi-Fi observation",
+        "event log",
+        "UART idle evidence",
+        "verified observer state"
+      ],
+      "dependencies": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "source_state": "USB physically absent; STANDALONE POWER installed; observer verified; relay off; TX disabled",
+      "stop_gate": "Identity/manifest missing, rail out of range, reset, Wi-Fi/event-log failure, UART idle missing, relay enables, TX enables, or feedback differs from (0,1).",
+      "pass_gate": "Identified observer boots standalone and all passive observations pass. PASS — continue to Cluster 11 only.",
+      "input_sources": [
+        {
+          "input": "+8V_RAW",
+          "source_cluster": null,
+          "source_name": "Current-limited 8.00 V bench source",
+          "verified": true
+        },
+        {
+          "input": "GND",
+          "source_cluster": null,
+          "source_name": "Verified common bench GND",
+          "verified": true
+        },
+        {
+          "input": "observer firmware",
+          "source_cluster": null,
+          "source_name": "Verified observer firmware image and manifest",
+          "verified": true
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "observer_identity",
+        "observer_manifest",
+        "logic_3v3_v",
+        "gpio16_idle_v",
+        "gpio18_idle_v",
+        "wifi_event_log",
+        "feedback_state"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "Physically disconnect USB; install STANDALONE POWER only after USB is absent; leave COIL POWER in its documented state and attach no treadmill cable.",
+            "opens_link": false,
+            "link": "No link opened — exclusive source boundary established"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect source-link labels, observer manifest identity, antenna clearance, and UART probe points before standalone boot.",
+            "orientation": "USB absent; STANDALONE POWER identity verified; GPIO16/GPIO18 probe points labeled; relay/TX disabled manifest available"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Confirm USB VBUS is absent and the standalone path maps TSR_3V3 to LOGIC_3V3 without shorts.",
+            "device": "U1/JP1/UART taps",
+            "pin": "USB, link terminals, 3V3/GND, GPIO16/GPIO18",
+            "net": "USB_5V, TSR_3V3, LOGIC_3V3, GND",
+            "evidence": "Record source isolation and rail resistance",
+            "points": "U1/JP1/UART taps · USB, link terminals, 3V3/GND, GPIO16/GPIO18 · USB_5V, TSR_3V3, LOGIC_3V3, GND",
+            "expected": "USB physically absent; standalone link map correct; no rail short"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Boot the identified observer standalone and record rails, Wi-Fi/event-log observation, relay state, and feedback.",
+            "device": "U1/U2/U4/K1",
+            "pin": "3V3, GPIO controls, feedback inputs",
+            "net": "TSR_3V3 → LOGIC_3V3 → passive observer",
+            "stimulus": "Standalone bench VIN with observer boot",
+            "jumper_state": "USB absent; STANDALONE POWER installed; relay off; TX disabled",
+            "firmware_identity": "Exact observer identity",
+            "observation_state": "Observer manifest proves relay and TX disabled",
+            "limits": "LOGIC_3V3 3.20–3.40 V; Wi-Fi/event log present; no reset; feedback (0,1) bypass"
+          },
+          {
+            "instruction": "Measure GPIO16 UART idle without transmitting.",
+            "device": "U1",
+            "pin": "GPIO16",
+            "net": "GPIO16_RX_LOCAL idle",
+            "stimulus": "Passive high-impedance meter/scope only",
+            "jumper_state": "USB absent; STANDALONE POWER installed; no jumper removed or external drive",
+            "firmware_identity": "Exact observer identity",
+            "observation_state": "Observer manifest; relay off; TX disabled",
+            "limits": "Record stable GPIO16 UART idle level; no transmitted waveform"
+          },
+          {
+            "instruction": "Measure GPIO18 UART idle without transmitting.",
+            "device": "U1",
+            "pin": "GPIO18",
+            "net": "GPIO18_RX_LOCAL idle",
+            "stimulus": "Passive high-impedance meter/scope only",
+            "jumper_state": "USB absent; STANDALONE POWER installed; no jumper removed or external drive",
+            "firmware_identity": "Exact observer identity",
+            "observation_state": "Observer manifest; relay off; TX disabled",
+            "limits": "Record stable GPIO18 UART idle level; no transmitted waveform"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify standalone VIN, source exclusivity, observer identity, and manifest."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check U2/JP1/U1 seating, reset cause, antenna, and passive probe loading."
+          },
+          {
+            "stage": "output",
+            "instruction": "Measure TSR_3V3 then LOGIC_3V3, boot/event log, GPIO16/GPIO18 idle, and feedback."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "Power off and return STANDALONE POWER to its documented incoming state; leave USB and treadmill cables disconnected.",
+            "restores_link": false,
+            "link": "No link opened"
+          }
+        ]
+      }
+    },
+    {
+      "number": 11,
+      "name": "RJ45 pass-through and treadmill bypass",
+      "inputs": [
+        "CONSOLE.1–8",
+        "MOTOR.1–8",
+        "verified observer state"
+      ],
+      "outputs": [
+        "eight mapped conductors",
+        "end-to-end CONSOLE.6 ↔ MOTOR.6 NC bypass",
+        "bypass-only treadmill evidence"
+      ],
+      "dependencies": [
+        7,
+        8,
+        10
+      ],
+      "source_state": "USB absent; standalone installed; observer verified; relay off; TX disabled; source → state → harness → direct-path sequence",
+      "stop_gate": "Any map, identity, current, drop, receive-only UART, bypass, thermal, or reset check fails. Power off; do not transfer the relay or transmit.",
+      "pass_gate": "All eight paths, NC bypass, current, restored-path drop, receive-only observation, and thermal evidence pass. PASS — continue only to documentation closeout, never to treadmill control.",
+      "input_sources": [
+        {
+          "input": "CONSOLE.1–8",
+          "source_cluster": null,
+          "source_name": "Isolated CONSOLE RJ45 breakout and cable",
+          "verified": true
+        },
+        {
+          "input": "MOTOR.1–8",
+          "source_cluster": null,
+          "source_name": "Isolated MOTOR RJ45 breakout and cable",
+          "verified": true
+        },
+        {
+          "input": "verified observer state",
+          "source_cluster": 10,
+          "verified": true
+        }
+      ],
+      "evidence_fields": [
+        "operator",
+        "date",
+        "signed_pass",
+        "observer_identity",
+        "observer_manifest",
+        "harness_identity",
+        "treadmill_current_ma",
+        "supply_drop_mv",
+        "ground_return_drop_mv",
+        "plus_8v_endpoint_temp_c",
+        "gnd_endpoint_temp_c",
+        "console_1_temp_c",
+        "console_2_temp_c",
+        "console_3_temp_c",
+        "console_4_temp_c",
+        "console_5_temp_c",
+        "console_6_temp_c",
+        "console_7_temp_c",
+        "console_8_temp_c",
+        "motor_1_temp_c",
+        "motor_2_temp_c",
+        "motor_3_temp_c",
+        "motor_4_temp_c",
+        "motor_5_temp_c",
+        "motor_6_temp_c",
+        "motor_7_temp_c",
+        "motor_8_temp_c"
+      ],
+      "actions": {
+        "isolate": [
+          {
+            "instruction": "All sources off before RJ45 or harness changes: disconnect both RJ45 cables, remove the fused-DMM harness, and isolate both independent direct +8V paths for individual mapping.",
+            "opens_link": true,
+            "link": "CONSOLE.2 ↔ MOTOR.2 direct +8V path"
+          },
+          {
+            "instruction": "Keep all sources off and isolate the second independent power conductor before mapping.",
+            "opens_link": true,
+            "link": "CONSOLE.8 ↔ MOTOR.8 direct +8V path"
+          }
+        ],
+        "inspect": [
+          {
+            "instruction": "Inspect CONSOLE/MOTOR identities, pin numbering, dual-pin fused-DMM harness fuses/polarity, strain relief, and every terminal before attachment.",
+            "orientation": "Both connector orientations and pins 1–8 independently identified; harness review identity recorded; no heat/discoloration"
+          }
+        ],
+        "unpowered_evidence": [
+          {
+            "instruction": "Map all eight conductors independently before any common links are restored.",
+            "device": "CONSOLE/MOTOR/K1",
+            "pin": "pins 1–8 and local relay contacts",
+            "net": "all eight connector paths including CONSOLE.6 ↔ MOTOR.6",
+            "evidence": "Record each end-to-end map and unrelated-pin isolation",
+            "points": "CONSOLE/MOTOR/K1 · pins 1–8 and local relay contacts · all eight connector paths including CONSOLE.6 ↔ MOTOR.6",
+            "expected": "Eight exact maps pass; unrelated pins open during isolated mapping; CONSOLE.6 ↔ MOTOR.6 is NC bypass"
+          }
+        ],
+        "measure": [
+          {
+            "instruction": "Perform receive-only mapping observation with no transmit and no relay transfer.",
+            "device": "U1/U6",
+            "pin": "GPIO16, GPIO18, RX tap pins",
+            "net": "CONSOLE receive paths → GPIO16/GPIO18",
+            "stimulus": "Identified observer; treadmill initially unpowered",
+            "jumper_state": "USB absent; STANDALONE POWER installed; relay off; TX disabled",
+            "firmware_identity": "Exact observer identity",
+            "observation_state": "Observer manifest proves relay and TX disabled",
+            "limits": "Receive-only activity observed; no MCU TX and no treadmill relay transfer"
+          },
+          {
+            "instruction": "Run bypass-only current measurement through the reviewed dual-pin fused-DMM harness.",
+            "device": "Fused-DMM harness/CONSOLE/MOTOR",
+            "pin": "both independent +8V pins and GND return",
+            "net": "source → state → harness → direct-path sequence",
+            "stimulus": "Treadmill bypass-only operation",
+            "jumper_state": "USB absent; STANDALONE POWER installed; observer verified; relay off; TX disabled",
+            "firmware_identity": "Exact observer identity",
+            "observation_state": "Observer manifest and harness review identity recorded",
+            "limits": "Treadmill current separately measured no more than 500 mA; current no-control diagnostic cannot pass relay exercise gate and cannot pass UART exercise gate"
+          },
+          {
+            "instruction": "Power off before harness removal; restore both direct paths, then measure supply and ground-return drops.",
+            "device": "CONSOLE/MOTOR",
+            "pin": "restored supply and ground endpoints",
+            "net": "restored direct paths → voltage drop",
+            "stimulus": "Bypass-only treadmill after direct-path restoration",
+            "jumper_state": "USB absent; STANDALONE POWER installed; relay off; TX disabled",
+            "firmware_identity": "Exact observer identity",
+            "observation_state": "Observer manifest; direct paths restored before drop",
+            "limits": "Supply drop no more than 50 mV; ground-return drop no more than 50 mV"
+          },
+          {
+            "instruction": "After direct-path restoration, run the fifteen-minute bypass thermal test at every terminal.",
+            "device": "CONSOLE/MOTOR/power endpoints",
+            "pin": "CONSOLE pins 1–8, MOTOR pins 1–8, +8V and GND endpoints",
+            "net": "restored direct paths → terminal temperatures",
+            "stimulus": "Fifteen-minute bypass treadmill hold",
+            "jumper_state": "USB absent; STANDALONE POWER installed; relay off; TX disabled",
+            "firmware_identity": "Exact observer identity",
+            "observation_state": "Observer manifest; no transfer and no TX",
+            "limits": "Every terminal and power-path endpoint no more than 40°C and no more than 10°C over ambient"
+          }
+        ],
+        "likely_causes": [
+          {
+            "stage": "source",
+            "instruction": "Verify bypass-only source sequence, observer/manifest, harness identity, fuses, and all-sources-off transition records."
+          },
+          {
+            "stage": "component",
+            "instruction": "Check connector orientation/terminals, independent +8V conductors, GND returns, relay NC contact, and tap resistors."
+          },
+          {
+            "stage": "output",
+            "instruction": "Trace source → component → output: each pin map, CONSOLE.6 through local NC to MOTOR.6, current harness, restored drops, then thermal endpoints."
+          }
+        ],
+        "restore": [
+          {
+            "instruction": "Power off before removing the fused-DMM harness; restore the first exact independent +8V direct path.",
+            "restores_link": true,
+            "link": "CONSOLE.2 ↔ MOTOR.2 direct +8V path"
+          },
+          {
+            "instruction": "With power still off, restore the second exact independent +8V direct path; verify both independent +8V paths before any drop or thermal test.",
+            "restores_link": true,
+            "link": "CONSOLE.8 ↔ MOTOR.8 direct +8V path"
+          }
+        ]
+      }
+    }
+  ]
+}
+</script><div class="small">Bypass sequence record: power removed before removal of the harness. Restore both independent +8V paths. Voltage drop only after direct-path restoration. Thermal only after direct-path restoration. The current no-control diagnostic cannot pass the relay exercise gate. The current no-control diagnostic cannot pass the UART exercise gate.</div>
+</body>
+</html>
