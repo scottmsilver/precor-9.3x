@@ -994,3 +994,79 @@ def test_each_build_connection_has_one_numbered_wiring_record():
         )[cluster["number"]]
         for index, instruction in enumerate(build, 1):
             assert f"{index}. {instruction['instruction']}" in section
+
+
+def test_cluster_8_records_receive_taps_and_local_relay_transfer_evidence():
+    cluster = _guide_metadata(BUILD_HTML)["clusters"][7]
+    unpowered = cluster["actions"]["unpowered_test"]
+    powered = cluster["actions"]["powered_test"]
+
+    for source, destination in (
+        ("LOCAL_CONSOLE_6_STUB", "GPIO18_RX_LOCAL"),
+        ("LOCAL_PIN3_STUB", "GPIO16_RX_LOCAL"),
+    ):
+        mapping = next(
+            record
+            for record in unpowered
+            if source in record["points"] and destination in record["points"]
+        )
+        assert "10 kΩ" in mapping["expected"]
+        assert "isolat" in mapping["expected"].lower()
+        observation = next(
+            record
+            for record in powered
+            if source in record["input"] and destination in record["output"]
+        )
+        assert observation["evidence"]
+        assert observation["limits"]
+
+    transfer = next(
+        record
+        for record in powered
+        if "TX_DRV" in record["input"]
+        and "LOCAL_TX_SELECTED" in record["output"]
+    )
+    assert "bounded" in transfer["instruction"].lower()
+    assert "K1" in transfer["input"]
+    assert transfer["evidence"]
+    assert transfer["limits"]
+
+    assert {
+        "gpio18_rx_local_low_v",
+        "gpio18_rx_local_high_v",
+        "gpio16_rx_local_low_v",
+        "gpio16_rx_local_high_v",
+        "local_tx_selected_nc_ohm",
+        "local_tx_selected_no_ohm",
+    } <= set(cluster["evidence_fields"])
+    section = _cluster_sections(_visible_html_text(BUILD_HTML), BUILD_HTML.name)[8]
+    for label in (
+        "GPIO18_RX_LOCAL low (V)",
+        "GPIO18_RX_LOCAL high (V)",
+        "GPIO16_RX_LOCAL low (V)",
+        "GPIO16_RX_LOCAL high (V)",
+        "LOCAL_TX_SELECTED NC (Ω)",
+        "LOCAL_TX_SELECTED NO (Ω)",
+    ):
+        assert label in section
+
+
+def test_build_pdf_has_two_substantive_cluster_11_pages():
+    completed = subprocess.run(
+        ["pdftotext", "-layout", str(BUILD_PDF), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pages = [_normalize_text(page) for page in completed.stdout.split("\f")]
+    pages = [page for page in pages if page]
+    first = next(
+        index
+        for index, page in enumerate(pages)
+        if "Cluster 11 — RJ45 pass-through and treadmill bypass" in page
+    )
+    cluster_11_pages = pages[first:]
+    assert len(cluster_11_pages) == 2
+    assert all(len(page) >= 1000 for page in cluster_11_pages)
+    assert "Bypass-only controlled sequence" in cluster_11_pages[1]
+    assert "dedicated bypass and thermal evidence" in cluster_11_pages[1]

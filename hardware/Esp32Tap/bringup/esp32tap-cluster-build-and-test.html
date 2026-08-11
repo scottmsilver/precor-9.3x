@@ -182,6 +182,22 @@
       .relay-page h3 {
         margin-top: 4px;
       }
+      .uart-page {
+        font-size: 7.2pt;
+        line-height: 1.08;
+      }
+      .uart-page p,
+      .uart-page table {
+        margin-top: 1px;
+        margin-bottom: 2px;
+      }
+      .uart-page h3 {
+        margin-top: 3px;
+        margin-bottom: 2px;
+      }
+      .uart-page .sign {
+        margin-bottom: 20px;
+      }
       .force-page {
         break-before: page;
         page-break-before: always;
@@ -1016,7 +1032,7 @@
       <div class="footer">Cluster 7 · Local relay proof only</div>
     </section>
 
-    <section class="page">
+    <section class="page uart-page">
       <h2>Cluster 8 — AHC126 and UART taps</h2>
       <div class="boundary">
         <div>
@@ -1086,6 +1102,22 @@
           </td>
           <td></td>
         </tr>
+        <tr>
+          <td>
+            Verify GPIO18 local receive tap · resistance · LOCAL_CONSOLE_6_STUB
+            → GPIO18_RX_LOCAL · 10 kΩ nominal (9–11 kΩ); isolated from
+            LOGIC_3V3, GND, and TX_DRV
+          </td>
+          <td></td>
+        </tr>
+        <tr>
+          <td>
+            Verify GPIO16 local receive tap · resistance · LOCAL_PIN3_STUB →
+            GPIO16_RX_LOCAL · 10 kΩ nominal (9–11 kΩ); isolated from LOGIC_3V3,
+            GND, and TX_DRV
+          </td>
+          <td></td>
+        </tr>
       </table>
       <h3>Powered test</h3>
       <table class="records">
@@ -1101,11 +1133,74 @@
           </td>
           <td></td>
         </tr>
+        <tr>
+          <td>
+            Stimulate GPIO18 local receive tap · LOCAL_CONSOLE_6_STUB low/high
+            from bounded UART exerciser · GPIO18_RX_LOCAL · record low/high
+            voltage and observed bits · low ≤0.40 V; high ≥2.40 V; bits follow
+          </td>
+          <td></td>
+        </tr>
+        <tr>
+          <td>
+            Stimulate GPIO16 local receive tap · LOCAL_PIN3_STUB low/high from
+            bounded UART exerciser · GPIO16_RX_LOCAL · record low/high voltage
+            and observed bits · low ≤0.40 V; high ≥2.40 V; bits follow
+          </td>
+          <td></td>
+        </tr>
+        <tr>
+          <td>
+            Exercise bounded local relay transfer · TX_DRV/K1 LOCAL_NC/LOCAL_NO
+            with bounded relay exerciser · LOCAL_TX_SELECTED · record NC/NO
+            selected resistance and TX waveform · selected path below 2 Ω;
+            unselected path open; waveform follows TX_DRV
+          </td>
+          <td></td>
+        </tr>
       </table>
       <p>
         <b>Relay exerciser identity:</b> ____________________
         <b>Firmware identity:</b> ____________________
       </p>
+      <h3>Dedicated local future-interface evidence</h3>
+      <table class="records">
+        <tr>
+          <th>Evidence field</th>
+          <th>Measured</th>
+          <th>Limit/state</th>
+        </tr>
+        <tr>
+          <td>GPIO18_RX_LOCAL low (V)</td>
+          <td></td>
+          <td>≤0.40 V</td>
+        </tr>
+        <tr>
+          <td>GPIO18_RX_LOCAL high (V)</td>
+          <td></td>
+          <td>≥2.40 V</td>
+        </tr>
+        <tr>
+          <td>GPIO16_RX_LOCAL low (V)</td>
+          <td></td>
+          <td>≤0.40 V</td>
+        </tr>
+        <tr>
+          <td>GPIO16_RX_LOCAL high (V)</td>
+          <td></td>
+          <td>≥2.40 V</td>
+        </tr>
+        <tr>
+          <td>LOCAL_TX_SELECTED NC (Ω)</td>
+          <td></td>
+          <td>&lt;2 Ω selected</td>
+        </tr>
+        <tr>
+          <td>LOCAL_TX_SELECTED NO (Ω)</td>
+          <td></td>
+          <td>&lt;2 Ω selected</td>
+        </tr>
+      </table>
       <div class="stop">
         <b>STOP gate:</b> TX_DRV drives while disabled, enabled waveform does
         not follow, either receive tap fails, local relay selection fails, any
@@ -1481,33 +1576,33 @@
         <b>Observer manifest:</b> ____________________ (path or SHA proving
         relay and TX outputs disabled)
       </p>
-      <h3>Bypass-only controlled sequence</h3>
-      <ol>
-        <li>
-          All sources off before RJ45 changes. Attach cables only after Clusters
-          1–10 signed PASS.
-        </li>
-        <li>
-          Verify bypass-only source state: USB absent; STANDALONE POWER
-          installed; observer verified; relay off; TX disabled.
-        </li>
-        <li>
-          With all sources off before harness changes, remove both independent
-          direct +8V paths and install the reviewed dual-pin fused-DMM harness.
-          Measure current separately at no more than 500 mA.
-        </li>
-        <li>
-          Remove power before removal of the harness. Verify zero current,
-          remove harness, then restore both independent +8V paths and
-          continuity-check each.
-        </li>
-        <li>
-          Voltage drop is measured only after direct-path restoration. Thermal
-          test only after direct-path restoration; then run the fifteen-minute
-          hold.
-        </li>
-      </ol>
       <div class="force-page">
+        <h3>Bypass-only controlled sequence</h3>
+        <ol>
+          <li>
+            All sources off before RJ45 changes. Attach cables only after
+            Clusters 1–10 signed PASS.
+          </li>
+          <li>
+            Verify bypass-only source state: USB absent; STANDALONE POWER
+            installed; observer verified; relay off; TX disabled.
+          </li>
+          <li>
+            With all sources off before harness changes, remove both independent
+            direct +8V paths and install the reviewed dual-pin fused-DMM
+            harness. Measure current separately at no more than 500 mA.
+          </li>
+          <li>
+            Remove power before removal of the harness. Verify zero current,
+            remove harness, then restore both independent +8V paths and
+            continuity-check each.
+          </li>
+          <li>
+            Voltage drop is measured only after direct-path restoration. Thermal
+            test only after direct-path restoration; then run the fifteen-minute
+            hold.
+          </li>
+        </ol>
         <h3>Cluster 11 — dedicated bypass and thermal evidence</h3>
         <table class="records">
           <tr>
@@ -2794,7 +2889,17 @@
                 "verified": true
               }
             ],
-            "evidence_fields": ["operator", "date", "signed_pass"],
+            "evidence_fields": [
+              "operator",
+              "date",
+              "signed_pass",
+              "gpio18_rx_local_low_v",
+              "gpio18_rx_local_high_v",
+              "gpio16_rx_local_low_v",
+              "gpio16_rx_local_high_v",
+              "local_tx_selected_nc_ohm",
+              "local_tx_selected_no_ohm"
+            ],
             "parts": [
               {
                 "reference": "U6/C6/R3/R4/R5",
@@ -2925,6 +3030,18 @@
                   "check_kind": "continuity",
                   "points": "U6 pins, 100 Ω resistor, local TX_DRV test point",
                   "expected": "exact map; disabled output isolated; no connector-side wiring"
+                },
+                {
+                  "instruction": "Verify GPIO18 local receive tap",
+                  "check_kind": "resistance",
+                  "points": "LOCAL_CONSOLE_6_STUB → GPIO18_RX_LOCAL",
+                  "expected": "10 kΩ nominal (9–11 kΩ); isolated from LOGIC_3V3, GND, and TX_DRV"
+                },
+                {
+                  "instruction": "Verify GPIO16 local receive tap",
+                  "check_kind": "resistance",
+                  "points": "LOCAL_PIN3_STUB → GPIO16_RX_LOCAL",
+                  "expected": "10 kΩ nominal (9–11 kΩ); isolated from LOGIC_3V3, GND, and TX_DRV"
                 }
               ],
               "powered_test": [
@@ -2934,6 +3051,27 @@
                   "output": "TX_DRV/UART_BUFFER_HIGH_Z/UART_BUFFER_FOLLOWS",
                   "evidence": "capture logic traces",
                   "limits": "pin 3 high impedance disabled and follows pin 2 enabled"
+                },
+                {
+                  "instruction": "Stimulate GPIO18 local receive tap",
+                  "input": "LOCAL_CONSOLE_6_STUB low/high from bounded UART exerciser",
+                  "output": "GPIO18_RX_LOCAL",
+                  "evidence": "record low/high voltage and observed bits",
+                  "limits": "low ≤0.40 V; high ≥2.40 V; bits follow"
+                },
+                {
+                  "instruction": "Stimulate GPIO16 local receive tap",
+                  "input": "LOCAL_PIN3_STUB low/high from bounded UART exerciser",
+                  "output": "GPIO16_RX_LOCAL",
+                  "evidence": "record low/high voltage and observed bits",
+                  "limits": "low ≤0.40 V; high ≥2.40 V; bits follow"
+                },
+                {
+                  "instruction": "Exercise bounded local relay transfer",
+                  "input": "TX_DRV/K1 LOCAL_NC/LOCAL_NO with bounded relay exerciser",
+                  "output": "LOCAL_TX_SELECTED",
+                  "evidence": "record NC/NO selected resistance and TX waveform",
+                  "limits": "selected path below 2 Ω; unselected path open; waveform follows TX_DRV"
                 }
               ]
             }
