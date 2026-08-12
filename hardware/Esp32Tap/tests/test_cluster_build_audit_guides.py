@@ -557,7 +557,8 @@ def _visible_from_to_tables(path: Path) -> dict[int, list[list[list[str]]]]:
 def _assert_rendered_from_to_rows(words: list[dict], guide_name: str) -> None:
     for cluster in _guide_metadata(BUILD_HTML)["clusters"]:
         cells_by_row = _pdf_from_to_cells(words, cluster)
-        for row, cells in zip(cluster["build_rows"], cells_by_row, strict=True):
+        for row in cluster["build_rows"]:
+            cells = cells_by_row[(cluster["number"], row["step"])]
             expected = [
                 str(row["step"]),
                 row["reference"],
@@ -619,9 +620,32 @@ def _words_text(words: list[dict]) -> str:
     )
 
 
-def _pdf_from_to_cells(words: list[dict], cluster: dict) -> list[list[str]]:
+def _pdf_cluster_pages(words: list[dict], cluster: dict) -> set[int]:
+    pages = sorted({word["page"] for word in words})
+    page_text = {
+        page: _words_text([word for word in words if word["page"] == page])
+        for page in pages
+    }
+    heading = re.compile(
+        rf"Cluster\s+{cluster['number']}\s*(?:—|-)\s*{re.escape(cluster['name'])}"
+    )
+    continuation = re.compile(
+        rf"Cluster\s+{cluster['number']}\b.{0, 80}\bcontinu(?:ed|ation)\b",
+        re.IGNORECASE,
+    )
+    owned = {page for page, text in page_text.items() if heading.search(text)}
+    owned.update(page for page, text in page_text.items() if continuation.search(text))
+    assert owned, f"PDF: no page heading found for Cluster {cluster['number']}"
+    return owned
+
+
+def _pdf_from_to_cells(
+    words: list[dict], cluster: dict
+) -> dict[tuple[int, int], list[str]]:
+    cluster_pages = _pdf_cluster_pages(words, cluster)
+    scoped_words = [word for word in words if word["page"] in cluster_pages]
     header_groups = {}
-    for word in words:
+    for word in scoped_words:
         if word["text"] in FROM_TO_HEADERS:
             header_groups.setdefault((word["page"], round(word["y"], 1)), []).append(
                 word
@@ -632,50 +656,76 @@ def _pdf_from_to_cells(words: list[dict], cluster: dict) -> list[list[str]]:
         if [item["text"] for item in sorted(group, key=lambda item: item["x"])]
         == list(FROM_TO_HEADERS)
     ]
-    assert len(headers) >= (2 if cluster["number"] == 11 else 1)
-    anchors = []
+    expected_headers = 2 if cluster["number"] == 11 else 1
+    assert len(headers) == 2 if cluster["number"] == 11 else len(headers) >= 1, (
+        f"PDF Cluster {cluster['number']}: expected {expected_headers} complete headers"
+    )
+    non_build_y = [
+        y
+        for page in cluster_pages
+        for y in {round(word["y"], 1) for word in scoped_words if word["page"] == page}
+        if "Unpowered test"
+        in _words_text(
+            [
+                word
+                for word in scoped_words
+                if word["page"] == page and round(word["y"], 1) == y
+            ]
+        )
+    ]
+    anchors: dict[tuple[int, int], tuple[dict, list[dict]]] = {}
     for row in cluster["build_rows"]:
-        candidates = [
-            word
-            for word in words
-            if word["text"] == str(row["step"])
-            and any(
-                header[0]["page"] == word["page"]
-                and header[0]["y"] < word["y"] < header[0]["y"] + 400
-                for header in headers
-            )
-        ]
-        assert candidates, (
-            f"PDF C{cluster['number']} Step {row['step']}: missing bbox row anchor"
+        candidates = []
+        for header in headers:
+            ends = [
+                other[0]["y"]
+                for other in headers
+                if other[0]["page"] == header[0]["page"]
+                and other[0]["y"] > header[0]["y"]
+            ] + [y for y in non_build_y if y > header[0]["y"]]
+            table_end = min(ends, default=header[0]["y"] + 400)
+            boundaries = [(header[i]["x"] + header[i + 1]["x"]) / 2 for i in range(6)]
+            for step_word in scoped_words:
+                if (
+                    step_word["page"] != header[0]["page"]
+                    or step_word["text"] != str(row["step"])
+                    or step_word["y"] <= header[0]["y"]
+                    or step_word["y"] >= table_end
+                ):
+                    continue
+                line = [
+                    word
+                    for word in scoped_words
+                    if word["page"] == step_word["page"]
+                    and abs(word["y"] - step_word["y"]) < 1.5
+                ]
+                cells = [[] for _ in range(7)]
+                for word in line:
+                    cells[sum(word["x"] >= boundary for boundary in boundaries)].append(
+                        word
+                    )
+                if (
+                    _words_text(cells[0]) == str(row["step"])
+                    and _words_text(cells[1]) == row["reference"]
+                    and _words_text(cells[2]) == row["color"]
+                ):
+                    candidates.append((step_word, header))
+        assert len(candidates) == 1, (
+            f"PDF C{cluster['number']} Step {row['step']}: Step/Ref/Color anchor must be unique in cluster scope"
         )
-        anchors.append(
-            min(
-                candidates,
-                key=lambda item: min(
-                    item["y"] - header[0]["y"]
-                    for header in headers
-                    if header[0]["page"] == item["page"] and item["y"] > header[0]["y"]
-                ),
-            )
-        )
-    cells_by_row = []
-    for index, anchor in enumerate(anchors):
-        header = max(
-            (
-                item
-                for item in headers
-                if item[0]["page"] == anchor["page"] and item[0]["y"] < anchor["y"]
-            ),
-            key=lambda item: item[0]["y"],
-        )
+        anchors[(cluster["number"], row["step"])] = candidates[0]
+    result = {}
+    ordered = list(anchors.items())
+    for index, (key, (anchor, header)) in enumerate(ordered):
+        next_anchor = ordered[index + 1][1][0] if index + 1 < len(ordered) else None
         next_y = (
-            anchors[index + 1]["y"]
-            if index + 1 < len(anchors) and anchors[index + 1]["page"] == anchor["page"]
+            next_anchor["y"]
+            if next_anchor and next_anchor["page"] == anchor["page"]
             else anchor["y"] + 100
         )
         boundaries = [(header[i]["x"] + header[i + 1]["x"]) / 2 for i in range(6)]
         cells = [[] for _ in range(7)]
-        for word in words:
+        for word in scoped_words:
             if (
                 word["page"] == anchor["page"]
                 and anchor["y"] - 0.5 <= word["y"] < next_y
@@ -683,8 +733,8 @@ def _pdf_from_to_cells(words: list[dict], cluster: dict) -> list[list[str]]:
                 cells[sum(word["x"] >= boundary for boundary in boundaries)].append(
                     word
                 )
-        cells_by_row.append([_words_text(cell) for cell in cells])
-    return cells_by_row
+        result[key] = [_words_text(cell) for cell in cells]
+    return result
 
 
 def _assert_headings_in_order(text: str, guide_name: str) -> None:
@@ -1780,6 +1830,44 @@ def test_build_from_to_tables_render_in_html():
 def test_build_from_to_tables_render_in_pdf():
     words = _pdf_bbox_words(BUILD_PDF)
     _assert_rendered_from_to_rows(words, BUILD_PDF.name)
+
+
+def test_pdf_from_to_parser_scopes_duplicate_steps_to_cluster_pages():
+    def word(page: int, x: float, y: float, text: str) -> dict:
+        return {"page": page, "x": x, "y": y, "text": text}
+
+    words = []
+    for page, number, name, reference, color in (
+        (1, 1, "Raw protection", "15", "RED"),
+        (2, 2, "TSR supply", "20", "ORANGE"),
+    ):
+        words.extend(
+            [
+                word(page, x, 10, text)
+                for x, text in zip(
+                    (10, 50, 70, 95), ("Cluster", str(number), "—", name)
+                )
+            ]
+        )
+        words.extend(
+            [
+                word(page, x, 30, text)
+                for x, text in zip((10, 50, 90, 140, 220, 300, 370), FROM_TO_HEADERS)
+            ]
+        )
+        words.extend(
+            [
+                word(page, x, 50, text)
+                for x, text in zip((10, 50, 90), ("1", reference, color))
+            ]
+        )
+    cluster = {
+        "number": 2,
+        "name": "TSR supply",
+        "build_rows": [{"step": 1, "reference": "20", "color": "ORANGE"}],
+    }
+    cells = _pdf_from_to_cells(words, cluster)
+    assert cells[(2, 1)][:3] == ["1", "20", "ORANGE"]
 
 
 def test_build_from_to_cluster_11_keeps_map_gate_between_steps():
