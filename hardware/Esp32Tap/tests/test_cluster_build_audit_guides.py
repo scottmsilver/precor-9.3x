@@ -683,7 +683,10 @@ def _pdf_from_to_cells(
                 if other[0]["page"] == header[0]["page"]
                 and other[0]["y"] > header[0]["y"]
             ] + [y for y in non_build_y if y > header[0]["y"]]
-            table_end = min(ends, default=header[0]["y"] + 400)
+            page_end = max(
+                word["y"] for word in scoped_words if word["page"] == header[0]["page"]
+            ) + 1
+            table_end = min(ends, default=page_end)
             boundaries = [header[i + 1]["x"] - 3 for i in range(6)]
             for step_word in scoped_words:
                 if (
@@ -1998,6 +2001,24 @@ def test_build_pdf_has_two_substantive_cluster_11_pages():
     assert all(len(page) >= 1000 for page in cluster_11_pages)
     assert "Bypass-only controlled sequence" in cluster_11_pages[1]
     assert "dedicated bypass and thermal evidence" in cluster_11_pages[1]
+
+
+def test_build_pdf_has_no_near_empty_cluster_spill_pages():
+    completed = subprocess.run(
+        ["pdftotext", "-layout", str(BUILD_PDF), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    pages = [_normalize_text(page) for page in completed.stdout.split("\f")]
+    pages = [page for page in pages if page]
+    # The cover may be compact, but every cluster-owned page must contain
+    # substantive construction, test, or evidence content—not just signoff or
+    # a footer. Cluster 11's intentional continuation is checked separately.
+    for page_number, page in enumerate(pages[1:], 2):
+        assert len(page) >= 1000, (
+            f"PDF page {page_number} is a near-empty cluster spill page: {page!r}"
+        )
 
 
 def test_command_net_provenance_crosses_devkit_posts_at_cluster_5():
