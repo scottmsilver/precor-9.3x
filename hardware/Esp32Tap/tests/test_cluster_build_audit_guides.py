@@ -34,8 +34,8 @@ EXPECTED_CLUSTERS = {
     11: "RJ45 pass-through and treadmill bypass",
 }
 EXPECTED_LEGACY_REFS_BY_CLUSTER = {
-    1: set(range(15, 20)),
-    2: {*range(20, 29), 31},
+    1: {*range(15, 20), 23, 24},
+    2: {20, 21, 22, 25, 26, 27, 28, 31},
     3: {29, 30},
     4: set(range(32, 58)),
     5: set(range(58, 74)),
@@ -47,6 +47,145 @@ EXPECTED_LEGACY_REFS_BY_CLUSTER = {
     11: {*range(1, 15), *range(101, 105)},
 }
 QUALIFIED_LEGACY_GROUPS = {70: 4, 71: 2, 97: 6, 98: 3}
+EXPECTED_CONNECTION_IDS_BY_LEGACY_REF = {
+    15: ("C1-1",),
+    16: ("C1-2", "C1-3"),
+    17: ("C1-4",),
+    18: ("C1-5",),
+    19: ("C1-6",),
+    23: ("C1-7",),
+    24: ("C1-8",),
+    20: ("C2-1",),
+    21: ("C2-3",),
+    22: ("C2-5",),
+    25: ("C2-2",),
+    26: ("C2-4",),
+    27: ("C2-6",),
+    28: ("C2-7",),
+    31: ("C2-8",),
+    29: ("C3-1",),
+    30: ("C3-2",),
+    **{
+        ref: (f"C4-{index}",)
+        for ref, index in {
+            32: 1,
+            33: 2,
+            34: 7,
+            35: 8,
+            36: 3,
+            37: 9,
+            38: 10,
+            39: 11,
+            40: 12,
+            41: 13,
+            42: 14,
+            43: 4,
+            44: 15,
+            45: 16,
+            46: 17,
+            47: 18,
+            48: 5,
+            49: 6,
+            50: 19,
+            51: 20,
+            52: 21,
+            53: 22,
+            54: 23,
+            56: 26,
+            57: 27,
+        }.items()
+    },
+    55: ("C4-24", "C4-25"),
+    58: ("C5-1",),
+    59: ("C5-2",),
+    60: ("C5-3",),
+    61: ("C5-3", "C5-15"),
+    62: ("C5-16",),
+    63: ("C5-4",),
+    64: ("C5-5",),
+    65: ("C5-6",),
+    66: ("C5-6", "C5-17"),
+    67: ("C5-18",),
+    68: ("C5-7",),
+    69: ("C5-8",),
+    "70a": ("C5-9",),
+    "70b": ("C5-10",),
+    "70c": ("C5-11",),
+    "70d": ("C5-12",),
+    "71a": ("C5-13",),
+    "71b": ("C5-14",),
+    72: ("C5-1", "C5-19"),
+    73: ("C5-2", "C5-20"),
+    **{
+        ref: (f"C6-{index}",)
+        for ref, index in {
+            74: 1,
+            75: 2,
+            76: 3,
+            77: 5,
+            78: 4,
+            79: 6,
+            80: 7,
+            81: 8,
+            82: 9,
+            83: 10,
+            86: 14,
+            87: 15,
+        }.items()
+    },
+    84: ("C6-11", "C6-12"),
+    85: ("C6-12", "C6-13"),
+    88: ("C7-2",),
+    89: ("C7-1",),
+    90: ("C7-1", "C7-3"),
+    91: ("C7-2", "C7-4"),
+    105: ("C7-8",),
+    106: ("C7-9", "C7-10"),
+    107: ("C7-13",),
+    108: ("C7-14", "C7-10"),
+    109: ("C7-11", "C7-12"),
+    110: ("C7-15",),
+    111: ("C7-16", "C7-12"),
+    92: ("C8-1",),
+    93: ("C8-2",),
+    94: ("C8-3",),
+    95: ("C8-4",),
+    96: ("C8-5", "C8-6"),
+    "97a": ("C8-8",),
+    "97b": ("C8-9",),
+    "97c": ("C8-10",),
+    "97d": ("C8-11",),
+    "97e": ("C8-12",),
+    "97f": ("C8-13",),
+    "98a": ("C8-14",),
+    "98b": ("C8-15",),
+    "98c": ("C8-16",),
+    99: ("C8-1", "C8-17"),
+    100: ("C8-2", "C8-18"),
+    112: ("C9-1", "C9-2"),
+    113: ("C9-1", "C9-3"),
+    114: ("C9-4",),
+    115: ("C9-5",),
+    116: ("C9-6", "C9-7"),
+    117: ("C9-8",),
+    118: ("C9-9", "C9-7"),
+    119: ("C9-10", "C9-11"),
+    120: ("C9-12", "C9-13"),
+    121: ("C9-14",),
+    122: ("C9-15",),
+    123: ("C9-16", "C9-17"),
+    124: ("C9-18",),
+    125: ("C9-19",),
+    126: ("C9-20",),
+    **{ref: (f"C11-{index}",) for ref, index in zip(range(1, 12), range(2, 13))},
+    12: ("C11-13",),
+    13: ("C11-14",),
+    14: ("C11-15",),
+    101: ("C11-13", "C11-16"),
+    102: ("C11-16",),
+    103: ("C11-17",),
+    104: ("C11-17",),
+}
 BUILD_ROW_FIELDS = {
     "step",
     "reference",
@@ -336,18 +475,12 @@ def _visible_from_to_tables(path: Path) -> dict[int, list[list[list[str]]]]:
 
 
 def _assert_rendered_from_to_rows(text: str, guide_name: str) -> None:
-    sections = _cluster_sections(text, guide_name)
     for cluster in _guide_metadata(BUILD_HTML)["clusters"]:
-        section = sections[cluster["number"]]
-        header_pattern = r"\s+".join(map(re.escape, FROM_TO_HEADERS))
-        expected_table_count = 2 if cluster["number"] == 11 else 1
-        assert len(re.findall(header_pattern, section)) == expected_table_count, (
-            f"{guide_name} cluster {cluster['number']}: expected {expected_table_count} "
-            "complete Step/Ref/Color/From/To/Part/Note header rows"
-        )
-        cursor = 0
-        for row in cluster["build_rows"]:
-            values = (
+        blocks = _pdf_from_to_row_blocks(text, cluster)
+        for row, block in zip(cluster["build_rows"], blocks, strict=True):
+            normalized_block = _normalize_text(block)
+            cursor = 0
+            for value in (
                 str(row["step"]),
                 row["reference"],
                 row["color"],
@@ -356,18 +489,15 @@ def _assert_rendered_from_to_rows(text: str, guide_name: str) -> None:
                 row["part_description"],
                 row["note"],
                 row["directive"],
-            )
-            pattern = r".{0,640}?".join(
-                _scalar_render_pattern(_normalize_text(value))
-                for value in values
-                if value
-            )
-            match = re.search(pattern, section[cursor:], re.IGNORECASE)
-            assert match, (
-                f"{guide_name} cluster {cluster['number']} Step {row['step']}: "
-                "complete ordered row is absent"
-            )
-            cursor += match.end()
+            ):
+                if not value:
+                    continue
+                position = normalized_block.find(_normalize_text(value), cursor)
+                assert position >= 0, (
+                    f"{guide_name} cluster {cluster['number']} Step {row['step']}: "
+                    f"{value!r} is absent from its bounded extracted row"
+                )
+                cursor = position + len(_normalize_text(value))
 
 
 def _pdf_text(path: Path) -> str:
@@ -379,6 +509,55 @@ def _pdf_text(path: Path) -> str:
         text=True,
     )
     return _normalize_text(completed.stdout)
+
+
+def _pdf_layout_text(path: Path) -> str:
+    assert path.is_file(), f"{path.name}: guide PDF is missing"
+    completed = subprocess.run(
+        ["pdftotext", "-layout", str(path), "-"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout
+
+
+def _pdf_from_to_row_blocks(text: str, cluster: dict) -> list[str]:
+    heading = re.search(
+        rf"Cluster\s+{cluster['number']}\s*(?:—|-)\s*{re.escape(cluster['name'])}",
+        text,
+    )
+    assert heading, f"PDF: missing Cluster {cluster['number']} heading"
+    next_heading = re.search(
+        r"^\s*Cluster\s+\d+\s*(?:—|-)", text[heading.end() :], re.M
+    )
+    section_end = heading.end() + next_heading.start() if next_heading else len(text)
+    section = text[heading.start() : section_end]
+    starts = []
+    for row in cluster["build_rows"]:
+        match = re.search(
+            rf"^\s*{row['step']}\s+{re.escape(row['reference'])}\s+{re.escape(row['color'])}(?:\s|$)",
+            section,
+            re.MULTILINE,
+        )
+        assert match, (
+            f"PDF cluster {cluster['number']} Step {row['step']}: "
+            "missing row-start Step/Ref/Color tuple"
+        )
+        starts.append(match.start())
+    assert starts == sorted(starts) and len(starts) == len(set(starts))
+    build_end = re.search(r"^\s*Unpowered test", section, re.M)
+    end = build_end.start() if build_end else len(section)
+    blocks = []
+    for index, start in enumerate(starts):
+        stop = starts[index + 1] if index + 1 < len(starts) else end
+        boundary = re.search(
+            r"^\s*Independent isolated-map evidence", section[start:stop], re.M
+        )
+        if boundary:
+            stop = start + boundary.start()
+        blocks.append(section[start:stop])
+    return blocks
 
 
 def _assert_headings_in_order(text: str, guide_name: str) -> None:
@@ -1245,7 +1424,7 @@ def test_each_build_connection_has_one_numbered_wiring_record():
             for row in cluster["build_rows"]
             for connection_id in row["connection_ids"]
         ]
-        assert consumed_ids == wiring_ids
+        assert set(consumed_ids) == set(wiring_ids)
 
 
 def test_build_from_to_rows_cover_wiring_and_actions_once():
@@ -1304,12 +1483,23 @@ def test_build_from_to_rows_cover_wiring_and_actions_once():
             consumed_connections.extend(row["connection_ids"])
             consumed_actions.extend(row["action_ids"])
 
-        assert Counter(consumed_connections) == Counter(wiring_ids), (
-            f"cluster {number}: every wiring record must be consumed exactly once"
+        assert set(consumed_connections) == set(wiring_ids), (
+            f"cluster {number}: every wiring record must be covered"
         )
-        assert Counter(consumed_actions) == Counter(action_ids), (
-            f"cluster {number}: every build action must be consumed exactly once"
+        assert set(consumed_actions) == set(action_ids), (
+            f"cluster {number}: every build action must be covered"
         )
+        justified_reuse = Counter(
+            connection_id
+            for expected in EXPECTED_CONNECTION_IDS_BY_LEGACY_REF.values()
+            for connection_id in expected
+            if connection_id.startswith(f"C{number}-")
+        )
+        for connection_id, count in Counter(consumed_connections).items():
+            if count > 1:
+                assert count == justified_reuse[connection_id], (
+                    f"cluster {number}: {connection_id} reuse is not justified by exact legacy endpoint rows"
+                )
         assert len({row["reference"] for row in rows}) == len(rows), (
             f"cluster {number}: displayed row references must be unique"
         )
@@ -1340,6 +1530,18 @@ def test_build_from_to_legacy_references_match_source():
             displayed_legacy_references.append(reference)
             source = LEGACY_ROWS[base]
             assert row["color"] == source["color"]
+            fixture_key = reference if suffix else base
+            assert (
+                tuple(row["connection_ids"])
+                == EXPECTED_CONNECTION_IDS_BY_LEGACY_REF[fixture_key]
+            ), (
+                f"legacy Ref {reference}: connection IDs must exactly match the "
+                "authoritative endpoint mapping; unrelated IDs or permutations are forbidden"
+            )
+            assert (
+                tuple(row["action_ids"])
+                == EXPECTED_CONNECTION_IDS_BY_LEGACY_REF[fixture_key]
+            )
             if base not in QUALIFIED_LEGACY_GROUPS:
                 assert not suffix, (
                     f"legacy Ref {base} must be displayed without a suffix"
@@ -1421,7 +1623,10 @@ def test_build_from_to_tables_render_in_html():
 
 
 def test_build_from_to_tables_render_in_pdf():
-    _assert_rendered_from_to_rows(_pdf_text(BUILD_PDF), BUILD_PDF.name)
+    text = _pdf_layout_text(BUILD_PDF)
+    header_pattern = r"^\s*" + r"\s+".join(map(re.escape, FROM_TO_HEADERS)) + r"\s*$"
+    assert len(re.findall(header_pattern, text, re.MULTILINE)) == 12
+    _assert_rendered_from_to_rows(text, BUILD_PDF.name)
 
 
 def test_build_from_to_cluster_11_keeps_map_gate_between_steps():
