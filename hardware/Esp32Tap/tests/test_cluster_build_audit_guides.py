@@ -6,6 +6,7 @@ import re
 import subprocess
 from collections import Counter
 from pathlib import Path
+from xml.etree import ElementTree
 
 import pytest
 
@@ -185,6 +186,85 @@ EXPECTED_CONNECTION_IDS_BY_LEGACY_REF = {
     102: ("C11-16",),
     103: ("C11-17",),
     104: ("C11-17",),
+}
+EXPECTED_NEW_ROWS_BY_CLUSTER = {
+    1: {},
+    2: {},
+    3: {
+        "NEW C3-3": ("C3-3", "C4 lead 1", "LOGIC_3V3", "BLUE", "Wire"),
+        "NEW C3-4": ("C3-4", "C4 lead 2", "GND", "BLACK", "Wire"),
+        "NEW C3-5": (
+            "C3-5",
+            "TSR_3V3 endpoint",
+            "the JP1 standalone-side post",
+            "BLUE",
+            "Wire",
+        ),
+        "NEW C3-6": (
+            "C3-6",
+            "LOGIC_3V3 endpoint",
+            "the JP1 logic-side post",
+            "BLUE",
+            "Wire",
+        ),
+        "NEW C3-7": (
+            "C3-7",
+            "DevKit GPIO15",
+            "the DevKit-side GPIO15 jumper post",
+            "YELLOW",
+            "Wire",
+        ),
+        "NEW C3-8": (
+            "C3-8",
+            "DevKit GPIO21",
+            "the DevKit-side GPIO21 jumper post",
+            "YELLOW",
+            "Wire",
+        ),
+    },
+    4: {},
+    5: {},
+    6: {
+        "NEW C6-16": ("C6-16", "Q1 collector", "RELAY_COIL−", "VIOLET", "Wire"),
+        "NEW C6-17": ("C6-17", "JP2 supply side", "+5V_RLY", "VIOLET", "Wire"),
+        "NEW C6-18": ("C6-18", "JP2 coil side", "RELAY_COIL+", "VIOLET", "Wire"),
+    },
+    7: {
+        "NEW C7-5": ("C7-5", "K1 pin 4", "LOCAL_NC", "WHITE", "Wire"),
+        "NEW C7-6": ("C7-6", "K1 pin 6", "LOCAL_TX_SELECTED", "WHITE", "Wire"),
+        "NEW C7-7": ("C7-7", "K1 pin 8", "LOCAL_NO", "WHITE", "Wire"),
+    },
+    8: {
+        "NEW C8-7": ("C8-7", "R_TX 2", "TX_DRV", "YELLOW", "Wire"),
+        **{
+            f"NEW C8-{index}": (f"C8-{index}", part, net, color, "Wire")
+            for index, part, net, color in (
+                (19, "R_CONS_RX 1", "LOCAL_CONSOLE_6_STUB", "WHITE"),
+                (20, "R_CONS_RX 2", "GPIO18_RX_LOCAL", "GREEN"),
+                (21, "DEVKIT GPIO18", "GPIO18_RX_LOCAL", "GREEN"),
+                (22, "R_PIN3_RX 1", "LOCAL_PIN3_STUB", "WHITE"),
+                (23, "R_PIN3_RX 2", "GPIO16_RX_LOCAL", "GREEN"),
+                (24, "DEVKIT GPIO16", "GPIO16_RX_LOCAL", "GREEN"),
+                (25, "K1 pin 4 / LOCAL_NC", "LOCAL_CONSOLE_6_STUB", "WHITE"),
+                (26, "K1 pin 8 / LOCAL_NO", "TX_DRV", "YELLOW"),
+                (27, "K1 pin 6", "LOCAL_TX_SELECTED", "YELLOW"),
+            )
+        },
+    },
+    9: {},
+    10: {
+        "NEW C10-1": ("C10-1", "USB plug", "DISCONNECTED", "NO WIRE", "NO WIRE"),
+        "NEW C10-2": (
+            "C10-2",
+            "STANDALONE POWER between",
+            "TSR_3V3 and LOGIC_3V3",
+            "BLUE",
+            "Jumper",
+        ),
+        "NEW C10-3": ("C10-3", "bench positive lead", "+8V_RAW", "RED", "Bench lead"),
+        "NEW C10-4": ("C10-4", "bench return lead", "GND", "BLACK", "Bench lead"),
+    },
+    11: {"NEW C11-1": ("C11-1", "J1/J2 terminals", "unwired", "NO WIRE", "NO WIRE")},
 }
 BUILD_ROW_FIELDS = {
     "step",
@@ -474,30 +554,25 @@ def _visible_from_to_tables(path: Path) -> dict[int, list[list[list[str]]]]:
     return tables_by_cluster
 
 
-def _assert_rendered_from_to_rows(text: str, guide_name: str) -> None:
+def _assert_rendered_from_to_rows(words: list[dict], guide_name: str) -> None:
     for cluster in _guide_metadata(BUILD_HTML)["clusters"]:
-        blocks = _pdf_from_to_row_blocks(text, cluster)
-        for row, block in zip(cluster["build_rows"], blocks, strict=True):
-            normalized_block = _normalize_text(block)
-            cursor = 0
-            for value in (
+        cells_by_row = _pdf_from_to_cells(words, cluster)
+        for row, cells in zip(cluster["build_rows"], cells_by_row, strict=True):
+            expected = [
                 str(row["step"]),
                 row["reference"],
                 row["color"],
                 row["from"],
                 row["to"],
                 row["part_description"],
-                row["note"],
-                row["directive"],
-            ):
-                if not value:
-                    continue
-                position = normalized_block.find(_normalize_text(value), cursor)
-                assert position >= 0, (
+            ]
+            for value, cell in zip(expected, cells[:6], strict=True):
+                assert _normalize_text(value) in cell, (
                     f"{guide_name} cluster {cluster['number']} Step {row['step']}: "
-                    f"{value!r} is absent from its bounded extracted row"
+                    f"{value!r} is absent from its own PDF column"
                 )
-                cursor = position + len(_normalize_text(value))
+            assert _normalize_text(row["note"]) in cells[6]
+            assert _normalize_text(row["directive"]) in cells[6]
 
 
 def _pdf_text(path: Path) -> str:
@@ -511,53 +586,105 @@ def _pdf_text(path: Path) -> str:
     return _normalize_text(completed.stdout)
 
 
-def _pdf_layout_text(path: Path) -> str:
+def _pdf_bbox_words(path: Path) -> list[dict]:
     assert path.is_file(), f"{path.name}: guide PDF is missing"
     completed = subprocess.run(
-        ["pdftotext", "-layout", str(path), "-"],
+        ["pdftotext", "-bbox-layout", str(path), "-"],
         check=True,
         capture_output=True,
         text=True,
     )
-    return completed.stdout
+    root = ElementTree.fromstring(completed.stdout)
+    return [
+        {
+            "page": page_number,
+            "x": float(word.attrib["xMin"]),
+            "y": float(word.attrib["yMin"]),
+            "text": "".join(word.itertext()),
+        }
+        for page_number, page in enumerate(
+            (element for element in root.iter() if element.tag.endswith("}page")), 1
+        )
+        for word in page.iter()
+        if word.tag.endswith("}word")
+    ]
 
 
-def _pdf_from_to_row_blocks(text: str, cluster: dict) -> list[str]:
-    heading = re.search(
-        rf"Cluster\s+{cluster['number']}\s*(?:—|-)\s*{re.escape(cluster['name'])}",
-        text,
+def _words_text(words: list[dict]) -> str:
+    return _normalize_text(
+        " ".join(
+            word["text"]
+            for word in sorted(words, key=lambda item: (item["y"], item["x"]))
+        )
     )
-    assert heading, f"PDF: missing Cluster {cluster['number']} heading"
-    next_heading = re.search(
-        r"^\s*Cluster\s+\d+\s*(?:—|-)", text[heading.end() :], re.M
-    )
-    section_end = heading.end() + next_heading.start() if next_heading else len(text)
-    section = text[heading.start() : section_end]
-    starts = []
+
+
+def _pdf_from_to_cells(words: list[dict], cluster: dict) -> list[list[str]]:
+    header_groups = {}
+    for word in words:
+        if word["text"] in FROM_TO_HEADERS:
+            header_groups.setdefault((word["page"], round(word["y"], 1)), []).append(
+                word
+            )
+    headers = [
+        sorted(group, key=lambda item: item["x"])
+        for group in header_groups.values()
+        if [item["text"] for item in sorted(group, key=lambda item: item["x"])]
+        == list(FROM_TO_HEADERS)
+    ]
+    assert len(headers) >= (2 if cluster["number"] == 11 else 1)
+    anchors = []
     for row in cluster["build_rows"]:
-        match = re.search(
-            rf"^\s*{row['step']}\s+{re.escape(row['reference'])}\s+{re.escape(row['color'])}(?:\s|$)",
-            section,
-            re.MULTILINE,
+        candidates = [
+            word
+            for word in words
+            if word["text"] == str(row["step"])
+            and any(
+                header[0]["page"] == word["page"]
+                and header[0]["y"] < word["y"] < header[0]["y"] + 400
+                for header in headers
+            )
+        ]
+        assert candidates, (
+            f"PDF C{cluster['number']} Step {row['step']}: missing bbox row anchor"
         )
-        assert match, (
-            f"PDF cluster {cluster['number']} Step {row['step']}: "
-            "missing row-start Step/Ref/Color tuple"
+        anchors.append(
+            min(
+                candidates,
+                key=lambda item: min(
+                    item["y"] - header[0]["y"]
+                    for header in headers
+                    if header[0]["page"] == item["page"] and item["y"] > header[0]["y"]
+                ),
+            )
         )
-        starts.append(match.start())
-    assert starts == sorted(starts) and len(starts) == len(set(starts))
-    build_end = re.search(r"^\s*Unpowered test", section, re.M)
-    end = build_end.start() if build_end else len(section)
-    blocks = []
-    for index, start in enumerate(starts):
-        stop = starts[index + 1] if index + 1 < len(starts) else end
-        boundary = re.search(
-            r"^\s*Independent isolated-map evidence", section[start:stop], re.M
+    cells_by_row = []
+    for index, anchor in enumerate(anchors):
+        header = max(
+            (
+                item
+                for item in headers
+                if item[0]["page"] == anchor["page"] and item[0]["y"] < anchor["y"]
+            ),
+            key=lambda item: item[0]["y"],
         )
-        if boundary:
-            stop = start + boundary.start()
-        blocks.append(section[start:stop])
-    return blocks
+        next_y = (
+            anchors[index + 1]["y"]
+            if index + 1 < len(anchors) and anchors[index + 1]["page"] == anchor["page"]
+            else anchor["y"] + 100
+        )
+        boundaries = [(header[i]["x"] + header[i + 1]["x"]) / 2 for i in range(6)]
+        cells = [[] for _ in range(7)]
+        for word in words:
+            if (
+                word["page"] == anchor["page"]
+                and anchor["y"] - 0.5 <= word["y"] < next_y
+            ):
+                cells[sum(word["x"] >= boundary for boundary in boundaries)].append(
+                    word
+                )
+        cells_by_row.append([_words_text(cell) for cell in cells])
+    return cells_by_row
 
 
 def _assert_headings_in_order(text: str, guide_name: str) -> None:
@@ -1440,6 +1567,18 @@ def test_build_from_to_rows_cover_wiring_and_actions_once():
         assert [row.get("step") for row in rows] == list(range(1, len(rows) + 1))
 
         wiring_ids = [record["connection_id"] for record in wiring]
+        legacy_ids = {
+            connection_id
+            for expected in EXPECTED_CONNECTION_IDS_BY_LEGACY_REF.values()
+            for connection_id in expected
+            if connection_id.startswith(f"C{number}-")
+        }
+        new_fixture_ids = {
+            expected[0] for expected in EXPECTED_NEW_ROWS_BY_CLUSTER[number].values()
+        }
+        assert new_fixture_ids == set(wiring_ids) - legacy_ids, (
+            f"cluster {number}: NEW fixture must cover every non-legacy wiring/action ID"
+        )
         action_ids = []
         for action in actions:
             assert action.get("action_id") == action["connection_id"], (
@@ -1512,13 +1651,26 @@ def test_build_from_to_legacy_references_match_source():
         number = cluster["number"]
         numeric_bases = set()
         qualified_by_base: dict[int, list[dict]] = {}
+        displayed_new_references = []
         for row in cluster["build_rows"]:
             reference = row["reference"]
             legacy_match = re.fullmatch(r"(\d+)([a-z]?)", reference)
             if not legacy_match:
-                assert reference == f"NEW {row['connection_ids'][0]}", (
-                    f"cluster {number} Step {row['step']}: unmapped rows need their stable NEW connection ID"
+                expected = EXPECTED_NEW_ROWS_BY_CLUSTER[number].get(reference)
+                assert expected, f"cluster {number}: undeclared NEW row {reference!r}"
+                connection_id, expected_from, expected_to, color, part = expected
+                assert row["connection_ids"] == [connection_id]
+                assert row["action_ids"] == [connection_id]
+                assert (
+                    _normalize_text(row["from"]),
+                    _normalize_text(row["to"]),
+                    row["color"],
+                    _normalize_text(row["part_description"]),
+                ) == (expected_from, expected_to, color, part), (
+                    f"cluster {number} {reference}: NEW endpoint fixture differs; "
+                    "unrelated IDs and permutations are forbidden"
                 )
+                displayed_new_references.append(reference)
                 continue
 
             base = int(legacy_match.group(1))
@@ -1557,6 +1709,9 @@ def test_build_from_to_legacy_references_match_source():
 
         assert numeric_bases == EXPECTED_LEGACY_REFS_BY_CLUSTER[number], (
             f"cluster {number}: legacy-reference ownership does not match the approved map"
+        )
+        assert displayed_new_references == list(EXPECTED_NEW_ROWS_BY_CLUSTER[number]), (
+            f"cluster {number}: NEW rows must be complete, unique, and in authoritative order"
         )
         for base, count in QUALIFIED_LEGACY_GROUPS.items():
             if base not in EXPECTED_LEGACY_REFS_BY_CLUSTER[number]:
@@ -1623,10 +1778,8 @@ def test_build_from_to_tables_render_in_html():
 
 
 def test_build_from_to_tables_render_in_pdf():
-    text = _pdf_layout_text(BUILD_PDF)
-    header_pattern = r"^\s*" + r"\s+".join(map(re.escape, FROM_TO_HEADERS)) + r"\s*$"
-    assert len(re.findall(header_pattern, text, re.MULTILINE)) == 12
-    _assert_rendered_from_to_rows(text, BUILD_PDF.name)
+    words = _pdf_bbox_words(BUILD_PDF)
+    _assert_rendered_from_to_rows(words, BUILD_PDF.name)
 
 
 def test_build_from_to_cluster_11_keeps_map_gate_between_steps():
