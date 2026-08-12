@@ -43,8 +43,8 @@ Lock legacy ownership with this exact reference plan:
 
 ```python
 EXPECTED_LEGACY_REFS_BY_CLUSTER = {
-    1: set(range(15, 20)),
-    2: {*range(20, 29), 31},
+    1: {*range(15, 20), 23, 24},
+    2: {20, 21, 22, 25, 26, 27, 28, 31},
     3: {29, 30},
     4: set(range(32, 58)),
     5: set(range(58, 74)),
@@ -66,7 +66,7 @@ Do not steal a reference from another cluster merely because it shares a net.
 
 - [ ] **Step 2: Add schema and consumption tests**
 
-Require every row to contain `step`, `reference`, `connection_ids`, `action_ids`, `from`, `to`, `color`, `part_description`, `note`, and `directive`. Require consecutive steps and require every wiring/action ID to be consumed exactly once.
+Require every row to contain `step`, `reference`, `connection_ids`, `action_ids`, `from`, `to`, `color`, `part_description`, `note`, and `directive`. Require consecutive steps and require every wiring/action ID to be covered at least once. Permit repeated IDs only when the endpoint-graph check proves that endpoint participates in each physical row; reject arbitrary reuse or permutation.
 
 Preserve each existing `actions.build[*].connection_id`; also set
 `action_id == connection_id`. Update
@@ -134,7 +134,7 @@ delete `connection_id`.
 
 - [ ] **Step 2: Verify electrical/action coverage**
 
-Run the schema, consumption, legacy mapping, and action parity tests. Fix mappings until every existing wiring record and action is consumed exactly once without changing shared fields or electrical content.
+Run the schema, coverage, legacy mapping, and action parity tests. Fix mappings until every existing wiring record and action is covered without changing shared fields or electrical content. Reuse an ID only where exact endpoint-graph validation proves that the same endpoint participates in multiple physical legacy wires.
 
 - [ ] **Step 3: Add table CSS**
 

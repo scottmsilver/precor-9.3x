@@ -80,7 +80,7 @@ and contains:
 
 - `step`
 - `reference`
-- `connection_ids` (one or more existing wiring records consumed by the row)
+- `connection_ids` (one or more existing wiring records supporting the row)
 - `action_ids` (the corresponding build actions, in operator order)
 - `from`
 - `to`
@@ -91,11 +91,17 @@ and contains:
 
 Existing `wiring` records and `actions.build` directives remain. Each build
 action gains a stable `action_id`. Tests require every wiring record and every
-build action to be consumed exactly once by a `build_rows` entry. For a row
-that consumes multiple endpoint records/actions, `action_ids` lists them in
-operator order and `directive` is their ordered, whitespace-normalized
-concatenation. Automated comparison is exact after normalizing whitespace and
-terminal punctuation; no fuzzy matcher is used.
+build action to be covered by at least one `build_rows` entry. Reuse is allowed
+only when the same endpoint membership participates in multiple physical
+wires—for example an IC supply-pin record supports both the rail-to-pin row and
+the pin-to-decoupling-capacitor row. The endpoint graph must prove every reuse;
+arbitrary or unrelated ID reuse is rejected.
+
+For each row, `action_ids` lists the supporting actions in operator order and
+`directive` is their ordered, whitespace-normalized concatenation. Automated
+comparison is exact after normalizing whitespace and terminal punctuation; no
+fuzzy matcher is used. A reused action may therefore appear in more than one
+row Note when it supplies necessary context for both physical wires.
 
 The complete `directive` is operator-visible in the **Note** cell, following
 any short legacy note/purpose text. It includes initials/evidence prompts,
@@ -106,8 +112,10 @@ parallel structures from diverging, hiding, or dropping operator-critical
 text. Shared build/audit cluster fields are unchanged.
 
 Legacy references are mapped from the existing from-to artifact and checked
-for consistency. New-only fixture, removable-post, and staged construction
-records keep stable `NEW` references.
+for consistency. Reference ownership follows the cluster that constructs the
+part in the depth-first guide, not the old artifact's cluster label; notably,
+bulk-capacitor Refs 23–24 belong to current Cluster 1. New-only fixture,
+removable-post, and staged construction records keep stable `NEW` references.
 
 ## Presentation
 
@@ -134,9 +142,9 @@ No other test/evidence block is moved.
 Automated tests require:
 
 1. all 11 Build sections to contain the seven columns in the required order;
-2. every wiring record and build action to be consumed exactly once by the
-   ordered `build_rows` mapping, allowing only the declared endpoint-pair and
-   qualified-group legacy mappings;
+2. every wiring record and build action to be covered at least once by the
+   ordered `build_rows` mapping; repeated IDs are allowed only when exact
+   endpoint-graph validation proves their use in multiple physical rows;
 3. consecutive cluster-local Step values and unique displayed row identities;
 4. valid wire colors;
 5. accurate legacy Ref endpoints/colors/notes, with qualified repetitions only
