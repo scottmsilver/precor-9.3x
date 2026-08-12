@@ -684,10 +684,11 @@ def _pdf_from_to_cells(
                 and other[0]["y"] > header[0]["y"]
             ] + [y for y in non_build_y if y > header[0]["y"]]
             table_end = min(ends, default=header[0]["y"] + 400)
-            boundaries = [(header[i]["x"] + header[i + 1]["x"]) / 2 for i in range(6)]
+            boundaries = [header[i + 1]["x"] - 3 for i in range(6)]
             for step_word in scoped_words:
                 if (
                     step_word["page"] != header[0]["page"]
+                    or step_word["x"] >= boundaries[0]
                     or step_word["text"] != str(row["step"])
                     or step_word["y"] <= header[0]["y"]
                     or step_word["y"] >= table_end
@@ -727,12 +728,12 @@ def _pdf_from_to_cells(
             else table_end
         )
         next_y = min(same_table_next_y, table_end)
-        boundaries = [(header[i]["x"] + header[i + 1]["x"]) / 2 for i in range(6)]
+        boundaries = [header[i + 1]["x"] - 3 for i in range(6)]
         cells = [[] for _ in range(7)]
         for word in scoped_words:
             if (
                 word["page"] == anchor["page"]
-                and anchor["y"] - 0.5 <= word["y"] < next_y
+                and anchor["y"] - 1.5 <= word["y"] < next_y
             ):
                 cells[sum(word["x"] >= boundary for boundary in boundaries)].append(
                     word
@@ -919,7 +920,11 @@ def _operator_record_groups(
 
 
 def _assert_operator_metadata_values_render(
-    text: str, metadata: dict, guide_name: str, medium: str
+    text: str,
+    metadata: dict,
+    guide_name: str,
+    medium: str,
+    skipped_groups: frozenset[str] = frozenset(),
 ) -> None:
     sections = _cluster_sections(text, guide_name)
     for cluster in metadata["clusters"]:
@@ -928,6 +933,8 @@ def _assert_operator_metadata_values_render(
         groups = _operator_record_groups(cluster, metadata["mode"])
         assert groups, f"{guide_name} cluster {number}: no operator metadata records"
         for group, contracts in groups.items():
+            if group in skipped_groups:
+                continue
             cursor = 0
             for label, pattern in contracts:
                 match = re.search(pattern, section[cursor:], re.IGNORECASE)
@@ -1405,7 +1412,15 @@ def test_pdf_preserves_contracts_and_has_letter_page_size(
                 f"{path.name} cluster {number}: missing rendered {label!r}"
             )
     _assert_shared_metadata_values_render(text, metadata, path.name)
-    _assert_operator_metadata_values_render(text, metadata, path.name, "PDF")
+    # Build directives live in the wide Note column, so pdftotext -layout may
+    # interleave wrapped endpoint columns. The bbox test below checks each
+    # complete directive inside its own Note cell instead.
+    skipped_groups = (
+        frozenset({"build"}) if html_path == BUILD_HTML else frozenset()
+    )
+    _assert_operator_metadata_values_render(
+        text, metadata, path.name, "PDF", skipped_groups
+    )
     _assert_contract_language(text, path.name)
     _assert_bypass_sequence_contracts(text, path.name)
     assert re.search(r"file:///|/home/|[A-Za-z]:\\", text, re.IGNORECASE) is None
