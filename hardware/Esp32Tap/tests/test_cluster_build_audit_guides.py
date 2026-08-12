@@ -657,7 +657,7 @@ def _pdf_from_to_cells(
         == list(FROM_TO_HEADERS)
     ]
     expected_headers = 2 if cluster["number"] == 11 else 1
-    assert len(headers) == 2 if cluster["number"] == 11 else len(headers) >= 1, (
+    assert len(headers) == expected_headers, (
         f"PDF Cluster {cluster['number']}: expected {expected_headers} complete headers"
     )
     non_build_y = [
@@ -673,7 +673,7 @@ def _pdf_from_to_cells(
             ]
         )
     ]
-    anchors: dict[tuple[int, int], tuple[dict, list[dict]]] = {}
+    anchors: dict[tuple[int, int], tuple[dict, list[dict], float]] = {}
     for row in cluster["build_rows"]:
         candidates = []
         for header in headers:
@@ -709,20 +709,24 @@ def _pdf_from_to_cells(
                     and _words_text(cells[1]) == row["reference"]
                     and _words_text(cells[2]) == row["color"]
                 ):
-                    candidates.append((step_word, header))
+                    candidates.append((step_word, header, table_end))
         assert len(candidates) == 1, (
             f"PDF C{cluster['number']} Step {row['step']}: Step/Ref/Color anchor must be unique in cluster scope"
         )
         anchors[(cluster["number"], row["step"])] = candidates[0]
     result = {}
     ordered = list(anchors.items())
-    for index, (key, (anchor, header)) in enumerate(ordered):
-        next_anchor = ordered[index + 1][1][0] if index + 1 < len(ordered) else None
-        next_y = (
+    for index, (key, (anchor, header, table_end)) in enumerate(ordered):
+        next_entry = ordered[index + 1][1] if index + 1 < len(ordered) else None
+        next_anchor = next_entry[0] if next_entry else None
+        same_table_next_y = (
             next_anchor["y"]
-            if next_anchor and next_anchor["page"] == anchor["page"]
-            else anchor["y"] + 100
+            if next_entry
+            and next_entry[1] is header
+            and next_anchor["page"] == anchor["page"]
+            else table_end
         )
+        next_y = min(same_table_next_y, table_end)
         boundaries = [(header[i]["x"] + header[i + 1]["x"]) / 2 for i in range(6)]
         cells = [[] for _ in range(7)]
         for word in scoped_words:
@@ -1861,6 +1865,12 @@ def test_pdf_from_to_parser_scopes_duplicate_steps_to_cluster_pages():
                 for x, text in zip((10, 50, 90), ("1", reference, color))
             ]
         )
+        words.extend(
+            (
+                word(page, 10, 70, "Unpowered test"),
+                word(page, 370, 80, "borrowed-note borrowed-directive"),
+            )
+        )
     cluster = {
         "number": 2,
         "name": "TSR supply",
@@ -1868,6 +1878,8 @@ def test_pdf_from_to_parser_scopes_duplicate_steps_to_cluster_pages():
     }
     cells = _pdf_from_to_cells(words, cluster)
     assert cells[(2, 1)][:3] == ["1", "20", "ORANGE"]
+    assert "borrowed-note" not in cells[(2, 1)][6]
+    assert "borrowed-directive" not in cells[(2, 1)][6]
 
 
 def test_build_from_to_cluster_11_keeps_map_gate_between_steps():
