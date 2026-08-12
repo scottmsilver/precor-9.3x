@@ -123,8 +123,8 @@
       }
       .from-to {
         table-layout: fixed;
-        font-size: 5.5pt;
-        line-height: 1.04;
+        font-size: 6.5pt;
+        line-height: 1.08;
       }
       .from-to th,
       .from-to td {
@@ -139,10 +139,39 @@
       .from-to th:nth-child(6), .from-to td:nth-child(6) { width: 10%; }
       .from-to th:nth-child(7), .from-to td:nth-child(7) { width: 37%; }
       .from-to tbody td:nth-child(n + 4) { padding-top: 2px; }
-      .from-to tbody td:nth-child(7) { font-size: 5.5pt; }
+      .from-to tbody td:nth-child(7) { font-size: 6.5pt; }
       .from-to tbody td:nth-child(4),
-      .from-to tbody td:nth-child(5) { font-size: 5.8pt; }
+      .from-to tbody td:nth-child(5) { font-size: 6.5pt; }
       .from-to .directive { color: #27364a; }
+      .uart-page .from-to {
+        font-size: 5.8pt;
+        line-height: 1.04;
+        margin-bottom: 1px;
+      }
+      .uart-page .from-to tbody td:nth-child(n + 4) {
+        font-size: 5.8pt;
+      }
+      .dense-page .from-to,
+      .relay-page .from-to,
+      .compact .from-to {
+        font-size: 5.5pt;
+        line-height: 1.02;
+        margin: 1px 0 0;
+      }
+      .dense-page .from-to th,
+      .dense-page .from-to td,
+      .relay-page .from-to th,
+      .relay-page .from-to td,
+      .compact .from-to th,
+      .compact .from-to td {
+        padding: 0.5px 2px;
+      }
+      .dense-page .from-to tbody td:nth-child(n + 4),
+      .relay-page .from-to tbody td:nth-child(n + 4),
+      .compact .from-to tbody td:nth-child(n + 4) {
+        padding-top: 1px;
+        font-size: 5.5pt;
+      }
       .evidence {
         min-height: 28px;
       }
@@ -167,8 +196,8 @@
         white-space: nowrap;
       }
       .compact {
-        font-size: 8pt;
-        line-height: 1.12;
+        font-size: 8.5pt;
+        line-height: 1.18;
       }
       .compact p,
       .compact ul,
