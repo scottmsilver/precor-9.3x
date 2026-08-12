@@ -20,14 +20,15 @@ guide is unchanged.
 
 ## Table Convention
 
-Every Build section renders one ordered table with these columns:
+Every Build section renders an ordered point-to-point table with these columns:
 
 | Step | Ref | Color | From | To | Part | Note |
 |---|---|---|---|---|---|---|
 
 - **Step** is the cluster-local construction order and remains consecutive.
 - **Ref** is the original point-to-point reference number from
-  `esp32tap-breadboard-from-to.pdf` when the connection is the same.
+  `esp32tap-breadboard-from-to.pdf` when the rendered physical connection is
+  the same.
 - Connections introduced by the newer depth-first guide that have no original
   reference use `NEW` plus a stable cluster-local identifier, such as
   `NEW C8-14`; they must never be assigned a misleading legacy number.
@@ -41,25 +42,59 @@ Every Build section renders one ordered table with these columns:
 - **Note** carries orientation, state, multiplicity, or purpose information;
   safety-critical states such as “leave removed” remain explicit.
 
-Grouped connections such as four unused-input ground ties may occupy one row
-only when the Part/Note fields state the wire count and the row names every pin.
-`NO WIRE` rows remain visible where they communicate an intentional open
+### Legacy-reference mapping
+
+The old artifact models physical endpoint-to-endpoint wires, while the current
+metadata often models each endpoint's membership in a named net. The table
+therefore uses an explicit mapping layer instead of assuming one wiring record
+equals one legacy reference:
+
+- **Two endpoint records to one legacy wire:** combine the current records into
+  one From-to-To row and show the legacy Ref once. Example: current
+  `F1 lead 2 → FUSED_8V` plus `D1 anode → FUSED_8V` renders as legacy Ref 16,
+  `RXEF075 lead 2 → 1N5822 anode`.
+- **One grouped legacy reference to several physical wires:** render one row
+  per physical wire and qualify the repeated legacy reference with a stable
+  suffix, for example `70a`, `70b`, `70c`, `70d`. The Note states “legacy Ref
+  70; four wires.”
+- **Intentional opens:** grouped `NO WIRE` terminals use qualified suffixes in
+  the same way, with every open pin named.
+- **Direct one-to-one legacy match:** show the plain numeric Ref.
+- **No legitimate legacy match:** show `NEW` plus the stable connection ID.
+
+The mapping is stored explicitly and tested against an authoritative expected
+mapping derived from the legacy from-to metadata. A numeric legacy reference
+may repeat only through its declared qualified group. Every legacy Ref used by
+the build guide must resolve to the same physical endpoints, color, wire count,
+and note semantics as the reference artifact.
+
+Each display row otherwise represents one physical wire or one intentional
+open. `NO WIRE` rows remain visible where they communicate an intentional open
 terminal.
 
 ## Data Contract
 
-The embedded build-guide metadata remains the source of truth. Each wiring
-record gains the fields needed to render the convention:
+The embedded build-guide metadata remains the electrical source of truth. A
+separate `build_rows` array per cluster is the presentation/traceability view
+and contains:
 
 - `step`
 - `reference`
+- `connection_ids` (one or more existing wiring records consumed by the row)
 - `from`
 - `to`
+- `color`
 - `part_description`
 - `note`
+- `directive` (the complete operator action/state instruction)
 
-Existing `connection_id`, `part`, `pin`, `net`, and `color` fields remain for
-the current electrical-completeness and HTML/PDF visibility checks. Shared
+Existing `wiring` records and `actions.build` directives remain. Tests require
+every wiring record and every build action to be consumed exactly once by a
+`build_rows` entry. A row's `directive` must remain semantically identical to
+the corresponding build action, including initials/evidence prompts, staged
+sequencing, “only after PASS” conditions, removable-jumper state, wire count,
+polarity, and leave-open/NO-WIRE instructions. This prevents the parallel
+structures from diverging or dropping operator-critical text. Shared
 build/audit cluster fields are unchanged.
 
 Legacy references are mapped from the existing from-to artifact and checked
@@ -75,18 +110,35 @@ Rows may wrap, but a row cannot split across pages. Existing intentional
 cluster continuations remain allowed; accidental table-only spill pages are
 not.
 
+Normally a Build section uses one contiguous point-to-point table. Cluster 11
+is the sole intentional exception: its table is split after isolated-mapping
+Step 1 so the existing writable **Independent isolated-map evidence — complete
+before Step 2** table and signed gate remain physically between Step 1 and the
+commoning steps. The second point-to-point table resumes at Step 2 with the
+same seven columns. Automated and PDF-text checks enforce this ordering:
+
+`Step 1 → isolated-map evidence/signoff → Step 2`.
+
+No other test/evidence block is moved.
+
 ## Verification
 
 Automated tests require:
 
 1. all 11 Build sections to contain the seven columns in the required order;
-2. exactly one visible table row per wiring metadata record, in metadata order;
-3. consecutive cluster-local Step values;
+2. every wiring record and build action to be consumed exactly once by the
+   ordered `build_rows` mapping, allowing only the declared endpoint-pair and
+   qualified-group legacy mappings;
+3. consecutive cluster-local Step values and unique displayed row identities;
 4. valid wire colors;
-5. unique and accurate legacy Ref values, with new-only records clearly marked;
+5. accurate legacy Ref endpoints/colors/notes, with qualified repetitions only
+   for declared groups and new-only records clearly marked;
 6. visible HTML and extracted PDF values matching Step/Ref/Color/From/To/Part/Note;
-7. unchanged shared cluster contracts and unchanged test/evidence content; and
-8. US Letter output with no clipping, orphan spill page, browser header, or
+7. semantic parity between every `build_rows.directive` and its build action,
+   including staged/PASS/jumper/initials instructions;
+8. unchanged shared cluster contracts and unchanged test/evidence content,
+   including Cluster 11's Step 1 → evidence/signoff → Step 2 ordering; and
+9. US Letter output with no clipping, orphan spill page, browser header, or
    local path.
 
 The focused cluster-guide suite and neighboring PDF tests must pass. Every
