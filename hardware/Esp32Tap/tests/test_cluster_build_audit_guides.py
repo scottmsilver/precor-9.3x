@@ -4,6 +4,7 @@ import html
 import json
 import re
 import subprocess
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 BRINGUP = ROOT / "hardware/Esp32Tap/bringup"
 BUILD_HTML = BRINGUP / "esp32tap-cluster-build-and-test.html"
 BUILD_PDF = BRINGUP / "esp32tap-cluster-build-and-test.pdf"
+LEGACY_FROM_TO_HTML = BRINGUP / "esp32tap-breadboard-from-to.html"
 AUDIT_HTML = BRINGUP / "esp32tap-cluster-audit-and-test.html"
 AUDIT_PDF = BRINGUP / "esp32tap-cluster-audit-and-test.pdf"
 OLD_HTML = BRINGUP / "esp32tap-module-test-checklist.html"
@@ -30,6 +32,44 @@ EXPECTED_CLUSTERS = {
     9: "Indicators and VBUS sensing",
     10: "Whole-device standalone bench test",
     11: "RJ45 pass-through and treadmill bypass",
+}
+EXPECTED_LEGACY_REFS_BY_CLUSTER = {
+    1: set(range(15, 20)),
+    2: {*range(20, 29), 31},
+    3: {29, 30},
+    4: set(range(32, 58)),
+    5: set(range(58, 74)),
+    6: set(range(74, 88)),
+    7: {*range(88, 92), *range(105, 112)},
+    8: set(range(92, 101)),
+    9: set(range(112, 127)),
+    10: set(),
+    11: {*range(1, 15), *range(101, 105)},
+}
+QUALIFIED_LEGACY_GROUPS = {70: 4, 71: 2, 97: 6, 98: 3}
+BUILD_ROW_FIELDS = {
+    "step",
+    "reference",
+    "connection_ids",
+    "action_ids",
+    "from",
+    "to",
+    "color",
+    "part_description",
+    "note",
+    "directive",
+}
+FROM_TO_HEADERS = ("Step", "Ref", "Color", "From", "To", "Part", "Note")
+WIRE_COLORS = {
+    "BLACK",
+    "RED",
+    "ORANGE",
+    "BLUE",
+    "VIOLET",
+    "YELLOW",
+    "GREEN",
+    "WHITE",
+    "NO WIRE",
 }
 
 SHARED_CLUSTER_FIELDS = {
@@ -187,6 +227,147 @@ def _visible_html_text(path: Path) -> str:
 
 def _normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _cell_text(cell_html: str) -> str:
+    return _normalize_text(html.unescape(re.sub(r"<[^>]+>", " ", cell_html)))
+
+
+def _json_script(path: Path, script_id: str) -> dict:
+    source = path.read_text(encoding="utf-8")
+    match = re.search(
+        rf'<script\s+id="{re.escape(script_id)}"\s+type="application/json">\s*(.*?)\s*</script>',
+        source,
+        re.DOTALL,
+    )
+    assert match, f"{path.name}: {script_id} JSON is missing"
+    return json.loads(match.group(1))
+
+
+def _legacy_rows() -> dict[int, dict[str, str]]:
+    source = LEGACY_FROM_TO_HTML.read_text(encoding="utf-8")
+    metadata = _json_script(LEGACY_FROM_TO_HTML, "cluster-metadata")
+    color_by_ref = {
+        reference: color
+        for color, references in metadata["wire_colors"].items()
+        for reference in references
+    }
+    rows: dict[int, dict[str, str]] = {}
+    for row_html in re.findall(r"<tr\b[^>]*>(.*?)</tr>", source, re.DOTALL):
+        cells = re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row_html, re.DOTALL)
+        if len(cells) != 5 or not _cell_text(cells[0]).isdigit():
+            continue
+        reference = int(_cell_text(cells[0]))
+        rows[reference] = {
+            "from": _cell_text(cells[1]),
+            "to": _cell_text(cells[2]),
+            "part_description": _cell_text(cells[3]),
+            "note": _cell_text(cells[4]),
+            "color": color_by_ref[reference],
+        }
+    assert set(rows) == set(range(1, 127)), (
+        f"{LEGACY_FROM_TO_HTML.name}: expected authoritative refs 1..126"
+    )
+    return rows
+
+
+LEGACY_ROWS = _legacy_rows()
+
+
+def _normalize_directive(text: str) -> str:
+    return re.sub(r"[.!?;:]+$", "", _normalize_text(text))
+
+
+def _qualified_legacy_endpoints(reference: int) -> list[tuple[str, str]]:
+    source = LEGACY_ROWS[reference]
+    pin_match = re.fullmatch(r"(.+?) pins ([0-9,]+)", source["from"])
+    assert pin_match, f"legacy Ref {reference}: grouped From endpoint is malformed"
+    prefix, pin_list = pin_match.groups()
+    return [(f"{prefix} pin {pin}", source["to"]) for pin in pin_list.split(",")]
+
+
+def _raw_cluster_sections(path: Path) -> dict[int, str]:
+    source = re.sub(
+        r"<script\b.*?</script>",
+        " ",
+        path.read_text(encoding="utf-8"),
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    starts = []
+    for number, name in EXPECTED_CLUSTERS.items():
+        match = re.search(
+            rf"<h2\b[^>]*>\s*Cluster\s+{number}\s*(?:—|-)\s*{re.escape(name)}\s*</h2>",
+            source,
+            re.DOTALL,
+        )
+        assert match, f"{path.name}: cannot identify raw Cluster {number} section"
+        starts.append((number, match.start()))
+    return {
+        number: source[
+            start : starts[index + 1][1] if index + 1 < len(starts) else None
+        ]
+        for index, (number, start) in enumerate(starts)
+    }
+
+
+def _visible_from_to_tables(path: Path) -> dict[int, list[list[list[str]]]]:
+    tables_by_cluster: dict[int, list[list[list[str]]]] = {}
+    for number, section in _raw_cluster_sections(path).items():
+        tables = []
+        for table_html in re.findall(
+            r'<table\b[^>]*class="[^"]*\bfrom-to\b[^"]*"[^>]*>(.*?)</table>',
+            section,
+            re.DOTALL | re.IGNORECASE,
+        ):
+            rows = []
+            for row_html in re.findall(
+                r"<tr\b[^>]*>(.*?)</tr>", table_html, re.DOTALL | re.IGNORECASE
+            ):
+                cells = re.findall(
+                    r"<t[dh]\b[^>]*>(.*?)</t[dh]>",
+                    row_html,
+                    re.DOTALL | re.IGNORECASE,
+                )
+                if cells:
+                    rows.append([_cell_text(cell) for cell in cells])
+            tables.append(rows)
+        tables_by_cluster[number] = tables
+    return tables_by_cluster
+
+
+def _assert_rendered_from_to_rows(text: str, guide_name: str) -> None:
+    sections = _cluster_sections(text, guide_name)
+    for cluster in _guide_metadata(BUILD_HTML)["clusters"]:
+        section = sections[cluster["number"]]
+        header_pattern = r"\s+".join(map(re.escape, FROM_TO_HEADERS))
+        expected_table_count = 2 if cluster["number"] == 11 else 1
+        assert len(re.findall(header_pattern, section)) == expected_table_count, (
+            f"{guide_name} cluster {cluster['number']}: expected {expected_table_count} "
+            "complete Step/Ref/Color/From/To/Part/Note header rows"
+        )
+        cursor = 0
+        for row in cluster["build_rows"]:
+            values = (
+                str(row["step"]),
+                row["reference"],
+                row["color"],
+                row["from"],
+                row["to"],
+                row["part_description"],
+                row["note"],
+                row["directive"],
+            )
+            pattern = r".{0,640}?".join(
+                _scalar_render_pattern(_normalize_text(value))
+                for value in values
+                if value
+            )
+            match = re.search(pattern, section[cursor:], re.IGNORECASE)
+            assert match, (
+                f"{guide_name} cluster {cluster['number']} Step {row['step']}: "
+                "complete ordered row is absent"
+            )
+            cursor += match.end()
 
 
 def _pdf_text(path: Path) -> str:
@@ -414,7 +595,11 @@ def _assert_operator_evidence(cluster: dict, guide_name: str) -> None:
         str(field).strip().lower().replace("-", "_").replace(" ", "_")
         for field in evidence
     }
-    assert {"operator", "date", "signed_pass"} <= normalized, (
+    assert {
+        "operator",
+        "date",
+        "signed_pass",
+    } <= normalized, (
         f"{guide_name} cluster {cluster['number']}: operator, date, and signed-pass fields are required"
     )
 
@@ -460,9 +645,10 @@ def _assert_dependency_contract(
             f"{guide_name} cluster {number}: input source {upstream!r} is not a declared dependency"
         )
         if upstream is None:
-            assert isinstance(source.get("source_name"), str) and source[
-                "source_name"
-            ].strip(), (
+            assert (
+                isinstance(source.get("source_name"), str)
+                and source["source_name"].strip()
+            ), (
                 f"{guide_name} cluster {number}: external input {source['input']!r} needs a clear source_name prerequisite"
             )
             assert "source_output" not in source
@@ -476,9 +662,10 @@ def _assert_dependency_contract(
             )
             if source_output != source["input"]:
                 assert "source_output" in source
-                assert isinstance(source.get("source_mapping"), str) and source[
-                    "source_mapping"
-                ].strip(), (
+                assert (
+                    isinstance(source.get("source_mapping"), str)
+                    and source["source_mapping"].strip()
+                ), (
                     f"{guide_name} cluster {number}: renamed source output {source_output!r} "
                     f"needs an explicit mapping to input {source['input']!r}"
                 )
@@ -609,7 +796,11 @@ def _assert_audit_actions(cluster: dict, guide_name: str) -> None:
                 f"{guide_name} cluster {number}: audit measurements need exact {field}"
             )
     cause_stages = [cause.get("stage") for cause in structured["likely_causes"]]
-    assert cause_stages == ["source", "component", "output"], (
+    assert cause_stages == [
+        "source",
+        "component",
+        "output",
+    ], (
         f"{guide_name} cluster {number}: likely causes must be ordered source -> component -> output"
     )
 
@@ -880,7 +1071,10 @@ def test_pdf_preserves_contracts_and_has_letter_page_size(
 
 
 def test_build_cluster_8_does_not_consume_unbuilt_rj45_state():
-    clusters = {cluster["number"]: cluster for cluster in _guide_metadata(BUILD_HTML)["clusters"]}
+    clusters = {
+        cluster["number"]: cluster
+        for cluster in _guide_metadata(BUILD_HTML)["clusters"]
+    }
     cluster = clusters[8]
     forbidden = {"CONSOLE.6", "PIN3", "MOTOR.6"}
     assert forbidden.isdisjoint(cluster["inputs"])
@@ -905,16 +1099,27 @@ def test_build_cluster_11_maps_isolated_conductors_before_common_links():
 
 
 def test_build_has_dedicated_measurement_evidence_fields():
-    clusters = {cluster["number"]: cluster for cluster in _guide_metadata(BUILD_HTML)["clusters"]}
+    clusters = {
+        cluster["number"]: cluster
+        for cluster in _guide_metadata(BUILD_HTML)["clusters"]
+    }
     required = {
         7: {
-            "usb_logic_release_ms", "gpio21_release_ms", "tread_ok_release_ms",
-            "vin_release_ms", "ambient_temp_c", "tps709_temp_c", "bc337_temp_c",
+            "usb_logic_release_ms",
+            "gpio21_release_ms",
+            "tread_ok_release_ms",
+            "vin_release_ms",
+            "ambient_temp_c",
+            "tps709_temp_c",
+            "bc337_temp_c",
         },
         10: {"gpio16_idle_v", "gpio18_idle_v"},
         11: {
-            "treadmill_current_ma", "supply_drop_mv", "ground_return_drop_mv",
-            "plus_8v_endpoint_temp_c", "gnd_endpoint_temp_c",
+            "treadmill_current_ma",
+            "supply_drop_mv",
+            "ground_return_drop_mv",
+            "plus_8v_endpoint_temp_c",
+            "gnd_endpoint_temp_c",
             *(f"console_{pin}_temp_c" for pin in range(1, 9)),
             *(f"motor_{pin}_temp_c" for pin in range(1, 9)),
         },
@@ -924,11 +1129,20 @@ def test_build_has_dedicated_measurement_evidence_fields():
 
     visible = _visible_html_text(BUILD_HTML)
     for label in (
-        "USB logic release (ms)", "GPIO21 release (ms)", "TREAD_OK release (ms)",
-        "VIN release (ms)", "TPS709 temperature (°C)", "BC337 temperature (°C)",
-        "GPIO16 UART idle (V)", "GPIO18 UART idle (V)", "Treadmill current (mA)",
-        "Supply drop (mV)", "Ground-return drop (mV)", "CONSOLE temperature (°C)",
-        "MOTOR temperature (°C)", "+8V endpoint temperature (°C)",
+        "USB logic release (ms)",
+        "GPIO21 release (ms)",
+        "TREAD_OK release (ms)",
+        "VIN release (ms)",
+        "TPS709 temperature (°C)",
+        "BC337 temperature (°C)",
+        "GPIO16 UART idle (V)",
+        "GPIO18 UART idle (V)",
+        "Treadmill current (mA)",
+        "Supply drop (mV)",
+        "Ground-return drop (mV)",
+        "CONSOLE temperature (°C)",
+        "MOTOR temperature (°C)",
+        "+8V endpoint temperature (°C)",
         "GND endpoint temperature (°C)",
     ):
         assert label in visible
@@ -963,14 +1177,13 @@ def test_build_cluster_8_proves_local_future_interface_without_connectors():
         cluster["outputs"]
     )
     provenance = {
-        source["input"]: source["source_cluster"]
-        for source in cluster["input_sources"]
+        source["input"]: source["source_cluster"] for source in cluster["input_sources"]
     }
     assert provenance["LOCAL_NC"] == provenance["LOCAL_NO"] == 7
     rendered = _normalize_text(
-        json.dumps(cluster["actions"], ensure_ascii=False) + " " + _cluster_sections(
-            _visible_html_text(BUILD_HTML), BUILD_HTML.name
-        )[8]
+        json.dumps(cluster["actions"], ensure_ascii=False)
+        + " "
+        + _cluster_sections(_visible_html_text(BUILD_HTML), BUILD_HTML.name)[8]
     )
     for required in (
         "LOCAL_CONSOLE_6_STUB",
@@ -1015,7 +1228,9 @@ def test_each_build_connection_has_one_numbered_wiring_record():
     for cluster in metadata["clusters"]:
         wiring = cluster["wiring"]
         build = cluster["actions"]["build"]
-        assert len(wiring) >= 3, f"cluster {cluster['number']} needs explicit connections"
+        assert len(wiring) >= 3, (
+            f"cluster {cluster['number']} needs explicit connections"
+        )
         assert len(build) == len(wiring), (
             f"cluster {cluster['number']} build/wiring mismatch"
         )
@@ -1025,11 +1240,216 @@ def test_each_build_connection_has_one_numbered_wiring_record():
         assert wiring_ids == [
             f"C{cluster['number']}-{index}" for index in range(1, len(wiring) + 1)
         ]
-        section = _cluster_sections(
-            _visible_html_text(BUILD_HTML), BUILD_HTML.name
-        )[cluster["number"]]
-        for index, instruction in enumerate(build, 1):
-            assert f"{index}. {instruction['instruction']}" in section
+        consumed_ids = [
+            connection_id
+            for row in cluster["build_rows"]
+            for connection_id in row["connection_ids"]
+        ]
+        assert consumed_ids == wiring_ids
+
+
+def test_build_from_to_rows_cover_wiring_and_actions_once():
+    metadata = _guide_metadata(BUILD_HTML)
+    for cluster in metadata["clusters"]:
+        number = cluster["number"]
+        wiring = cluster["wiring"]
+        actions = cluster["actions"]["build"]
+        rows = cluster.get("build_rows")
+        assert isinstance(rows, list) and rows, (
+            f"cluster {number}: build_rows must be a nonempty list"
+        )
+        assert [row.get("step") for row in rows] == list(range(1, len(rows) + 1))
+
+        wiring_ids = [record["connection_id"] for record in wiring]
+        action_ids = []
+        for action in actions:
+            assert action.get("action_id") == action["connection_id"], (
+                f"cluster {number}: action_id must equal connection_id"
+            )
+            action_ids.append(action["action_id"])
+        assert wiring_ids == action_ids, (
+            f"cluster {number}: wiring/build IDs must retain operator order"
+        )
+        assert len(wiring_ids) == len(set(wiring_ids))
+
+        consumed_connections = []
+        consumed_actions = []
+        for row in rows:
+            assert BUILD_ROW_FIELDS <= row.keys(), (
+                f"cluster {number} Step {row.get('step')}: incomplete build-row schema"
+            )
+            assert isinstance(row["connection_ids"], list) and row["connection_ids"]
+            assert isinstance(row["action_ids"], list) and row["action_ids"]
+            assert row["connection_ids"] == row["action_ids"]
+            assert row["color"] in WIRE_COLORS
+            assert all(
+                isinstance(row[field], str) and row[field].strip()
+                for field in (
+                    "reference",
+                    "from",
+                    "to",
+                    "color",
+                    "part_description",
+                    "directive",
+                )
+            )
+            assert isinstance(row["note"], str)
+            selected = [actions[action_ids.index(item)] for item in row["action_ids"]]
+            expected_directive = _normalize_directive(
+                " ".join(action["instruction"] for action in selected)
+            )
+            assert _normalize_directive(row["directive"]) == expected_directive, (
+                f"cluster {number} Step {row['step']}: directive differs from ordered actions"
+            )
+            consumed_connections.extend(row["connection_ids"])
+            consumed_actions.extend(row["action_ids"])
+
+        assert Counter(consumed_connections) == Counter(wiring_ids), (
+            f"cluster {number}: every wiring record must be consumed exactly once"
+        )
+        assert Counter(consumed_actions) == Counter(action_ids), (
+            f"cluster {number}: every build action must be consumed exactly once"
+        )
+        assert len({row["reference"] for row in rows}) == len(rows), (
+            f"cluster {number}: displayed row references must be unique"
+        )
+
+
+def test_build_from_to_legacy_references_match_source():
+    metadata = _guide_metadata(BUILD_HTML)
+    displayed_legacy_references = []
+    for cluster in metadata["clusters"]:
+        number = cluster["number"]
+        numeric_bases = set()
+        qualified_by_base: dict[int, list[dict]] = {}
+        for row in cluster["build_rows"]:
+            reference = row["reference"]
+            legacy_match = re.fullmatch(r"(\d+)([a-z]?)", reference)
+            if not legacy_match:
+                assert reference == f"NEW {row['connection_ids'][0]}", (
+                    f"cluster {number} Step {row['step']}: unmapped rows need their stable NEW connection ID"
+                )
+                continue
+
+            base = int(legacy_match.group(1))
+            suffix = legacy_match.group(2)
+            assert base in EXPECTED_LEGACY_REFS_BY_CLUSTER[number], (
+                f"cluster {number}: legacy Ref {base} belongs to another cluster"
+            )
+            numeric_bases.add(base)
+            displayed_legacy_references.append(reference)
+            source = LEGACY_ROWS[base]
+            assert row["color"] == source["color"]
+            if base not in QUALIFIED_LEGACY_GROUPS:
+                assert not suffix, (
+                    f"legacy Ref {base} must be displayed without a suffix"
+                )
+                for field in ("from", "to", "part_description"):
+                    assert _normalize_text(row[field]) == source[field], (
+                        f"legacy Ref {base}: {field} differs from the authoritative row"
+                    )
+                assert source["note"] in _normalize_text(row["note"])
+            else:
+                assert suffix, f"grouped legacy Ref {base} requires a suffix"
+                qualified_by_base.setdefault(base, []).append(row)
+
+        assert numeric_bases == EXPECTED_LEGACY_REFS_BY_CLUSTER[number], (
+            f"cluster {number}: legacy-reference ownership does not match the approved map"
+        )
+        for base, count in QUALIFIED_LEGACY_GROUPS.items():
+            if base not in EXPECTED_LEGACY_REFS_BY_CLUSTER[number]:
+                continue
+            rows = qualified_by_base.get(base, [])
+            assert [row["reference"] for row in rows] == [
+                f"{base}{chr(ord('a') + index)}" for index in range(count)
+            ]
+            assert [
+                (_normalize_text(row["from"]), _normalize_text(row["to"]))
+                for row in rows
+            ] == _qualified_legacy_endpoints(base)
+            source = LEGACY_ROWS[base]
+            group_semantics = (
+                f"legacy Ref {base}; {count} intentional opens"
+                if source["color"] == "NO WIRE"
+                else f"legacy Ref {base}; {count} wires"
+            )
+            for row in rows:
+                assert row["color"] == source["color"]
+                assert source["note"] in _normalize_text(row["note"])
+                assert group_semantics in _normalize_text(row["note"])
+                if source["color"] == "NO WIRE":
+                    assert row["part_description"] in {"NO WIRE", "—"}
+                else:
+                    assert row["part_description"] == "Wire"
+
+    assert len(displayed_legacy_references) == len(set(displayed_legacy_references))
+
+
+def test_build_from_to_tables_render_in_html():
+    metadata = _guide_metadata(BUILD_HTML)
+    tables_by_cluster = _visible_from_to_tables(BUILD_HTML)
+    for cluster in metadata["clusters"]:
+        number = cluster["number"]
+        tables = tables_by_cluster[number]
+        assert len(tables) == (2 if number == 11 else 1), (
+            f"cluster {number}: expected visible from-to table(s)"
+        )
+        assert all(table and tuple(table[0]) == FROM_TO_HEADERS for table in tables)
+        visible_rows = [row for table in tables for row in table[1:]]
+        assert len(visible_rows) == len(cluster["build_rows"])
+        for metadata_row, visible_row in zip(
+            cluster["build_rows"], visible_rows, strict=True
+        ):
+            assert len(visible_row) == len(FROM_TO_HEADERS)
+            expected = [
+                str(metadata_row["step"]),
+                metadata_row["reference"],
+                metadata_row["color"],
+                metadata_row["from"],
+                metadata_row["to"],
+                metadata_row["part_description"],
+            ]
+            assert visible_row[:6] == [_normalize_text(value) for value in expected]
+            note_cell = visible_row[6]
+            note_position = note_cell.find(_normalize_text(metadata_row["note"]))
+            directive_position = note_cell.find(
+                _normalize_text(metadata_row["directive"])
+            )
+            assert note_position >= 0 and directive_position >= note_position, (
+                f"cluster {number} Step {metadata_row['step']}: Note cell must show note then complete directive"
+            )
+
+
+def test_build_from_to_tables_render_in_pdf():
+    _assert_rendered_from_to_rows(_pdf_text(BUILD_PDF), BUILD_PDF.name)
+
+
+def test_build_from_to_cluster_11_keeps_map_gate_between_steps():
+    cluster = _guide_metadata(BUILD_HTML)["clusters"][10]
+    assert [row["step"] for row in cluster["build_rows"][:2]] == [1, 2]
+    first, second = cluster["build_rows"][:2]
+    for path, text in (
+        (BUILD_HTML, _visible_html_text(BUILD_HTML)),
+        (BUILD_PDF, _pdf_text(BUILD_PDF)),
+    ):
+        section = _cluster_sections(text, path.name)[11]
+        first_match = re.search(
+            _scalar_render_pattern("1")
+            + r".{0,160}?"
+            + _scalar_render_pattern(first["reference"]),
+            section,
+        )
+        evidence = section.find("Independent isolated-map evidence")
+        second_match = re.search(
+            _scalar_render_pattern("2")
+            + r".{0,160}?"
+            + _scalar_render_pattern(second["reference"]),
+            section,
+        )
+        assert first_match and second_match and evidence >= 0
+        assert first_match.start() < evidence < second_match.start(), (
+            f"{path.name}: Cluster 11 must keep Step 1 → isolated-map evidence/signoff → Step 2"
+        )
 
 
 def test_cluster_8_records_receive_taps_and_local_relay_transfer_evidence():
@@ -1059,8 +1479,7 @@ def test_cluster_8_records_receive_taps_and_local_relay_transfer_evidence():
     transfer = next(
         record
         for record in powered
-        if "TX_DRV" in record["input"]
-        and "LOCAL_TX_SELECTED" in record["output"]
+        if "TX_DRV" in record["input"] and "LOCAL_TX_SELECTED" in record["output"]
     )
     assert "bounded" in transfer["instruction"].lower()
     assert "K1" in transfer["input"]
@@ -1113,14 +1532,10 @@ def test_command_net_provenance_crosses_devkit_posts_at_cluster_5():
         cluster["number"]: cluster
         for cluster in _guide_metadata(BUILD_HTML)["clusters"]
     }
-    assert {"GPIO21_CMD_POST", "GPIO15_TX_ENABLE_POST"} <= set(
-        clusters[3]["outputs"]
-    )
+    assert {"GPIO21_CMD_POST", "GPIO15_TX_ENABLE_POST"} <= set(clusters[3]["outputs"])
     assert {"RELAY_CMD", "TX_ENABLE"}.isdisjoint(clusters[3]["outputs"])
 
-    sources = {
-        source["input"]: source for source in clusters[5]["input_sources"]
-    }
+    sources = {source["input"]: source for source in clusters[5]["input_sources"]}
     assert sources["RELAY_CMD"]["source_output"] == "GPIO21_CMD_POST"
     assert sources["TX_ENABLE"]["source_output"] == "GPIO15_TX_ENABLE_POST"
     assert "jumper" in sources["RELAY_CMD"]["source_mapping"].lower()
@@ -1249,7 +1664,8 @@ def test_audit_cluster_11_installs_fused_dmm_harness_before_treadmill_power():
     actions = _guide_metadata(AUDIT_HTML)["clusters"][10]["actions"]
     sequence = actions["state_sequence"]
     install_index = next(
-        index for index, record in enumerate(sequence)
+        index
+        for index, record in enumerate(sequence)
         if record["stage"] == "install_harness"
     )
     install = _normalize_text(json.dumps(sequence[install_index], ensure_ascii=False))
@@ -1257,13 +1673,12 @@ def test_audit_cluster_11_installs_fused_dmm_harness_before_treadmill_power():
     assert re.search(r"treadmill power.{0,30}(?:off|absent)", install, re.IGNORECASE)
 
     powered_index = next(
-        index for index, record in enumerate(sequence)
+        index
+        for index, record in enumerate(sequence)
         if record["stage"] == "apply_treadmill_power"
     )
     assert install_index < powered_index
-    restore_text = " ".join(
-        step["instruction"] for step in actions["restore"]
-    )
+    restore_text = " ".join(step["instruction"] for step in actions["restore"])
     assert re.search(
         r"(?:power|all sources).{0,30}off.{0,80}before.{0,30}(?:remove|removal).{0,30}harness",
         restore_text,
@@ -1334,9 +1749,10 @@ def test_audit_cluster_11_state_sequence_restores_ground_before_harness():
         assert "all sources off" in step["state"].lower()
 
     ground_check = sequence[3]
-    assert "ground return continuity" in (
-        ground_check["action"] + " " + ground_check["evidence"]
-    ).lower()
+    assert (
+        "ground return continuity"
+        in (ground_check["action"] + " " + ground_check["evidence"]).lower()
+    )
     harness = sequence[4]
     assert "+8" in harness["action"]
     assert "GND" not in harness["action"]
@@ -1346,9 +1762,7 @@ def test_audit_cluster_11_state_sequence_restores_ground_before_harness():
         "CONSOLE.2 ↔ MOTOR.2 +8V_RAW link",
         "CONSOLE.8 ↔ MOTOR.8 +8V_RAW link",
     }
-    restored = {
-        step["link"]: step["instruction"] for step in actions["restore"]
-    }
+    restored = {step["link"]: step["instruction"] for step in actions["restore"]}
     for link in plus8_links:
         assert re.search(
             r"(?:remove|removal).{0,30}harness.{0,100}restor",
@@ -1397,15 +1811,14 @@ def test_audit_cluster_8_keeps_gpio21_connected_for_firmware_relay_transfer():
     assert "GPIO21 jumper removed" not in isolation + " " + measurements
 
     opened = {step["link"] for step in actions["isolate"] if step["opens_link"]}
-    restored = {
-        step["link"] for step in actions["restore"] if step["restores_link"]
-    }
+    restored = {step["link"] for step in actions["restore"] if step["restores_link"]}
     assert opened == restored == {"GPIO15 jumper"}
 
 
 def test_audit_c7_c11_measurements_are_evidence_only_and_keyed_to_ledgers():
     clusters = {
-        cluster["number"]: cluster for cluster in _guide_metadata(AUDIT_HTML)["clusters"]
+        cluster["number"]: cluster
+        for cluster in _guide_metadata(AUDIT_HTML)["clusters"]
     }
     expected_measure_stages = {
         7: [1, 2, 4, 6, 8, 10],
