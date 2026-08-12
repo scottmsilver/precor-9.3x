@@ -81,21 +81,29 @@ and contains:
 - `step`
 - `reference`
 - `connection_ids` (one or more existing wiring records consumed by the row)
+- `action_ids` (the corresponding build actions, in operator order)
 - `from`
 - `to`
 - `color`
 - `part_description`
 - `note`
-- `directive` (the complete operator action/state instruction)
+- `directive` (the complete combined operator action/state instruction)
 
-Existing `wiring` records and `actions.build` directives remain. Tests require
-every wiring record and every build action to be consumed exactly once by a
-`build_rows` entry. A row's `directive` must remain semantically identical to
-the corresponding build action, including initials/evidence prompts, staged
-sequencing, “only after PASS” conditions, removable-jumper state, wire count,
-polarity, and leave-open/NO-WIRE instructions. This prevents the parallel
-structures from diverging or dropping operator-critical text. Shared
-build/audit cluster fields are unchanged.
+Existing `wiring` records and `actions.build` directives remain. Each build
+action gains a stable `action_id`. Tests require every wiring record and every
+build action to be consumed exactly once by a `build_rows` entry. For a row
+that consumes multiple endpoint records/actions, `action_ids` lists them in
+operator order and `directive` is their ordered, whitespace-normalized
+concatenation. Automated comparison is exact after normalizing whitespace and
+terminal punctuation; no fuzzy matcher is used.
+
+The complete `directive` is operator-visible in the **Note** cell, following
+any short legacy note/purpose text. It includes initials/evidence prompts,
+staged sequencing, “only after PASS” conditions, removable-jumper state, wire
+count, polarity, and leave-open/NO-WIRE instructions. Both HTML and extracted
+PDF tests require the directive in that row's Note cell. This prevents the
+parallel structures from diverging, hiding, or dropping operator-critical
+text. Shared build/audit cluster fields are unchanged.
 
 Legacy references are mapped from the existing from-to artifact and checked
 for consistency. New-only fixture, removable-post, and staged construction
@@ -133,9 +141,11 @@ Automated tests require:
 4. valid wire colors;
 5. accurate legacy Ref endpoints/colors/notes, with qualified repetitions only
    for declared groups and new-only records clearly marked;
-6. visible HTML and extracted PDF values matching Step/Ref/Color/From/To/Part/Note;
-7. semantic parity between every `build_rows.directive` and its build action,
-   including staged/PASS/jumper/initials instructions;
+6. visible HTML and extracted PDF values matching
+   Step/Ref/Color/From/To/Part/Note, including the complete directive in Note;
+7. exact normalized parity between every `build_rows.directive` and the
+   ordered actions selected by its `action_ids`, including
+   staged/PASS/jumper/initials instructions;
 8. unchanged shared cluster contracts and unchanged test/evidence content,
    including Cluster 11's Step 1 → evidence/signoff → Step 2 ordering; and
 9. US Letter output with no clipping, orphan spill page, browser header, or
