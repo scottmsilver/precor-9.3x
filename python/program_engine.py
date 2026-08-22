@@ -298,12 +298,7 @@ class ProgramState:
         self._pause_accumulated = 0.0
         self._pause_start = 0.0
         self._interval_start_elapsed = self._cumulative_at(resume_interval)
-        # Pre-mark milestones already passed
-        if self.total_duration > 0:
-            pct = (resume_elapsed / self.total_duration) * 100
-            for milestone in (25, 50, 75):
-                if pct >= milestone:
-                    self._encouragement_milestones.add(milestone)
+        self._mark_passed_milestones()
         iv = self.current_iv
         if iv and self._on_change:
             await self._on_change(iv["speed"], iv["incline"])
@@ -369,6 +364,14 @@ class ProgramState:
     async def skip(self):
         if not self.running:
             return
+        # Cut the interval we're leaving down to the time actually spent in it, so
+        # every later boundary slides earlier by the time skipped. Plan time then
+        # stays equal to real elapsed time and the workout clock never jumps — the
+        # map's milestones and the timer can't drift apart. MIN_DURATION doesn't
+        # apply: a truncated interval is a record of what happened, not a plan.
+        cur = self.current_iv
+        if cur:
+            cur["duration"] = max(1, min(cur["duration"], max(1, int(self.interval_elapsed))))
         self.current_interval += 1
         iv = self.current_iv
         if iv:
@@ -377,6 +380,9 @@ class ProgramState:
             self._interval_start_elapsed = target
             self.total_elapsed = target
             self.interval_elapsed = 0
+            # total_duration just shrank, so the same clock is now a larger fraction
+            # of the workout — don't announce thresholds it has already swept past.
+            self._mark_passed_milestones()
             if self._on_change:
                 await self._on_change(iv["speed"], iv["incline"])
         else:
@@ -494,6 +500,15 @@ class ProgramState:
         if self._task:
             self._task.cancel()
             self._task = None
+
+    def _mark_passed_milestones(self):
+        """Mark 25/50/75% as already announced. Used when the clock or the plan jumps."""
+        if self.total_duration <= 0:
+            return
+        pct = (self.total_elapsed / self.total_duration) * 100
+        for milestone in MILESTONE_MESSAGES:
+            if pct >= milestone:
+                self._encouragement_milestones.add(milestone)
 
     def _check_encouragement(self):
         """Set encouragement message at milestones, every 3 intervals, or countdown."""

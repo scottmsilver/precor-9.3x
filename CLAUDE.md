@@ -21,7 +21,7 @@ and a fully-loaded one converge. This works on any Pi OS whose apt provides
 `libpigpio1` (DietPi and Raspberry Pi OS both pull `1.79-1+rpt1` from
 `archive.raspberrypi.com`).
 
-**Software.** Compiled code (C++ `treadmill_io`, Rust `ftms-daemon`/`hrm-daemon`) is **cross-built off-Pi** in one aarch64 Docker toolchain; build-on-Pi is retired. The Python venv is still `pip`-installed on the Pi. Install is driven by the single source of truth `deploy/manifest.txt` (parsed as data), shared by the live deployer and the image baker so a flashed Pi and an rsync'd Pi are byte-identical. The Gemini API key is a per-device secret — gitignored and deliberately rsync-excluded so a normal deploy never clobbers it; push it explicitly once per device with `make deploy-key` (local `./.gemini_key` → Pi). Deploy refuses to run while the belt is moving (queries /api/status; `FORCE=1` overrides). `treadmill_io` is wired into the network-independent Path A slot (`treadmill-critical.target`) so belt control starts early. On the 512MB Zero, run the headroom gate after deploy: `bash deploy/tests/mem-headroom.sh` (asserts ≥40MB MemAvailable, 0 oom-kill). The whole stack can be acceptance-checked end-to-end with `make ship-check` (belt-clear) / `make ship-check-nobelt`.
+**Software.** Compiled code (C++ `treadmill_io`, Rust `ftms-daemon`/`hrm-daemon`) is **cross-built off-Pi** in one aarch64 Docker toolchain; build-on-Pi is retired. The Python venv is still `pip`-installed on the Pi. Install is driven by the single source of truth `deploy/manifest.txt` (parsed as data), shared by the live deployer and the image baker so a flashed Pi and an rsync'd Pi are byte-identical. The Gemini API key is a per-device secret — gitignored and deliberately rsync-excluded so a normal deploy never clobbers it; push it explicitly once per device with `make deploy-key` (local `./.gemini_key` → Pi). Deploy refuses to run while the belt is moving (queries /api/status; `FORCE=1` overrides). **Device-owned state is sacred:** the deploy rsyncs with `--delete`, so every file the Pi owns and the repo can't regenerate is listed in `DEVICE_STATE_EXCLUDES` in `deploy/deploy.sh` — `treadmill.db` plus its `-wal`/`-shm` sidecars (profiles, runs, saved workouts), the pre-SQLite migration JSONs, `hrm_config.json`. Anything left out of that list is destroyed on the next deploy. As a second line of defence the deploy takes a `sqlite3`-backup-API snapshot of `treadmill.db` **before** rsync, into `~/treadmill-backups` (outside the deploy dir, so `--delete` can never reach it); a failed backup aborts the deploy (`SKIP_BACKUP=1` overrides, `KEEP_BACKUPS` sets retention, default 10). `deploy/deploy.sh backup` takes one on demand. Guarded by `deploy/tests/test_device_state.sh`. `treadmill_io` is wired into the network-independent Path A slot (`treadmill-critical.target`) so belt control starts early. On the 512MB Zero, run the headroom gate after deploy: `bash deploy/tests/mem-headroom.sh` (asserts ≥40MB MemAvailable, 0 oom-kill). The whole stack can be acceptance-checked end-to-end with `make ship-check` (belt-clear) / `make ship-check-nobelt`.
 
 ```bash
 # Build all 3 aarch64 binaries in containers -> build/
@@ -32,6 +32,9 @@ make deploy                    # or: deploy/deploy.sh
 
 # Push the per-device Gemini key (local ./.gemini_key -> Pi; once per device):
 make deploy-key
+
+# Snapshot the Pi's database on demand (-> ~/treadmill-backups on the Pi):
+deploy/deploy.sh backup
 
 # Bake a flashable full-appliance .img (provisioning toolkit):
 make image
@@ -201,6 +204,7 @@ The running screen draws a full-bleed background photo; all text/widgets over it
 - **Tools**: `set_speed`, `set_incline`, `start_workout`, `stop_treadmill`, `pause/resume/skip`, `extend_interval`, `add_time`, `load_workout`, `query_workout_data`
 - **Workout query**: `query_workout_data` gives Gemini a read-only SQL interface to an in-memory SQLite DB (`python/workout_db.py`) populated from workout history, saved workouts, run records, and the live active program. Gemini writes its own SQL to query interval structures, compare past runs, and give contextual coaching. Engine-level read-only enforcement via `set_authorizer()`.
 - **ProgramState**: manages interval execution with 1s tick loop, pause/skip/extend support, encouragement milestones (25/50/75%)
+- **Program time is real time**: `total_elapsed` always equals time actually run. Skip therefore truncates the interval being left to the time spent in it (never jumps the clock to the next planned boundary), so remaining intervals shift earlier and `total_duration` shrinks. The Ridgeline map draws boundaries straight from interval durations, so its milestones track the timer instead of drifting ahead of it.
 - **GPX import**: `POST /api/gpx/upload` parses GPX routes into incline-based interval programs
 
 ### Persistence (SQLite)
@@ -322,7 +326,7 @@ Note: `make test` automatically stops the `treadmill-io` service before running 
 | `/api/program/start` | POST | Start the loaded program |
 | `/api/program/stop` | POST | Stop program, zero speed/incline |
 | `/api/program/pause` | POST | Toggle pause/resume |
-| `/api/program/skip` | POST | Skip to next interval |
+| `/api/program/skip` | POST | Skip to next interval (truncates the one being left to the time actually run) |
 | `/api/program/prev` | POST | Go back to the previous interval |
 | `/api/program/extend` | POST | Adjust current interval. Body: `{"seconds": <int>}` |
 | `/api/program/adjust-duration` | POST | Adjust total duration of a manual program |

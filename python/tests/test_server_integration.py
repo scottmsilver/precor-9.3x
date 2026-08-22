@@ -1056,6 +1056,46 @@ class TestHistoryResume:
         assert entry["last_interval"] == 1
         assert entry["last_elapsed"] == 150
 
+    def test_stop_saves_the_reshaped_plan_not_the_original(self, test_app):
+        """Skip reshapes the timeline, so history must store the plan as actually run.
+
+        Otherwise the saved position is measured against a plan that no longer
+        exists and resume lands in the wrong place (here, 60s before it started).
+        """
+        client, server, mock = test_app
+        program = {
+            "name": "Reshaped",
+            "intervals": [
+                {"name": "A", "duration": 120, "speed": 3.0, "incline": 0},
+                {"name": "B", "duration": 120, "speed": 5.0, "incline": 2},
+            ],
+        }
+        server._add_to_history(program)
+
+        sess = server.sess
+        sess.prog.load(program)
+        sess.prog.running = True
+        sess.prog._on_change = AsyncMock()
+        sess.prog._on_update = AsyncMock()
+        sess.start()
+        # Skip out of A after 60s, then run 30s into B: 90s on the clock.
+        sess.prog.interval_elapsed = 60
+        sess.prog.total_elapsed = 60
+        assert client.post("/api/program/skip").status_code == 200
+        sess.prog.total_elapsed = 90
+        sess.prog.interval_elapsed = 30
+
+        assert client.post("/api/program/stop").status_code == 200
+
+        history = server.db.get_program_history(server._active_profile_id())
+        entry = next(h for h in history if h["program"]["name"] == "Reshaped")
+        assert entry["last_elapsed"] == 90
+        # A is stored as the 60s that was actually run, so B still starts at 60s
+        # and the saved position sits 30s inside it rather than before it.
+        assert entry["program"]["intervals"][0]["duration"] == 60
+        cumulative_at_b = entry["program"]["intervals"][0]["duration"]
+        assert entry["last_elapsed"] - cumulative_at_b == 30
+
     def test_add_to_history_includes_position_fields(self, test_app):
         """_add_to_history should include completed, last_interval, last_elapsed."""
         _, server, _ = test_app
@@ -2101,3 +2141,42 @@ class TestUserProfile:
         kg = server._user_weight_kg()
         expected = (154 + 20) * 0.453592
         assert abs(kg - expected) < 0.01
+
+
+class TestProgramDurationValidation:
+    """A non-positive interval duration corrupts the workout timeline.
+
+    _cumulative_at() sums durations to place every later boundary, so a negative
+    duration drags the clock backwards (a -10s first interval puts boundary 1 at
+    -10s) and a 0s interval creates a boundary the tick loop can never sit on.
+    Programs arrive from clients as an unrestricted dict via POST /api/workouts,
+    so this is a system boundary and has to be validated here.
+    """
+
+    def test_rejects_negative_duration(self, test_app):
+        _, server, _ = test_app
+        err = server._validate_program({"intervals": [{"duration": -10}]})
+        assert err, "negative duration must be rejected"
+
+    def test_rejects_zero_duration(self, test_app):
+        _, server, _ = test_app
+        err = server._validate_program({"intervals": [{"duration": 0}]})
+        assert err, "zero duration must be rejected"
+
+    def test_accepts_positive_duration(self, test_app):
+        _, server, _ = test_app
+        assert server._validate_program({"intervals": [{"duration": 60}]}) is None
+        assert server._validate_program({"intervals": [{"duration": 0.5}]}) is None
+
+    def test_save_workout_endpoint_rejects_negative(self, test_app):
+        """The bad program must not reach the database."""
+        client, _, _ = test_app
+        resp = client.post("/api/workouts", json={
+            "program": {"name": "bad", "intervals": [
+                {"duration": -10, "speed": 1.0, "incline": 0},
+                {"duration": 60, "speed": 2.0, "incline": 0},
+            ]},
+            "source": "manual",
+        })
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is False, "negative-duration program was accepted"

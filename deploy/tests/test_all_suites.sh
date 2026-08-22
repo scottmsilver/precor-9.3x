@@ -8,7 +8,7 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "ok: $1"; }
 
 for t in test_manifest.sh test_deploy_dryrun.sh test_setup_logic.sh \
-         test_service_units.sh test_mem_headroom_selftest.sh; do
+         test_service_units.sh test_mem_headroom_selftest.sh test_device_state.sh; do
   bash "$HERE/$t" >/dev/null 2>&1 || fail "$t not green"
   pass "$t green"
 done

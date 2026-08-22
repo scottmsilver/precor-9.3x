@@ -14,6 +14,19 @@ VENV_DIR="${VENV_DIR:-.venv}"
 MANIFEST="$SCRIPT_DIR/deploy/manifest.txt"
 SERVER_PORT="${SERVER_PORT:-8000}"
 
+# State the DEVICE owns and the repo can never regenerate. `rsync --delete`
+# deletes whatever isn't in build/, so anything missing from this list is
+# destroyed on the next deploy. treadmill.db (plus its -wal/-shm sidecars) holds
+# profiles, run history and saved workouts; the JSON files are the pre-SQLite
+# layout that server.py still migrates from on first boot of an old device.
+# Add to this list whenever the app starts persisting something new on the Pi.
+DEVICE_STATE_EXCLUDES=(
+  --exclude='treadmill.db' --exclude='treadmill.db-wal' --exclude='treadmill.db-shm'
+  --exclude='program_history.json' --exclude='saved_workouts.json'
+  --exclude='run_history.json' --exclude='user_profile.json'
+  --exclude='hrm_config.json' --exclude='background_advice.json'
+)
+
 render_service() {
   # PI_USER only resolved for real runs (needs ssh); dry-run uses a token.
   sed -e "s|@USER@|${PI_USER:-@USER@}|g" \
@@ -75,6 +88,53 @@ print_plan() {
   fi
 }
 
+# Snapshot the device's database BEFORE rsync touches anything. Backups live in
+# ~/treadmill-backups, deliberately OUTSIDE ~/treadmill: the deploy rsyncs with
+# --delete, so anything inside the deploy dir is one missing --exclude away from
+# being erased. Nothing here is ever rsync'd, so --delete cannot reach it.
+#
+# Uses sqlite3's backup API, not cp: the live DB runs in WAL mode, so the .db
+# file alone can be stale or torn while the server is mid-write. The API takes a
+# consistent snapshot including the WAL.
+backup_device_state() {
+  if [ "${SKIP_BACKUP:-0}" = 1 ]; then
+    echo "backup: SKIPPED (SKIP_BACKUP=1)"
+    return 0
+  fi
+  echo "=== Backing up device database (pre-deploy) ==="
+  # Failure here aborts the deploy on purpose: losing the user's profiles, runs
+  # and saved workouts is worse than a deploy that didn't happen.
+  ssh "$PI_HOST" bash -s "$PI_DIR" "${KEEP_BACKUPS:-10}" <<'REMOTE' || {
+set -eu
+dir="$HOME/${1:?}"; keep="${2:?}"
+db="$dir/treadmill.db"
+out_dir="$HOME/treadmill-backups"
+if [ ! -f "$db" ]; then
+  echo "backup: no treadmill.db on device yet — nothing to back up"
+  exit 0
+fi
+command -v python3 >/dev/null 2>&1 || { echo "backup: python3 missing on device" >&2; exit 1; }
+mkdir -p "$out_dir"
+out="$out_dir/treadmill-$(date -u +%Y%m%dT%H%M%SZ).db"
+python3 - "$db" "$out" <<'PY'
+import sqlite3, sys
+src, dst = sys.argv[1], sys.argv[2]
+s = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+d = sqlite3.connect(dst)
+with d:
+    s.backup(d)
+d.close(); s.close()
+PY
+[ -s "$out" ] || { echo "backup: snapshot is empty — refusing to continue" >&2; exit 1; }
+# Prune oldest, keep the most recent $keep.
+ls -1t "$out_dir"/treadmill-*.db 2>/dev/null | tail -n +$((keep + 1)) | xargs -r rm -f
+echo "backup: $out ($(wc -c < "$out") bytes, $(ls -1 "$out_dir"/treadmill-*.db | wc -l) kept)"
+REMOTE
+    echo "REFUSING: could not back up the device database. Fix it, or re-run with SKIP_BACKUP=1 to deploy anyway." >&2
+    exit 1
+  }
+}
+
 deploy_full() {
   manifest_rows "$MANIFEST" >/dev/null    # fail closed before any host contact
   stage
@@ -93,11 +153,15 @@ deploy_full() {
   fi
   echo "=== Deploying to $PI_HOST:~/$PI_DIR ==="
   ssh "$PI_HOST" "mkdir -p ~/$PI_DIR"
+  backup_device_state
   # Never partial: rsync fully completes before any systemctl.
+  # --delete removes anything on the Pi that isn't in build/, so EVERY file the
+  # device owns must be excluded here or a deploy destroys it. That is user data
+  # (profiles, runs, saved workouts), not rebuildable output.
   rsync -az --delete \
     --exclude='*.o' --exclude='*.d' --exclude='*.test.o' \
     --exclude='.gemini_key' --exclude='*.pem' \
-    --exclude='program_history.json' --exclude='saved_workouts.json' \
+    "${DEVICE_STATE_EXCLUDES[@]}" \
     --exclude='__pycache__' \
     build/ "$PI_HOST":~/"$PI_DIR"/
   echo "Running setup (manifest install + ordered atomic restart)..."
@@ -128,5 +192,6 @@ case "${1:-}" in
   --dry-run)    print_plan ;;
   --stage-only) stage ;;
   key)          deploy_key ;;
+  backup)       backup_device_state ;;
   *)            deploy_full ;;
 esac
