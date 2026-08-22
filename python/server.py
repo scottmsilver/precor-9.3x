@@ -346,12 +346,18 @@ def _add_to_history(program, prompt=""):
     return entry
 
 
-def _update_history_position(program_name, interval, elapsed, completed=False):
-    """Update the history entry for a program with its last position."""
+def _update_history_position(program_name, interval, elapsed, completed=False, program=None):
+    """Update the history entry for a program with its last position (and plan)."""
     history = db.get_program_history(_active_profile_id())
     for entry in history:
         if entry["program"].get("name") == program_name:
-            db.update_history_entry(entry["id"], completed=completed, last_interval=interval, last_elapsed=elapsed)
+            db.update_history_entry(
+                entry["id"],
+                completed=completed,
+                last_interval=interval,
+                last_elapsed=elapsed,
+                program=program,
+            )
             return
 
 
@@ -520,6 +526,11 @@ def _validate_program(program):
             return f"interval {i} must be a dict"
         if "duration" not in iv or not isinstance(iv["duration"], (int, float)):
             return f"interval {i} must have a numeric duration"
+        # Durations are summed by _cumulative_at() to place every later boundary,
+        # so a non-positive one corrupts the whole timeline: a negative drags the
+        # clock backwards, a zero makes a boundary the tick loop can't land on.
+        if iv["duration"] <= 0:
+            return f"interval {i} duration must be greater than 0"
     return None
 
 
@@ -861,6 +872,7 @@ async def _apply_stop():
             sess.prog.program.get("name", ""),
             sess.prog.current_interval,
             sess.prog.total_elapsed,
+            program=sess.prog.program,
         )
     if sess.prog.running:
         await sess.prog.stop()
@@ -1779,6 +1791,7 @@ def _prog_on_update():
                     prog_state.get("current_interval", 0),
                     prog_state.get("total_elapsed", 0),
                     completed=True,
+                    program=prog,
                 )
             state["emu_speed"] = 0
             state["emu_incline"] = 0

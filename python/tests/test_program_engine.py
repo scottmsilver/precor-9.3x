@@ -287,18 +287,22 @@ class TestSkip:
         on_change.assert_called_with(6.0, 3)
 
     @pytest.mark.asyncio
-    async def test_skip_jumps_total_elapsed(self, loaded_prog):
-        """After skip, total_elapsed should jump to the cumulative duration of skipped intervals."""
+    async def test_skip_does_not_jump_total_elapsed(self, loaded_prog):
+        """Skip must not fast-forward the clock over time that was never run.
+
+        The interval being left is truncated instead, so the clock stays continuous.
+        See TestSkipRebasesTimeline for how that reshapes the remaining timeline.
+        """
         on_change = AsyncMock()
         on_update = AsyncMock()
         loaded_prog.running = True
         loaded_prog._on_change = on_change
         loaded_prog._on_update = on_update
-        # Default program: Warmup(60s), Run(120s), Cooldown(60s)
-        # Skip from interval 0 → interval 1, total_elapsed should be 60
+        # Default program: Warmup(60s), Run(120s), Cooldown(60s). Skipping the warmup
+        # immediately lands at 1s, not at the warmup's planned 60s.
         await loaded_prog.skip()
         assert loaded_prog.current_interval == 1
-        assert loaded_prog.total_elapsed == 60
+        assert loaded_prog.total_elapsed == 1
         assert loaded_prog.interval_elapsed == 0
 
     @pytest.mark.asyncio
@@ -397,6 +401,118 @@ class TestPrev:
         assert loaded_prog.interval_elapsed == 0
 
 
+class TestSkipRebasesTimeline:
+    """Skip cuts the interval you leave short; it never fast-forwards the clock.
+
+    The workout clock is real elapsed time, while the ridgeline map draws the plan.
+    If skip jumped the program clock to the next planned boundary instead, the two
+    would diverge by the time skipped and every remaining milestone would sit later
+    than the timer will ever read.
+    """
+
+    @pytest.fixture
+    def two_min_prog(self):
+        # 2-minute program: change to 10% at 0:30, change to 15% at 1:00.
+        prog = ProgramState()
+        prog._clock = FakeClock()
+        prog.load(
+            make_program(
+                [
+                    {"name": "A", "duration": 30, "speed": 2.0, "incline": 0},
+                    {"name": "B", "duration": 30, "speed": 4.0, "incline": 10},
+                    {"name": "C", "duration": 60, "speed": 4.0, "incline": 15},
+                ]
+            )
+        )
+        prog.running = True
+        prog._on_change = AsyncMock()
+        prog._on_update = AsyncMock()
+        return prog
+
+    @pytest.mark.asyncio
+    async def test_skip_shifts_remaining_boundaries_earlier(self, two_min_prog):
+        prog = two_min_prog
+        assert prog.total_duration == 120
+        prog.interval_elapsed = 10
+        prog.total_elapsed = 10
+
+        await prog.skip()
+
+        # The interval we left is now as long as we actually ran it...
+        assert prog.program["intervals"][0]["duration"] == 10
+        # ...so the 10% change is at 0:10 and the 15% change at 0:40.
+        assert prog._cumulative_at(1) == 10
+        assert prog._cumulative_at(2) == 40
+        assert prog.total_duration == 100
+        # And the workout clock does not jump.
+        assert prog.total_elapsed == 10
+        assert prog.interval_elapsed == 0
+
+    @pytest.mark.asyncio
+    async def test_skip_leaves_a_one_second_stub(self, two_min_prog):
+        """Skipping immediately still leaves a segment, so the map keeps its bend."""
+        prog = two_min_prog
+        await prog.skip()
+        assert prog.program["intervals"][0]["duration"] == 1
+        assert prog.total_elapsed == 1
+
+    @pytest.mark.asyncio
+    async def test_skip_does_not_stretch_a_long_interval(self, two_min_prog):
+        """Only ever shortens: an overrunning interval keeps its planned length."""
+        prog = two_min_prog
+        prog.interval_elapsed = 45
+        prog.total_elapsed = 45
+        await prog.skip()
+        assert prog.program["intervals"][0]["duration"] == 30
+        assert prog.total_duration == 120
+
+    @pytest.mark.asyncio
+    async def test_skip_does_not_replay_milestones_it_jumped_past(self, two_min_prog):
+        """Shrinking total_duration moves the percentage, not the encouragement.
+
+        Cutting a long interval short can push progress from 8% to past halfway in
+        one step. Without re-marking, the next ticks would announce "quarter of the
+        way" and then "halfway" while already well beyond both.
+        """
+        prog = two_min_prog
+        prog.interval_elapsed = 10
+        prog.total_elapsed = 10
+        assert prog._encouragement_milestones == set()
+
+        await prog.skip()
+
+        # 10s of a now-100s program is 10% — nothing passed yet.
+        assert prog._encouragement_milestones == set()
+
+        # Now cut B short too: 30s of a 90s program is past the quarter mark.
+        prog.interval_elapsed = 20
+        prog.total_elapsed = 30
+        await prog.skip()
+        assert prog.total_duration == 90
+        assert 25 in prog._encouragement_milestones
+        assert 50 not in prog._encouragement_milestones
+
+    @pytest.mark.asyncio
+    async def test_skip_repairs_a_non_positive_duration(self, two_min_prog):
+        """A malformed interval can't drag the clock backwards through skip."""
+        prog = two_min_prog
+        prog.program["intervals"][0]["duration"] = -10
+        await prog.skip()
+        assert prog.program["intervals"][0]["duration"] >= 1
+        assert prog.total_elapsed >= 0
+
+    @pytest.mark.asyncio
+    async def test_skipping_last_interval_records_actual_length(self, two_min_prog):
+        """Ending early makes total_duration the time actually run, not the plan."""
+        prog = two_min_prog
+        prog.current_interval = 2
+        prog.interval_elapsed = 20
+        prog.total_elapsed = 80
+        await prog.skip()
+        assert prog.completed is True
+        assert prog.total_duration == 80
+
+
 class TestSkipWhilePaused:
     @pytest.mark.asyncio
     async def test_skip_while_paused_preserves_timing(self):
@@ -445,11 +561,11 @@ class TestSkipWhilePaused:
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     pass
 
-        # After skip from A→B, total_elapsed should be cumulative_at(1) = 60
-        # After resume and 5 more non-paused ticks, total_elapsed ≈ 65
-        # Key check: elapsed should NOT include the 10s of paused time
+        # Skipping A at t=10 truncates it to the ~10s actually run, so the clock
+        # stays at ~10, then advances 5 more non-paused ticks to ~15.
+        # Key check: elapsed should NOT include the 10s of paused time (~25).
         assert prog.current_interval == 1
-        assert 63 <= prog.total_elapsed <= 67, f"Expected ~65 (60 + 5 ticks after resume), got {prog.total_elapsed}"
+        assert 13 <= prog.total_elapsed <= 17, f"Expected ~15 (10 + 5 ticks after resume), got {prog.total_elapsed}"
 
     @pytest.mark.asyncio
     async def test_prev_while_paused_preserves_timing(self):

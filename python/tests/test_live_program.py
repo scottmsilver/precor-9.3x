@@ -224,6 +224,57 @@ class TestLiveFullExecution:
         assert change_log[-1] == (0, 0)
 
     @pytest.mark.asyncio
+    async def test_skip_shortens_the_workout_in_real_time(self):
+        """Skipping cuts the plan short, so the workout really does end earlier.
+
+        Regression: skip used to fast-forward total_elapsed to the next planned
+        boundary. The workout clock then ran ahead of real elapsed time, and every
+        remaining boundary on the map sat later than the timer would ever read.
+        """
+        prog = ProgramState()
+        prog.load(
+            {
+                "name": "Skip Timing",
+                "intervals": [
+                    {"name": "A", "duration": 60, "speed": 2.0, "incline": 0},
+                    {"name": "B", "duration": 3, "speed": 5.0, "incline": 10},
+                    {"name": "C", "duration": 3, "speed": 1.0, "incline": 15},
+                ],
+            }
+        )
+
+        async def on_change(speed, incline):
+            pass
+
+        async def on_update(state):
+            pass
+
+        started = time.monotonic()
+        await prog.start(on_change, on_update)
+        await asyncio.sleep(2.0)
+        await prog.skip()
+        ran = time.monotonic() - started
+
+        # A is now roughly as long as it was actually run, so B and C start ~58s
+        # earlier and the whole workout shrinks to about 8s.
+        assert prog.program["intervals"][0]["duration"] <= 3
+        assert prog.total_duration <= 9, f"Expected ~8s total, got {prog.total_duration}"
+        # The clock did not jump: it still tracks time actually run.
+        assert abs(prog.total_elapsed - ran) <= 1.5, f"Clock {prog.total_elapsed} drifted from real elapsed {ran:.1f}"
+
+        for _ in range(150):
+            await asyncio.sleep(0.1)
+            if prog.completed:
+                break
+        wall = time.monotonic() - started
+
+        assert prog.completed is True
+        assert wall < 13, f"Should finish in ~8s of real time, took {wall:.1f}s"
+        assert (
+            abs(prog.total_elapsed - wall) <= 2.0
+        ), f"Final clock {prog.total_elapsed} drifted from real elapsed {wall:.1f}"
+
+    @pytest.mark.asyncio
     async def test_extend_adds_real_time(self):
         """Start a 10s interval, extend by 3s after 2s, verify it runs for ~13s.
         Uses 10s base because extend_current clamps minimum duration to 10."""

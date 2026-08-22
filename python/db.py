@@ -414,9 +414,18 @@ class TreadmillDB:
         row = self._read.execute("SELECT * FROM program_history WHERE id = ?", (entry_id,)).fetchone()
         return self._history_row_to_dict(row) if row else None
 
-    def update_history_entry(self, entry_id, completed=None, last_interval=None, last_elapsed=None):
+    def update_history_entry(self, entry_id, completed=None, last_interval=None, last_elapsed=None, program=None):
         parts = []
         vals = []
+        if program is not None:
+            # The plan can be reshaped while it runs (skip truncates, extend/split
+            # resize), and last_interval/last_elapsed are positions *in that plan* —
+            # so they have to be stored together or resume measures against a
+            # timeline that no longer exists.
+            parts.append("program_json = ?")
+            vals.append(json.dumps(program))
+            parts.append("total_duration = ?")
+            vals.append(sum(iv.get("duration", 0) for iv in program.get("intervals", [])))
         if completed is not None:
             parts.append("completed = ?")
             vals.append(1 if completed else 0)
