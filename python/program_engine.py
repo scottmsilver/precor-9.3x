@@ -371,7 +371,13 @@ class ProgramState:
         # apply: a truncated interval is a record of what happened, not a plan.
         cur = self.current_iv
         if cur:
-            cur["duration"] = max(1, min(cur["duration"], max(1, int(self.interval_elapsed))))
+            planned_duration = cur["duration"]
+            if planned_duration <= 0:
+                cur["duration"] = 1
+            elif planned_duration < 1:
+                cur["duration"] = planned_duration
+            else:
+                cur["duration"] = min(planned_duration, max(1, int(self.interval_elapsed)))
         self.current_interval += 1
         iv = self.current_iv
         if iv:

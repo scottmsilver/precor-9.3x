@@ -1093,8 +1093,42 @@ class TestHistoryResume:
         # A is stored as the 60s that was actually run, so B still starts at 60s
         # and the saved position sits 30s inside it rather than before it.
         assert entry["program"]["intervals"][0]["duration"] == 60
+        assert entry["total_duration"] == 180
         cumulative_at_b = entry["program"]["intervals"][0]["duration"]
         assert entry["last_elapsed"] - cumulative_at_b == 30
+
+    @pytest.mark.asyncio
+    async def test_completion_saves_the_reshaped_plan_and_duration(self, test_app):
+        """Natural completion persists the live timeline, not the original plan."""
+        _, server, _ = test_app
+        original = {
+            "name": "Completed Reshaped",
+            "intervals": [
+                {"name": "A", "duration": 120, "speed": 3.0, "incline": 0},
+                {"name": "B", "duration": 120, "speed": 5.0, "incline": 2},
+            ],
+        }
+        server._add_to_history(original)
+        reshaped = copy.deepcopy(original)
+        reshaped["intervals"][0]["duration"] = 60
+
+        await server._prog_on_update()(
+            {
+                "program": reshaped,
+                "running": False,
+                "completed": True,
+                "current_interval": 2,
+                "total_elapsed": 180,
+            }
+        )
+
+        history = server.db.get_program_history(server._active_profile_id())
+        entry = next(h for h in history if h["program"]["name"] == "Completed Reshaped")
+        assert entry["completed"] is True
+        assert entry["last_interval"] == 2
+        assert entry["last_elapsed"] == 180
+        assert entry["program"]["intervals"][0]["duration"] == 60
+        assert entry["total_duration"] == 180
 
     def test_add_to_history_includes_position_fields(self, test_app):
         """_add_to_history should include completed, last_interval, last_elapsed."""

@@ -457,6 +457,17 @@ class TestSkipRebasesTimeline:
         assert prog.total_elapsed == 1
 
     @pytest.mark.asyncio
+    async def test_skip_never_lengthens_a_valid_subsecond_interval(self, two_min_prog):
+        """The one-second stub is capped by the interval's valid planned length."""
+        prog = two_min_prog
+        prog.program["intervals"][0]["duration"] = 0.5
+
+        await prog.skip()
+
+        assert prog.program["intervals"][0]["duration"] == 0.5
+        assert prog.total_elapsed == 0.5
+
+    @pytest.mark.asyncio
     async def test_skip_does_not_stretch_a_long_interval(self, two_min_prog):
         """Only ever shortens: an overrunning interval keeps its planned length."""
         prog = two_min_prog
