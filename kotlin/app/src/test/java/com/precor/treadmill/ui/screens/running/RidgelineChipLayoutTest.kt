@@ -1,0 +1,135 @@
+package com.precor.treadmill.ui.screens.running
+
+import androidx.compose.ui.geometry.Rect
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Transition labels on the trail map must be STABLE: once a chip is on screen it stays
+ * on screen until it scrolls out of the window. The bug these tests pin down: the
+ * position marker's guard rect used to *delete* the chip of the bend you were running
+ * toward, so the label showed for a while and then popped out exactly when it mattered.
+ */
+class RidgelineChipLayoutTest {
+
+    private val mapW = 640f
+    private val centerX = 320f
+
+    private fun markerAt(x: Float, y: Float) = Rect(x - 20f, y - 20f, x + 20f, y + 20f)
+
+    private fun layout(
+        candidates: List<ChipCandidate>,
+        marker: Rect,
+        guard: Rect? = null,
+    ) = layoutTransitionChips(
+        candidates = candidates,
+        centerX = centerX,
+        mapW = mapW,
+        markerRect = marker,
+        metricsGuard = guard,
+        topBound = 0f,
+        botBound = 800f,
+    )
+
+    /** The reported failure: a chip must survive the marker sweeping straight through it. */
+    @Test
+    fun chipSurvivesTheMarkerSweepingPastIt() {
+        val chip = ChipCandidate(key = 120.0, anchorX = 300f, anchorY = 400f, pillW = 70f)
+        var markerY = 520f
+        while (markerY >= 280f) {
+            val slots = layout(listOf(chip), markerAt(298f, markerY))
+            assertEquals("chip dropped with marker at y=$markerY", 1, slots.size)
+            markerY -= 4f
+        }
+    }
+
+    /** A chip never overlaps the marker either — it moves out of the way instead. */
+    @Test
+    fun chipMovesOutOfTheMarkersWayInsteadOfVanishing() {
+        val chip = ChipCandidate(key = 120.0, anchorX = 300f, anchorY = 400f, pillW = 70f)
+        val marker = markerAt(300f, 400f)
+        val slot = layout(listOf(chip), marker).single()
+        val pill = Rect(slot.pillLeft, slot.pillTop, slot.pillLeft + chip.pillW, slot.pillTop + CHIP_H)
+        assertTrue("nudged pill still sits on the marker: $pill vs $marker", !pill.overlaps(marker))
+        assertTrue("chip should have been nudged off its bend", slot.offBend)
+    }
+
+    /** Two bends a few seconds apart both keep their label (the old code dropped one). */
+    @Test
+    fun neighbouringChipsBothKeepTheirLabel() {
+        val chips = listOf(
+            ChipCandidate(key = 100.0, anchorX = 260f, anchorY = 400f, pillW = 70f),
+            ChipCandidate(key = 130.0, anchorX = 280f, anchorY = 412f, pillW = 70f),
+            ChipCandidate(key = 160.0, anchorX = 300f, anchorY = 424f, pillW = 70f),
+        )
+        val slots = layout(chips, markerAt(120f, 700f))
+        assertEquals("every neighbouring bend keeps its chip", chips.size, slots.size)
+        // ...and they don't stack on top of each other.
+        val rects = slots.map { Rect(it.pillLeft, it.pillTop, it.pillLeft + 70f, it.pillTop + CHIP_H) }
+        for (a in rects.indices) for (b in a + 1 until rects.size) {
+            assertTrue("chips $a and $b overlap", !rects[a].overlaps(rects[b]))
+        }
+    }
+
+    /** The metrics pill still wins — but by displacing the chip, not deleting it. */
+    @Test
+    fun chipDodgesTheMetricsPillWithoutDisappearing() {
+        val chip = ChipCandidate(key = 60.0, anchorX = 120f, anchorY = 90f, pillW = 70f)
+        val guard = Rect(0f, 0f, 300f, 120f)
+        val slot = layout(listOf(chip), markerAt(400f, 700f), guard).single()
+        val pill = Rect(slot.pillLeft, slot.pillTop, slot.pillLeft + chip.pillW, slot.pillTop + CHIP_H)
+        assertTrue("chip overlaps the metrics pill: $pill", !pill.overlaps(guard))
+    }
+
+    /** Nudging must not push a pill off the top or bottom of the canvas. */
+    @Test
+    fun nudgedChipStaysOnCanvas() {
+        val chip = ChipCandidate(key = 60.0, anchorX = 300f, anchorY = 12f, pillW = 70f)
+        val slot = layout(listOf(chip), markerAt(300f, 12f)).single()
+        assertTrue("pill pushed above the canvas: ${slot.pillTop}", slot.pillTop >= 0f)
+        assertTrue("pill pushed below the canvas", slot.pillTop + CHIP_H <= 800f)
+    }
+
+    /**
+     * The whole-run property: with a realistic cluster of bends and the metrics pill in
+     * the corner, no label may drop out at ANY point as the marker climbs the map. This
+     * is the invariant the reported bug broke — a chip that is up must stay up.
+     */
+    @Test
+    fun noLabelDisappearsAnywhereAlongTheRun() {
+        // Eight bends spread over the map, switchbacking left/right like a real route.
+        val chips = (0 until 8).map { n ->
+            ChipCandidate(
+                key = n * 75.0,
+                anchorX = if (n % 2 == 0) 200f else 440f,
+                anchorY = 700f - n * 80f,
+                pillW = 72f,
+            )
+        }
+        val guard = Rect(0f, 0f, 260f, 130f) // metrics pill, top-left
+        var markerY = 760f
+        while (markerY >= 40f) {
+            val slots = layout(chips, markerAt(320f, markerY), guard)
+            assertEquals(
+                "a label dropped out with the marker at y=$markerY " +
+                    "(placed: ${slots.map { it.key }})",
+                chips.size,
+                slots.size,
+            )
+            markerY -= 5f
+        }
+    }
+
+    /** Placement is a function of geometry only, so equal input frames render identically. */
+    @Test
+    fun placementIsDeterministic() {
+        val chips = listOf(
+            ChipCandidate(key = 100.0, anchorX = 260f, anchorY = 400f, pillW = 70f),
+            ChipCandidate(key = 130.0, anchorX = 280f, anchorY = 412f, pillW = 70f),
+        )
+        val a = layout(chips, markerAt(300f, 500f))
+        val b = layout(chips, markerAt(300f, 500f))
+        assertEquals(a, b)
+    }
+}
