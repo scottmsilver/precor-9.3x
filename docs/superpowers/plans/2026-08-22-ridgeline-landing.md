@@ -1,0 +1,405 @@
+# Ridgeline Worktree Landing Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Sequentially land sticky transition labels, monotonic grade visualization, and the minimap glass viewport lens without losing behavior in their shared `RidgelineMap.kt` surface.
+
+**Architecture:** Establish the largest structural patch first, then port the steepness model into its extracted `RidgelineGeometry`, and apply the isolated minimap treatment last. Preserve each behavior as a separate commit and gate it before introducing the next layer. Automated geometry tests provide deterministic coverage; final appearance and animation are verified on the Galaxy Tab.
+
+**Tech Stack:** Kotlin, Jetpack Compose Canvas, JUnit 4, Android Gradle Plugin, ADB wireless debugging
+
+---
+
+## Source identity and file map
+
+All three sources are based on commit `932256165f36063ffb83273402ae86162aba0ba4` and have no newer committed branch changes.
+
+| Layer | Source branch | Tracked diff SHA-256 |
+|---|---|---|
+| Sticky labels | `worktree-ridgeline-sticky-labels` | `6725462557a2cc5af0f1e25f8b174d33587724132b29ff5a993ac9ebc2b711e5` |
+| HUD steepness | `worktree-hud-steepness` | `379fb395a5508d4a5455d631d899b4bc04188e2f890b68f29b722a681ad6e1c5` |
+| Minimap lens | `worktree-minimap-glass-lens` | `c19c6d616923421359e7816d998a96ee3bce98c9b2d9aa11c4fcc12cc81b3714` |
+
+Source root: `/home/ssilver/development/precor-9.3x/.claude/worktrees`
+
+Landing root: `/home/ssilver/development/precor-9.3x/.worktrees/land-ridgeline-timeline`
+
+Files and responsibilities:
+
+- `kotlin/app/src/main/java/com/precor/treadmill/ui/screens/running/RidgelineMap.kt`: route geometry, chip placement/drawing, steepness paint, minimap lens.
+- `kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineRouteTest.kt`: route and steepness invariants.
+- `kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineChipLayoutTest.kt`: collision and deterministic-placement unit tests.
+- `kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineLabelStabilityTest.kt`: whole-workout label continuity and filmstrip generation.
+- `kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineViewportLensTest.kt`: new pure-geometry coverage for the lens bounds.
+- `build/verification/2026-08-22-worktree-landing/`: local screenshots and screen recording from final device verification.
+
+### Task 1: Reconfirm the Ridgeline baseline and source snapshots
+
+- [ ] **Step 1: Verify all three source checksums**
+
+Run each source's `git diff --binary | sha256sum` and compare it with the table above. Run `git status --short` in each source tree and confirm only the files listed in the design are dirty. Stop if the sources have changed.
+
+- [ ] **Step 2: Run the clean Ridgeline baseline**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest \
+  --tests 'com.precor.treadmill.ui.screens.running.RidgelineRouteTest'
+```
+
+Expected: `BUILD SUCCESSFUL`; the measured baseline contains 22 actionable tasks and completes without test failures.
+
+### Task 2: Land deterministic sticky labels
+
+- [ ] **Step 1: Apply only the sticky-label tests**
+
+Run from the landing root:
+
+```bash
+git -C /home/ssilver/development/precor-9.3x/.claude/worktrees/ridgeline-sticky-labels diff --binary -- \
+  kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineChipLayoutTest.kt \
+  kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineLabelStabilityTest.kt | git apply --3way
+```
+
+Expected: the two test files appear; production code is unchanged.
+
+- [ ] **Step 2: Verify the new tests fail to compile**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest \
+  --tests 'com.precor.treadmill.ui.screens.running.RidgelineChipLayoutTest' \
+  --tests 'com.precor.treadmill.ui.screens.running.RidgelineLabelStabilityTest'
+```
+
+Expected: compilation fails because `RidgelineGeometry`, `ChipCandidate`, `ChipSlot`, and `layoutTransitionChips` do not exist yet.
+
+- [ ] **Step 3: Apply the sticky-label production patch**
+
+Apply the source `RidgelineMap.kt` diff with `git apply --3way`. Preserve its boundaries:
+
+- `RidgelineGeometry` owns `screenY` and `worldX` calculations.
+- `computeTargetLo` and `POS_WINDOW` remain test-visible internal declarations.
+- `layoutTransitionChips` is pure deterministic geometry.
+- Visible labels are displaced and leader-linked around collisions, never silently deleted.
+- The metrics panel, marker, canvas bounds, and previously placed labels remain exclusion regions.
+
+- [ ] **Step 4: Run focused sticky-label tests**
+
+Run the two-test Gradle command from Step 2.
+
+Expected: `BUILD SUCCESSFUL`, and `kotlin/build/ridgeline-labels.svg` is generated by the filmstrip test.
+
+- [ ] **Step 5: Run all Ridgeline tests and commit**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest --tests 'com.precor.treadmill.ui.screens.running.Ridgeline*Test'
+cd ..
+git diff --check
+git add kotlin/app/src/main/java/com/precor/treadmill/ui/screens/running/RidgelineMap.kt \
+  kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineChipLayoutTest.kt \
+  kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineLabelStabilityTest.kt
+git commit -m "fix: keep Ridgeline transition labels visible"
+```
+
+Expected: all selected tests pass and one sticky-label commit is created.
+
+### Task 3: Port monotonic steepness onto sticky-label geometry
+
+- [ ] **Step 1: Apply only the steepness tests**
+
+Run:
+
+```bash
+git -C /home/ssilver/development/precor-9.3x/.claude/worktrees/hud-steepness diff --binary -- \
+  kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineRouteTest.kt | git apply --3way
+```
+
+Expected: `RidgelineRouteTest.kt` gains monotonic turn-rate, speed independence, short-pitch smoothing, amplitude, and clamp tests.
+
+- [ ] **Step 2: Verify the steepness tests fail**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest \
+  --tests 'com.precor.treadmill.ui.screens.running.RidgelineRouteTest'
+```
+
+Expected: failures or compilation errors for missing `turnRate`, `smoothedGradeAt`, and `switchbackAmpFactor` behavior.
+
+- [ ] **Step 3: Port the route model, not the old file wholesale**
+
+Use the `hud-steepness` source diff as reference and add these units to the already-landed structure:
+
+- `RidgelineRoute.smoothedGradeAt(pos)` with local-interval smoothing reach.
+- `GRADE_REF`, `TURN_RATE_FLAT`, `TURN_RATE_GAIN`, smoothing bounds, and bounded `jitter(i)`.
+- `phaseAt` and `phaseScale` integration in seconds, driven by grade rather than speed.
+- `switchbackAmpFactor(gradePct)` with monotonic clamping.
+- `RidgelineGeometry.worldX` using the smoothed grade and amplitude factor, so the sticky-label anchors and rendered route share exactly one geometry calculation.
+- `SteepnessPaintSlot` cached by route, camera, geometry, fade, and density.
+- Grade-warmed thread brush and high-grade halo, while travelled route remains dimmed.
+
+Do not apply the entire old `RidgelineMap.kt` patch after sticky labels; that would overwrite the structural landing.
+
+- [ ] **Step 4: Run steepness and sticky-label tests together**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest --tests 'com.precor.treadmill.ui.screens.running.Ridgeline*Test'
+```
+
+Expected: all route, chip-layout, and label-stability tests pass.
+
+- [ ] **Step 5: Commit the steepness layer**
+
+Run:
+
+```bash
+cd ..
+git diff --check
+git add kotlin/app/src/main/java/com/precor/treadmill/ui/screens/running/RidgelineMap.kt \
+  kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineRouteTest.kt
+git commit -m "feat: make Ridgeline steepness visually monotonic"
+git push
+```
+
+Expected: one steepness commit pushed after all Ridgeline tests pass.
+
+### Task 4: Land and test the minimap viewport lens
+
+- [ ] **Step 1: Add a failing pure-geometry test**
+
+Create `RidgelineViewportLensTest.kt` covering a helper with this contract:
+
+```kotlin
+val lens = minimapViewportLens(leaderX = 100f, vTop = 40f, vBot = 46f, stripW = 12f)
+assertEquals(100f, lens.left, 0f)
+assertEquals(40f, lens.top, 0f)
+assertEquals(24f, lens.width, 0f)
+assertEquals(10f, lens.height, 0f) // minimum visible height
+assertEquals(7f, lens.radius, 0f)
+```
+
+Also test that a normal `vBot - vTop` is preserved and width remains `stripW + 12f`.
+
+- [ ] **Step 2: Run the new test and verify red**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest \
+  --tests 'com.precor.treadmill.ui.screens.running.RidgelineViewportLensTest'
+```
+
+Expected: compilation fails because `minimapViewportLens` does not exist.
+
+- [ ] **Step 3: Add the minimal lens geometry helper**
+
+Add an internal immutable value object and helper near the minimap drawing code:
+
+```kotlin
+internal data class ViewportLens(
+    val left: Float,
+    val top: Float,
+    val width: Float,
+    val height: Float,
+    val radius: Float,
+)
+
+internal fun minimapViewportLens(leaderX: Float, vTop: Float, vBot: Float, stripW: Float) =
+    ViewportLens(leaderX, vTop, stripW + 12f, max(10f, vBot - vTop), 7f)
+```
+
+- [ ] **Step 4: Port the visual lens using the helper**
+
+From the `minimap-glass-lens` source hunk, port the outer dark hairline, vertical glass gradient, white rim, lit top edge, and dim bottom bounce. Replace its local `lensX/lensW/lensH/lensR` calculations with the tested helper. Do not alter `camLo`, `camHi`, `yOf`, route cells, or leader endpoints.
+
+- [ ] **Step 5: Run all Ridgeline tests and commit**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest --tests 'com.precor.treadmill.ui.screens.running.Ridgeline*Test'
+cd ..
+git diff --check
+git add kotlin/app/src/main/java/com/precor/treadmill/ui/screens/running/RidgelineMap.kt \
+  kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineViewportLensTest.kt
+git commit -m "feat: render the minimap viewport as a glass lens"
+git push
+```
+
+Expected: one lens commit pushed after all Ridgeline tests pass.
+
+### Task 5: Build and verify the combined Android result
+
+- [ ] **Step 1: Run the Android unit and build gates**
+
+Run:
+
+```bash
+cd kotlin
+./gradlew :app:testDebugUnitTest :app:assembleDebug
+```
+
+Expected: `BUILD SUCCESSFUL`; APK exists at `kotlin/app/build/outputs/apk/debug/app-debug.apk`.
+
+- [ ] **Step 2: Discover and connect to the Galaxy Tab**
+
+Run:
+
+```bash
+adb mdns services
+```
+
+Find service `adb-R9ZY90P5LZP-WMXOYu` with type `_adb-tls-connect._tcp`, then run `adb connect <advertised-ip:port>`. Do not reuse an old endpoint. Confirm with `adb devices` that the endpoint is `device`, not `offline` or `unauthorized`.
+
+- [ ] **Step 3: Start the newly landed Python backend**
+
+Run from the integration worktree root:
+
+```bash
+mkdir -p build/verification/2026-08-22-worktree-landing
+TREADMILL_MOCK=1 \
+TREADMILL_DB=build/verification/2026-08-22-worktree-landing/verification.db \
+TREADMILL_SERVER_PORT=44083 python3 python/server.py \
+  > build/verification/2026-08-22-worktree-landing/server.log 2>&1 &
+echo $! > build/verification/2026-08-22-worktree-landing/server.pid
+for attempt in $(seq 1 50); do
+  curl --fail --silent http://127.0.0.1:44083/api/status >/dev/null && break
+  sleep 0.1
+done
+curl --fail http://127.0.0.1:44083/api/status
+hostname -I
+```
+
+Expected: `/api/status` returns successfully from a mock-hardware server backed by the isolated `verification.db`, leaving the repository's normal `treadmill.db` untouched. Record the host's current LAN IPv4 address from `hostname -I`; the tablet must use `http://<current-lan-ip>:44083`, not a remembered address or an already-running Pi/server. Keep this exact process running through the acceptance workout.
+
+- [ ] **Step 4: Install, launch, and point the APK at this backend**
+
+Run:
+
+```bash
+adb -s <advertised-ip:port> install -r kotlin/app/build/outputs/apk/debug/app-debug.apk
+adb -s <advertised-ip:port> shell am force-stop com.precor.treadmill
+adb -s <advertised-ip:port> shell am start -n com.precor.treadmill/.MainActivity
+```
+
+Expected: install reports `Success` and `MainActivity` launches.
+
+In the app's Setup/Settings screen, set the server URL to `http://<current-lan-ip>:44083` and confirm Debug/status data comes from that endpoint. If the screen cannot reach it, verify the tablet and host share the LAN and check `curl http://<current-lan-ip>:44083/api/status` locally before proceeding.
+
+- [ ] **Step 5: Exercise the acceptance workout**
+
+Use a mixed-grade, multi-interval workout long enough to pan the 600-second route window. Confirm:
+
+- Every visible transition label stays present as the marker approaches and passes it.
+- Displaced labels use leader lines and do not overlap the marker or metrics panel.
+- Higher grades visibly tighten/narrow the route and warm the trail.
+- The glass minimap lens follows the detailed viewport without changing route cells.
+- Skip shortens the current interval; the workout clock stays continuous and remaining route boundaries move earlier.
+
+- [ ] **Step 6: Capture evidence at the exact destination**
+
+Run:
+
+```bash
+mkdir -p build/verification/2026-08-22-worktree-landing
+adb -s <advertised-ip:port> exec-out screencap -p > \
+  build/verification/2026-08-22-worktree-landing/ridgeline-final.png
+adb -s <advertised-ip:port> shell screenrecord --time-limit 30 \
+  /sdcard/worktree-landing.mp4
+adb -s <advertised-ip:port> pull /sdcard/worktree-landing.mp4 \
+  build/verification/2026-08-22-worktree-landing/ridgeline-motion.mp4
+```
+
+Expected: a non-empty PNG and MP4 at the specified local paths.
+
+- [ ] **Step 7: Stop the dedicated verification backend**
+
+Run:
+
+```bash
+kill "$(cat build/verification/2026-08-22-worktree-landing/server.pid)"
+```
+
+Expected: only the process started in Step 3 exits. Preserve `server.log` with the device evidence.
+
+### Task 6: Final integration, issue closure, and source-worktree cleanup
+
+- [ ] **Step 1: Run combined final gates from the integration branch**
+
+Run:
+
+```bash
+pytest -q python/tests -m "not hardware"
+bash deploy/tests/test_all_suites.sh
+cd kotlin && ./gradlew :app:testDebugUnitTest :app:assembleDebug && cd ..
+git diff --check
+git status --short --branch
+```
+
+Expected: all gates pass and the branch has no uncommitted tracked changes.
+
+- [ ] **Step 2: Request code review**
+
+Invoke `superpowers:requesting-code-review` against the full range from `9edd973` through branch HEAD. Address blocking findings and rerun affected gates.
+
+- [ ] **Step 3: Merge from the root checkout and push**
+
+Invoke `superpowers:finishing-a-development-branch`, but perform the merge from the repository root because `main` is already checked out there and cannot be checked out inside the integration worktree:
+
+```bash
+cd /home/ssilver/development/precor-9.3x
+git pull --rebase
+git merge --no-ff feat/land-ridgeline-timeline
+pytest -q python/tests -m "not hardware"
+bash deploy/tests/test_all_suites.sh
+cd kotlin && ./gradlew :app:testDebugUnitTest :app:assembleDebug && cd ..
+git push
+git merge-base --is-ancestor feat/land-ridgeline-timeline origin/main
+```
+
+Expected: all merged-main gates pass, `git push` succeeds, and the ancestry check exits zero. Then remove the integration checkout from the root:
+
+```bash
+git worktree remove /home/ssilver/development/precor-9.3x/.worktrees/land-ridgeline-timeline
+```
+
+- [ ] **Step 4: Close and synchronize the beads task**
+
+Run:
+
+```bash
+bd close precor-9_3x-rbg --reason="Four preserved worktrees landed sequentially; automated and Galaxy Tab verification passed."
+bd dolt push
+```
+
+Expected: issue `precor-9_3x-rbg` is closed. If no Dolt remote is configured, record that result; the Git-versioned export still travels with the code push.
+
+- [ ] **Step 5: Remove only the now-landed source worktrees**
+
+The source worktrees intentionally remain dirty because they are the preserved input patches. After the final tests pass and the integration branch is verified as an ancestor of `origin/main`, compare each source status and checksum with the source-identity table one last time. Confirm that every source behavior is represented by its named integration commit and corresponding passing tests.
+
+The user explicitly approved cleaning these worktrees once landed. Remove the still-dirty checkouts with `git worktree remove --force`:
+
+```text
+.claude/worktrees/skip-truncates-timeline
+.claude/worktrees/ridgeline-sticky-labels
+.claude/worktrees/hud-steepness
+.claude/worktrees/minimap-glass-lens
+```
+
+Preserve their branches unless the user separately authorizes branch deletion. Run `git worktree prune`, `git pull --rebase`, `git push`, and final `git status`.
