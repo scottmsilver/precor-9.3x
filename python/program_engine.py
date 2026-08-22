@@ -393,6 +393,7 @@ class ProgramState:
                 await self._on_change(iv["speed"], iv["incline"])
         else:
             await self._finish()
+            return
         await self._broadcast()
 
     async def prev(self):
