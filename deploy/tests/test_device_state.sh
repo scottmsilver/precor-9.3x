@@ -61,30 +61,126 @@ pass "--delete still prunes stale shipped files"
 [ "$(cat "$dst/python/server.py")" = "new-shipped-content" ] || fail "shipped file not updated"
 pass "shipped files still update"
 
-# --- The pre-deploy backup is the second line of defence -------------------
-# An exclude list only protects files someone remembered to name. The backup
-# protects the ones nobody thought of, so it must run BEFORE rsync and must land
-# outside the deploy dir (anything inside it is in --delete's blast radius).
+# --- Execute the real backup path through a fake ssh transport --------------
+# The fake transport runs deploy.sh's remote heredoc locally with an isolated
+# HOME. This tests behavior without a Pi or network while retaining the exact
+# ssh argument and remote-shell contract used in production.
 DEPLOY="$ROOT/deploy/deploy.sh"
+fake_bin="$tmp/bin"; remote_home="$tmp/remote-home"; ssh_log="$tmp/ssh.log"
+mkdir -p "$fake_bin" "$remote_home/treadmill"
+cat > "$fake_bin/ssh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+printf '<%s>\n' "$@" >> "${FAKE_SSH_LOG:?}"
+[ "${FAKE_SSH_FAIL:-0}" != 1 ] || exit 77
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) shift 2 ;;
+    *) shift; break ;;
+  esac
+done
+HOME="${FAKE_REMOTE_HOME:?}" "$@"
+SH
+cat > "$fake_bin/date" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = -u ]; then
+  echo 20260102T030405Z
+else
+  exec /bin/date "$@"
+fi
+SH
+chmod +x "$fake_bin/ssh" "$fake_bin/date"
 
-grep -q 'backup_device_state' "$DEPLOY" || fail "deploy.sh must back up device state"
+# Keep a writer connected so treadmill.db remains a live WAL database while
+# the backup API reads it. The committed WAL row must appear in the snapshot.
+ready="$tmp/wal-ready"; stop_writer="$tmp/stop-writer"
+python3 - "$remote_home/treadmill/treadmill.db" "$ready" "$stop_writer" <<'PY' &
+import os, sqlite3, sys, time
+db, ready, stop = sys.argv[1:]
+conn = sqlite3.connect(db)
+conn.execute("PRAGMA journal_mode=WAL")
+conn.execute("PRAGMA wal_autocheckpoint=0")
+conn.execute("CREATE TABLE precious(value TEXT)")
+conn.execute("INSERT INTO precious VALUES ('from-live-wal')")
+conn.commit()
+open(ready, "w").close()
+while not os.path.exists(stop):
+    time.sleep(0.05)
+conn.close()
+PY
+writer_pid=$!
+trap 'touch "$stop_writer" 2>/dev/null || true; wait "$writer_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+for _ in $(seq 1 100); do [ -f "$ready" ] && break; sleep 0.05; done
+[ -f "$ready" ] || fail "WAL writer did not become ready"
+[ -s "$remote_home/treadmill/treadmill.db-wal" ] || fail "test database is not live in WAL mode"
 
-backup_line=$(grep -n '^\s*backup_device_state\s*$' "$DEPLOY" | head -1 | cut -d: -f1)
-rsync_line=$(grep -n 'rsync -az --delete' "$DEPLOY" | head -1 | cut -d: -f1)
-[ -n "$backup_line" ] || fail "backup_device_state is never invoked in the deploy path"
-[ -n "$rsync_line" ] || fail "could not find the deploy rsync"
-[ "$backup_line" -lt "$rsync_line" ] \
-  || fail "backup must run BEFORE rsync --delete (backup:$backup_line rsync:$rsync_line)"
-pass "device DB is backed up before rsync --delete runs"
+run_backup() {
+  PATH="$fake_bin:$PATH" FAKE_SSH_LOG="$ssh_log" FAKE_REMOTE_HOME="$remote_home" \
+    PI_HOST=fake-pi PI_DIR=treadmill KEEP_BACKUPS=2 bash "$DEPLOY" backup
+}
 
-grep -q 'out_dir="$HOME/treadmill-backups"' "$DEPLOY" \
-  || fail "backups must be written to \$HOME/treadmill-backups"
-grep -q 'rsync.*treadmill-backups' "$DEPLOY" \
-  && fail "backup dir must never be an rsync source/dest (--delete would reach it)"
+run_backup >/dev/null || fail "backup subcommand failed against a live WAL database"
+backup_dir="$remote_home/treadmill-backups"
+[ -d "$backup_dir" ] || fail "backup directory was not created outside deploy dir"
+[ ! -e "$remote_home/treadmill/treadmill-backups" ] || fail "backup landed inside deploy directory"
+[ "$(stat -c %a "$backup_dir")" = 700 ] || fail "backup directory mode is not 700"
+first_backup=$(find "$backup_dir" -maxdepth 1 -name 'treadmill-*.db' -print -quit)
+[ -n "$first_backup" ] || fail "backup snapshot was not created"
+[ "$(stat -c %a "$first_backup")" = 600 ] || fail "backup snapshot mode is not 600"
+python3 - "$first_backup" <<'PY' || fail "snapshot is unreadable, corrupt, or missing WAL data"
+import sqlite3, sys
+conn = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+assert conn.execute("SELECT value FROM precious").fetchone()[0] == "from-live-wal"
+conn.close()
+PY
+pass "live WAL database produces a readable integrity-checked snapshot"
+pass "backup directory and snapshot use modes 700 and 600"
 pass "backups live outside the deploy dir, beyond --delete's reach"
 
-# cp of a WAL-mode DB can be stale or torn; the sqlite backup API cannot.
-grep -q 's.backup(d)' "$DEPLOY" || fail "backup must use the sqlite3 backup API, not cp"
-pass "backup uses sqlite3's consistent-snapshot API (WAL-safe)"
+# A fixed fake timestamp forces all calls into the same second. Unique temp
+# names plus atomic rename must still create distinct snapshots; retention then
+# keeps only the newest two.
+run_backup >/dev/null || fail "second same-timestamp backup failed"
+run_backup >/dev/null || fail "third same-timestamp backup failed"
+[ "$(find "$backup_dir" -maxdepth 1 -name 'treadmill-*.db' | wc -l)" -eq 2 ] \
+  || fail "same-second uniqueness or KEEP_BACKUPS=2 retention failed"
+[ -z "$(find "$backup_dir" -maxdepth 1 -name '*.tmp' -print -quit)" ] \
+  || fail "partial temporary snapshot remained after success"
+pass "same-second snapshots are unique, atomic, and retention is enforced"
+
+# Backup failure must stop the command; SKIP_BACKUP must avoid ssh entirely.
+if PATH="$fake_bin:$PATH" FAKE_SSH_LOG="$ssh_log" FAKE_REMOTE_HOME="$remote_home" \
+     FAKE_SSH_FAIL=1 PI_HOST=fake-pi PI_DIR=treadmill bash "$DEPLOY" backup >/dev/null 2>&1; then
+  fail "backup transport failure did not fail closed"
+fi
+pass "backup failure aborts fail-closed"
+
+: > "$ssh_log"
+PATH="$fake_bin:$PATH" FAKE_SSH_LOG="$ssh_log" FAKE_REMOTE_HOME="$remote_home" \
+  SKIP_BACKUP=1 PI_HOST=fake-pi PI_DIR=treadmill bash "$DEPLOY" backup >/dev/null \
+  || fail "SKIP_BACKUP=1 failed"
+[ ! -s "$ssh_log" ] || fail "SKIP_BACKUP=1 still contacted ssh"
+pass "SKIP_BACKUP=1 bypasses backup transport"
+
+# Every remote command in this deploy workflow shares fail-fast SSH options.
+run_backup >/dev/null || fail "backup failed while checking ssh options"
+grep -q '<-o>' "$ssh_log" || fail "ssh options were not passed"
+grep -q '<BatchMode=yes>' "$ssh_log" || fail "ssh is not fail-fast noninteractive"
+grep -Eq '<ConnectTimeout=[1-9][0-9]*>' "$ssh_log" || fail "ssh has no bounded connect timeout"
+grep -q 'SSH_OPTS' "$DEPLOY" || fail "ssh/scp options are not centralized"
+unsafe_remote_calls=$(grep -nE '^[[:space:]]*(ssh|scp)[[:space:]]|\$\((ssh|scp)[[:space:]]' "$DEPLOY" \
+  | grep -v 'SSH_OPTS' || true)
+[ -z "$unsafe_remote_calls" ] || fail "ssh/scp call bypasses SSH_OPTS: $unsafe_remote_calls"
+grep -q 'rsync .*BatchMode=yes.*ConnectTimeout=' "$DEPLOY" \
+  || fail "rsync remote shell is not noninteractive with a bounded timeout"
+pass "ssh/scp workflow is noninteractive with bounded connection timeout"
+
+# The deploy must still invoke backup before its destructive rsync.
+backup_line=$(grep -n '^[[:space:]]*backup_device_state[[:space:]]*$' "$DEPLOY" | head -1 | cut -d: -f1)
+rsync_line=$(grep -n 'rsync -az --delete' "$DEPLOY" | head -1 | cut -d: -f1)
+[ -n "$backup_line" ] && [ -n "$rsync_line" ] && [ "$backup_line" -lt "$rsync_line" ] \
+  || fail "backup must run before rsync --delete"
+pass "device DB is backed up before rsync --delete runs"
 
 echo "ALL TESTS PASSED"

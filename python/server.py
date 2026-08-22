@@ -17,6 +17,7 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -524,13 +525,18 @@ def _validate_program(program):
     for i, iv in enumerate(intervals):
         if not isinstance(iv, dict):
             return f"interval {i} must be a dict"
-        if "duration" not in iv or not isinstance(iv["duration"], (int, float)):
+        if (
+            "duration" not in iv
+            or isinstance(iv["duration"], bool)
+            or not isinstance(iv["duration"], (int, float))
+        ):
             return f"interval {i} must have a numeric duration"
         # Durations are summed by _cumulative_at() to place every later boundary,
-        # so a non-positive one corrupts the whole timeline: a negative drags the
-        # clock backwards, a zero makes a boundary the tick loop can't land on.
-        if iv["duration"] <= 0:
-            return f"interval {i} duration must be greater than 0"
+        # so a non-finite or non-positive one corrupts the whole timeline: a
+        # negative drags the clock backwards, while zero/NaN/infinity create
+        # boundaries the tick loop cannot traverse reliably.
+        if not math.isfinite(iv["duration"]) or iv["duration"] <= 0:
+            return f"interval {i} duration must be finite and greater than 0"
     return None
 
 

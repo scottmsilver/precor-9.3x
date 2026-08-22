@@ -13,6 +13,8 @@ PI_DIR="${PI_DIR:-treadmill}"
 VENV_DIR="${VENV_DIR:-.venv}"
 MANIFEST="$SCRIPT_DIR/deploy/manifest.txt"
 SERVER_PORT="${SERVER_PORT:-8000}"
+SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
+SSH_OPTS=(-o BatchMode=yes -o "ConnectTimeout=$SSH_CONNECT_TIMEOUT")
 
 # State the DEVICE owns and the repo can never regenerate. `rsync --delete`
 # deletes whatever isn't in build/, so anything missing from this list is
@@ -104,8 +106,9 @@ backup_device_state() {
   echo "=== Backing up device database (pre-deploy) ==="
   # Failure here aborts the deploy on purpose: losing the user's profiles, runs
   # and saved workouts is worse than a deploy that didn't happen.
-  ssh "$PI_HOST" bash -s "$PI_DIR" "${KEEP_BACKUPS:-10}" <<'REMOTE' || {
+  ssh "${SSH_OPTS[@]}" "$PI_HOST" bash -s "$PI_DIR" "${KEEP_BACKUPS:-10}" <<'REMOTE' || {
 set -eu
+umask 077
 dir="$HOME/${1:?}"; keep="${2:?}"
 db="$dir/treadmill.db"
 out_dir="$HOME/treadmill-backups"
@@ -115,17 +118,27 @@ if [ ! -f "$db" ]; then
 fi
 command -v python3 >/dev/null 2>&1 || { echo "backup: python3 missing on device" >&2; exit 1; }
 mkdir -p "$out_dir"
-out="$out_dir/treadmill-$(date -u +%Y%m%dT%H%M%SZ).db"
-python3 - "$db" "$out" <<'PY'
+chmod 700 "$out_dir"
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+tmp=$(mktemp "$out_dir/treadmill-$stamp.XXXXXX.tmp")
+trap 'rm -f "$tmp"' EXIT
+python3 - "$db" "$tmp" <<'PY'
 import sqlite3, sys
 src, dst = sys.argv[1], sys.argv[2]
 s = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
 d = sqlite3.connect(dst)
 with d:
     s.backup(d)
+result = d.execute("PRAGMA integrity_check").fetchone()
+if not result or result[0] != "ok":
+    raise RuntimeError(f"backup integrity check failed: {result!r}")
 d.close(); s.close()
 PY
-[ -s "$out" ] || { echo "backup: snapshot is empty — refusing to continue" >&2; exit 1; }
+[ -s "$tmp" ] || { echo "backup: snapshot is empty — refusing to continue" >&2; exit 1; }
+chmod 600 "$tmp"
+out="${tmp%.tmp}.db"
+mv -f -- "$tmp" "$out"
+trap - EXIT
 # Prune oldest, keep the most recent $keep.
 ls -1t "$out_dir"/treadmill-*.db 2>/dev/null | tail -n +$((keep + 1)) | xargs -r rm -f
 echo "backup: $out ($(wc -c < "$out") bytes, $(ls -1 "$out_dir"/treadmill-*.db | wc -l) kept)"
@@ -138,7 +151,7 @@ REMOTE
 deploy_full() {
   manifest_rows "$MANIFEST" >/dev/null    # fail closed before any host contact
   stage
-  PI_USER="${PI_USER:-$(ssh "$PI_HOST" whoami)}"
+  PI_USER="${PI_USER:-$(ssh "${SSH_OPTS[@]}" "$PI_HOST" whoami)}"
   # Re-render now that PI_USER is resolved (stage() rendered with the @USER@
   # token for --stage-only; here we substitute the real deploy user).
   for tmpl in deploy/*.service.in; do
@@ -152,20 +165,20 @@ deploy_full() {
     source "$LOCK_SCRIPT" acquire "deploy from $(basename "$SCRIPT_DIR")"
   fi
   echo "=== Deploying to $PI_HOST:~/$PI_DIR ==="
-  ssh "$PI_HOST" "mkdir -p ~/$PI_DIR"
+  ssh "${SSH_OPTS[@]}" "$PI_HOST" "mkdir -p ~/$PI_DIR"
   backup_device_state
   # Never partial: rsync fully completes before any systemctl.
   # --delete removes anything on the Pi that isn't in build/, so EVERY file the
   # device owns must be excluded here or a deploy destroys it. That is user data
   # (profiles, runs, saved workouts), not rebuildable output.
-  rsync -az --delete \
+  rsync -az --delete -e "ssh -o BatchMode=yes -o ConnectTimeout=$SSH_CONNECT_TIMEOUT" \
     --exclude='*.o' --exclude='*.d' --exclude='*.test.o' \
     --exclude='.gemini_key' --exclude='*.pem' \
     "${DEVICE_STATE_EXCLUDES[@]}" \
     --exclude='__pycache__' \
     build/ "$PI_HOST":~/"$PI_DIR"/
   echo "Running setup (manifest install + ordered atomic restart)..."
-  ssh "$PI_HOST" "cd ~/$PI_DIR && bash setup.sh"
+  ssh "${SSH_OPTS[@]}" "$PI_HOST" "cd ~/$PI_DIR && bash setup.sh"
   echo "Done!  API: https://$PI_HOST:$SERVER_PORT/api/status"
 }
 
@@ -181,10 +194,10 @@ deploy_key() {
     exit 1
   fi
   echo "=== Deploying Gemini key -> $PI_HOST:~/$PI_DIR/.gemini_key ==="
-  ssh "$PI_HOST" "mkdir -p ~/$PI_DIR"
+  ssh "${SSH_OPTS[@]}" "$PI_HOST" "mkdir -p ~/$PI_DIR"
   # scp then tighten perms; the key is owner-only on the device.
-  scp -q "$key" "$PI_HOST":~/"$PI_DIR"/.gemini_key
-  ssh "$PI_HOST" "chmod 600 ~/$PI_DIR/.gemini_key && sudo systemctl restart treadmill-server"
+  scp "${SSH_OPTS[@]}" -q "$key" "$PI_HOST":~/"$PI_DIR"/.gemini_key
+  ssh "${SSH_OPTS[@]}" "$PI_HOST" "chmod 600 ~/$PI_DIR/.gemini_key && sudo systemctl restart treadmill-server"
   echo "Done! Key deployed ($(wc -c < "$key") bytes) and treadmill-server restarted."
 }
 

@@ -523,6 +523,17 @@ class TestSkipRebasesTimeline:
         assert prog.completed is True
         assert prog.total_duration == 80
 
+    @pytest.mark.asyncio
+    async def test_skipping_last_interval_broadcasts_completion_once(self, two_min_prog):
+        """The completion callback has one owner when skip ends the workout."""
+        prog = two_min_prog
+        prog.current_interval = 2
+
+        await prog.skip()
+
+        assert prog.completed is True
+        assert prog._on_update.await_count == 1
+
 
 class TestSkipWhilePaused:
     @pytest.mark.asyncio

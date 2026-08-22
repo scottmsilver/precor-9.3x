@@ -2202,6 +2202,12 @@ class TestProgramDurationValidation:
         assert server._validate_program({"intervals": [{"duration": 60}]}) is None
         assert server._validate_program({"intervals": [{"duration": 0.5}]}) is None
 
+    @pytest.mark.parametrize("duration", [True, False, float("nan"), float("inf")])
+    def test_rejects_non_finite_or_boolean_duration(self, test_app, duration):
+        _, server, _ = test_app
+        err = server._validate_program({"intervals": [{"duration": duration}]})
+        assert err, f"unsafe duration must be rejected: {duration!r}"
+
     def test_save_workout_endpoint_rejects_negative(self, test_app):
         """The bad program must not reach the database."""
         client, _, _ = test_app
