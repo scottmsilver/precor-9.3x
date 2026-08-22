@@ -211,7 +211,7 @@ fun RidgelineMap(
     modifier: Modifier = Modifier,
     metricsPillRect: Rect? = null,
 ) {
-    // Every chip measures two short strings per frame and the map can hold ~40 chips.
+    // Every chip measures two short strings per frame and dense programs can hold dozens.
     // The default cache is 8 entries, so the whole set would miss on every frame and
     // re-run text layout inside the draw pass; size it past the worst case instead.
     val measurer = rememberTextMeasurer(cacheSize = 128)
@@ -593,14 +593,12 @@ private fun DrawScope.drawRidgeline(
         val spdTl: androidx.compose.ui.text.TextLayoutResult,
         val travelled: Boolean,
     )
-    val chipDraws = ArrayList<ChipDraw>()
-    var i = route.idxAt(camLo)
-    var chipCount = 0
-    while (chipCount < 40 && i < route.count) {
-        val bs = route.startOf(i)
-        if (bs > camHi) break
-        if (bs >= camLo) {
-            val pos = Offset(worldX(bs), screenY(bs))
+    val measuredText = ArrayList<Pair<androidx.compose.ui.text.TextLayoutResult, androidx.compose.ui.text.TextLayoutResult>>()
+    val visibleCandidates = collectVisibleTransitionCandidates(
+        route = route,
+        geometry = geom,
+        markerPos = md,
+        pillWidthFor = { i ->
             val color = RidgelineTheme.mutedGradeColor(route.gradeIdx(i))
             // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
             // shows BOTH values of the transition — incline and speed — each in its
@@ -628,18 +626,24 @@ private fun DrawScope.drawRidgeline(
             // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
             // "8% 3.0" text, anchor dot). Pill butts against the anchor dot at cx.
             val pillW = gradeTl.size.width + 6f + spdTl.size.width + 14f
-            chipDraws.add(
-                ChipDraw(
-                    candidate = ChipCandidate(bs, pos.x, pos.y, pillW),
-                    pos = pos,
-                    grade = route.gradeIdx(i),
-                    gradeTl = gradeTl,
-                    spdTl = spdTl,
-                    travelled = bs < md,
-                ),
-            )
-        }
-        i++; chipCount++
+            measuredText.add(gradeTl to spdTl)
+            pillW
+        },
+    )
+    val chipDraws = ArrayList<ChipDraw>(visibleCandidates.size)
+    visibleCandidates.forEachIndexed { index, visible ->
+        val (gradeTl, spdTl) = measuredText[index]
+        val candidate = visible.candidate
+        chipDraws.add(
+            ChipDraw(
+                candidate = candidate,
+                pos = Offset(candidate.anchorX, candidate.anchorY),
+                grade = route.gradeIdx(visible.intervalIndex),
+                gradeTl = gradeTl,
+                spdTl = spdTl,
+                travelled = visible.travelled,
+            ),
+        )
     }
 
     // Pass 2: place them (pure geometry, unit-tested in RidgelineChipLayoutTest).
@@ -667,7 +671,7 @@ private fun DrawScope.drawRidgeline(
         val pillLeft = slot.pillLeft
         val pillTop = slot.pillTop
         val textY = pillTop + CHIP_H / 2f
-        val chromeAlpha = if (c.travelled) 0.45f else 1f
+        val chromeAlpha = transitionChipAlpha(c.travelled)
         // Leader line back to the bend when the chip had to step aside.
         if (slot.offBend) {
             val edgeX = if (pillLeft > c.pos.x) pillLeft else pillLeft + c.candidate.pillW
@@ -701,10 +705,12 @@ private fun DrawScope.drawRidgeline(
         drawText( // legible-exempt: solved via legibleOn over the photo
             c.gradeTl,
             topLeft = Offset(pillLeft + 7f, textY - c.gradeTl.size.height / 2f),
+            alpha = chromeAlpha,
         )
         drawText( // legible-exempt: solved via legibleOn over the photo
             c.spdTl,
             topLeft = Offset(pillLeft + 7f + c.gradeTl.size.width + 6f, textY - c.spdTl.size.height / 2f),
+            alpha = chromeAlpha,
         )
     }
 
@@ -1030,6 +1036,48 @@ internal class RidgelineGeometry(
     }
 }
 
+/** One interval boundary collected from the exact geometry used by the draw pass. */
+internal data class VisibleTransitionCandidate(
+    val intervalIndex: Int,
+    val candidate: ChipCandidate,
+    val travelled: Boolean,
+)
+
+/**
+ * Collect every transition boundary in the camera window without walking irrelevant
+ * intervals. The scan begins in the interval containing [RidgelineGeometry.camLo] and
+ * stops at the first boundary above [RidgelineGeometry.camHi].
+ */
+internal fun collectVisibleTransitionCandidates(
+    route: RidgelineRoute,
+    geometry: RidgelineGeometry,
+    markerPos: Double,
+    pillWidthFor: (intervalIndex: Int) -> Float,
+): List<VisibleTransitionCandidate> {
+    val out = ArrayList<VisibleTransitionCandidate>()
+    var i = route.idxAt(geometry.camLo)
+    while (i < route.count) {
+        val boundary = route.startOf(i)
+        if (boundary > geometry.camHi) break
+        if (boundary >= geometry.camLo) {
+            out.add(
+                VisibleTransitionCandidate(
+                    intervalIndex = i,
+                    candidate = ChipCandidate(
+                        key = boundary,
+                        anchorX = geometry.worldX(boundary),
+                        anchorY = geometry.screenY(boundary),
+                        pillW = pillWidthFor(i),
+                    ),
+                    travelled = boundary < markerPos,
+                ),
+            )
+        }
+        i++
+    }
+    return out
+}
+
 // --- transition chip placement (pure geometry) -----------------------------
 // Split out of the draw pass so the "labels never disappear" property is a unit
 // test (RidgelineChipLayoutTest) rather than something you can only catch by
@@ -1037,6 +1085,9 @@ internal class RidgelineGeometry(
 
 /** Chip pill height, px. */
 internal const val CHIP_H = 24f
+
+/** The whole travelled chip, including both text runs, uses one deterministic alpha. */
+internal fun transitionChipAlpha(travelled: Boolean): Float = if (travelled) 0.45f else 1f
 
 /** Vertical nudge granularity and reach when a chip has to step aside, px. */
 private const val CHIP_NUDGE_STEP = 7f
@@ -1093,7 +1144,9 @@ internal data class ChipSlot(
  * order, so an earlier bend keeps its spot and later ones move — placement is a pure
  * function of the frame's geometry, so it doesn't jitter between frames.
  *
- * A candidate is dropped only if nothing within ±[CHIP_NUDGE_MAX] fits on the canvas.
+ * If the ordinary offsets fail, a bounded whole-canvas lane search runs. If no
+ * collision-free position physically exists, a deterministic clamped slot is retained;
+ * that last-resort slot may overlap because overlap is preferable to disappearance.
  */
 internal fun layoutTransitionChips(
     candidates: List<ChipCandidate>,
@@ -1139,11 +1192,11 @@ internal fun layoutTransitionChips(
         // Probing is allocation-free (plain float bounds, no Rect per attempt): the search
         // can run hundreds of probes per chip and this runs inside the draw pass, so a
         // Rect per probe would be real GC pressure at 60fps. Only the winner allocates.
-        fun usable(l: Float, t: Float, r: Float, b: Float): Boolean {
+        fun usable(l: Float, t: Float, r: Float, b: Float, blockers: List<Rect>): Boolean {
             val il = l - 4f; val it = t - 4f; val ir = r + 4f; val ib = b + 4f
             val g = metricsGuard
             if (g != null && g.left < ir && il < g.right && g.top < ib && it < g.bottom) return false
-            for (p in nearby) {
+            for (p in blockers) {
                 if (p.left < ir && il < p.right && p.top < ib && it < p.bottom) return false
             }
             return true
@@ -1159,14 +1212,49 @@ internal fun layoutTransitionChips(
                 val pl = pillLeftFor(side, dx)
                 val l = leftFor(pl, onBend)
                 val r = rightFor(pl, onBend)
-                if (usable(l, top, r, top + CHIP_H)) {
+                if (usable(l, top, r, top + CHIP_H, nearby)) {
                     placed.add(Rect(l, top, r, top + CHIP_H))
                     slot = ChipSlot(c.key, pl, top, dx, dy)
                     break@search
                 }
             }
         }
-        slot?.let { out.add(it) }
+
+        // Ordinary bend-relative offsets are intentionally local. If they are all
+        // blocked, search deterministic canvas lanes. The loop bounds are derived from
+        // the finite canvas and pill dimensions; probes remain allocation-free.
+        if (slot == null) {
+            val minLeft = 4f
+            val maxLeft = max(minLeft, mapW - c.pillW - 4f)
+            val maxTop = max(topBound, botBound - CHIP_H)
+            val xStep = max(8f, c.pillW + 8f)
+            val yStep = CHIP_H + 8f
+            val cols = max(1, kotlin.math.ceil((maxLeft - minLeft) / xStep).toInt())
+            val rows = max(1, kotlin.math.ceil((maxTop - topBound) / yStep).toInt())
+            val preferredLeft = pillLeftFor(natural, 0f)
+            val preferredTop = topFor(0f)
+            grid@ for (row in 0..rows) {
+                val top = min(maxTop, topBound + row * yStep)
+                for (col in 0..cols) {
+                    val pl = min(maxLeft, minLeft + col * xStep)
+                    if (usable(pl, top, pl + c.pillW, top + CHIP_H, placed)) {
+                        placed.add(Rect(pl, top, pl + c.pillW, top + CHIP_H))
+                        slot = ChipSlot(c.key, pl, top, pl - preferredLeft, top - preferredTop)
+                        break@grid
+                    }
+                }
+            }
+        }
+
+        // The canvas may genuinely be too small (or wholly covered by guards). Keep a
+        // stable, clamped pill anyway: a visible overlap is the explicit last resort.
+        if (slot == null) {
+            val pl = pillLeftFor(natural, 0f)
+            val top = topFor(0f)
+            placed.add(Rect(pl, top, pl + c.pillW, top + CHIP_H))
+            slot = ChipSlot(c.key, pl, top, 0f, 0f)
+        }
+        out.add(slot)
     }
     return out
 }

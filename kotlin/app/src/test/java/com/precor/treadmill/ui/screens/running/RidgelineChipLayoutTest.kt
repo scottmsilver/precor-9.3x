@@ -132,4 +132,44 @@ class RidgelineChipLayoutTest {
         val b = layout(chips, markerAt(300f, 500f))
         assertEquals(a, b)
     }
+
+    /** The bounded ordinary nudge search must hand off to a whole-canvas search. */
+    @Test
+    fun fallbackSearchFindsSpaceBeyondTheOrdinaryNudgeRange() {
+        val chip = ChipCandidate(key = 60.0, anchorX = 300f, anchorY = 100f, pillW = 70f)
+        val guard = Rect(0f, 0f, mapW, 690f)
+
+        val slot = layout(listOf(chip), markerAt(500f, 760f), guard).single()
+        val pill = Rect(slot.pillLeft, slot.pillTop, slot.pillLeft + chip.pillW, slot.pillTop + CHIP_H)
+
+        assertTrue("fallback still overlaps the guard: $pill", !pill.overlaps(guard))
+        assertTrue("fallback did not move beyond the ordinary nudge range", slot.pillTop > 690f)
+    }
+
+    /** Even impossible packing is fail-visible: overlap is preferable to disappearance. */
+    @Test
+    fun physicallyUnsatisfiableCanvasStillRetainsEveryLabel() {
+        val chips = (0 until 6).map { n ->
+            ChipCandidate(key = n.toDouble(), anchorX = 50f, anchorY = 50f, pillW = 92f)
+        }
+        val slots = layoutTransitionChips(
+            candidates = chips,
+            centerX = 50f,
+            mapW = 100f,
+            markerRect = Rect(0f, 0f, 100f, 100f),
+            metricsGuard = Rect(0f, 0f, 100f, 100f),
+            topBound = 0f,
+            botBound = 100f,
+        )
+
+        assertEquals("last-resort placement silently dropped labels", chips.size, slots.size)
+        assertTrue(slots.all { it.pillLeft >= 0f && it.pillTop >= 0f && it.pillTop + CHIP_H <= 100f })
+    }
+
+    /** Travelled labels dim as a unit; upcoming labels retain full-strength text. */
+    @Test
+    fun pastChipTextUsesTheSameDimmedAlphaAsItsChrome() {
+        assertEquals(0.45f, transitionChipAlpha(travelled = true), 0f)
+        assertEquals(1f, transitionChipAlpha(travelled = false), 0f)
+    }
 }
