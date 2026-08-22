@@ -1,6 +1,7 @@
 package com.precor.treadmill.ui.screens.running
 
 import androidx.compose.ui.geometry.Rect
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -144,14 +145,52 @@ class RidgelineLabelStabilityTest {
         val clashes = mutableListOf<String>()
         for (f in runFrames()) {
             val rects = f.slots.map { Rect(it.pillLeft, it.pillTop, it.pillLeft + pillW, it.pillTop + CHIP_H) }
+            val markerRect = Rect(
+                f.marker.first - 20f,
+                f.marker.second - 20f,
+                f.marker.first + 20f,
+                f.marker.second + 20f,
+            )
             for (a in rects.indices) {
                 if (rects[a].overlaps(metricsGuard)) clashes.add("t=%.0fs: chip over the metrics pill".format(f.markerPos))
+                if (rects[a].overlaps(markerRect)) clashes.add("t=%.0fs: chip over the marker".format(f.markerPos))
                 for (b in a + 1 until rects.size) {
                     if (rects[a].overlaps(rects[b])) clashes.add("t=%.0fs: chips overlap".format(f.markerPos))
                 }
             }
         }
         assertTrue("${clashes.size} overlap(s):\n" + clashes.take(10).joinToString("\n"), clashes.isEmpty())
+    }
+
+    /** Production collection must not truncate dense, supported programs at 40 labels. */
+    @Test
+    fun allFortyOneVisibleBoundariesReachLayout() {
+        val denseRoute = RidgelineRoute(
+            (0 until 41).map { n ->
+                RouteInterval(grade = (n % 10).toDouble(), speed = 3.0, durSec = 10.0)
+            },
+        )
+        val denseGeometry = RidgelineGeometry(
+            denseRoute, centerX, ampBase, camLo = 0.0, ew = POS_WINDOW, topY, botY,
+        )
+        val visible = collectVisibleTransitionCandidates(
+            route = denseRoute,
+            geometry = denseGeometry,
+            markerPos = 0.0,
+            pillWidthFor = { pillW },
+        )
+        val slots = layoutTransitionChips(
+            candidates = visible.map { it.candidate },
+            centerX = centerX,
+            mapW = mapW,
+            markerRect = Rect(centerX - 20f, botY - 20f, centerX + 20f, botY + 20f),
+            metricsGuard = null,
+            topBound = topY,
+            botBound = botY,
+        )
+
+        assertEquals(41, visible.size)
+        assertEquals("production collection/layout truncated visible boundaries", visible.size, slots.size)
     }
 
     /** Renders a filmstrip so the run can be reviewed by eye (not an assertion). */
