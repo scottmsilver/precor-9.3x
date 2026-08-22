@@ -187,7 +187,7 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
 // beyond ~11min WINDOW — the camera pans as you progress and the minimap's viewport
 // box + leader lines activate — while shorter programs fit whole and always FILL the
 // panel. (Was 25min, then 15; the switchbacks read squashed with more in view.)
-private const val POS_WINDOW = 600.0
+internal const val POS_WINDOW = 600.0
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
@@ -211,7 +211,10 @@ fun RidgelineMap(
     modifier: Modifier = Modifier,
     metricsPillRect: Rect? = null,
 ) {
-    val measurer = rememberTextMeasurer()
+    // Every chip measures two short strings per frame and the map can hold ~40 chips.
+    // The default cache is 8 entries, so the whole set would miss on every frame and
+    // re-run text layout inside the draw pass; size it past the worst case instead.
+    val measurer = rememberTextMeasurer(cacheSize = 128)
 
     // Pulsing position-ring: radius 8->19->8 and opacity 0.5->0->0.5 over 2.4s, infinite.
     // Two independent reversing tweens; both values are READ inside the draw lambda below
@@ -262,7 +265,7 @@ fun RidgelineMap(
 }
 
 /** Window math shared with the draw pass: lower edge (route seconds) of the view window. */
-private fun computeTargetLo(route: RidgelineRoute, markerPos: Double): Double {
+internal fun computeTargetLo(route: RidgelineRoute, markerPos: Double): Double {
     val fitsWhole = route.total <= POS_WINDOW * 1.12
     if (fitsWhole) return 0.0
     val md = markerPos.coerceIn(0.0, route.total)
@@ -318,23 +321,11 @@ private fun DrawScope.drawRidgeline(
     // When the whole route fits, it rests at 0.
     val camLo = if (fitsWhole) 0.0 else elevLo
     val camHi = camLo + EW
-    fun screenY(pos: Double): Float = (botY - ((pos - camLo) / EW) * (botY - topY)).toFloat()
-
-    // Organic detail (amplitude jitter, phase wobble, grade smoothing) is tuned in the
-    // design's MILE domain — feed it planned miles via distAt so the look is preserved.
-    // Grade smoothing keeps its ±0.05mi reach by converting through the LOCAL interval
-    // speed (0.05mi = 180/speed seconds), not a fixed time radius (codex review).
-    fun worldX(pos: Double): Float {
-        val u = route.distAt(pos)
-        val smoothSec = 180.0 / max(0.5, route.speedIdx(route.idxAt(pos)))
-        val g = (route.gradeAt(max(0.0, pos - smoothSec)) + route.gradeAt(pos) + route.gradeAt(pos + smoothSec)) / 3.0
-        // amplitude eases narrower on steep pitches (design exact: 0.55 floor + organic
-        // jitter). Relies on the base-turn term so flat routes still meander wide.
-        // steep-pitch floor raised 0.55 -> 0.65 so steep routes still sweep wide
-        val amp = ampBase * (0.65f + 0.35f * (1f - min(1f, (g / 16.0).toFloat()))) *
-            (0.85f + 0.15f * sin(u * 1.7 + 0.4).toFloat())
-        return centerX + amp * sin(route.phaseAt(pos) + 0.4 * sin(u * 1.23 + 0.7)).toFloat()
-    }
+    // Path geometry lives in a plain object so a test can reproduce the exact frame the
+    // user sees (RidgelineLabelStabilityTest walks a real program through it).
+    val geom = RidgelineGeometry(route, centerX, ampBase, camLo, EW, topY, botY)
+    fun screenY(pos: Double): Float = geom.screenY(pos)
+    fun worldX(pos: Double): Float = geom.worldX(pos)
 
     // --- background radial gradient (glow -> bg at 64%, centered 60%/8% top) ---
     // Design: radial-gradient(82% 78% at 60% 8%, glow 0%, bg 64%). Compose radial
@@ -574,124 +565,147 @@ private fun DrawScope.drawRidgeline(
         )
     }
 
-    // --- grade chips at interval boundaries (ahead of marker) ---
-    // De-clutter: skip a chip if it is within MIN_CHIP_GAP (vertical px) of the
-    // marker or of a chip we already placed, AND skip any chip whose drawn extent
-    // falls inside (or within ~12dp of) the metrics-pill or NEXT-pill rect, so the
-    // chips never collide with the overlay pills (matches the target).
+    // --- grade chips at interval boundaries ---
+    // Transition labels are STICKY: a chip that is on screen stays on screen until it
+    // scrolls out of the camera window. Collisions (the position marker, the metrics
+    // pill, another chip) MOVE a chip — side flip first, then a vertical nudge with a
+    // leader line back to the bend — they never delete it. The old rule dropped any
+    // blocked chip, and since the marker carries its own 40px guard rect that meant the
+    // label of the bend you were running toward popped out exactly as you reached it,
+    // then never returned (the `md - 15s` cull finished it off). A label that sits a few
+    // px off its bend is strictly better than one that vanishes mid-run.
     val mPos = Offset(worldX(md), screenY(md))
     val pillMargin = 12f * dp
     fun inflated(r: Rect?): Rect? = r?.let {
         Rect(it.left - pillMargin, it.top - pillMargin, it.right + pillMargin, it.bottom + pillMargin)
     }
     val metricsGuard = inflated(metricsPillRect)
-    // De-clutter by REAL rect collision (not a vertical-gap heuristic): a naive
-    // min-y-gap silently ate the chip of any interval starting shortly after the
-    // previous one — on a 60-min route a 120s climb is ~19px tall, so every
-    // "steep push" chip right after it was dropped. Chips now flip to the other
-    // side of the bend when the natural side collides, and only skip when both
-    // sides are blocked.
-    val placedChipRects = ArrayList<Rect>()
-    placedChipRects.add(Rect(mPos.x - 20f, mPos.y - 20f, mPos.x + 20f, mPos.y + 20f))
     // (boundary sec, anchor point drawn, grade) for the path-vs-chip validation log.
     val chipAnchors = ArrayList<Triple<Double, Offset, Double>>()
+
+    // Pass 1: measure every boundary in the window (travelled ones included — a chip
+    // you just ran past fades its chrome but keeps its text until it scrolls away).
+    data class ChipDraw(
+        val candidate: ChipCandidate,
+        val pos: Offset,
+        val grade: Double,
+        val gradeTl: androidx.compose.ui.text.TextLayoutResult,
+        val spdTl: androidx.compose.ui.text.TextLayoutResult,
+        val travelled: Boolean,
+    )
+    val chipDraws = ArrayList<ChipDraw>()
     var i = route.idxAt(camLo)
     var chipCount = 0
     while (chipCount < 40 && i < route.count) {
         val bs = route.startOf(i)
         if (bs > camHi) break
-        if (bs >= camLo && bs >= md - 15.0) {
+        if (bs >= camLo) {
             val pos = Offset(worldX(bs), screenY(bs))
-            run {
-                val naturalSide = if (pos.x < centerX) -1 else 1
-                val color = RidgelineTheme.mutedGradeColor(route.gradeIdx(i))
-                // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
-                // shows BOTH values of the transition — incline and speed — each in its
-                // theme color, solved against the photo+scrim so it stays legible.
-                // Values set in the proportional display face (Space Grotesk), not the
-                // mono: a monospace "." gets a full advance cell, so "7.5%" read as
-                // "7 . 5 %". Times elsewhere keep the mono (fixed advance is a feature
-                // for a counting clock, but a defect for static values).
-                val gradeTl = measurer.measure(
-                    "%.1f%%".format(route.gradeIdx(i)),
-                    style = TextStyle(
-                        color = color.legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineLabelFamily,
-                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                val spdTl = measurer.measure(
-                    "%.1f".format(route.speedIdx(i)),
-                    style = TextStyle(
-                        color = RidgelineTheme.mutedSpeedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineLabelFamily,
-                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
-                // "8% 3.0" text, anchor dot). Pill butts against the anchor dot at cx.
-                val pillW = gradeTl.size.width + 6f + spdTl.size.width + 14f
-                val pillTop = pos.y - 12f
-                // Pill clamped onto the canvas: with the wider route sweep, extreme
-                // bends would otherwise push a left/right pill off the drawable area.
-                fun pillLeftFor(side: Int): Float {
-                    val cx0 = pos.x + side * 22f
-                    return (if (side < 0) cx0 - pillW else cx0)
-                        .coerceIn(4f, max(4f, mapW - pillW - 4f))
-                }
-                fun chipRectFor(side: Int): Rect {
-                    val pl = pillLeftFor(side)
-                    // Extent covers the anchor dot AT THE BEND (pos.x) plus the pill.
-                    return Rect(
-                        left = min(pos.x - 5f, pl),
-                        top = pillTop,
-                        right = max(pos.x + 5f, pl + pillW),
-                        bottom = pillTop + 24f,
-                    )
-                }
-                fun blocked(r: Rect): Boolean {
-                    val inflatedR = Rect(r.left - 4f, r.top - 4f, r.right + 4f, r.bottom + 4f)
-                    return (metricsGuard?.overlaps(inflatedR) == true) ||
-                        placedChipRects.any { it.overlaps(inflatedR) }
-                }
-                // Natural side first; flip if it collides; skip only if both blocked.
-                var side = naturalSide
-                var chipRect = chipRectFor(side)
-                if (blocked(chipRect)) {
-                    side = -naturalSide
-                    chipRect = chipRectFor(side)
-                }
-                if (!blocked(chipRect)) {
-                    val pillLeft = pillLeftFor(side)
-                    placedChipRects.add(chipRect)
-                    drawRoundRectCompat(pillLeft, pillTop, pillW, 24f, 6f, RidgelineTheme.pillBg)
-                    drawRoundRect(
-                        color = color,
-                        topLeft = Offset(pillLeft, pillTop),
-                        size = Size(pillW, 24f),
-                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(6f, 6f),
-                        style = Stroke(width = 1f),
-                    )
-                    // Anchor dot sits EXACTLY on the bend (pos = the boundary's path
-                    // point) — not offset toward the pill, which visually parked it on
-                    // whichever segment happened to pass 22px to the side. Fixed ivory
-                    // over a dark ring: a grade-colored dot camouflaged against the
-                    // very segment it marks.
-                    drawCircle(RidgelineTheme.bg, radius = 5.5f, center = pos)
-                    drawCircle(RidgelineTheme.fg, radius = 3.5f, center = pos)
-                    chipAnchors.add(Triple(bs, pos, route.gradeIdx(i)))
-                    drawText( // legible-exempt: solved via legibleOn over the photo
-                        gradeTl,
-                        topLeft = Offset(pillLeft + 7f, pos.y - gradeTl.size.height / 2f),
-                    )
-                    drawText( // legible-exempt: solved via legibleOn over the photo
-                        spdTl,
-                        topLeft = Offset(pillLeft + 7f + gradeTl.size.width + 6f, pos.y - spdTl.size.height / 2f),
-                    )
-                }
-            }
+            val color = RidgelineTheme.mutedGradeColor(route.gradeIdx(i))
+            // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
+            // shows BOTH values of the transition — incline and speed — each in its
+            // theme color, solved against the photo+scrim so it stays legible.
+            // Values set in the proportional display face (Space Grotesk), not the
+            // mono: a monospace "." gets a full advance cell, so "7.5%" read as
+            // "7 . 5 %". Times elsewhere keep the mono (fixed advance is a feature
+            // for a counting clock, but a defect for static values).
+            val gradeTl = measurer.measure(
+                "%.1f%%".format(route.gradeIdx(i)),
+                style = TextStyle(
+                    color = color.legibleOn(overlayBg, targetLc = 60.0),
+                    fontFamily = RidgelineLabelFamily,
+                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            val spdTl = measurer.measure(
+                "%.1f".format(route.speedIdx(i)),
+                style = TextStyle(
+                    color = RidgelineTheme.mutedSpeedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0),
+                    fontFamily = RidgelineLabelFamily,
+                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
+            // "8% 3.0" text, anchor dot). Pill butts against the anchor dot at cx.
+            val pillW = gradeTl.size.width + 6f + spdTl.size.width + 14f
+            chipDraws.add(
+                ChipDraw(
+                    candidate = ChipCandidate(bs, pos.x, pos.y, pillW),
+                    pos = pos,
+                    grade = route.gradeIdx(i),
+                    gradeTl = gradeTl,
+                    spdTl = spdTl,
+                    travelled = bs < md,
+                ),
+            )
         }
         i++; chipCount++
+    }
+
+    // Pass 2: place them (pure geometry, unit-tested in RidgelineChipLayoutTest).
+    // Priority order, NOT route order: what's coming up claims space first (nearest
+    // bend ahead of you wins), then what you already ran through, most recent first.
+    // Route order would let a transition you crossed five minutes ago crowd out the
+    // climb you're about to hit.
+    val byPriority = chipDraws.sortedWith(
+        compareBy({ it.travelled }, { if (it.travelled) -it.candidate.key else it.candidate.key }),
+    )
+    val slots = layoutTransitionChips(
+        candidates = byPriority.map { it.candidate },
+        centerX = centerX,
+        mapW = mapW,
+        markerRect = Rect(mPos.x - 20f, mPos.y - 20f, mPos.x + 20f, mPos.y + 20f),
+        metricsGuard = metricsGuard,
+        topBound = topY,
+        botBound = botY,
+    ).associateBy { it.key }
+
+    // Pass 3: draw. A chip behind the marker keeps its (legibility-solved) text but
+    // drops its chrome to the travelled-trail weight, so the eye still reads forward.
+    for (c in chipDraws) {
+        val slot = slots[c.candidate.key] ?: continue
+        val pillLeft = slot.pillLeft
+        val pillTop = slot.pillTop
+        val textY = pillTop + CHIP_H / 2f
+        val chromeAlpha = if (c.travelled) 0.45f else 1f
+        // Leader line back to the bend when the chip had to step aside.
+        if (slot.offBend) {
+            val edgeX = if (pillLeft > c.pos.x) pillLeft else pillLeft + c.candidate.pillW
+            drawLine(
+                RidgelineTheme.fg,
+                start = c.pos,
+                end = Offset(edgeX, textY),
+                strokeWidth = 1f,
+                alpha = 0.35f * chromeAlpha,
+            )
+        }
+        drawRoundRectCompat(
+            pillLeft, pillTop, c.candidate.pillW, CHIP_H, 6f,
+            RidgelineTheme.pillBg.copy(alpha = RidgelineTheme.pillBg.alpha * chromeAlpha),
+        )
+        drawRoundRect(
+            color = RidgelineTheme.mutedGradeColor(c.grade),
+            topLeft = Offset(pillLeft, pillTop),
+            size = Size(c.candidate.pillW, CHIP_H),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(6f, 6f),
+            style = Stroke(width = 1f),
+            alpha = chromeAlpha,
+        )
+        // Anchor dot sits EXACTLY on the bend (pos = the boundary's path point) — not
+        // offset toward the pill, which visually parked it on whichever segment happened
+        // to pass 22px to the side. Fixed ivory over a dark ring: a grade-colored dot
+        // camouflaged against the very segment it marks.
+        drawCircle(RidgelineTheme.bg, radius = 5.5f, center = c.pos, alpha = chromeAlpha)
+        drawCircle(RidgelineTheme.fg, radius = 3.5f, center = c.pos, alpha = chromeAlpha)
+        chipAnchors.add(Triple(c.candidate.key, c.pos, c.grade))
+        drawText( // legible-exempt: solved via legibleOn over the photo
+            c.gradeTl,
+            topLeft = Offset(pillLeft + 7f, textY - c.gradeTl.size.height / 2f),
+        )
+        drawText( // legible-exempt: solved via legibleOn over the photo
+            c.spdTl,
+            topLeft = Offset(pillLeft + 7f + c.gradeTl.size.width + 6f, textY - c.spdTl.size.height / 2f),
+        )
     }
 
     // --- path-vs-chip alignment validation (adb logcat -s RidgelineSync) ---
@@ -862,7 +876,17 @@ private fun DrawScope.drawRidgeline(
             fun clampY(top: Float, h: Int): Float =
                 top.coerceAtMost(mBot - h).coerceAtLeast(mTop)
             val labelRight = mx - mW / 2f - 10f
-            fun transitionTick(pos: Double, isNext: Boolean) {
+            /**
+             * Draws a tick + its label; returns the label block's bottom edge so the
+             * next caller can dodge it. [avoidBelow] pushes the label down past an
+             * already-drawn block — the two never trade places (last is always below
+             * next on the strip), so this can't loop.
+             */
+            fun transitionTick(
+                pos: Double,
+                isNext: Boolean,
+                avoidBelow: Float = Float.NEGATIVE_INFINITY,
+            ): Float {
                 val y = yOf(pos)
                 val color = if (isNext) RidgelineTheme.accent else RidgelineTheme.dim
                 drawLine(
@@ -887,7 +911,10 @@ private fun DrawScope.drawRidgeline(
                     ),
                 )
                 if (!isNext) {
-                    val tlY = clampY(y - timeTl.size.height / 2f, timeTl.size.height)
+                    val tlY = clampY(
+                        max(y - timeTl.size.height / 2f, avoidBelow),
+                        timeTl.size.height,
+                    )
                     // Its own little island — the label sits on bare photo left of the
                     // strip and washed out over bright water/sky without one.
                     if (SEE_THROUGH_MAP) drawRoundRectCompat(
@@ -899,7 +926,7 @@ private fun DrawScope.drawRidgeline(
                         timeTl,
                         topLeft = Offset(labelRight - timeTl.size.width, tlY),
                     )
-                    return
+                    return tlY + timeTl.size.height
                 }
                 // Upcoming interval's values — what actually changes at this boundary.
                 val ni = min(route.idxAt(pos + 1.0), route.count - 1)
@@ -948,20 +975,200 @@ private fun DrawScope.drawRidgeline(
                     gradeTl,
                     topLeft = Offset(labelRight - spdTl.size.width - 6f - gradeTl.size.width, rowY),
                 )
+                return rowY + gradeTl.size.height
             }
             val lastVisible = lastB > 0.5                    // the start needs no tick
             val nextVisible = nextB < route.total - 0.5      // finish has its own flag
-            // If both would collide (short interval), keep the upcoming one (its
-            // two-line 14sp label needs the extra clearance).
-            val collide = lastVisible && nextVisible &&
-                kotlin.math.abs(yOf(lastB) - yOf(nextB)) < 44f
-            if (lastVisible && !collide) transitionTick(lastB, isNext = false)
-            if (nextVisible) transitionTick(nextB, isNext = true)
+            // Upcoming transition first (it owns its spot), then the one just crossed
+            // pushed clear of it. On a short interval these two used to collide and the
+            // "last" label was simply deleted — so it appeared, then vanished as soon as
+            // you stepped into a brief interval. Now it slides down instead.
+            val nextBottom = if (nextVisible) transitionTick(nextB, isNext = true)
+            else Float.NEGATIVE_INFINITY
+            if (lastVisible) {
+                transitionTick(lastB, isNext = false, avoidBelow = nextBottom + 5f)
+            }
         }
         // current-position marker
         drawCircle(RidgelineTheme.bg, radius = 7f, center = Offset(mx, yOf(md)))
         drawCircle(RidgelineTheme.accent, radius = 5f, center = Offset(mx, yOf(md)))
     }
+}
+
+/**
+ * The map's path geometry for one frame: route position → screen point. Extracted from
+ * the draw pass so tests can replay a real program through the exact same math.
+ *
+ * Organic detail (amplitude jitter, phase wobble, grade smoothing) is tuned in the
+ * design's MILE domain — it is fed planned miles via distAt so the look is preserved.
+ * Grade smoothing keeps its ±0.05mi reach by converting through the LOCAL interval
+ * speed (0.05mi = 180/speed seconds), not a fixed time radius (codex review).
+ */
+internal class RidgelineGeometry(
+    private val route: RidgelineRoute,
+    private val centerX: Float,
+    private val ampBase: Float,
+    val camLo: Double,
+    val ew: Double,
+    private val topY: Float,
+    private val botY: Float,
+) {
+    val camHi: Double get() = camLo + ew
+
+    fun screenY(pos: Double): Float = (botY - ((pos - camLo) / ew) * (botY - topY)).toFloat()
+
+    fun worldX(pos: Double): Float {
+        val u = route.distAt(pos)
+        val smoothSec = 180.0 / max(0.5, route.speedIdx(route.idxAt(pos)))
+        val g = (route.gradeAt(max(0.0, pos - smoothSec)) + route.gradeAt(pos) + route.gradeAt(pos + smoothSec)) / 3.0
+        // amplitude eases narrower on steep pitches (design exact: 0.55 floor + organic
+        // jitter). Relies on the base-turn term so flat routes still meander wide.
+        // steep-pitch floor raised 0.55 -> 0.65 so steep routes still sweep wide
+        val amp = ampBase * (0.65f + 0.35f * (1f - min(1f, (g / 16.0).toFloat()))) *
+            (0.85f + 0.15f * sin(u * 1.7 + 0.4).toFloat())
+        return centerX + amp * sin(route.phaseAt(pos) + 0.4 * sin(u * 1.23 + 0.7)).toFloat()
+    }
+}
+
+// --- transition chip placement (pure geometry) -----------------------------
+// Split out of the draw pass so the "labels never disappear" property is a unit
+// test (RidgelineChipLayoutTest) rather than something you can only catch by
+// staring at a moving treadmill.
+
+/** Chip pill height, px. */
+internal const val CHIP_H = 24f
+
+/** Vertical nudge granularity and reach when a chip has to step aside, px. */
+private const val CHIP_NUDGE_STEP = 7f
+private const val CHIP_NUDGE_MAX = 84f
+
+/**
+ * Displacements a blocked chip may try, nearest-first. Vertical alone isn't enough: a
+ * chip pinned under the metrics pill can only escape downward, and a few px of the
+ * marker's guard rect is enough to seal that one exit — so it needs to be able to step
+ * sideways too. Cost weights sideways movement a little cheaper than vertical because
+ * the map is tall and narrow, and the ordering means an unobstructed chip still lands
+ * exactly on its bend (0,0 is first).
+ */
+private val CHIP_OFFSETS: List<Pair<Float, Float>> = buildList {
+    // The long reaches matter for one real case: a bend that falls BEHIND the metrics
+    // stack in the top-left corner. There is no nearby free space at all, so the label
+    // slides out to the right of the pill — same height on the map, so it still reads as
+    // that bend's elevation — with a leader line home. Sideways is costed below vertical
+    // for exactly that reason: the map's vertical axis is meaningful, its width is slack.
+    val dxs = listOf(0f, -20f, 20f, -40f, 40f, -70f, 70f, -110f, 110f, -170f, 170f, -250f, 250f, -340f, 340f)
+    var s = 0
+    while (s * CHIP_NUDGE_STEP <= CHIP_NUDGE_MAX) {
+        val dys = if (s == 0) listOf(0f) else listOf(-s * CHIP_NUDGE_STEP, s * CHIP_NUDGE_STEP)
+        for (dy in dys) for (dx in dxs) add(dx to dy)
+        s++
+    }
+}.sortedBy { (dx, dy) -> kotlin.math.abs(dy) + 0.45f * kotlin.math.abs(dx) }
+
+/** A transition chip wanting a spot: its bend on the path plus the pill's width. */
+internal data class ChipCandidate(
+    val key: Double,
+    val anchorX: Float,
+    val anchorY: Float,
+    val pillW: Float,
+)
+
+/** Where a chip's pill ended up. [offBend] means it stepped aside — draw a leader line. */
+internal data class ChipSlot(
+    val key: Double,
+    val pillLeft: Float,
+    val pillTop: Float,
+    val dx: Float,
+    val dy: Float,
+) {
+    val offBend: Boolean get() = dx != 0f || dy != 0f
+}
+
+/**
+ * Place transition chips so they never vanish while you run.
+ *
+ * Each candidate takes the natural side of its bend, flips to the other side if that
+ * collides, then walks progressively larger vertical nudges (alternating up/down) until
+ * it finds clear space inside [topBound]..[botBound]. Candidates are placed in route
+ * order, so an earlier bend keeps its spot and later ones move — placement is a pure
+ * function of the frame's geometry, so it doesn't jitter between frames.
+ *
+ * A candidate is dropped only if nothing within ±[CHIP_NUDGE_MAX] fits on the canvas.
+ */
+internal fun layoutTransitionChips(
+    candidates: List<ChipCandidate>,
+    centerX: Float,
+    mapW: Float,
+    markerRect: Rect,
+    metricsGuard: Rect?,
+    topBound: Float,
+    botBound: Float,
+): List<ChipSlot> {
+    val placed = ArrayList<Rect>(candidates.size + 1)
+    placed.add(markerRect)
+    val out = ArrayList<ChipSlot>(candidates.size)
+
+    for (c in candidates) {
+        fun pillLeftFor(side: Int, dx: Float): Float {
+            val cx0 = c.anchorX + side * 22f
+            return ((if (side < 0) cx0 - c.pillW else cx0) + dx)
+                .coerceIn(4f, max(4f, mapW - c.pillW - 4f))
+        }
+        // Clamp onto the canvas rather than rejecting: during a camera pan a cluster of
+        // bends crowds the top edge, and rejecting every out-of-bounds spot left those
+        // chips with nowhere to go for a few frames — a visible flicker. Clamped chips
+        // pile up at the edge and then slide apart horizontally.
+        fun topFor(dy: Float): Float = (c.anchorY - CHIP_H / 2f + dy)
+            .coerceIn(topBound, max(topBound, botBound - CHIP_H))
+        // The anchor dot joins the footprint only while the pill is ON the bend; a
+        // displaced pill is tied back by a hairline leader instead, and reserving the
+        // whole span would keep it colliding with the very thing it stepped away from.
+        fun leftFor(pl: Float, onBend: Boolean) = if (onBend) min(c.anchorX - 5f, pl) else pl
+        fun rightFor(pl: Float, onBend: Boolean) =
+            if (onBend) max(c.anchorX + 5f, pl + c.pillW) else pl + c.pillW
+        // This chip can only ever land inside this vertical band, so only already-placed
+        // rects overlapping the band can possibly collide with it. Filtering once per
+        // chip keeps the worst case sane: the offset search is ~750 probes, and scanning
+        // every placed rect on each probe would put a five-figure comparison count inside
+        // a 60fps draw pass.
+        val lo = max(topBound, botBound - CHIP_H)
+        val reachTop = (c.anchorY - CHIP_H / 2f - CHIP_NUDGE_MAX).coerceIn(topBound, lo) - 4f
+        val reachBot = (c.anchorY - CHIP_H / 2f + CHIP_NUDGE_MAX).coerceIn(topBound, lo) + CHIP_H + 4f
+        val nearby = placed.filter { it.bottom >= reachTop && it.top <= reachBot }
+
+        // Probing is allocation-free (plain float bounds, no Rect per attempt): the search
+        // can run hundreds of probes per chip and this runs inside the draw pass, so a
+        // Rect per probe would be real GC pressure at 60fps. Only the winner allocates.
+        fun usable(l: Float, t: Float, r: Float, b: Float): Boolean {
+            val il = l - 4f; val it = t - 4f; val ir = r + 4f; val ib = b + 4f
+            val g = metricsGuard
+            if (g != null && g.left < ir && il < g.right && g.top < ib && it < g.bottom) return false
+            for (p in nearby) {
+                if (p.left < ir && il < p.right && p.top < ib && it < p.bottom) return false
+            }
+            return true
+        }
+
+        val natural = if (c.anchorX < centerX) -1 else 1
+        val sides = intArrayOf(natural, -natural)
+        var slot: ChipSlot? = null
+        search@ for ((dx, dy) in CHIP_OFFSETS) {
+            val onBend = dx == 0f && dy == 0f
+            val top = topFor(dy)
+            for (side in sides) {
+                val pl = pillLeftFor(side, dx)
+                val l = leftFor(pl, onBend)
+                val r = rightFor(pl, onBend)
+                if (usable(l, top, r, top + CHIP_H)) {
+                    placed.add(Rect(l, top, r, top + CHIP_H))
+                    slot = ChipSlot(c.key, pl, top, dx, dy)
+                    break@search
+                }
+            }
+        }
+        slot?.let { out.add(it) }
+    }
+    return out
 }
 
 /** Rounded-rect fill helper (Compose drawRoundRect needs CornerRadius import; keep it local). */
