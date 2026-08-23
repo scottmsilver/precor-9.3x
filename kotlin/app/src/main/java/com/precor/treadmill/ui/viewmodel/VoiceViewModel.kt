@@ -115,11 +115,13 @@ class VoiceViewModel(
     private fun connectBackground() {
         connectJob?.cancel()
         connectJob = viewModelScope.launch {
-            if (config == null) {
-                config = try { api.getConfig() } catch (e: Exception) {
-                    Log.e(TAG, "Failed to fetch config for background connect", e)
-                    null
-                }
+            // Gemini ephemeral tokens are single-use. Close any connection attempt
+            // being superseded and fetch a fresh token for every new WebSocket.
+            geminiClient?.disconnect()
+            geminiClient = null
+            config = try { api.getConfig() } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch config for background connect", e)
+                null
             }
             val cfg = config ?: return@launch
             if (cfg.geminiApiKey.isEmpty()) {
@@ -260,14 +262,9 @@ class VoiceViewModel(
             while (true) {
                 delay(TOKEN_REFRESH_MS)
                 Log.d(TAG, "Token refresh: fetching new config")
-                val newConfig = try { api.getConfig() } catch (_: Exception) { null }
-                if (newConfig != null) {
-                    config = newConfig
-                    // Reconnect with fresh token
-                    geminiClient?.disconnect()
-                    geminiClient = null
-                    connectBackground()
-                }
+                // connectBackground owns token acquisition so an unused token is
+                // never cached or consumed by a superseded connection attempt.
+                connectBackground()
             }
         }
     }
