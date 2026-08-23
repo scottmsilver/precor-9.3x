@@ -72,7 +72,7 @@ data class SessionMessage(
 @Serializable
 data class Interval(
     val name: String,
-    @Serializable(with = LenientIntSerializer::class) val duration: Int,
+    @Serializable(with = LenientDoubleSerializer::class) val duration: Double,
     @Serializable(with = LenientDoubleSerializer::class) val speed: Double,
     @Serializable(with = LenientDoubleSerializer::class) val incline: Double,
 )
