@@ -8,8 +8,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -34,15 +35,20 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
 import com.precor.treadmill.ui.theme.legibleOn
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 // --- Route model (finite, POSITION domain = planned program seconds) ---------
@@ -183,6 +189,144 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     }
 }
 
+/** A measured text payload plus the width consumed by that payload. */
+internal data class MeasuredTransitionText<T>(val value: T, val width: Float)
+
+/** Stable, route-derived label content prepared outside the animated draw callback. */
+internal data class PreparedTransitionLabel<T>(
+    val intervalIndex: Int,
+    val key: Double,
+    val gradeValue: Double,
+    val gradeText: String,
+    val speedText: String,
+    val gradeColor: Color,
+    val speedColor: Color,
+    val grade: MeasuredTransitionText<T>,
+    val speed: MeasuredTransitionText<T>,
+    val gradeOffset: Float,
+    val speedOffset: Float,
+    val pillW: Float,
+)
+
+internal data class TransitionLabelModel<T>(
+    val route: RidgelineRoute,
+    val labels: List<PreparedTransitionLabel<T>>,
+)
+
+/**
+ * Prepare immutable label strings, colors, measurements, and contained pill widths.
+ * [measure] is generic so JVM tests exercise this exact pipeline with representative
+ * widths while production supplies cached [androidx.compose.ui.text.TextLayoutResult]s.
+ */
+internal fun <T> prepareTransitionLabelModel(
+    route: RidgelineRoute,
+    maxPillWidth: Float,
+    gradeColorFor: (intervalIndex: Int) -> Color,
+    speedColorFor: (intervalIndex: Int) -> Color,
+    measure: (text: String, color: Color, maxWidth: Float?) -> MeasuredTransitionText<T>,
+): TransitionLabelModel<T> {
+    val safePillWidth = max(1f, maxPillWidth)
+    // Preserve the normal 7/6/7 chrome, but shrink it with the pill on tiny canvases.
+    // Text constraints use an integral shared budget because TextLayoutResult reports
+    // integer pixel widths; independently rounded fractional caps can overflow by 1px.
+    val sidePadding = min(7f, safePillWidth / 4f)
+    val gap = min(6f, max(0f, safePillWidth - sidePadding * 2f))
+    val contentWidth = max(0f, safePillWidth - sidePadding * 2f - gap)
+    val labels = ArrayList<PreparedTransitionLabel<T>>(route.count)
+    for (i in 0 until route.count) {
+        val gradeText = "%.1f%%".format(route.gradeIdx(i))
+        val speedText = "%.1f".format(route.speedIdx(i))
+        val gradeColor = gradeColorFor(i)
+        val speedColor = speedColorFor(i)
+        val naturalGrade = measure(gradeText, gradeColor, null)
+        val naturalSpeed = measure(speedText, speedColor, null)
+        val naturalTotal = naturalGrade.width + naturalSpeed.width
+        val (grade, speed) = if (naturalTotal <= contentWidth) {
+            naturalGrade to naturalSpeed
+        } else {
+            // Share constrained content width proportionally; both layouts ellipsize
+            // against the same bounds used by pill geometry.
+            val pixelBudget = floor(contentWidth).toInt().coerceAtLeast(0)
+            val gradePixels = if (naturalTotal <= 0f) pixelBudget / 2 else
+                floor(pixelBudget * naturalGrade.width / naturalTotal).toInt().coerceIn(0, pixelBudget)
+            val speedPixels = pixelBudget - gradePixels
+            measure(gradeText, gradeColor, gradePixels.toFloat()) to
+                measure(speedText, speedColor, speedPixels.toFloat())
+        }
+        val gradeOffset = sidePadding
+        val speedOffset = gradeOffset + grade.width + gap
+        labels.add(
+            PreparedTransitionLabel(
+                intervalIndex = i,
+                key = route.startOf(i),
+                gradeValue = route.gradeIdx(i),
+                gradeText = gradeText,
+                speedText = speedText,
+                gradeColor = gradeColor,
+                speedColor = speedColor,
+                grade = grade,
+                speed = speed,
+                gradeOffset = gradeOffset,
+                speedOffset = speedOffset,
+                pillW = min(safePillWidth, speedOffset + speed.width + sidePadding),
+            ),
+        )
+    }
+    return TransitionLabelModel(route, labels)
+}
+
+internal enum class RidgelineStaticLabelKind { FINISH, LAST_TIME, NEXT_TIME, GRADE, SPEED }
+
+internal data class PreparedTransitionTick<T>(
+    val lastTime: T,
+    val nextTime: T,
+    val grade: T,
+    val speed: T,
+)
+
+/** Route-scoped finish and minimap layouts retained across pulse/camera draw frames. */
+internal data class PreparedRidgelineStaticLabels<T>(
+    val finish: T,
+    val transitions: List<PreparedTransitionTick<T>>,
+)
+
+internal fun <T> prepareRidgelineStaticLabels(
+    route: RidgelineRoute,
+    finishColor: Color,
+    lastTimeColor: Color,
+    nextTimeColor: Color,
+    gradeColorFor: (intervalIndex: Int) -> Color,
+    speedColorFor: (intervalIndex: Int) -> Color,
+    measure: (kind: RidgelineStaticLabelKind, text: String, color: Color) -> T,
+): PreparedRidgelineStaticLabels<T> {
+    val finish = measure(
+        RidgelineStaticLabelKind.FINISH,
+        "FINISH · ${"%,d".format(Math.round(route.vertAt(route.total)))} ft",
+        finishColor,
+    )
+    val transitions = ArrayList<PreparedTransitionTick<T>>(route.count)
+    for (i in 0 until route.count) {
+        val time = ridgelineFmtTime(route.startOf(i))
+        transitions.add(
+            PreparedTransitionTick(
+                lastTime = measure(RidgelineStaticLabelKind.LAST_TIME, time, lastTimeColor),
+                nextTime = measure(RidgelineStaticLabelKind.NEXT_TIME, time, nextTimeColor),
+                grade = measure(
+                    RidgelineStaticLabelKind.GRADE,
+                    "%.1f%%".format(route.gradeIdx(i)),
+                    gradeColorFor(i),
+                ),
+                speed = measure(
+                    RidgelineStaticLabelKind.SPEED,
+                    "%.1f".format(route.speedIdx(i)),
+                    speedColorFor(i),
+                ),
+            ),
+        )
+    }
+    return PreparedRidgelineStaticLabels(finish, transitions)
+}
+
 // Route-position (planned seconds) shown at once. 10 minutes per screen: programs
 // beyond ~11min WINDOW — the camera pans as you progress and the minimap's viewport
 // box + leader lines activate — while shorter programs fit whole and always FILL the
@@ -190,6 +334,10 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
 internal const val POS_WINDOW = 600.0
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
+
+/** Width left for route geometry after the right-side strip and its margins. */
+private fun ridgelineMapWidth(canvasWidth: Float, density: Float): Float =
+    max(1f, canvasWidth - 42f * density)
 
 // Throttle key for the path-vs-chip alignment validation log (draws run per frame).
 private var lastAlignmentLogKey: Int = 0
@@ -211,22 +359,21 @@ fun RidgelineMap(
     modifier: Modifier = Modifier,
     metricsPillRect: Rect? = null,
 ) {
-    // Every chip measures two short strings per frame and dense programs can hold dozens.
-    // The default cache is 8 entries, so the whole set would miss on every frame and
-    // re-run text layout inside the draw pass; size it past the worst case instead.
-    val measurer = rememberTextMeasurer(cacheSize = 128)
+    // All layouts are retained by route-scoped models below, rather than an LRU that a
+    // valid 601-transition route could churn during animated draw frames.
+    val measurer = rememberTextMeasurer(cacheSize = 0)
 
     // Pulsing position-ring: radius 8->19->8 and opacity 0.5->0->0.5 over 2.4s, infinite.
     // Two independent reversing tweens; both values are READ inside the draw lambda below
     // so Compose redraws the Canvas every frame.
     val pulseT = rememberInfiniteTransition(label = "marker-pulse")
-    val pulseR by pulseT.animateFloat(
+    val pulseR = pulseT.animateFloat(
         initialValue = 8f,
         targetValue = 19f,
         animationSpec = infiniteRepeatable(tween(2400), RepeatMode.Reverse),
         label = "pulse-r",
     )
-    val pulseA by pulseT.animateFloat(
+    val pulseA = pulseT.animateFloat(
         initialValue = 0.5f,
         targetValue = 0f,
         animationSpec = infiniteRepeatable(tween(2400), RepeatMode.Reverse),
@@ -237,7 +384,7 @@ fun RidgelineMap(
     // page/lead step the design computes) with an easeInOutCubic over ~1s, so the colored
     // map glides instead of snapping when progress nears the top edge.
     val targetLo = remember(route, markerPos) { computeTargetLo(route, markerPos) }
-    val elevLo by animateFloatAsState(
+    val elevLo = animateFloatAsState(
         targetValue = targetLo.toFloat(),
         animationSpec = tween(1000, easing = CubicBezierEasing(0.65f, 0f, 0.35f, 1f)),
         label = "camera-pan",
@@ -251,15 +398,81 @@ fun RidgelineMap(
     // was a speed-region estimate, wrong for the map area).
     val overlayBg = if (SEE_THROUGH_MAP) Color(0xFF11171B) else LocalOverlayBackground.current
 
-
-    Canvas(modifier = modifier) {
-        // Canvas does NOT clip children by default — contours draw past the panel
-        // edge (x in [-30, W+30]) and were bleeding onto neighboring UI.
-        clipRect(0f, 0f, size.width, size.height) {
-            drawRidgeline(
-                route, markerPos, pulseR, pulseA, elevLo.toDouble(),
-                measurer, metricsPillRect, overlayBg,
+    BoxWithConstraints(modifier = modifier) {
+        val density = LocalDensity.current
+        val canvasWidthPx = with(density) { maxWidth.toPx() }
+        val preparedLabels = remember(route, overlayBg, measurer, canvasWidthPx) {
+            prepareTransitionLabelModel(
+                route = route,
+                maxPillWidth = max(1f, ridgelineMapWidth(canvasWidthPx, density.density) - 8f),
+                gradeColorFor = { i ->
+                    RidgelineTheme.mutedGradeColor(route.gradeIdx(i)).legibleOn(overlayBg, targetLc = 60.0)
+                },
+                speedColorFor = { i ->
+                    RidgelineTheme.mutedSpeedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0)
+                },
+                measure = { text, color, maxWidth ->
+                    val constraints = maxWidth?.let { Constraints(maxWidth = max(0, it.roundToInt())) }
+                        ?: Constraints()
+                    val layout = measurer.measure(
+                        text,
+                        style = TextStyle(
+                            color = color,
+                            fontFamily = RidgelineLabelFamily,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        ),
+                        overflow = TextOverflow.Ellipsis,
+                        softWrap = false,
+                        maxLines = 1,
+                        constraints = constraints,
+                    )
+                    MeasuredTransitionText(layout, layout.size.width.toFloat())
+                },
             )
+        }
+        val staticLabels = remember(route, overlayBg, measurer) {
+            prepareRidgelineStaticLabels(
+                route = route,
+                finishColor = RidgelineTheme.elev.legibleOn(overlayBg, targetLc = 60.0),
+                lastTimeColor = RidgelineTheme.dim.legibleOn(overlayBg, targetLc = 45.0),
+                nextTimeColor = RidgelineTheme.accent.legibleOn(overlayBg, targetLc = 60.0),
+                gradeColorFor = { i ->
+                    RidgelineTheme.mutedGradeColor(route.gradeIdx(i)).legibleOn(overlayBg, targetLc = 60.0)
+                },
+                speedColorFor = { i ->
+                    RidgelineTheme.mutedSpeedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0)
+                },
+                measure = { kind, text, color ->
+                    val isLast = kind == RidgelineStaticLabelKind.LAST_TIME
+                    val layout = measurer.measure(
+                        text,
+                        style = TextStyle(
+                            color = color,
+                            fontFamily = if (kind == RidgelineStaticLabelKind.FINISH)
+                                RidgelineMonoFamily else RidgelineLabelFamily,
+                            fontSize = if (isLast) 12.sp else 14.sp,
+                            fontWeight = if (isLast) FontWeight.Normal else FontWeight.SemiBold,
+                        ),
+                        softWrap = false,
+                        maxLines = 1,
+                    )
+                    layout
+                },
+            )
+        }
+        val labelFrameCache = remember(preparedLabels) {
+            TransitionLabelFrameCache<androidx.compose.ui.text.TextLayoutResult>()
+        }
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            // Canvas does NOT clip children by default — contours draw past the panel
+            // edge (x in [-30, W+30]) and were bleeding onto neighboring UI.
+            clipRect(0f, 0f, size.width, size.height) {
+                drawRidgeline(
+                    route, markerPos, pulseR.value, pulseA.value, elevLo.value.toDouble(),
+                    metricsPillRect, preparedLabels, staticLabels, labelFrameCache,
+                )
+            }
         }
     }
 }
@@ -284,9 +497,10 @@ private fun DrawScope.drawRidgeline(
     pulseR: Float,
     pulseA: Float,
     elevLo: Double,
-    measurer: TextMeasurer,
     metricsPillRect: Rect?,
-    overlayBg: Color,
+    preparedLabels: TransitionLabelModel<androidx.compose.ui.text.TextLayoutResult>,
+    staticLabels: PreparedRidgelineStaticLabels<androidx.compose.ui.text.TextLayoutResult>,
+    labelFrameCache: TransitionLabelFrameCache<androidx.compose.ui.text.TextLayoutResult>,
 ) {
     val W = size.width
     val H = size.height
@@ -296,7 +510,7 @@ private fun DrawScope.drawRidgeline(
     // small consistent margin) rather than floating mid-gap before the stepper rail.
     val stripW = 12f * dp
     val stripX = W - 16f * dp - stripW / 2f   // strip centerline ~16dp in from the map's right edge
-    val mapW = stripX - stripW / 2f - 14f * dp   // drawable width for the switchback path
+    val mapW = ridgelineMapWidth(W, dp)   // drawable width for the switchback path
 
     val topY = 74f / 800f * H
     val botY = H - 50f * dp
@@ -583,114 +797,51 @@ private fun DrawScope.drawRidgeline(
     // (boundary sec, anchor point drawn, grade) for the path-vs-chip validation log.
     val chipAnchors = ArrayList<Triple<Double, Offset, Double>>()
 
-    // Pass 1: measure every boundary in the window (travelled ones included — a chip
-    // you just ran past fades its chrome but keeps its text until it scrolls away).
-    data class ChipDraw(
-        val candidate: ChipCandidate,
-        val pos: Offset,
-        val grade: Double,
-        val gradeTl: androidx.compose.ui.text.TextLayoutResult,
-        val spdTl: androidx.compose.ui.text.TextLayoutResult,
-        val travelled: Boolean,
-    )
-    val measuredText = ArrayList<Pair<androidx.compose.ui.text.TextLayoutResult, androidx.compose.ui.text.TextLayoutResult>>()
-    val visibleCandidates = collectVisibleTransitionCandidates(
-        route = route,
+    // Animated frames reuse the route/size-scoped text model and only project, place,
+    // and draw the visible subset.
+    val markerRect = Rect(mPos.x - 20f, mPos.y - 20f, mPos.x + 20f, mPos.y + 20f)
+    val labelFrame = labelFrameCache.layout(
+        model = preparedLabels,
         geometry = geom,
         markerPos = md,
-        pillWidthFor = { i ->
-            val color = RidgelineTheme.mutedGradeColor(route.gradeIdx(i))
-            // Geometry (dot, pill border) keeps the true grade color; the chip TEXT
-            // shows BOTH values of the transition — incline and speed — each in its
-            // theme color, solved against the photo+scrim so it stays legible.
-            // Values set in the proportional display face (Space Grotesk), not the
-            // mono: a monospace "." gets a full advance cell, so "7.5%" read as
-            // "7 . 5 %". Times elsewhere keep the mono (fixed advance is a feature
-            // for a counting clock, but a defect for static values).
-            val gradeTl = measurer.measure(
-                "%.1f%%".format(route.gradeIdx(i)),
-                style = TextStyle(
-                    color = color.legibleOn(overlayBg, targetLc = 60.0),
-                    fontFamily = RidgelineLabelFamily,
-                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                ),
-            )
-            val spdTl = measurer.measure(
-                "%.1f".format(route.speedIdx(i)),
-                style = TextStyle(
-                    color = RidgelineTheme.mutedSpeedColor(route.speedIdx(i)).legibleOn(overlayBg, targetLc = 60.0),
-                    fontFamily = RidgelineLabelFamily,
-                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                ),
-            )
-            // Pill badge (design: rect h24 rx6, pillBg fill, 1px colored border,
-            // "8% 3.0" text, anchor dot). Pill butts against the anchor dot at cx.
-            val pillW = gradeTl.size.width + 6f + spdTl.size.width + 14f
-            measuredText.add(gradeTl to spdTl)
-            pillW
-        },
-    )
-    val chipDraws = ArrayList<ChipDraw>(visibleCandidates.size)
-    visibleCandidates.forEachIndexed { index, visible ->
-        val (gradeTl, spdTl) = measuredText[index]
-        val candidate = visible.candidate
-        chipDraws.add(
-            ChipDraw(
-                candidate = candidate,
-                pos = Offset(candidate.anchorX, candidate.anchorY),
-                grade = route.gradeIdx(visible.intervalIndex),
-                gradeTl = gradeTl,
-                spdTl = spdTl,
-                travelled = visible.travelled,
-            ),
-        )
-    }
-
-    // Pass 2: place them (pure geometry, unit-tested in RidgelineChipLayoutTest).
-    // Priority order, NOT route order: what's coming up claims space first (nearest
-    // bend ahead of you wins), then what you already ran through, most recent first.
-    // Route order would let a transition you crossed five minutes ago crowd out the
-    // climb you're about to hit.
-    val byPriority = chipDraws.sortedWith(
-        compareBy({ it.travelled }, { if (it.travelled) -it.candidate.key else it.candidate.key }),
-    )
-    val slots = layoutTransitionChips(
-        candidates = byPriority.map { it.candidate },
         centerX = centerX,
         mapW = mapW,
-        markerRect = Rect(mPos.x - 20f, mPos.y - 20f, mPos.x + 20f, mPos.y + 20f),
+        markerRect = markerRect,
         metricsGuard = metricsGuard,
         topBound = topY,
         botBound = botY,
-    ).associateBy { it.key }
+    )
+    val slots = labelFrame.layout.slots.associateBy { it.key }
 
-    // Pass 3: draw. A chip behind the marker keeps its (legibility-solved) text but
+    // Draw. A chip behind the marker keeps its (legibility-solved) text but
     // drops its chrome to the travelled-trail weight, so the eye still reads forward.
-    for (c in chipDraws) {
+    for (c in labelFrame.visible) {
         val slot = slots[c.candidate.key] ?: continue
+        val label = c.label
+        val pos = Offset(c.candidate.anchorX, c.candidate.anchorY)
         val pillLeft = slot.pillLeft
         val pillTop = slot.pillTop
         val textY = pillTop + CHIP_H / 2f
         val chromeAlpha = transitionChipAlpha(c.travelled)
         // Leader line back to the bend when the chip had to step aside.
         if (slot.offBend) {
-            val edgeX = if (pillLeft > c.pos.x) pillLeft else pillLeft + c.candidate.pillW
+            val edgeX = if (pillLeft > pos.x) pillLeft else pillLeft + label.pillW
             drawLine(
                 RidgelineTheme.fg,
-                start = c.pos,
+                start = pos,
                 end = Offset(edgeX, textY),
                 strokeWidth = 1f,
                 alpha = 0.35f * chromeAlpha,
             )
         }
         drawRoundRectCompat(
-            pillLeft, pillTop, c.candidate.pillW, CHIP_H, 6f,
+            pillLeft, pillTop, label.pillW, CHIP_H, 6f,
             RidgelineTheme.pillBg.copy(alpha = RidgelineTheme.pillBg.alpha * chromeAlpha),
         )
         drawRoundRect(
-            color = RidgelineTheme.mutedGradeColor(c.grade),
+            color = label.gradeColor,
             topLeft = Offset(pillLeft, pillTop),
-            size = Size(c.candidate.pillW, CHIP_H),
+            size = Size(label.pillW, CHIP_H),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(6f, 6f),
             style = Stroke(width = 1f),
             alpha = chromeAlpha,
@@ -699,17 +850,20 @@ private fun DrawScope.drawRidgeline(
         // offset toward the pill, which visually parked it on whichever segment happened
         // to pass 22px to the side. Fixed ivory over a dark ring: a grade-colored dot
         // camouflaged against the very segment it marks.
-        drawCircle(RidgelineTheme.bg, radius = 5.5f, center = c.pos, alpha = chromeAlpha)
-        drawCircle(RidgelineTheme.fg, radius = 3.5f, center = c.pos, alpha = chromeAlpha)
-        chipAnchors.add(Triple(c.candidate.key, c.pos, c.grade))
+        drawCircle(RidgelineTheme.bg, radius = 5.5f, center = pos, alpha = chromeAlpha)
+        drawCircle(RidgelineTheme.fg, radius = 3.5f, center = pos, alpha = chromeAlpha)
+        chipAnchors.add(Triple(c.candidate.key, pos, label.gradeValue))
         drawText( // legible-exempt: solved via legibleOn over the photo
-            c.gradeTl,
-            topLeft = Offset(pillLeft + 7f, textY - c.gradeTl.size.height / 2f),
+            label.grade.value,
+            topLeft = Offset(pillLeft + label.gradeOffset, textY - label.grade.value.size.height / 2f),
             alpha = chromeAlpha,
         )
         drawText( // legible-exempt: solved via legibleOn over the photo
-            c.spdTl,
-            topLeft = Offset(pillLeft + 7f + c.gradeTl.size.width + 6f, textY - c.spdTl.size.height / 2f),
+            label.speed.value,
+            topLeft = Offset(
+                pillLeft + label.speedOffset,
+                textY - label.speed.value.size.height / 2f,
+            ),
             alpha = chromeAlpha,
         )
     }
@@ -743,16 +897,7 @@ private fun DrawScope.drawRidgeline(
         val fx = worldX(route.total)
         val fy = screenY(route.total)
         // "FINISH · N,NNN ft" amber mono label
-        val finishLabel = "FINISH · ${"%,d".format(Math.round(totalVert))} ft"
-        val finishTl = measurer.measure(
-            finishLabel,
-            style = TextStyle(
-                // amber summit color, solved against the photo+scrim so it stays legible.
-                color = RidgelineTheme.elev.legibleOn(overlayBg, targetLc = 60.0),
-                fontFamily = RidgelineMonoFamily,
-                fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-            ),
-        )
+        val finishTl = staticLabels.finish
         // If the right-pointing flag + label would run off the map's drawable area
         // (whole-route views end near the top-right), mirror them to the left.
         val dir = if (fx + 26f * dp + finishTl.size.width + 12f > mapW) -1f else 1f
@@ -891,6 +1036,7 @@ private fun DrawScope.drawRidgeline(
             fun transitionTick(
                 pos: Double,
                 isNext: Boolean,
+                labels: PreparedTransitionTick<androidx.compose.ui.text.TextLayoutResult>,
                 avoidBelow: Float = Float.NEGATIVE_INFINITY,
             ): Float {
                 val y = yOf(pos)
@@ -907,15 +1053,7 @@ private fun DrawScope.drawRidgeline(
                 // not the mono: these times are STATIC labels (a boundary's timestamp,
                 // not a counting clock), so the mono's fixed-advance colon just reads
                 // as "5 : 00".
-                val timeTl = measurer.measure(
-                    ridgelineFmtTime(pos),
-                    style = TextStyle(
-                        color = color.legibleOn(overlayBg, targetLc = if (isNext) 60.0 else 45.0),
-                        fontFamily = RidgelineLabelFamily,
-                        fontSize = if (isNext) 14.sp else 12.sp,
-                        fontWeight = if (isNext) FontWeight.SemiBold else FontWeight.Normal,
-                    ),
-                )
+                val timeTl = if (isNext) labels.nextTime else labels.lastTime
                 if (!isNext) {
                     val tlY = clampY(
                         max(y - timeTl.size.height / 2f, avoidBelow),
@@ -935,27 +1073,10 @@ private fun DrawScope.drawRidgeline(
                     return tlY + timeTl.size.height
                 }
                 // Upcoming interval's values — what actually changes at this boundary.
-                val ni = min(route.idxAt(pos + 1.0), route.count - 1)
-                val ng = route.gradeIdx(ni)
-                val ns = route.speedIdx(ni)
                 // Proportional display face for values (mono "." gets a full cell —
                 // "7 . 5"); the time above keeps the mono for stable counting width.
-                val gradeTl = measurer.measure(
-                    "%.1f%%".format(ng),
-                    style = TextStyle(
-                        color = RidgelineTheme.mutedGradeColor(ng).legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineLabelFamily,
-                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    ),
-                )
-                val spdTl = measurer.measure(
-                    "%.1f".format(ns),
-                    style = TextStyle(
-                        color = RidgelineTheme.mutedSpeedColor(ns).legibleOn(overlayBg, targetLc = 60.0),
-                        fontFamily = RidgelineLabelFamily,
-                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                    ),
-                )
+                val gradeTl = labels.grade
+                val spdTl = labels.speed
                 // Two stacked lines straddling the tick: time above, "8% 3.0" below.
                 val timeY = clampY(y - timeTl.size.height - 1f, timeTl.size.height)
                 val rowY = clampY(y + 2f, gradeTl.size.height)
@@ -989,10 +1110,19 @@ private fun DrawScope.drawRidgeline(
             // pushed clear of it. On a short interval these two used to collide and the
             // "last" label was simply deleted — so it appeared, then vanished as soon as
             // you stepped into a brief interval. Now it slides down instead.
-            val nextBottom = if (nextVisible) transitionTick(nextB, isNext = true)
+            val nextBottom = if (nextVisible) transitionTick(
+                nextB,
+                isNext = true,
+                labels = staticLabels.transitions[curIvIdx + 1],
+            )
             else Float.NEGATIVE_INFINITY
             if (lastVisible) {
-                transitionTick(lastB, isNext = false, avoidBelow = nextBottom + 5f)
+                transitionTick(
+                    lastB,
+                    isNext = false,
+                    labels = staticLabels.transitions[curIvIdx],
+                    avoidBelow = nextBottom + 5f,
+                )
             }
         }
         // current-position marker
@@ -1012,12 +1142,12 @@ private fun DrawScope.drawRidgeline(
  */
 internal class RidgelineGeometry(
     private val route: RidgelineRoute,
-    private val centerX: Float,
-    private val ampBase: Float,
+    internal val centerX: Float,
+    internal val ampBase: Float,
     val camLo: Double,
     val ew: Double,
-    private val topY: Float,
-    private val botY: Float,
+    internal val topY: Float,
+    internal val botY: Float,
 ) {
     val camHi: Double get() = camLo + ew
 
@@ -1036,11 +1166,17 @@ internal class RidgelineGeometry(
     }
 }
 
-/** One interval boundary collected from the exact geometry used by the draw pass. */
-internal data class VisibleTransitionCandidate(
-    val intervalIndex: Int,
+/** One prepared label projected through the exact geometry used by the draw pass. */
+internal data class ProjectedTransitionLabel<T>(
+    val label: PreparedTransitionLabel<T>,
     val candidate: ChipCandidate,
     val travelled: Boolean,
+)
+
+internal data class TransitionLabelFrame<T>(
+    val visible: List<ProjectedTransitionLabel<T>>,
+    val prioritized: List<ProjectedTransitionLabel<T>>,
+    val layout: ChipLayoutResult,
 )
 
 /**
@@ -1048,26 +1184,26 @@ internal data class VisibleTransitionCandidate(
  * intervals. The scan begins in the interval containing [RidgelineGeometry.camLo] and
  * stops at the first boundary above [RidgelineGeometry.camHi].
  */
-internal fun collectVisibleTransitionCandidates(
-    route: RidgelineRoute,
+internal fun <T> collectVisibleTransitionCandidates(
+    model: TransitionLabelModel<T>,
     geometry: RidgelineGeometry,
     markerPos: Double,
-    pillWidthFor: (intervalIndex: Int) -> Float,
-): List<VisibleTransitionCandidate> {
-    val out = ArrayList<VisibleTransitionCandidate>()
-    var i = route.idxAt(geometry.camLo)
-    while (i < route.count) {
-        val boundary = route.startOf(i)
+): List<ProjectedTransitionLabel<T>> {
+    val out = ArrayList<ProjectedTransitionLabel<T>>()
+    var i = model.route.idxAt(geometry.camLo)
+    while (i < model.labels.size) {
+        val label = model.labels[i]
+        val boundary = label.key
         if (boundary > geometry.camHi) break
         if (boundary >= geometry.camLo) {
             out.add(
-                VisibleTransitionCandidate(
-                    intervalIndex = i,
+                ProjectedTransitionLabel(
+                    label = label,
                     candidate = ChipCandidate(
                         key = boundary,
                         anchorX = geometry.worldX(boundary),
                         anchorY = geometry.screenY(boundary),
-                        pillW = pillWidthFor(i),
+                        pillW = label.pillW,
                     ),
                     travelled = boundary < markerPos,
                 ),
@@ -1076,6 +1212,108 @@ internal fun collectVisibleTransitionCandidates(
         i++
     }
     return out
+}
+
+/** Shared production frame pipeline: project, prioritize, place, and instrument. */
+internal fun <T> layoutTransitionLabelFrame(
+    model: TransitionLabelModel<T>,
+    geometry: RidgelineGeometry,
+    markerPos: Double,
+    centerX: Float,
+    mapW: Float,
+    markerRect: Rect,
+    metricsGuard: Rect?,
+    topBound: Float,
+    botBound: Float,
+    fixedGuards: List<Rect> = emptyList(),
+): TransitionLabelFrame<T> {
+    val visible = collectVisibleTransitionCandidates(model, geometry, markerPos)
+    // Caller order is route order; production priority is upcoming nearest-first,
+    // followed by travelled labels most-recent-first.
+    val prioritized = visible.sortedWith(
+        compareBy({ it.travelled }, { if (it.travelled) -it.label.key else it.label.key }),
+    )
+    val layout = layoutTransitionChipsDetailed(
+        candidates = prioritized.map { it.candidate },
+        centerX = centerX,
+        mapW = mapW,
+        markerRect = markerRect,
+        metricsGuard = metricsGuard,
+        topBound = topBound,
+        botBound = botBound,
+        fixedGuards = fixedGuards,
+    )
+    return TransitionLabelFrame(visible, prioritized, layout)
+}
+
+/** Reuses projected/placed labels when only pulse paint changes between draw frames. */
+internal class TransitionLabelFrameCache<T> {
+    var computations: Int = 0
+        private set
+
+    private var cachedModel: TransitionLabelModel<T>? = null
+    private var cachedGeometryCenter = Float.NaN
+    private var cachedGeometryAmp = Float.NaN
+    private var cachedCamLo = Double.NaN
+    private var cachedEw = Double.NaN
+    private var cachedGeometryTop = Float.NaN
+    private var cachedGeometryBot = Float.NaN
+    private var cachedCenterX = Float.NaN
+    private var cachedTopBound = Float.NaN
+    private var cachedBotBound = Float.NaN
+    private var cachedMarkerPos = Double.NaN
+    private var cachedMapW = Float.NaN
+    private var cachedMarkerRect: Rect? = null
+    private var cachedMetricsGuard: Rect? = null
+    private var cachedFixedGuards: List<Rect> = emptyList()
+    private var cachedFrame: TransitionLabelFrame<T>? = null
+
+    fun layout(
+        model: TransitionLabelModel<T>,
+        geometry: RidgelineGeometry,
+        markerPos: Double,
+        centerX: Float,
+        mapW: Float,
+        markerRect: Rect,
+        metricsGuard: Rect?,
+        topBound: Float,
+        botBound: Float,
+        fixedGuards: List<Rect> = emptyList(),
+    ): TransitionLabelFrame<T> {
+        val cached = cachedFrame
+        if (cached != null && cachedModel === model &&
+            cachedGeometryCenter == geometry.centerX && cachedGeometryAmp == geometry.ampBase &&
+            cachedCamLo == geometry.camLo && cachedEw == geometry.ew &&
+            cachedGeometryTop == geometry.topY && cachedGeometryBot == geometry.botY &&
+            cachedCenterX == centerX && cachedTopBound == topBound && cachedBotBound == botBound &&
+            cachedMarkerPos == markerPos && cachedMapW == mapW &&
+            cachedMarkerRect == markerRect && cachedMetricsGuard == metricsGuard &&
+            cachedFixedGuards == fixedGuards
+        ) return cached
+
+        val frame = layoutTransitionLabelFrame(
+            model, geometry, markerPos, centerX, mapW, markerRect, metricsGuard,
+            topBound, botBound, fixedGuards,
+        )
+        computations++
+        cachedModel = model
+        cachedGeometryCenter = geometry.centerX
+        cachedGeometryAmp = geometry.ampBase
+        cachedCamLo = geometry.camLo
+        cachedEw = geometry.ew
+        cachedGeometryTop = geometry.topY
+        cachedGeometryBot = geometry.botY
+        cachedCenterX = centerX
+        cachedTopBound = topBound
+        cachedBotBound = botBound
+        cachedMarkerPos = markerPos
+        cachedMapW = mapW
+        cachedMarkerRect = markerRect
+        cachedMetricsGuard = metricsGuard
+        cachedFixedGuards = fixedGuards.toList()
+        cachedFrame = frame
+        return frame
+    }
 }
 
 // --- transition chip placement (pure geometry) -----------------------------
@@ -1087,7 +1325,7 @@ internal fun collectVisibleTransitionCandidates(
 internal const val CHIP_H = 24f
 
 /** The whole travelled chip, including both text runs, uses one deterministic alpha. */
-internal fun transitionChipAlpha(travelled: Boolean): Float = if (travelled) 0.45f else 1f
+internal fun transitionChipAlpha(travelled: Boolean): Float = if (travelled) 0.68f else 1f
 
 /** Vertical nudge granularity and reach when a chip has to step aside, px. */
 private const val CHIP_NUDGE_STEP = 7f
@@ -1131,22 +1369,106 @@ internal data class ChipSlot(
     val pillTop: Float,
     val dx: Float,
     val dy: Float,
+    val overlapFallback: Boolean = false,
 ) {
     val offBend: Boolean get() = dx != 0f || dy != 0f
 }
 
+internal data class ChipLayoutStats(
+    val probes: Int,
+    val collisionChecks: Int,
+    val overlapFallbacks: Int,
+)
+
+internal data class ChipLayoutResult(val slots: List<ChipSlot>, val stats: ChipLayoutStats)
+
+private class MutableChipLayoutStats {
+    var probes = 0
+    var collisionChecks = 0
+    var overlapFallbacks = 0
+}
+
+/** Spatially bins placed rectangles; probes pass float bounds and allocate nothing. */
+private class RectSpatialBins(
+    private val mapW: Float,
+    private val topBound: Float,
+    private val botBound: Float,
+    expectedRects: Int,
+) {
+    private val cell = 32f
+    private val cols = max(1, kotlin.math.ceil(mapW / cell).toInt())
+    private val rows = max(1, kotlin.math.ceil(max(1f, botBound - topBound) / cell).toInt())
+    private val bins = arrayOfNulls<MutableList<Int>>(cols * rows)
+    private val rects = ArrayList<Rect>(expectedRects)
+    private val seen = IntArray(max(1, expectedRects))
+    private var stamp = 0
+
+    private fun col(x: Float): Int = kotlin.math.floor(x / cell).toInt().coerceIn(0, cols - 1)
+    private fun row(y: Float): Int = kotlin.math.floor((y - topBound) / cell).toInt().coerceIn(0, rows - 1)
+
+    fun add(rect: Rect) {
+        if (rect.width <= 0f || rect.height <= 0f) return
+        val id = rects.size
+        rects.add(rect)
+        for (r in row(rect.top)..row(rect.bottom)) for (c in col(rect.left)..col(rect.right)) {
+            val index = r * cols + c
+            val bucket = bins[index] ?: ArrayList<Int>().also { bins[index] = it }
+            bucket.add(id)
+        }
+    }
+
+    fun allRects(): List<Rect> = rects
+
+    fun overlaps(l: Float, t: Float, r: Float, b: Float, stats: MutableChipLayoutStats): Boolean {
+        stamp++
+        if (stamp == Int.MAX_VALUE) {
+            seen.fill(0)
+            stamp = 1
+        }
+        for (row in row(t)..row(b)) for (col in col(l)..col(r)) {
+            val bucket = bins[row * cols + col] ?: continue
+            for (id in bucket) {
+                if (seen[id] == stamp) continue
+                seen[id] = stamp
+                stats.collisionChecks++
+                val p = rects[id]
+                if (p.left < r && l < p.right && p.top < b && t < p.bottom) return true
+            }
+        }
+        return false
+    }
+
+    /** Rightmost edge among blockers intersecting the probe, or NaN when it is clear. */
+    fun blockingRight(l: Float, t: Float, r: Float, b: Float, stats: MutableChipLayoutStats): Float {
+        stamp++
+        if (stamp == Int.MAX_VALUE) {
+            seen.fill(0)
+            stamp = 1
+        }
+        var right = Float.NaN
+        for (row in row(t)..row(b)) for (col in col(l)..col(r)) {
+            val bucket = bins[row * cols + col] ?: continue
+            for (id in bucket) {
+                if (seen[id] == stamp) continue
+                seen[id] = stamp
+                stats.collisionChecks++
+                val p = rects[id]
+                if (p.left < r && l < p.right && p.top < b && t < p.bottom) {
+                    right = if (right.isNaN()) p.right else max(right, p.right)
+                }
+            }
+        }
+        return right
+    }
+}
+
 /**
- * Place transition chips so they never vanish while you run.
+ * Place transition chips in caller-supplied priority order so they never vanish.
+ * Production supplies upcoming nearest-first, then travelled most-recent-first.
  *
- * Each candidate takes the natural side of its bend, flips to the other side if that
- * collides, then walks progressively larger vertical nudges (alternating up/down) until
- * it finds clear space inside [topBound]..[botBound]. Candidates are placed in route
- * order, so an earlier bend keeps its spot and later ones move — placement is a pure
- * function of the frame's geometry, so it doesn't jitter between frames.
- *
- * If the ordinary offsets fail, a bounded whole-canvas lane search runs. If no
- * collision-free position physically exists, a deterministic clamped slot is retained;
- * that last-resort slot may overlap because overlap is preferable to disappearance.
+ * Ordinary bend-relative offsets are followed by a complete blocker-edge/canvas-edge
+ * search. If no collision-free rectangle exists, a deterministic clamped slot remains;
+ * only that physically overfull last resort may overlap.
  */
 internal fun layoutTransitionChips(
     candidates: List<ChipCandidate>,
@@ -1156,16 +1478,37 @@ internal fun layoutTransitionChips(
     metricsGuard: Rect?,
     topBound: Float,
     botBound: Float,
-): List<ChipSlot> {
-    val placed = ArrayList<Rect>(candidates.size + 1)
-    placed.add(markerRect)
+): List<ChipSlot> = layoutTransitionChipsDetailed(
+    candidates, centerX, mapW, markerRect, metricsGuard, topBound, botBound,
+).slots
+
+internal fun layoutTransitionChipsDetailed(
+    candidates: List<ChipCandidate>,
+    centerX: Float,
+    mapW: Float,
+    markerRect: Rect,
+    metricsGuard: Rect?,
+    topBound: Float,
+    botBound: Float,
+    fixedGuards: List<Rect> = emptyList(),
+): ChipLayoutResult {
+    val stats = MutableChipLayoutStats()
+    val occupancy = RectSpatialBins(
+        mapW, topBound, botBound,
+        candidates.size + fixedGuards.size + 2,
+    )
+    occupancy.add(markerRect)
+    metricsGuard?.let { occupancy.add(it) }
+    fixedGuards.forEach { occupancy.add(it) }
     val out = ArrayList<ChipSlot>(candidates.size)
+    var narrowestFailedWidth = Float.POSITIVE_INFINITY
 
     for (c in candidates) {
+        val pillW = min(c.pillW, max(1f, mapW - 8f))
         fun pillLeftFor(side: Int, dx: Float): Float {
             val cx0 = c.anchorX + side * 22f
-            return ((if (side < 0) cx0 - c.pillW else cx0) + dx)
-                .coerceIn(4f, max(4f, mapW - c.pillW - 4f))
+            return ((if (side < 0) cx0 - pillW else cx0) + dx)
+                .coerceIn(4f, max(4f, mapW - pillW - 4f))
         }
         // Clamp onto the canvas rather than rejecting: during a camera pan a cluster of
         // bends crowds the top edge, and rejecting every out-of-bounds spot left those
@@ -1178,70 +1521,68 @@ internal fun layoutTransitionChips(
         // whole span would keep it colliding with the very thing it stepped away from.
         fun leftFor(pl: Float, onBend: Boolean) = if (onBend) min(c.anchorX - 5f, pl) else pl
         fun rightFor(pl: Float, onBend: Boolean) =
-            if (onBend) max(c.anchorX + 5f, pl + c.pillW) else pl + c.pillW
-        // This chip can only ever land inside this vertical band, so only already-placed
-        // rects overlapping the band can possibly collide with it. Filtering once per
-        // chip keeps the worst case sane: the offset search is ~750 probes, and scanning
-        // every placed rect on each probe would put a five-figure comparison count inside
-        // a 60fps draw pass.
-        val lo = max(topBound, botBound - CHIP_H)
-        val reachTop = (c.anchorY - CHIP_H / 2f - CHIP_NUDGE_MAX).coerceIn(topBound, lo) - 4f
-        val reachBot = (c.anchorY - CHIP_H / 2f + CHIP_NUDGE_MAX).coerceIn(topBound, lo) + CHIP_H + 4f
-        val nearby = placed.filter { it.bottom >= reachTop && it.top <= reachBot }
+            if (onBend) max(c.anchorX + 5f, pl + pillW) else pl + pillW
 
-        // Probing is allocation-free (plain float bounds, no Rect per attempt): the search
-        // can run hundreds of probes per chip and this runs inside the draw pass, so a
-        // Rect per probe would be real GC pressure at 60fps. Only the winner allocates.
-        fun usable(l: Float, t: Float, r: Float, b: Float, blockers: List<Rect>): Boolean {
+        fun usable(l: Float, t: Float, r: Float, b: Float): Boolean {
+            stats.probes++
             val il = l - 4f; val it = t - 4f; val ir = r + 4f; val ib = b + 4f
-            val g = metricsGuard
-            if (g != null && g.left < ir && il < g.right && g.top < ib && it < g.bottom) return false
-            for (p in blockers) {
-                if (p.left < ir && il < p.right && p.top < ib && it < p.bottom) return false
-            }
-            return true
+            return !occupancy.overlaps(il, it, ir, ib, stats)
         }
 
         val natural = if (c.anchorX < centerX) -1 else 1
         val sides = intArrayOf(natural, -natural)
         var slot: ChipSlot? = null
-        search@ for ((dx, dy) in CHIP_OFFSETS) {
-            val onBend = dx == 0f && dy == 0f
-            val top = topFor(dy)
-            for (side in sides) {
-                val pl = pillLeftFor(side, dx)
-                val l = leftFor(pl, onBend)
-                val r = rightFor(pl, onBend)
-                if (usable(l, top, r, top + CHIP_H, nearby)) {
-                    placed.add(Rect(l, top, r, top + CHIP_H))
-                    slot = ChipSlot(c.key, pl, top, dx, dy)
-                    break@search
+        if (pillW < narrowestFailedWidth) {
+            search@ for ((dx, dy) in CHIP_OFFSETS) {
+                val onBend = dx == 0f && dy == 0f
+                val top = topFor(dy)
+                for (side in sides) {
+                    val pl = pillLeftFor(side, dx)
+                    val l = leftFor(pl, onBend)
+                    val r = rightFor(pl, onBend)
+                    if (usable(l, top, r, top + CHIP_H)) {
+                        occupancy.add(Rect(l, top, r, top + CHIP_H))
+                        slot = ChipSlot(c.key, pl, top, dx, dy)
+                        break@search
+                    }
                 }
             }
         }
 
-        // Ordinary bend-relative offsets are intentionally local. If they are all
-        // blocked, search deterministic canvas lanes. The loop bounds are derived from
-        // the finite canvas and pill dimensions; probes remain allocation-free.
-        if (slot == null) {
+        // For axis-aligned blockers, a feasible rectangle can slide up until it touches
+        // a blocker/canvas edge. At each such y, sweep from the canvas edge and jump
+        // directly past the rightmost blocker hit. This covers the same blocker-edge
+        // positions as a Cartesian x/y search without its quadratic probe explosion.
+        if (slot == null && pillW < narrowestFailedWidth) {
             val minLeft = 4f
-            val maxLeft = max(minLeft, mapW - c.pillW - 4f)
+            val maxLeft = max(minLeft, mapW - pillW - 4f)
             val maxTop = max(topBound, botBound - CHIP_H)
-            val xStep = max(8f, c.pillW + 8f)
-            val yStep = CHIP_H + 8f
-            val cols = max(1, kotlin.math.ceil((maxLeft - minLeft) / xStep).toInt())
-            val rows = max(1, kotlin.math.ceil((maxTop - topBound) / yStep).toInt())
             val preferredLeft = pillLeftFor(natural, 0f)
             val preferredTop = topFor(0f)
-            grid@ for (row in 0..rows) {
-                val top = min(maxTop, topBound + row * yStep)
-                for (col in 0..cols) {
-                    val pl = min(maxLeft, minLeft + col * xStep)
-                    if (usable(pl, top, pl + c.pillW, top + CHIP_H, placed)) {
-                        placed.add(Rect(pl, top, pl + c.pillW, top + CHIP_H))
+            val blockers = occupancy.allRects()
+            val ys = FloatArray(blockers.size * 2 + 2)
+            var yCount = 0
+            ys[yCount++] = topBound; ys[yCount++] = maxTop
+            for (b in blockers) {
+                ys[yCount++] = (b.bottom + 4f).coerceIn(topBound, maxTop)
+                ys[yCount++] = (b.top - CHIP_H - 4f).coerceIn(topBound, maxTop)
+            }
+            java.util.Arrays.sort(ys, 0, yCount)
+            edge@ for (yi in 0 until yCount) {
+                if (yi > 0 && ys[yi] == ys[yi - 1]) continue
+                val top = ys[yi]
+                var pl = minLeft
+                while (pl <= maxLeft) {
+                    stats.probes++
+                    val blockingRight = occupancy.blockingRight(
+                        pl - 4f, top - 4f, pl + pillW + 4f, top + CHIP_H + 4f, stats,
+                    )
+                    if (blockingRight.isNaN()) {
+                        occupancy.add(Rect(pl, top, pl + pillW, top + CHIP_H))
                         slot = ChipSlot(c.key, pl, top, pl - preferredLeft, top - preferredTop)
-                        break@grid
+                        break@edge
                     }
+                    pl = blockingRight + 4f
                 }
             }
         }
@@ -1251,12 +1592,17 @@ internal fun layoutTransitionChips(
         if (slot == null) {
             val pl = pillLeftFor(natural, 0f)
             val top = topFor(0f)
-            placed.add(Rect(pl, top, pl + c.pillW, top + CHIP_H))
-            slot = ChipSlot(c.key, pl, top, 0f, 0f)
+            occupancy.add(Rect(pl, top, pl + pillW, top + CHIP_H))
+            slot = ChipSlot(c.key, pl, top, 0f, 0f, overlapFallback = true)
+            stats.overlapFallbacks++
+            narrowestFailedWidth = min(narrowestFailedWidth, pillW)
         }
         out.add(slot)
     }
-    return out
+    return ChipLayoutResult(
+        out,
+        ChipLayoutStats(stats.probes, stats.collisionChecks, stats.overlapFallbacks),
+    )
 }
 
 /** Rounded-rect fill helper (Compose drawRoundRect needs CornerRadius import; keep it local). */

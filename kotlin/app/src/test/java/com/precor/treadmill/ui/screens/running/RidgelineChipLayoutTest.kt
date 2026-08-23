@@ -1,6 +1,7 @@
 package com.precor.treadmill.ui.screens.running
 
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -164,12 +165,118 @@ class RidgelineChipLayoutTest {
 
         assertEquals("last-resort placement silently dropped labels", chips.size, slots.size)
         assertTrue(slots.all { it.pillLeft >= 0f && it.pillTop >= 0f && it.pillTop + CHIP_H <= 100f })
+        assertTrue("impossible packing was not identified as last-resort overlap", slots.all { it.overlapFallback })
     }
 
     /** Travelled labels dim as a unit; upcoming labels retain full-strength text. */
     @Test
     fun pastChipTextUsesTheSameDimmedAlphaAsItsChrome() {
-        assertEquals(0.45f, transitionChipAlpha(travelled = true), 0f)
+        val pastAlpha = transitionChipAlpha(travelled = true)
+        assertTrue("past text alpha is too low for reliable contrast", pastAlpha >= 0.65f)
+        assertTrue("past label must remain visibly dimmer", pastAlpha < 1f)
         assertEquals(1f, transitionChipAlpha(travelled = false), 0f)
+    }
+
+    /** Blocker-edge fallback finds a free slot that the old 32px grid skipped. */
+    @Test
+    fun blockerEdgeFallbackFindsUnalignedFreeRectangle() {
+        val chip = ChipCandidate(key = 1.0, anchorX = 100f, anchorY = 50f, pillW = 50f)
+        val guards = listOf(
+            Rect(0f, 0f, 200f, 34f),
+            Rect(0f, 66f, 200f, 100f),
+            Rect(0f, 34f, 79f, 66f),
+            Rect(137f, 34f, 200f, 66f),
+        )
+        val result = layoutTransitionChipsDetailed(
+            candidates = listOf(chip),
+            centerX = 100f,
+            mapW = 200f,
+            markerRect = Rect.Zero,
+            metricsGuard = null,
+            topBound = 0f,
+            botBound = 100f,
+            fixedGuards = guards,
+        )
+        val slot = result.slots.single()
+        val pill = Rect(slot.pillLeft, slot.pillTop, slot.pillLeft + chip.pillW, slot.pillTop + CHIP_H)
+
+        assertTrue("edge fallback overlapped a guard: $pill", guards.none { it.overlaps(pill) })
+        assertTrue("free edge slot was incorrectly marked overlapping", !slot.overlapFallback)
+        assertEquals(83f, slot.pillLeft, 0f)
+        assertEquals(38f, slot.pillTop, 0f)
+    }
+
+    /** Model measurement constrains both pill geometry and ellipsized text width. */
+    @Test
+    fun oversizedPreparedPillIsHorizontallyContained() {
+        val route = RidgelineRoute(listOf(RouteInterval(grade = 99.0, speed = 99.0, durSec = 60.0)))
+        val model = prepareTransitionLabelModel(
+            route = route,
+            maxPillWidth = 92f,
+            gradeColorFor = { Color.White },
+            speedColorFor = { Color.White },
+            measure = { text, _, maxWidth ->
+                val natural = text.length * 80f
+                MeasuredTransitionText(text, minOf(natural, maxWidth ?: natural))
+            },
+        )
+        val label = model.labels.single()
+
+        assertTrue(label.pillW <= 92f)
+        assertTrue(label.grade.width + label.speed.width + 20f <= label.pillW)
+    }
+
+    /** Narrow-canvas integer rounding cannot push either text run outside its pill. */
+    @Test
+    fun narrowPreparedPillContainsRoundedTextLayouts() {
+        val route = RidgelineRoute(listOf(RouteInterval(grade = 99.0, speed = 99.0, durSec = 60.0)))
+        val model = prepareTransitionLabelModel(
+            route = route,
+            maxPillWidth = 15f,
+            gradeColorFor = { Color.White },
+            speedColorFor = { Color.White },
+            measure = { text, _, maxWidth ->
+                val natural = text.length * 20f
+                MeasuredTransitionText(text, maxWidth?.let { kotlin.math.ceil(it).toFloat() } ?: natural)
+            },
+        )
+        val label = model.labels.single()
+
+        assertTrue(label.pillW <= 15f)
+        assertTrue(label.gradeOffset >= 0f)
+        assertTrue(label.gradeOffset + label.grade.width <= label.pillW)
+        assertTrue(label.speedOffset + label.speed.width <= label.pillW)
+    }
+
+    /** Finish/minimap transition text is prepared once per route, never per pulse frame. */
+    @Test
+    fun staticTransitionChromeIsPreparedForEveryBoundary() {
+        val route = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 1.0, speed = 2.5, durSec = 10.0),
+                RouteInterval(grade = 3.0, speed = 4.5, durSec = 20.0),
+                RouteInterval(grade = 5.0, speed = 6.5, durSec = 30.0),
+            ),
+        )
+        var measures = 0
+        val labels = prepareRidgelineStaticLabels(
+            route = route,
+            finishColor = Color.White,
+            lastTimeColor = Color.Gray,
+            nextTimeColor = Color.Green,
+            gradeColorFor = { Color.Yellow },
+            speedColorFor = { Color.Cyan },
+            measure = { kind, text, color ->
+                measures++
+                Triple(kind, text, color)
+            },
+        )
+
+        assertEquals("FINISH · 19 ft", labels.finish.second)
+        assertEquals(route.count, labels.transitions.size)
+        assertEquals("0:10", labels.transitions[1].lastTime.second)
+        assertEquals("3.0%", labels.transitions[1].grade.second)
+        assertEquals("4.5", labels.transitions[1].speed.second)
+        assertEquals(1 + route.count * 4, measures)
     }
 }
