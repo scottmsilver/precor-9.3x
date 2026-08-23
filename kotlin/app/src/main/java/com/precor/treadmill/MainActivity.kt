@@ -7,7 +7,6 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.WindowManager
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -137,12 +136,6 @@ class MainActivity : ComponentActivity() {
                         TAG,
                         "WAKE_WORD_DETECTED name=${detection.model.name} score=${detection.score}",
                     )
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Wake word ${String.format("%.3f", detection.score)}",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-
                     // Give the wrapper's AudioRecord time to release before Gemini's
                     // existing AudioCapture claims the microphone.
                     engine.stop()
