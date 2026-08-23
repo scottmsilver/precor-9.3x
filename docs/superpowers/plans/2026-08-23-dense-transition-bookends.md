@@ -392,9 +392,10 @@ constrained-measure path. Set
 `badgeOffset = speedOffset + speed.width + BADGE_GAP`; compute one
 `effectivePillW <= maxPillWidth`. Use that exact width for the candidate,
 placement, chrome, leaders, brackets, canvas checks, and all guards.
-Use the Ridgeline amber transition accent for `PreparedTransitionBadge.color`;
-include that color in the endpoint-preparation cache key/model lifetime. Badge
-sizing tests must also assert the prepared amber color.
+Use `RidgelineTheme.elev` (`#FFB35C`) for
+`PreparedTransitionBadge.color`; include that exact color in the
+endpoint-preparation cache key/model lifetime. Badge sizing tests must also
+assert `RidgelineTheme.elev`.
 
 - [ ] **Step 5: Refactor the frame cache into membership and packing phases**
 
@@ -544,7 +545,7 @@ effective first/last pill rectangles, badge baseline/offset, unclipped bracket,
 and clipped drawable segments. Add failing production-level assertions that:
 
 - z-order data places route → bracket → leaders/chips → marker/metrics;
-- badge and one-pixel bracket both use the specified amber transition accent;
+- badge and one-pixel bracket both use `RidgelineTheme.elev` (`#FFB35C`);
 - the effective pill rectangles use exactly the placement width;
 - badge text lies inside the ending pill and after speed text;
 - marker, metrics, fixed guards, other chips, and canvas exclude the full
@@ -560,7 +561,7 @@ Build pill rectangles from `slot.pillLeft`, `slot.pillTop`,
 `endpointContent.effectivePillW`, and `CHIP_H`. Build and test the pure
 `BookendDecoration`, then draw its clipped segments after the route but before
 ordinary leaders/chips and before the marker/metrics at one pixel and the lower
-endpoint alpha, using the same amber transition accent as the badge.
+endpoint alpha, using `RidgelineTheme.elev`, the same amber as the badge.
 
 Draw the badge inside the ending pill at the prepared `badgeOffset`. Use
 `effectivePillW` identically for placement, pill chrome, collision bounds,
@@ -670,6 +671,8 @@ restore_setting() {
 
 cleanup_bookend_device() {
   local exit_code=$?
+  local restore_failed=0
+  trap - EXIT
   set +e
   {
     if [[ -n "$BOOKEND_SERIAL" ]]; then
@@ -677,41 +680,53 @@ cleanup_bookend_device() {
       if [[ "$BOOKEND_PREF_PRESENT" == 1 ]]; then
         adb -s "$BOOKEND_SERIAL" shell run-as "$BOOKEND_PACKAGE" sh -c \
           'cat > files/datastore/server_prefs.preferences_pb' \
-          <"$BOOKEND_EVIDENCE/server-prefs-before.pb"
+          <"$BOOKEND_EVIDENCE/server-prefs-before.pb" || restore_failed=1
         adb -s "$BOOKEND_SERIAL" exec-out run-as "$BOOKEND_PACKAGE" \
           cat files/datastore/server_prefs.preferences_pb \
-          >"$BOOKEND_EVIDENCE/server-prefs-restored.pb"
+          >"$BOOKEND_EVIDENCE/server-prefs-restored.pb" || restore_failed=1
         cmp "$BOOKEND_EVIDENCE/server-prefs-before.pb" \
-          "$BOOKEND_EVIDENCE/server-prefs-restored.pb"
+          "$BOOKEND_EVIDENCE/server-prefs-restored.pb" || restore_failed=1
       else
         adb -s "$BOOKEND_SERIAL" shell run-as "$BOOKEND_PACKAGE" \
-          rm -f files/datastore/server_prefs.preferences_pb
+          rm -f files/datastore/server_prefs.preferences_pb || restore_failed=1
       fi
       [[ -n "$BOOKEND_WINDOW_SCALE" ]] && \
-        restore_setting global window_animation_scale "$BOOKEND_WINDOW_SCALE"
+        restore_setting global window_animation_scale "$BOOKEND_WINDOW_SCALE" || restore_failed=1
       [[ -n "$BOOKEND_TRANSITION_SCALE" ]] && \
-        restore_setting global transition_animation_scale "$BOOKEND_TRANSITION_SCALE"
+        restore_setting global transition_animation_scale "$BOOKEND_TRANSITION_SCALE" || restore_failed=1
       [[ -n "$BOOKEND_ANIMATOR_SCALE" ]] && \
-        restore_setting global animator_duration_scale "$BOOKEND_ANIMATOR_SCALE"
+        restore_setting global animator_duration_scale "$BOOKEND_ANIMATOR_SCALE" || restore_failed=1
       [[ -n "$BOOKEND_TIMEOUT" ]] && \
-        restore_setting system screen_off_timeout "$BOOKEND_TIMEOUT"
+        restore_setting system screen_off_timeout "$BOOKEND_TIMEOUT" || restore_failed=1
+      [[ -z "$BOOKEND_WINDOW_SCALE" || \
+        "$(adb -s "$BOOKEND_SERIAL" shell settings get global window_animation_scale | tr -d '\r')" == "$BOOKEND_WINDOW_SCALE" ]] || restore_failed=1
+      [[ -z "$BOOKEND_TRANSITION_SCALE" || \
+        "$(adb -s "$BOOKEND_SERIAL" shell settings get global transition_animation_scale | tr -d '\r')" == "$BOOKEND_TRANSITION_SCALE" ]] || restore_failed=1
+      [[ -z "$BOOKEND_ANIMATOR_SCALE" || \
+        "$(adb -s "$BOOKEND_SERIAL" shell settings get global animator_duration_scale | tr -d '\r')" == "$BOOKEND_ANIMATOR_SCALE" ]] || restore_failed=1
+      [[ -z "$BOOKEND_TIMEOUT" || \
+        "$(adb -s "$BOOKEND_SERIAL" shell settings get system screen_off_timeout | tr -d '\r')" == "$BOOKEND_TIMEOUT" ]] || restore_failed=1
       if [[ "$BOOKEND_WAS_RUNNING" == 1 ]]; then
-        adb -s "$BOOKEND_SERIAL" shell am start -n "$BOOKEND_ACTIVITY" >/dev/null
+        adb -s "$BOOKEND_SERIAL" shell am start -n "$BOOKEND_ACTIVITY" >/dev/null || restore_failed=1
       fi
     fi
     if [[ -n "$BOOKEND_SERVER_PID" ]]; then
       kill "$BOOKEND_SERVER_PID" 2>/dev/null
       wait "$BOOKEND_SERVER_PID" 2>/dev/null
+      kill -0 "$BOOKEND_SERVER_PID" 2>/dev/null && restore_failed=1
     fi
     if [[ -n "$BOOKEND_TMP" && -d "$BOOKEND_TMP" && "$BOOKEND_TMP" == /tmp/* ]]; then
       rm -rf -- "$BOOKEND_TMP"
+      [[ ! -e "$BOOKEND_TMP" ]] || restore_failed=1
     else
       echo "refusing unexpected temp cleanup: $BOOKEND_TMP"
+      restore_failed=1
     fi
-    printf 'exit_code=%s\n' "$exit_code"
+    printf 'original_exit_code=%s\nrestore_failed=%s\n' "$exit_code" "$restore_failed"
     adb devices -l
   } >"$BOOKEND_EVIDENCE/restoration.log" 2>&1
-  return "$exit_code"
+  if [[ "$exit_code" == 0 && "$restore_failed" != 0 ]]; then exit_code=1; fi
+  exit "$exit_code"
 }
 trap cleanup_bookend_device EXIT
 trap 'exit 130' INT TERM
@@ -722,9 +737,14 @@ env TREADMILL_MOCK=1 TREADMILL_DB="$BOOKEND_TMP/verification.db" \
 BOOKEND_SERVER_PID=$!
 echo "$BOOKEND_SERVER_PID" >"$BOOKEND_EVIDENCE/server.pid"
 for _ in $(seq 1 50); do
+  if ! kill -0 "$BOOKEND_SERVER_PID" 2>/dev/null; then
+    sed -n '1,240p' "$BOOKEND_EVIDENCE/server.log" >&2
+    exit 1
+  fi
   curl --fail --silent "$BOOKEND_URL/" >"$BOOKEND_EVIDENCE/backend-ready.json" && break
   sleep 0.2
 done
+kill -0 "$BOOKEND_SERVER_PID"
 curl --fail --silent "$BOOKEND_URL/" >/dev/null
 
 adb mdns services | tee "$BOOKEND_EVIDENCE/adb-mdns.log"
@@ -791,9 +811,12 @@ curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/profiles" \
   -H 'Content-Type: application/json' -d '{"name":"Bookend Verify"}' \
   | tee "$BOOKEND_EVIDENCE/profile-create.json"
 BOOKEND_PROFILE=$(jq -r '.profile.id' "$BOOKEND_EVIDENCE/profile-create.json")
+jq -e '.ok == true and .profile.id != null' "$BOOKEND_EVIDENCE/profile-create.json" >/dev/null
+test "$BOOKEND_PROFILE" != null
 curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/profile/select" \
   -H 'Content-Type: application/json' -d "{\"id\":\"$BOOKEND_PROFILE\"}" \
   | tee "$BOOKEND_EVIDENCE/profile-select.json"
+jq -e '.ok == true' "$BOOKEND_EVIDENCE/profile-select.json" >/dev/null
 
 run_fixture() {
   local slug=$1 count=$2 duration=$3
@@ -807,12 +830,18 @@ run_fixture() {
   curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/workouts" \
     -H 'Content-Type: application/json' --data-binary @"$BOOKEND_EVIDENCE/$slug-request.json" \
     | tee "$BOOKEND_EVIDENCE/$slug-create.json"
+  jq -e '.ok == true and .workout.id != null' "$BOOKEND_EVIDENCE/$slug-create.json" >/dev/null
   local workout
   workout=$(jq -r '.workout.id' "$BOOKEND_EVIDENCE/$slug-create.json")
+  test "$workout" != null
   curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/workouts/$workout/load" \
     | tee "$BOOKEND_EVIDENCE/$slug-load.json"
+  jq -e '.ok == true' "$BOOKEND_EVIDENCE/$slug-load.json" >/dev/null
   curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/program/start" \
     | tee "$BOOKEND_EVIDENCE/$slug-start.json"
+  jq -e --argjson count "$count" \
+    '.running == true and (.program.intervals | length) == $count' \
+    "$BOOKEND_EVIDENCE/$slug-start.json" >/dev/null
   sleep 3
   adb -s "$BOOKEND_SERIAL" exec-out screencap -p >"$BOOKEND_EVIDENCE/$slug.png"
   adb -s "$BOOKEND_SERIAL" shell uiautomator dump "/sdcard/$slug.xml" >/dev/null
@@ -843,6 +872,12 @@ Execute the created script without relying on the current shell's variables:
 chmod +x build/verification/2026-08-23-dense-bookends/verify-device.sh
 bash build/verification/2026-08-23-dense-bookends/verify-device.sh \
   >build/verification/2026-08-23-dense-bookends/device-run.log 2>&1
+BOOKEND_CHECK_PID=$(<build/verification/2026-08-23-dense-bookends/server.pid)
+! kill -0 "$BOOKEND_CHECK_PID" 2>/dev/null
+BOOKEND_CHECK_TMP=$(<build/verification/2026-08-23-dense-bookends/tmp-path.txt)
+test ! -e "$BOOKEND_CHECK_TMP"
+grep -q '^restore_failed=0$' \
+  build/verification/2026-08-23-dense-bookends/restoration.log
 ```
 
 The dense video naturally crosses many 0.6-second represented boundaries and
