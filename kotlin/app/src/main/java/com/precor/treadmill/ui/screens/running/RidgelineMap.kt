@@ -694,6 +694,18 @@ internal data class ViewportLens(
     val radius: Float,
 )
 
+internal data class ViewportLensStyle(
+    val rimColor: Color,
+    val rimAlpha: Float,
+    val rimWidthDp: Float,
+)
+
+internal val minimapViewportLensStyle = ViewportLensStyle(
+    rimColor = RidgelineTheme.elev,
+    rimAlpha = 0.75f,
+    rimWidthDp = 2f,
+)
+
 internal fun minimapViewportLens(
     leaderX: Float,
     vTop: Float,
@@ -1290,14 +1302,23 @@ private fun DrawScope.drawRidgeline(
                 size = Size(lens.width, lens.height),
                 cornerRadius = rim,
             )
-            // Firm white rim plus lit top and subtler bottom bounce read as glass.
-            drawRoundRect(
-                color = RidgelineTheme.fg.copy(alpha = 0.36f),
-                topLeft = Offset(lens.left, lens.top),
-                size = Size(lens.width, lens.height),
-                cornerRadius = rim,
-                style = Stroke(width = 1f),
-            )
+            // Inset amber rim plus lit top and subtler bottom bounce read as glass.
+            val lensStyle = minimapViewportLensStyle
+            val rimWidth = lensStyle.rimWidthDp * dp
+            val inset = rimWidth / 2f
+            val rimSize = Size(lens.width - rimWidth, lens.height - rimWidth)
+            if (lens.width > rimWidth && lens.height > rimWidth) {
+                drawRoundRect(
+                    color = lensStyle.rimColor.copy(alpha = lensStyle.rimAlpha),
+                    topLeft = Offset(lens.left + inset, lens.top + inset),
+                    size = rimSize,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                        max(0f, lens.radius - inset),
+                        max(0f, lens.radius - inset),
+                    ),
+                    style = Stroke(width = rimWidth),
+                )
+            }
             drawLine(
                 RidgelineTheme.fg,
                 Offset(lens.left + lens.radius, lens.top + 0.5f),
