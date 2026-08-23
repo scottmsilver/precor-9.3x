@@ -231,7 +231,7 @@ private class BoundedLru<K, V>(private val capacity: Int) {
 
 private data class TransitionTextKey(val text: String, val color: Color, val maxWidthBits: Int?)
 
-/** Cheap route content plus bounded, viewport-driven measured-label caches. */
+/** Cheap route content plus viewport-driven, model-lifetime prepared labels. */
 internal class TransitionLabelModel<T>(
     val route: RidgelineRoute,
     private val maxPillWidth: Float,
@@ -239,7 +239,7 @@ internal class TransitionLabelModel<T>(
     private val measure: (text: String, color: Color, maxWidth: Float?) -> MeasuredTransitionText<T>,
 ) {
     private val measuredText = BoundedLru<TransitionTextKey, MeasuredTransitionText<T>>(256)
-    private val preparedLabels = BoundedLru<Int, PreparedTransitionLabel<T>>(96)
+    private val preparedLabels = MutableList<PreparedTransitionLabel<T>?>(contents.size) { null }
 
     val labels: List<PreparedTransitionLabel<T>> = object : AbstractList<PreparedTransitionLabel<T>>() {
         override val size: Int get() = route.count
@@ -251,7 +251,8 @@ internal class TransitionLabelModel<T>(
         return measuredText.getOrPut(key) { measure(text, color, maxWidth) }
     }
 
-    private fun labelAt(i: Int): PreparedTransitionLabel<T> = preparedLabels.getOrPut(i) {
+    private fun labelAt(i: Int): PreparedTransitionLabel<T> {
+        preparedLabels[i]?.let { return it }
         val content = contents[i]
         val safePillWidth = max(1f, maxPillWidth)
         val sidePadding = min(7f, safePillWidth / 4f)
@@ -271,7 +272,7 @@ internal class TransitionLabelModel<T>(
         }
         val gradeOffset = sidePadding
         val speedOffset = gradeOffset + grade.width + gap
-        PreparedTransitionLabel(
+        return PreparedTransitionLabel(
             intervalIndex = i,
             key = route.startOf(i),
             gradeValue = content.gradeValue,
@@ -284,7 +285,7 @@ internal class TransitionLabelModel<T>(
             gradeOffset = gradeOffset,
             speedOffset = speedOffset,
             pillW = min(safePillWidth, speedOffset + speed.width + sidePadding),
-        )
+        ).also { preparedLabels[i] = it }
     }
 }
 
@@ -298,7 +299,7 @@ internal data class TransitionLabelContent(
 
 /**
  * Prepare immutable strings/colors cheaply; measured labels are loaded by viewport and
- * retained in a 96-label LRU (enough for the server-contract 61-label maximum window).
+ * retained for this route model's lifetime, proportional to its existing interval contents.
  * Individual layouts are interned in a 256-entry route/style-scoped LRU.
  * [measure] is generic so JVM tests exercise this exact pipeline with representative
  * widths while production supplies cached [androidx.compose.ui.text.TextLayoutResult]s.
