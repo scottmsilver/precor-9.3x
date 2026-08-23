@@ -76,6 +76,8 @@ class GeminiLiveClient(
     private var setupDone = false
     private var connectionToken: ConnectionToken? = null
     private var receivingAudio = false
+    private var turnInProgress = false
+    private var pendingStateContext: String? = null
     private var turnCompleteJob: Job? = null
     private val turnTextParts = mutableListOf<String>()
     private val turnToolCalls = mutableListOf<String>()
@@ -112,9 +114,36 @@ class GeminiLiveClient(
 
     /** Update the treadmill state context. Sends to Gemini mid-session if connected. */
     fun updateStateContext(ctx: String) {
-        if (ctx == stateContext) return
-        stateContext = ctx
-        sendStateUpdate(ctx)
+        val sendNow = synchronized(this) {
+            if (ctx == stateContext) return
+            stateContext = ctx
+            if (turnInProgress) {
+                pendingStateContext = ctx
+                false
+            } else {
+                true
+            }
+        }
+        if (sendNow) {
+            sendStateUpdate(ctx)
+        } else {
+            debugLog("Deferring state update until turn complete")
+        }
+    }
+
+    private fun markTurnInProgress() {
+        val started = synchronized(this) {
+            if (turnInProgress) false else {
+                turnInProgress = true
+                true
+            }
+        }
+        if (started) debugLog("Turn activity started")
+    }
+
+    private fun completeTurnAndTakePendingState(): String? = synchronized(this) {
+        turnInProgress = false
+        pendingStateContext.also { pendingStateContext = null }
     }
 
     private fun sendStateUpdate(ctx: String) {
@@ -280,6 +309,8 @@ class GeminiLiveClient(
             connectionToken = null
             setupDone = false
             receivingAudio = false
+            turnInProgress = false
+            pendingStateContext = null
             turnTextParts.clear()
             turnToolCalls.clear()
             turnCompleteJob?.cancel()
@@ -411,9 +442,13 @@ class GeminiLiveClient(
                 Log.i("VoiceTiming", "GEMINI_FIRST_RESPONSE: ${now - lastAudioSentMs}ms after last mic chunk")
             }
 
+            val speechState = (serverContent["speechState"] ?: serverContent["speech_state"])
+                ?.jsonPrimitive?.contentOrNull
+            if (speechState == "SPEECH") markTurnInProgress()
+
             // Interrupted
             if (serverContent["interrupted"]?.jsonPrimitive?.booleanOrNull == true) {
-                Log.w(TAG, ">>> INTERRUPTED by server (barge-in detected)")
+                debugLog(">>> INTERRUPTED by server (barge-in detected)")
                 receivingAudio = false
                 // Reset timing so next turn measures from fresh
                 firstResponseMs = 0L
@@ -446,6 +481,11 @@ class GeminiLiveClient(
                 turnTextParts.clear()
                 turnToolCalls.clear()
 
+                completeTurnAndTakePendingState()?.let { pending ->
+                    debugLog("Sending deferred state update after turn complete")
+                    sendStateUpdate(pending)
+                }
+
                 // Small delay to let last audio chunks finish before signaling speaking end
                 turnCompleteJob?.cancel()
                 turnCompleteJob = scope?.launch {
@@ -462,6 +502,7 @@ class GeminiLiveClient(
             val modelTurn = (serverContent["modelTurn"] ?: serverContent["model_turn"])?.jsonObject
             val parts = modelTurn?.get("parts")?.jsonArray
             if (parts != null) {
+                markTurnInProgress()
                 for (part in parts) {
                     val partObj = part.jsonObject
 
@@ -500,6 +541,7 @@ class GeminiLiveClient(
         val toolCall = (msg["toolCall"] ?: msg["tool_call"])?.jsonObject
         val functionCalls = toolCall?.get("functionCalls")?.jsonArray
         if (functionCalls != null) {
+            markTurnInProgress()
             for (fc in functionCalls) {
                 val fcObj = fc.jsonObject
                 val name = fcObj["name"]?.jsonPrimitive?.content ?: continue

@@ -111,6 +111,60 @@ class GeminiLiveClientSendTest {
         assertTrue(harness.callbacks.errors.isEmpty())
     }
 
+    @Test
+    fun stateUpdatesDuringTurn_areDeferredAndCoalescedUntilTurnComplete() {
+        val harness = Harness()
+        val connection = harness.connectAndReady()
+        connection.socket.sentTexts.clear()
+
+        connection.listener.onMessage(
+            connection.socket,
+            """{"serverContent":{"speechState":"SPEECH"}}""",
+        )
+        assertTrue(harness.await { harness.debugLogs.any { "Turn activity started" in it } })
+        harness.client.updateStateContext("Speed: 2.0 mph")
+        harness.client.updateStateContext("Speed: 3.0 mph")
+
+        assertTrue(connection.socket.sentTexts.none { "[State update" in it })
+
+        connection.listener.onMessage(
+            connection.socket,
+            """{"serverContent":{"turnComplete":true}}""",
+        )
+
+        assertTrue(harness.await { connection.socket.sentTexts.count { "[State update" in it } == 1 })
+        val update = connection.socket.sentTexts.single { "[State update" in it }
+        assertTrue("latest state should be sent", "Speed: 3.0 mph" in update)
+        assertFalse("superseded state must be dropped", "Speed: 2.0 mph" in update)
+    }
+
+    @Test
+    fun genuineInterruptionStillFlushesPlayback_beforeDeferredStateIsSent() {
+        val harness = Harness()
+        val connection = harness.connectAndReady()
+        connection.socket.sentTexts.clear()
+        connection.listener.onMessage(
+            connection.socket,
+            """{"serverContent":{"speechState":"SPEECH"}}""",
+        )
+        assertTrue(harness.await { harness.debugLogs.any { "Turn activity started" in it } })
+        harness.client.updateStateContext("Incline: 5.0%")
+
+        connection.listener.onMessage(
+            connection.socket,
+            """{"serverContent":{"interrupted":true}}""",
+        )
+
+        assertTrue(harness.await { harness.callbacks.interruptions == 1 })
+        assertTrue(connection.socket.sentTexts.none { "[State update" in it })
+
+        connection.listener.onMessage(
+            connection.socket,
+            """{"serverContent":{"turnComplete":true}}""",
+        )
+        assertTrue(harness.await { connection.socket.sentTexts.any { "Incline: 5.0%" in it } })
+    }
+
     private class Harness(
         terminalCallbackDispatch: ((() -> Unit) -> Unit) = { callback -> callback() },
     ) {
@@ -145,6 +199,15 @@ class GeminiLiveClientSendTest {
             assertTrue(callbacks.awaitConnectedCount(expectedCount))
             return connection
         }
+
+        fun await(condition: () -> Boolean): Boolean {
+            val deadline = System.nanoTime() + 2_000_000_000L
+            while (System.nanoTime() < deadline) {
+                if (condition()) return true
+                Thread.sleep(10)
+            }
+            return false
+        }
     }
 
     private data class FakeConnection(
@@ -156,11 +219,13 @@ class GeminiLiveClientSendTest {
         @Volatile var acceptAudio = true
         @Volatile var audioSendCount = 0
         @Volatile var beforeAudioResult: (() -> Unit)? = null
+        val sentTexts = CopyOnWriteArrayList<String>()
 
         override fun request(): Request = request
         override fun queueSize(): Long = 0
 
         override fun send(text: String): Boolean {
+            sentTexts += text
             if ("\"audio\"" !in text) return true
             audioSendCount += 1
             beforeAudioResult?.invoke()
@@ -175,6 +240,7 @@ class GeminiLiveClientSendTest {
     private class RecordingCallbacks : GeminiLiveCallbacks {
         val states = CopyOnWriteArrayList<ClientState>()
         val errors = CopyOnWriteArrayList<String>()
+        @Volatile var interruptions = 0
 
         override fun onStateChange(state: ClientState) {
             states += state
@@ -192,7 +258,7 @@ class GeminiLiveClientSendTest {
         override fun onAudioChunk(pcmBase64: String) = Unit
         override fun onSpeakingStart() = Unit
         override fun onSpeakingEnd() = Unit
-        override fun onInterrupted() = Unit
+        override fun onInterrupted() { interruptions += 1 }
         override fun onError(msg: String) { errors += msg }
     }
 
