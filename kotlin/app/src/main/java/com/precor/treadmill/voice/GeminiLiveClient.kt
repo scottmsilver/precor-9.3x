@@ -7,6 +7,8 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okhttp3.*
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * WebSocket client for Gemini Live (BidiGenerateContentConstrained) API.
@@ -46,6 +48,11 @@ class GeminiLiveClient(
     private val serverPrompt: String? = null,
     /** Server-provided smartass addendum */
     private val serverSmartass: String? = null,
+    private val webSocketFactory: (OkHttpClient, Request, WebSocketListener) -> WebSocket =
+        { client, request, listener -> client.newWebSocket(request, listener) },
+    private val debugLog: (String) -> Unit = { message -> Log.d(TAG, message) },
+    private val errorLog: (String) -> Unit = { message -> Log.e(TAG, message) },
+    private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
 ) {
     companion object {
         private const val TAG = "GeminiLive"
@@ -63,6 +70,7 @@ class GeminiLiveClient(
     private var scope: CoroutineScope? = null
     private var state: ClientState = ClientState.DISCONNECTED
     private var setupDone = false
+    private var connectionToken: ConnectionToken? = null
     private var receivingAudio = false
     private var turnCompleteJob: Job? = null
     private val turnTextParts = mutableListOf<String>()
@@ -73,6 +81,11 @@ class GeminiLiveClient(
     private var firstResponseMs = 0L
     private var firstAudioChunkMs = 0L
     private var audioChunkCount = 0
+
+    private class ConnectionToken {
+        val terminal = AtomicBoolean(false)
+        val acceptedAudioChunks = AtomicInteger(0)
+    }
 
     /** Set by VoiceViewModel to read speech-end timestamp from AudioCapture. */
     var speechEndTimestampProvider: (() -> Long)? = null
@@ -124,6 +137,8 @@ class GeminiLiveClient(
 
     fun connect() {
         if (ws != null) return
+        val token = ConnectionToken()
+        connectionToken = token
         setState(ClientState.CONNECTING)
 
         // CRITICAL: limitedParallelism(1) ensures messages are processed
@@ -138,52 +153,92 @@ class GeminiLiveClient(
             .build()
 
         val url = "$GEMINI_WS_BASE?access_token=$apiKey"
-        Log.d(TAG, "Connecting to Gemini Live (model=$model)")
+        debugLog("Connecting to Gemini Live (model=$model)")
         val request = Request.Builder().url(url).build()
 
-        ws = activeClient.newWebSocket(request, object : WebSocketListener() {
+        ws = webSocketFactory(activeClient, request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connected, sending setup...")
+                if (!isCurrentConnection(webSocket, token)) return
+                debugLog("WebSocket connected, sending setup...")
                 sendSetup()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d(TAG, "onMessage(text): ${text.take(300)}")
-                scope?.launch { handleMessage(text) }
+                if (!isCurrentConnection(webSocket, token)) return
+                debugLog("onMessage(text): ${text.take(300)}")
+                scope?.launch {
+                    if (isCurrentConnection(webSocket, token)) handleMessage(text)
+                }
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
+                if (!isCurrentConnection(webSocket, token)) return
                 val text = bytes.utf8()
-                Log.d(TAG, "onMessage(binary, ${bytes.size} bytes): ${text.take(300)}")
-                scope?.launch { handleMessage(text) }
+                debugLog("onMessage(binary, ${bytes.size} bytes): ${text.take(300)}")
+                scope?.launch {
+                    if (isCurrentConnection(webSocket, token)) handleMessage(text)
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket error: ${t.message}")
-                callbacks.onError("WebSocket connection error")
-                cleanup()
-                setState(ClientState.ERROR)
+                finishConnection(
+                    webSocket = webSocket,
+                    token = token,
+                    terminalState = ClientState.ERROR,
+                    logMessage = "WebSocket error: ${t.message}",
+                    callbackMessage = "WebSocket connection error",
+                )
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closed: $code $reason")
-                cleanup()
-                if (state != ClientState.ERROR) {
-                    setState(ClientState.DISCONNECTED)
-                }
+                finishConnection(
+                    webSocket = webSocket,
+                    token = token,
+                    terminalState = ClientState.DISCONNECTED,
+                    logMessage = "WebSocket closed: $code $reason",
+                )
             }
         })
     }
 
     fun disconnect() {
-        ws?.close(1000, "Client disconnect")
-        cleanup()
-        setState(ClientState.DISCONNECTED)
+        val socket = ws
+        val token = connectionToken
+        if (socket == null || token == null) return
+        socket.close(1000, "Client disconnect")
+        finishConnection(socket, token, ClientState.DISCONNECTED)
+    }
+
+    private fun isCurrentConnection(webSocket: WebSocket, token: ConnectionToken): Boolean =
+        synchronized(this) {
+            ws === webSocket && connectionToken === token && !token.terminal.get()
+        }
+
+    private fun finishConnection(
+        webSocket: WebSocket,
+        token: ConnectionToken,
+        terminalState: ClientState,
+        logMessage: String? = null,
+        callbackMessage: String? = null,
+    ) {
+        synchronized(this) {
+            if (ws !== webSocket || connectionToken !== token) return
+            if (!token.terminal.compareAndSet(false, true)) return
+
+            if (logMessage != null) {
+                if (terminalState == ClientState.ERROR) errorLog(logMessage)
+                else debugLog(logMessage)
+            }
+            callbackMessage?.let(callbacks::onError)
+            cleanup()
+            setState(terminalState)
+        }
     }
 
     private fun cleanup() {
         synchronized(this) {
             ws = null
+            connectionToken = null
             setupDone = false
             receivingAudio = false
             turnTextParts.clear()
@@ -283,7 +338,7 @@ class GeminiLiveClient(
         }
 
         val setupStr = setup.toString()
-        Log.d(TAG, "Setup message (first 500): ${setupStr.take(500)}")
+        debugLog("Setup message (first 500): ${setupStr.take(500)}")
         ws?.send(setupStr)
     }
 
@@ -297,7 +352,7 @@ class GeminiLiveClient(
 
         // Setup complete
         if ("setupComplete" in msg || "setup_complete" in msg) {
-            Log.d(TAG, "Setup complete, ready for audio")
+            debugLog("Setup complete, ready for audio")
             setupDone = true
             setState(ClientState.CONNECTED)
             return
@@ -311,7 +366,7 @@ class GeminiLiveClient(
         // Server content (audio, turn complete, interrupted)
         val serverContent = (msg["serverContent"] ?: msg["server_content"])?.jsonObject
         if (serverContent != null) {
-            val now = SystemClock.elapsedRealtime()
+            val now = elapsedRealtime()
             if (firstResponseMs == 0L && lastAudioSentMs > 0L) {
                 firstResponseMs = now
                 Log.i("VoiceTiming", "GEMINI_FIRST_RESPONSE: ${now - lastAudioSentMs}ms after last mic chunk")
@@ -338,7 +393,7 @@ class GeminiLiveClient(
                 serverContent["turn_complete"]?.jsonPrimitive?.booleanOrNull == true
             ) {
                 val textJoined = turnTextParts.joinToString(" ")
-                Log.d(TAG, "Turn complete: toolCalls=$turnToolCalls, text=${textJoined.ifEmpty { "(none)" }}")
+                debugLog("Turn complete: toolCalls=$turnToolCalls, text=${textJoined.ifEmpty { "(none)" }}")
                 if (lastAudioSentMs > 0L) {
                     Log.i("VoiceTiming", "TURN_COMPLETE: ${now - lastAudioSentMs}ms after last mic, $audioChunkCount audio chunks received")
                 }
@@ -374,7 +429,7 @@ class GeminiLiveClient(
                     // Collect text parts for fallback detection
                     val text = partObj["text"]?.jsonPrimitive?.contentOrNull
                     if (!text.isNullOrBlank()) {
-                        Log.d(TAG, "modelTurn text: $text")
+                        debugLog("modelTurn text: $text")
                         turnTextParts.add(text)
                     }
 
@@ -415,7 +470,7 @@ class GeminiLiveClient(
                 } ?: emptyMap()
 
                 turnToolCalls.add(name)
-                Log.d(TAG, "toolCall: $name($args) id=$fcId")
+                debugLog("toolCall: $name($args) id=$fcId")
 
                 val context = turnTextParts.takeIf { it.isNotEmpty() }?.joinToString(" ")
                 val result = functionBridge.execute(name, args, context)
@@ -424,7 +479,7 @@ class GeminiLiveClient(
             // Fire fallback immediately if there was narration text alongside tool calls
             if (turnTextParts.isNotEmpty()) {
                 val textJoined = turnTextParts.joinToString(" ")
-                Log.d(TAG, "Fallback (post-toolCall): already_executed=$turnToolCalls")
+                debugLog("Fallback (post-toolCall): already_executed=$turnToolCalls")
                 callbacks.onTextFallback(textJoined, turnToolCalls.toList())
                 turnTextParts.clear()
             }
@@ -478,14 +533,20 @@ class GeminiLiveClient(
                 }
             }
         }
-        Log.d(TAG, "Sending text prompt: $text")
+        debugLog("Sending text prompt: $text")
         ws?.send(msg.toString())
     }
 
     /** Send a PCM16 audio chunk (base64 encoded) to Gemini. */
     fun sendAudio(pcmBase64: String) {
-        if (ws == null || !setupDone) return
-        lastAudioSentMs = SystemClock.elapsedRealtime()
+        val socket: WebSocket
+        val token: ConnectionToken
+        synchronized(this) {
+            socket = ws ?: return
+            token = connectionToken ?: return
+            if (!setupDone || token.terminal.get()) return
+        }
+        lastAudioSentMs = elapsedRealtime()
         val msg = buildJsonObject {
             putJsonObject("realtimeInput") {
                 if (isV31) {
@@ -505,6 +566,19 @@ class GeminiLiveClient(
                 }
             }
         }
-        ws?.send(msg.toString())
+        if (socket.send(msg.toString())) {
+            val acceptedCount = token.acceptedAudioChunks.incrementAndGet()
+            if (acceptedCount == 1 || acceptedCount % 100 == 0) {
+                debugLog("Accepted audio chunk $acceptedCount")
+            }
+        } else {
+            finishConnection(
+                webSocket = socket,
+                token = token,
+                terminalState = ClientState.ERROR,
+                logMessage = "Audio WebSocket send rejected",
+                callbackMessage = "WebSocket rejected audio send",
+            )
+        }
     }
 }
