@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.TextMeasurer
@@ -58,9 +59,10 @@ import kotlin.math.sin
 // (where the incline changes) are structurally the program's own clock — they
 // can never drift from the route bends. A distance-domain layout let a 25s
 // sprint own 68% of the track while a 75s recovery collapsed to a sliver.
-// The organic detail (switchback phase, amplitude jitter, vert feet) is still
-// integrated over PLANNED MILES internally, so the mile-tuned design constants
-// keep their look.
+// Distance-domain detail (vert feet, amplitude jitter) is still integrated over
+// PLANNED MILES internally. The switchback phase is NOT: it accumulates per second
+// as a function of grade alone, because zigzag density is the map's only steepness
+// signal and it must not be diluted by how fast you happen to be running.
 
 /** One planned interval, in the route's domain. */
 data class RouteInterval(val grade: Double, val speed: Double, val durSec: Double)
@@ -98,6 +100,23 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     fun gradeAt(pos: Double): Double = gradeIdx(idxAt(pos))
 
     /**
+     * Grade at [pos] softened across interval bends, so switchback width eases into
+     * a new pitch without averaging a short pitch away through its midpoint.
+     */
+    fun smoothedGradeAt(pos: Double): Double {
+        val p = pos.coerceIn(0.0, total)
+        val i = idxAt(p)
+        val g = gradeIdx(i)
+        val reach = ((endOf(i) - startOf(i)) * SMOOTH_FRAC)
+            .coerceIn(SMOOTH_MIN_SEC, SMOOTH_MAX_SEC)
+        val wIn = ((reach - (p - startOf(i))) / (2.0 * reach)).coerceIn(0.0, 0.5)
+        val wOut = ((reach - (endOf(i) - p)) / (2.0 * reach)).coerceIn(0.0, 0.5)
+        val prev = if (i > 0) gradeIdx(i - 1) else g
+        val next = if (i < count - 1) gradeIdx(i + 1) else g
+        return g * (1.0 - wIn - wOut) + prev * wIn + next * wOut
+    }
+
+    /**
      * Exact program-position → route-position mapping. In the time domain this is
      * simply the program clock (interval start + elapsed, clamped), which is the
      * whole point: an incline change can't miss its bend.
@@ -125,26 +144,34 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
         return v / 100.0 * 5280.0
     }
 
-    // switchback turn-phase: turns accumulate per foot climbed, denser where steep.
-    // Integrated over planned miles (mile-tuned constants), walked by position.
+    // Switchback phase accumulates per second from grade alone. Small bounded jitter
+    // keeps the line organic without letting speed or interval position dominate the
+    // steepness signal.
     fun phaseAt(pos: Double): Double {
         val p = pos.coerceIn(0.0, total)
         var ph = 0.0
+        var organicPhase = 0.0
         var i = 0
         while (i < count && cum[i] < p - 1e-9) {
             val end = min(endOf(i), p)
-            val segMi = (end - cum[i]) * speedIdx(i) / 3600.0
-            val g = gradeIdx(i)
-            val vGain = segMi * g / 100.0 * 5280.0
-            val noise = 0.82 + 0.36 * sin(i * 5.13 + 1.7)
-            // Distance-driven base turn term so FLAT real-program routes still meander
-            // into multiple switchbacks (design only ever fed steep synthetic routes,
-            // where the grade-gated vGain term alone sufficed). BASE_TURNS_PER_MILE is
-            // tuned so a flat 1-mi segment yields ~2-3 half-cycles of sin(phase).
-            ph += SW_A * ((0.5 + g / 8.0) * noise * vGain + BASE_TURNS_PER_MILE * segMi)
+            val elapsed = end - cum[i]
+            val duration = endOf(i) - startOf(i)
+            // The wobble returns to zero at both interval boundaries, so it shapes
+            // the line locally without changing the interval's grade-only net rate.
+            if (elapsed < duration - 1e-9) {
+                val rate = turnRate(gradeIdx(i))
+                // Scaling amplitude by duration*rate/pi makes the wobble derivative
+                // exactly (jitter-1)*rate*cos(...): at most ±8% of forward motion.
+                organicPhase = (jitter(i) - 1.0) * duration * rate / PI *
+                    sin(PI * elapsed / duration)
+            }
+            ph += elapsed * turnRate(gradeIdx(i))
             i++
         }
-        return ph * phaseScale
+        // The minimum-route-sweep scale applies only to grade-derived phase. Keeping
+        // the bounded wobble outside prevents a short route from amplifying it into
+        // multi-radian reversals.
+        return ph * phaseScale + organicPhase
     }
 
     // Short routes accumulate almost no natural phase (a 2-min program is ~0.1mi),
@@ -155,12 +182,8 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
 
     init {
         var raw = 0.0
-        for (i in 0 until count) {
-            val segMi = cumMi[i + 1] - cumMi[i]
-            val g = gradeIdx(i)
-            val noise = 0.82 + 0.36 * sin(i * 5.13 + 1.7)
-            raw += SW_A * ((0.5 + g / 8.0) * noise * (segMi * g / 100.0 * 5280.0) + BASE_TURNS_PER_MILE * segMi)
-        }
+        for (i in 0 until count) raw +=
+            (cum[i + 1] - cum[i]) * turnRate(gradeIdx(i))
         phaseScale = if (raw > 1e-9) max(1.0, MIN_TOTAL_PHASE / raw) else 1.0
     }
 
@@ -180,12 +203,21 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     }
 
     companion object {
-        const val SW_A = 0.030
-        // Half-cycles per mile contributed independent of grade (keeps flat routes wavy).
-        // 0.030 * 250 * 1mi ≈ 7.5 rad ≈ 2.4 half-cycles for a flat 1-mi segment.
-        const val BASE_TURNS_PER_MILE = 250.0
         // Minimum total switchback sweep for the whole route (~2.2π ≈ one full S).
         const val MIN_TOTAL_PHASE = 7.0
+        const val GRADE_REF = 15.0
+        const val TURN_RATE_FLAT = 0.008
+        const val TURN_RATE_GAIN = 0.040
+        const val SMOOTH_FRAC = 0.18
+        const val SMOOTH_MIN_SEC = 2.0
+        const val SMOOTH_MAX_SEC = 20.0
+
+        fun turnRate(gradePct: Double): Double =
+            TURN_RATE_FLAT + TURN_RATE_GAIN *
+                (gradePct.coerceIn(0.0, GRADE_REF) / GRADE_REF)
+
+        /** Bounded organic coefficient used by a zero-net phase wobble per interval. */
+        fun jitter(i: Int): Double = 1.0 + 0.08 * sin(i * 5.13 + 1.7)
     }
 }
 
@@ -416,6 +448,19 @@ internal fun visibleInteriorBoundaries(route: RidgelineRoute, camLo: Double, cam
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
+private const val AMP_FLAT = 1.00f
+private const val AMP_STEEP = 0.35f
+private const val STEEP_STOPS = 64
+private const val STEEP_TINT_MAX = 0.92f
+private const val STEEP_GLOW_ALPHA = 0.5f
+
+/** Monotonic switchback width, clamped to the treadmill's practical grade range. */
+internal fun switchbackAmpFactor(gradePct: Double): Float {
+    val t = (gradePct.coerceIn(0.0, RidgelineRoute.GRADE_REF) /
+        RidgelineRoute.GRADE_REF).toFloat()
+    return AMP_FLAT + (AMP_STEEP - AMP_FLAT) * t
+}
+
 /** Width left for route geometry after the right-side strip and its margins. */
 private fun ridgelineMapWidth(canvasWidth: Float, density: Float): Float =
     max(1f, canvasWidth - 42f * density)
@@ -545,6 +590,9 @@ fun RidgelineMap(
         val labelFrameCache = remember(preparedLabels) {
             TransitionLabelFrameCache<androidx.compose.ui.text.TextLayoutResult>()
         }
+        // Paint ownership follows the route just like the label caches. Camera/canvas
+        // changes update the slot key; marker-pulse redraws reuse its shader and blur.
+        val steepnessPaint = remember(route) { SteepnessPaintSlot() }
         Canvas(modifier = Modifier.fillMaxSize()) {
             // Canvas does NOT clip children by default — contours draw past the panel
             // edge (x in [-30, W+30]) and were bleeding onto neighboring UI.
@@ -552,6 +600,7 @@ fun RidgelineMap(
                 drawRidgeline(
                     route, markerPos, pulseR.value, pulseA.value, elevLo.value.toDouble(),
                     metricsPillRect, preparedLabels, staticLabels, labelFrameCache,
+                    steepnessPaint,
                 )
             }
         }
@@ -582,6 +631,7 @@ private fun DrawScope.drawRidgeline(
     preparedLabels: TransitionLabelModel<androidx.compose.ui.text.TextLayoutResult>,
     staticLabels: PreparedRidgelineStaticLabels<androidx.compose.ui.text.TextLayoutResult>,
     labelFrameCache: TransitionLabelFrameCache<androidx.compose.ui.text.TextLayoutResult>,
+    steepnessPaint: SteepnessPaintSlot,
 ) {
     val W = size.width
     val H = size.height
@@ -776,10 +826,18 @@ private fun DrawScope.drawRidgeline(
             // soft shadow under the whole thread
             drawPath(thread(0, last), fadeBrush(Color.Black), alpha = 0.40f,
                 style = Stroke(width = 6.2f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            // travelled: dim; ahead: bright ivory
-            drawPath(thread(0, sp), fadeBrush(RidgelineTheme.fg), alpha = 0.38f,
+            // Ahead trail warms from ivory toward elevation amber with grade. The
+            // matching high-grade halo adds weight without lowering photo contrast.
+            steepnessPaint.update(route, camLo, EW, W, H, topY, botY, cutTop, fade, dp)
+            val threadBrush = steepnessPaint.brush
+            val glowPaint = steepnessPaint.glowPaint
+            if (sp < last && glowPaint != null) drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawPath(thread(sp, last).asAndroidPath(), glowPaint)
+            }
+            // Travelled trail remains deliberately dim; ahead retains full strength.
+            drawPath(thread(0, sp), threadBrush, alpha = 0.38f,
                 style = Stroke(width = 3.4f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
-            if (sp < last) drawPath(thread(sp, last), fadeBrush(RidgelineTheme.fg), alpha = 0.95f,
+            if (sp < last) drawPath(thread(sp, last), threadBrush, alpha = 0.95f,
                 style = Stroke(width = 3.4f * dp, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
     } else for (sg in segs) {
@@ -1212,10 +1270,9 @@ private fun DrawScope.drawRidgeline(
  * The map's path geometry for one frame: route position → screen point. Extracted from
  * the draw pass so tests can replay a real program through the exact same math.
  *
- * Organic detail (amplitude jitter, phase wobble, grade smoothing) is tuned in the
- * design's MILE domain — it is fed planned miles via distAt so the look is preserved.
- * Grade smoothing keeps its ±0.05mi reach by converting through the LOCAL interval
- * speed (0.05mi = 180/speed seconds), not a fixed time radius (codex review).
+ * This is the only route-position → screen geometry used by drawing, labels, the
+ * prepared pipeline, and tests. Distance still drives organic wobble; smoothed grade
+ * drives the monotonic sweep width.
  */
 internal class RidgelineGeometry(
     private val route: RidgelineRoute,
@@ -1232,12 +1289,7 @@ internal class RidgelineGeometry(
 
     fun worldX(pos: Double): Float {
         val u = route.distAt(pos)
-        val smoothSec = 180.0 / max(0.5, route.speedIdx(route.idxAt(pos)))
-        val g = (route.gradeAt(max(0.0, pos - smoothSec)) + route.gradeAt(pos) + route.gradeAt(pos + smoothSec)) / 3.0
-        // amplitude eases narrower on steep pitches (design exact: 0.55 floor + organic
-        // jitter). Relies on the base-turn term so flat routes still meander wide.
-        // steep-pitch floor raised 0.55 -> 0.65 so steep routes still sweep wide
-        val amp = ampBase * (0.65f + 0.35f * (1f - min(1f, (g / 16.0).toFloat()))) *
+        val amp = ampBase * switchbackAmpFactor(route.smoothedGradeAt(pos)) *
             (0.85f + 0.15f * sin(u * 1.7 + 0.4).toFloat())
         return centerX + amp * sin(route.phaseAt(pos) + 0.4 * sin(u * 1.23 + 0.7)).toFloat()
     }
@@ -1754,10 +1806,115 @@ private const val MONO_THREAD_ROUTE = true
 // muted markers carry the map alone); flip to bring the topo texture back.
 private const val SHOW_CONTOURS = false
 
+/**
+ * Cached grade paint for the mono trail. Its inputs exclude marker position and pulse,
+ * so steady animated frames reuse the gradient, native Paint, shader, and blur filter.
+ */
+private class SteepnessPaintSlot {
+    private var routeKey: RidgelineRoute? = null
+    private var camLoBits = 0L
+    private var ewBits = 0L
+    private var canvasWidthBits = 0
+    private var canvasHeightBits = 0
+    private var topYBits = 0
+    private var botYBits = 0
+    private var fadeBits = 0
+    private var densityBits = 0
+    private var cutTopKey = false
 
+    var brush: Brush = SolidColor(RidgelineTheme.fg)
+        private set
 
+    var glowPaint: android.graphics.Paint? = null
+        private set
 
+    fun update(
+        route: RidgelineRoute,
+        camLo: Double,
+        ew: Double,
+        canvasWidth: Float,
+        canvasHeight: Float,
+        topY: Float,
+        botY: Float,
+        cutTop: Boolean,
+        fade: Float,
+        density: Float,
+    ) {
+        val sameKey = routeKey === route &&
+            camLoBits == camLo.toRawBits() && ewBits == ew.toRawBits() &&
+            canvasWidthBits == canvasWidth.toRawBits() &&
+            canvasHeightBits == canvasHeight.toRawBits() &&
+            topYBits == topY.toRawBits() && botYBits == botY.toRawBits() &&
+            fadeBits == fade.toRawBits() && densityBits == density.toRawBits() &&
+            cutTopKey == cutTop
+        if (sameKey) return
 
+        routeKey = route
+        camLoBits = camLo.toRawBits()
+        ewBits = ew.toRawBits()
+        canvasWidthBits = canvasWidth.toRawBits()
+        canvasHeightBits = canvasHeight.toRawBits()
+        topYBits = topY.toRawBits()
+        botYBits = botY.toRawBits()
+        fadeBits = fade.toRawBits()
+        densityBits = density.toRawBits()
+        cutTopKey = cutTop
+
+        if (botY - topY < 1f) {
+            brush = SolidColor(RidgelineTheme.fg)
+            glowPaint = null
+            return
+        }
+
+        val count = STEEP_STOPS + 1
+        val stops = ArrayList<Pair<Float, Color>>(count)
+        val haloColors = IntArray(count)
+        val haloPositions = FloatArray(count)
+        for (i in 0 until count) {
+            val fraction = i.toFloat() / STEEP_STOPS
+            val pos = (camLo + (1.0 - fraction) * ew).coerceIn(0.0, route.total)
+            val steepness = (route.smoothedGradeAt(pos) / RidgelineRoute.GRADE_REF)
+                .coerceIn(0.0, 1.0).toFloat()
+            val fadeAlpha = if (!cutTop) 1f else
+                (fraction * (botY - topY) / fade).coerceIn(0f, 1f)
+            val trailColor = lerp(
+                RidgelineTheme.fg,
+                RidgelineTheme.elev,
+                steepness * STEEP_TINT_MAX,
+            )
+            stops.add(fraction to trailColor.copy(alpha = trailColor.alpha * fadeAlpha))
+            haloPositions[i] = fraction
+            haloColors[i] = RidgelineTheme.elev.copy(
+                alpha = STEEP_GLOW_ALPHA * steepness * steepness * fadeAlpha,
+            ).toArgb()
+        }
+        brush = Brush.verticalGradient(
+            colorStops = stops.toTypedArray(),
+            startY = topY,
+            endY = botY,
+        )
+        glowPaint = android.graphics.Paint().apply {
+            isAntiAlias = true
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 10f * density
+            strokeCap = android.graphics.Paint.Cap.ROUND
+            strokeJoin = android.graphics.Paint.Join.ROUND
+            shader = android.graphics.LinearGradient(
+                0f,
+                topY,
+                0f,
+                botY,
+                haloColors,
+                haloPositions,
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+            maskFilter = android.graphics.BlurMaskFilter(
+                5.5f * density,
+                android.graphics.BlurMaskFilter.Blur.NORMAL,
+            )
+        }
+    }
+}
 
 // Cached scrim paints (see-through mode), one slot per drawing (trail, ghost) so
 // the two callers don't thrash each other's cache every frame. Rebuilt only when
