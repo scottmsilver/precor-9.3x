@@ -116,6 +116,149 @@ class RidgelineRouteTest {
         )
     }
 
+    // --- steepness legibility ------------------------------------------------
+    // The map's ONLY steepness signal is switchback geometry: how tightly the trail
+    // zigzags (turn rate) and how wide it sweeps (amplitude). The vertical axis is
+    // program time, so grade cannot show up as a climb rate — if the geometry doesn't
+    // encode it, a 12% push draws exactly like a 1% stroll.
+    //
+    // Bug: turn rate was integrated over planned MILES with a per-interval noise term
+    // (±30%), so it tracked speed as much as grade and was not even monotonic — a
+    // fast 1% interval out-meandered a slow 2% one, and two identical 10% intervals
+    // differed 2x depending on their index.
+
+    /** Radians of switchback phase drawn per second of interval [i]. */
+    private fun RidgelineRoute.turnRateOf(i: Int) =
+        (phaseAt(endOf(i)) - phaseAt(startOf(i))) / (endOf(i) - startOf(i))
+
+    @Test
+    fun `switchback rate rises monotonically with grade`() {
+        val grades = listOf(0.0, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0)
+        // Identical duration and speed everywhere, so grade is the only variable.
+        val r = RidgelineRoute(grades.map { RouteInterval(it, speed = 4.0, durSec = 300.0) })
+        val rates = grades.indices.map { r.turnRateOf(it) }
+        for (i in 1 until rates.size) {
+            assertTrue(
+                "grade ${grades[i]}% must zigzag tighter than ${grades[i - 1]}% " +
+                    "(${rates[i]} vs ${rates[i - 1]})",
+                rates[i] > rates[i - 1],
+            )
+        }
+    }
+
+    @Test
+    fun `organic jitter cannot reorder adjacent grades at different route positions`() {
+        // Indices 1 and 2 exercise opposite sides of the deterministic organic wobble.
+        // Jitter may shape the line within an interval, but its net turn rate must not
+        // let a lower pitch look tighter merely because it occurs elsewhere.
+        val r = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 0.0, speed = 4.0, durSec = 300.0),
+                RouteInterval(grade = 14.0, speed = 4.0, durSec = 300.0),
+                RouteInterval(grade = 15.0, speed = 4.0, durSec = 300.0),
+            ),
+        )
+        assertTrue(
+            "15% at index 2 must turn faster than 14% at index 1",
+            r.turnRateOf(2) > r.turnRateOf(1),
+        )
+    }
+
+    @Test
+    fun `short route sweep floor keeps organic jitter small and forward moving`() {
+        val r = RidgelineRoute(
+            listOf(RouteInterval(grade = 0.0, speed = 4.0, durSec = 10.0)),
+        )
+        var previous = r.phaseAt(0.0)
+        for (step in 1..100) {
+            val pos = step / 10.0
+            val phase = r.phaseAt(pos)
+            assertTrue("phase reversed at ${pos}s: $phase <= $previous", phase > previous)
+            val floorOnlyPhase = RidgelineRoute.MIN_TOTAL_PHASE * pos / r.total
+            assertEquals(floorOnlyPhase, phase, 0.081)
+            previous = phase
+        }
+    }
+
+    @Test
+    fun `short interval inside a long route cannot curl backward`() {
+        val r = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 0.0, speed = 4.0, durSec = 1_000.0),
+                RouteInterval(grade = 0.0, speed = 4.0, durSec = 10.0),
+            ),
+        )
+        val start = r.startOf(1)
+        var previous = r.phaseAt(start)
+        for (step in 1..100) {
+            val pos = start + step / 10.0
+            val phase = r.phaseAt(pos)
+            assertTrue("embedded pitch reversed at ${pos - start}s", phase > previous)
+            previous = phase
+        }
+    }
+
+    @Test
+    fun `equal grades draw alike regardless of speed or position in the route`() {
+        val r = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 10.0, speed = 2.5, durSec = 300.0),
+                RouteInterval(grade = 1.0, speed = 6.0, durSec = 300.0),
+                RouteInterval(grade = 10.0, speed = 5.0, durSec = 300.0),
+                RouteInterval(grade = 1.0, speed = 3.0, durSec = 300.0),
+            ),
+        )
+        // Only the small organic jitter may differ (<20%); speed must not leak in.
+        assertEquals(r.turnRateOf(0), r.turnRateOf(2), r.turnRateOf(0) * 0.20)
+        assertEquals(r.turnRateOf(1), r.turnRateOf(3), r.turnRateOf(1) * 0.20)
+    }
+
+    @Test
+    fun `a steep pitch is visibly steeper than a flat one`() {
+        val r = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 0.0, speed = 4.0, durSec = 600.0),
+                RouteInterval(grade = 15.0, speed = 4.0, durSec = 600.0),
+            ),
+        )
+        val ratio = r.turnRateOf(1) / r.turnRateOf(0)
+        assertTrue("steep/flat turn-rate ratio $ratio is too subtle to see", ratio >= 3.5)
+        // ...and steep switchbacks pull IN as well as tightening up.
+        assertTrue(
+            "steep amplitude ${switchbackAmpFactor(15.0)} not meaningfully narrower " +
+                "than flat ${switchbackAmpFactor(0.0)}",
+            switchbackAmpFactor(15.0) <= switchbackAmpFactor(0.0) * 0.6f,
+        )
+    }
+
+    @Test
+    fun `a short steep pitch keeps its own grade through the middle`() {
+        // The sweep width is driven by a smoothed grade. With the old fixed ±0.05mi
+        // reach (±60s at 3mph) the 120s wall below averaged to (0+15+0)/3 = 5% at its
+        // own midpoint — the map drew a hard climb at a third of its steepness.
+        val r = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 0.0, speed = 3.0, durSec = 300.0),
+                RouteInterval(grade = 15.0, speed = 3.0, durSec = 120.0),
+                RouteInterval(grade = 0.0, speed = 3.0, durSec = 300.0),
+            ),
+        )
+        val mid = (r.startOf(1) + r.endOf(1)) / 2.0
+        assertEquals(15.0, r.smoothedGradeAt(mid), 1e-9)
+        // ...while the bend itself still eases rather than stepping.
+        val atBend = r.smoothedGradeAt(r.startOf(1) + 1.0)
+        assertTrue("bend should blend, got $atBend", atBend > 0.0 && atBend < 15.0)
+    }
+
+    @Test
+    fun `switchback amplitude narrows monotonically with grade`() {
+        val amps = listOf(0.0, 3.0, 6.0, 9.0, 12.0, 15.0).map { switchbackAmpFactor(it) }
+        for (i in 1 until amps.size) assertTrue(amps[i] < amps[i - 1])
+        // Saturates past the reference grade rather than inverting.
+        assertEquals(switchbackAmpFactor(15.0), switchbackAmpFactor(40.0), 1e-6f)
+        assertEquals(switchbackAmpFactor(0.0), switchbackAmpFactor(-5.0), 1e-6f)
+    }
+
     @Test
     fun `short routes get a switchback sweep floor`() {
         // A 2-minute nearly-flat program accumulates almost no natural phase; the
