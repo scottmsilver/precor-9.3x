@@ -160,8 +160,10 @@ Output a JSON object with these fields:
   - "incline": percent (0 to 15, 0.5 steps)
 
 Rules:
-- Always start with a warmup (2-5 min, low speed/incline)
-- Always end with a cooldown (2-5 min, decreasing speed)
+- Explicit total duration and interval structure take priority over defaults
+- Include a warmup or cooldown only when requested
+- When the user leaves the structure open, warmup and cooldown intervals may be
+  included within the requested total duration
 - Speed range: 0.5-12.0 mph. Incline range: 0-15
 - Match the requested total duration closely
 - Give intervals short, motivating names

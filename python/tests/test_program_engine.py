@@ -4,8 +4,17 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from program_engine import ProgramState
+from program_engine import SYSTEM_PROMPT, ProgramState
 from tests.helpers import FakeClock, make_program
+
+
+def test_generation_prompt_prioritizes_explicit_workout_structure():
+    prompt = SYSTEM_PROMPT.lower()
+
+    assert "always start with a warmup" not in prompt
+    assert "always end with a cooldown" not in prompt
+    assert "include a warmup or cooldown only when requested" in prompt
+    assert "explicit total duration and interval structure take priority" in prompt
 
 
 class TestLoadProgram:
