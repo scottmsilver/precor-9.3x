@@ -131,6 +131,13 @@ class RidgelineRouteTest {
     private fun RidgelineRoute.turnRateOf(i: Int) =
         (phaseAt(endOf(i)) - phaseAt(startOf(i))) / (endOf(i) - startOf(i))
 
+    /** Finite-difference turn density at [elapsedSec] within interval [i]. */
+    private fun RidgelineRoute.instantaneousTurnRate(i: Int, elapsedSec: Double): Double {
+        val dt = 1e-3
+        val p = startOf(i) + elapsedSec
+        return (phaseAt(p + dt) - phaseAt(p)) / dt
+    }
+
     @Test
     fun `switchback rate rises monotonically with grade`() {
         val grades = listOf(0.0, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0)
@@ -147,10 +154,7 @@ class RidgelineRouteTest {
     }
 
     @Test
-    fun `organic jitter cannot reorder adjacent grades at different route positions`() {
-        // Indices 1 and 2 exercise opposite sides of the deterministic organic wobble.
-        // Jitter may shape the line within an interval, but its net turn rate must not
-        // let a lower pitch look tighter merely because it occurs elsewhere.
+    fun `interval index cannot reorder adjacent grades`() {
         val r = RidgelineRoute(
             listOf(
                 RouteInterval(grade = 0.0, speed = 4.0, durSec = 300.0),
@@ -165,7 +169,50 @@ class RidgelineRouteTest {
     }
 
     @Test
-    fun `short route sweep floor keeps organic jitter small and forward moving`() {
+    fun `instantaneous switchback density is grade-only at every interval position`() {
+        val grades = listOf(0.0, 14.0, 15.0, 3.0, 10.0, 14.0, 15.0)
+        val r = RidgelineRoute(
+            grades.mapIndexed { i, grade ->
+                RouteInterval(grade = grade, speed = 2.0 + i, durSec = 300.0)
+            },
+        )
+        for (i in grades.indices) {
+            for (elapsed in listOf(0.0, 60.0, 150.0, 240.0)) {
+                assertEquals(
+                    "grade ${grades[i]}% at index $i and ${elapsed}s",
+                    RidgelineRoute.turnRate(grades[i]),
+                    r.instantaneousTurnRate(i, elapsed),
+                    1e-6,
+                )
+            }
+        }
+        assertTrue(
+            "15% at index 2 must turn faster than 14% at index 1 at the bend",
+            r.instantaneousTurnRate(2, 0.0) > r.instantaneousTurnRate(1, 0.0),
+        )
+    }
+
+    @Test
+    fun `shared geometry turn structure ignores speed and interval index`() {
+        val uniform = RidgelineRoute(
+            listOf(RouteInterval(grade = 10.0, speed = 3.0, durSec = 900.0)),
+        )
+        val split = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 10.0, speed = 2.0, durSec = 300.0),
+                RouteInterval(grade = 10.0, speed = 6.0, durSec = 300.0),
+                RouteInterval(grade = 10.0, speed = 4.0, durSec = 300.0),
+            ),
+        )
+        val a = RidgelineGeometry(uniform, 320f, 250f, 0.0, 900.0, 20f, 700f)
+        val b = RidgelineGeometry(split, 320f, 250f, 0.0, 900.0, 20f, 700f)
+        for (pos in listOf(0.0, 90.0, 299.0, 301.0, 450.0, 599.0, 601.0, 810.0, 900.0)) {
+            assertEquals("worldX differed at ${pos}s", a.worldX(pos), b.worldX(pos), 1e-5f)
+        }
+    }
+
+    @Test
+    fun `short route sweep floor stays forward moving`() {
         val r = RidgelineRoute(
             listOf(RouteInterval(grade = 0.0, speed = 4.0, durSec = 10.0)),
         )
@@ -175,7 +222,7 @@ class RidgelineRouteTest {
             val phase = r.phaseAt(pos)
             assertTrue("phase reversed at ${pos}s: $phase <= $previous", phase > previous)
             val floorOnlyPhase = RidgelineRoute.MIN_TOTAL_PHASE * pos / r.total
-            assertEquals(floorOnlyPhase, phase, 0.081)
+            assertEquals(floorOnlyPhase, phase, 1e-9)
             previous = phase
         }
     }
@@ -208,9 +255,8 @@ class RidgelineRouteTest {
                 RouteInterval(grade = 1.0, speed = 3.0, durSec = 300.0),
             ),
         )
-        // Only the small organic jitter may differ (<20%); speed must not leak in.
-        assertEquals(r.turnRateOf(0), r.turnRateOf(2), r.turnRateOf(0) * 0.20)
-        assertEquals(r.turnRateOf(1), r.turnRateOf(3), r.turnRateOf(1) * 0.20)
+        assertEquals(r.turnRateOf(0), r.turnRateOf(2), 1e-9)
+        assertEquals(r.turnRateOf(1), r.turnRateOf(3), 1e-9)
     }
 
     @Test
