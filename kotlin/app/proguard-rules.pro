@@ -31,3 +31,6 @@
 
 # Voice layer models (used by JSON building)
 -keep class com.precor.treadmill.voice.** { *; }
+
+# ONNX Runtime JNI constructs these Java classes by their original names.
+-keep class ai.onnxruntime.** { *; }
