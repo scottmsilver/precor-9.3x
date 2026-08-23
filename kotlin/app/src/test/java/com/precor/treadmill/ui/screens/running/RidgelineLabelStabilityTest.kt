@@ -424,6 +424,62 @@ class RidgelineLabelStabilityTest {
         assertEquals("progress change did not invalidate layout", 2, frameCache.computations)
     }
 
+    /** Prepared labels belong to the route model, even when a dense viewport is repacked. */
+    @Test
+    fun denseRecomputationDoesNotRemeasurePreparedLabels() {
+        val denseRoute = RidgelineRoute(
+            (0 until 601).map { n ->
+                RouteInterval(grade = (n % 17).toDouble(), speed = 2.5 + (n % 11) * 0.1, durSec = 1.0)
+            },
+        )
+        var measurements = 0
+        val model = prepareTransitionLabelModel(
+            route = denseRoute,
+            maxPillWidth = mapW - 8f,
+            gradeColorFor = { Color(0xff000000.toInt() or it) },
+            speedColorFor = { Color(0xff100000.toInt() or it) },
+            measure = { text, _, maxWidth ->
+                measurements++
+                val natural = 7f + text.length * 7f
+                MeasuredTransitionText(text, minOf(natural, maxWidth ?: natural))
+            },
+        )
+        val frameCache = TransitionLabelFrameCache<String>()
+
+        fun layout(camLo: Double, markerPos: Double): TransitionLabelFrame<String> {
+            val geometry = RidgelineGeometry(
+                denseRoute, centerX, ampBase, camLo, POS_WINDOW, topY, botY,
+            )
+            val marker = Rect(
+                geometry.worldX(markerPos) - 20f,
+                geometry.screenY(markerPos) - 20f,
+                geometry.worldX(markerPos) + 20f,
+                geometry.screenY(markerPos) + 20f,
+            )
+            return frameCache.layout(
+                model, geometry, markerPos, centerX, mapW, marker,
+                metricsGuard, topY, botY,
+            )
+        }
+
+        val first = layout(camLo = 0.0, markerPos = 300.0)
+        val firstMeasurements = measurements
+        val second = layout(camLo = 2.0, markerPos = 302.0)
+
+        assertEquals(601, first.visible.size)
+        assertEquals(599, second.visible.size)
+        assertEquals("moved dense viewport did not recompute layout", 2, frameCache.computations)
+        assertEquals(
+            "already prepared dense labels were measured again",
+            firstMeasurements,
+            measurements,
+        )
+        println(
+            "dense prepared cache: firstMeasurements=$firstMeasurements " +
+                "secondMeasurements=$measurements",
+        )
+    }
+
     /** Renders a filmstrip so the run can be reviewed by eye (not an assertion). */
     @Test
     fun writesFilmstripForVisualReview() {
