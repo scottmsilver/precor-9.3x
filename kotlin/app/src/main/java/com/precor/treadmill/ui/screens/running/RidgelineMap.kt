@@ -42,7 +42,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
 import com.precor.treadmill.ui.theme.legibleOn
-import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.floor
@@ -59,10 +58,9 @@ import kotlin.math.sin
 // (where the incline changes) are structurally the program's own clock — they
 // can never drift from the route bends. A distance-domain layout let a 25s
 // sprint own 68% of the track while a 75s recovery collapsed to a sliver.
-// Distance-domain detail (vert feet, amplitude jitter) is still integrated over
-// PLANNED MILES internally. The switchback phase is NOT: it accumulates per second
-// as a function of grade alone, because zigzag density is the map's only steepness
-// signal and it must not be diluted by how fast you happen to be running.
+// Elevation detail is still integrated over PLANNED MILES internally. Switchback
+// phase and amplitude modulation are NOT: phase integrates grade over program time,
+// and amplitude's small organic wobble also uses time. Neither can be diluted by speed.
 
 /** One planned interval, in the route's domain. */
 data class RouteInterval(val grade: Double, val speed: Double, val durSec: Double)
@@ -71,7 +69,7 @@ data class RouteInterval(val grade: Double, val speed: Double, val durSec: Doubl
 class RidgelineRoute(intervals: List<RouteInterval>) {
     private val iv: List<RouteInterval> = if (intervals.isEmpty())
         listOf(RouteInterval(2.0, 4.0, 450.0)) else intervals
-    // Cumulative boundaries in both domains: seconds (layout) and miles (detail).
+    // Cumulative boundaries in both domains: seconds (layout) and miles (elevation).
     private val cum: DoubleArray = DoubleArray(iv.size + 1).also {
         for (i in iv.indices) it[i + 1] = it[i] + max(1.0, iv[i].durSec)
     }
@@ -144,40 +142,25 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
         return v / 100.0 * 5280.0
     }
 
-    // Switchback phase accumulates per second from grade alone. Small bounded jitter
-    // keeps the line organic without letting speed or interval position dominate the
-    // steepness signal.
+    // Switchback phase accumulates per second from grade alone. Organic character is
+    // kept in amplitude geometry instead: any index- or position-dependent phase-rate
+    // perturbation can reorder arbitrarily close grades and corrupt steepness density.
     fun phaseAt(pos: Double): Double {
         val p = pos.coerceIn(0.0, total)
         var ph = 0.0
-        var organicPhase = 0.0
         var i = 0
         while (i < count && cum[i] < p - 1e-9) {
             val end = min(endOf(i), p)
             val elapsed = end - cum[i]
-            val duration = endOf(i) - startOf(i)
-            // The wobble returns to zero at both interval boundaries, so it shapes
-            // the line locally without changing the interval's grade-only net rate.
-            if (elapsed < duration - 1e-9) {
-                val rate = turnRate(gradeIdx(i))
-                // Scaling amplitude by duration*rate/pi makes the wobble derivative
-                // exactly (jitter-1)*rate*cos(...): at most ±8% of forward motion.
-                organicPhase = (jitter(i) - 1.0) * duration * rate / PI *
-                    sin(PI * elapsed / duration)
-            }
             ph += elapsed * turnRate(gradeIdx(i))
             i++
         }
-        // The minimum-route-sweep scale applies only to grade-derived phase. Keeping
-        // the bounded wobble outside prevents a short route from amplifying it into
-        // multi-radian reversals.
-        return ph * phaseScale + organicPhase
+        return ph * phaseScale
     }
 
-    // Short routes accumulate almost no natural phase (a 2-min program is ~0.1mi),
-    // which would draw as a straight stub. Scale the whole route's phase up to a
-    // floor of ~2.2π so even tiny routes sweep at least one full S-curve; long
-    // routes (natural phase ≥ the floor) are untouched.
+    // Short routes accumulate little natural phase and would draw as a straight stub.
+    // Scale the whole route's grade-derived phase up to a floor of ~2.2π so even tiny
+    // routes sweep at least one full S-curve; long routes are untouched.
     private val phaseScale: Double
 
     init {
@@ -215,9 +198,6 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
         fun turnRate(gradePct: Double): Double =
             TURN_RATE_FLAT + TURN_RATE_GAIN *
                 (gradePct.coerceIn(0.0, GRADE_REF) / GRADE_REF)
-
-        /** Bounded organic coefficient used by a zero-net phase wobble per interval. */
-        fun jitter(i: Int): Double = 1.0 + 0.08 * sin(i * 5.13 + 1.7)
     }
 }
 
@@ -1271,8 +1251,8 @@ private fun DrawScope.drawRidgeline(
  * the draw pass so tests can replay a real program through the exact same math.
  *
  * This is the only route-position → screen geometry used by drawing, labels, the
- * prepared pipeline, and tests. Distance still drives organic wobble; smoothed grade
- * drives the monotonic sweep width.
+ * prepared pipeline, and tests. Program time drives the small amplitude wobble;
+ * smoothed grade drives the monotonic sweep width.
  */
 internal class RidgelineGeometry(
     private val route: RidgelineRoute,
@@ -1288,10 +1268,10 @@ internal class RidgelineGeometry(
     fun screenY(pos: Double): Float = (botY - ((pos - camLo) / ew) * (botY - topY)).toFloat()
 
     fun worldX(pos: Double): Float {
-        val u = route.distAt(pos)
+        val time = pos.coerceIn(0.0, route.total)
         val amp = ampBase * switchbackAmpFactor(route.smoothedGradeAt(pos)) *
-            (0.85f + 0.15f * sin(u * 1.7 + 0.4).toFloat())
-        return centerX + amp * sin(route.phaseAt(pos) + 0.4 * sin(u * 1.23 + 0.7)).toFloat()
+            (0.85f + 0.15f * sin(time * 0.002 + 0.4).toFloat())
+        return centerX + amp * sin(route.phaseAt(pos)).toFloat()
     }
 }
 
