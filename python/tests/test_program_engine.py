@@ -4,7 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from program_engine import SYSTEM_PROMPT, ProgramState
+from program_engine import GEMINI_MODEL, SYSTEM_PROMPT, ProgramState
 from tests.helpers import FakeClock, make_program
 
 
@@ -15,6 +15,10 @@ def test_generation_prompt_prioritizes_explicit_workout_structure():
     assert "always end with a cooldown" not in prompt
     assert "include a warmup or cooldown only when requested" in prompt
     assert "explicit total duration and interval structure take priority" in prompt
+
+
+def test_workout_generation_uses_benchmark_winner():
+    assert GEMINI_MODEL == "gemini-3.5-flash-lite"
 
 
 class TestLoadProgram:

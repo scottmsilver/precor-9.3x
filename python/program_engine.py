@@ -35,7 +35,7 @@ MILESTONE_MESSAGES = {
     75: "Three quarters done — the finish line is in sight!",
 }
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
 TTS_MODEL = "gemini-2.5-flash-preview-tts"
 
 
