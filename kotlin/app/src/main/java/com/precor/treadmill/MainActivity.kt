@@ -86,7 +86,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playWakeWordSelfTest() {
-        Log.i(TAG, "WAKE_WORD_SELF_TEST phrase=hello_world")
+        Log.i(TAG, "WAKE_WORD_SELF_TEST phrase=hey_treddy")
         wakeTestTts?.shutdown()
         wakeTestTts = TextToSpeech(applicationContext) { status ->
             if (status != TextToSpeech.SUCCESS) {
@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
             }
             wakeTestTts?.language = Locale.US
             wakeTestTts?.speak(
-                "hello world",
+                "hey Treddy",
                 TextToSpeech.QUEUE_FLUSH,
                 null,
                 "wake-word-self-test",
@@ -122,9 +122,9 @@ class MainActivity : ComponentActivity() {
                 context = applicationContext,
                 models = listOf(
                     WakeWordModel(
-                        name = "Hello World",
-                        modelPath = "hello_world.onnx",
-                        threshold = 0.03f,
+                        name = "Hey Treddy",
+                        modelPath = "hey_treddy.onnx",
+                        threshold = 0.60f,
                     )
                 ),
                 detectionCooldownMs = 3_000L,
@@ -156,7 +156,7 @@ class MainActivity : ComponentActivity() {
             wakeWordStateJob = lifecycleScope.launch {
                 voiceViewModel.voiceState.collect { state ->
                     if (state == VoiceState.IDLE) {
-                        Log.i(TAG, "WAKE_WORD_LISTENING phrase=hello_world")
+                        Log.i(TAG, "WAKE_WORD_LISTENING phrase=hey_treddy")
                         engine.start()
                     } else {
                         engine.stop()

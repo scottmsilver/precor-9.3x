@@ -14,9 +14,12 @@ Original TensorFlow model: Copyright Google LLC
 ONNX conversion: Copyright (c) 2022-2024 David Scripka (OpenWakeWord Project)
 Licensed under the Apache License, Version 2.0
 
-3. hello_world.onnx
--------------------
-[INSERT YOUR MODEL'S LICENSE INFORMATION HERE]
+3. hey_treddy.onnx
+------------------
+Internal prototype model trained with HAwake/openWakeWord. Synthetic positive
+samples used a LibriTTS-R Piper voice whose source dataset is CC BY 4.0;
+background samples may retain additional source-level terms. Do not redistribute
+this prototype until its training-data attribution and licensing are reviewed.
 
 ================================================================================
 
