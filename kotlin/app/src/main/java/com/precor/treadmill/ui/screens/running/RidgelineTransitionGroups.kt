@@ -1,6 +1,10 @@
 package com.precor.treadmill.ui.screens.running
 
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.min
 
 internal data class TransitionBoundaryGroup(
@@ -73,4 +77,31 @@ internal fun formatTransitionCount(count: Int): String {
         count < 999_950_000 -> "×%.1fM".format(Locale.US, count / 1_000_000.0)
         else -> "×%.1fB".format(Locale.US, count / 1_000_000_000.0)
     }
+}
+
+internal data class BookendSegment(val start: Offset, val end: Offset)
+
+/** A simple brace based on the pills' final placed rectangles, not their route anchors. */
+internal fun placedBookendBracket(
+    first: Rect,
+    last: Rect,
+    centerX: Float,
+): List<BookendSegment> {
+    val gapLo = min(first.right, last.right)
+    val gapHi = max(first.left, last.left)
+    val spineX = if (gapLo <= gapHi) {
+        centerX.coerceIn(gapLo, gapHi)
+    } else {
+        val left = min(first.left, last.left)
+        val right = max(first.right, last.right)
+        if (abs(centerX - left) <= abs(centerX - right)) left else right
+    }
+    fun edge(rect: Rect): Float = if (spineX <= rect.left) rect.left else rect.right
+    val firstY = first.center.y
+    val lastY = last.center.y
+    return listOf(
+        BookendSegment(Offset(edge(first), firstY), Offset(spineX, firstY)),
+        BookendSegment(Offset(spineX, firstY), Offset(spineX, lastY)),
+        BookendSegment(Offset(spineX, lastY), Offset(edge(last), lastY)),
+    ).filter { it.start != it.end }
 }

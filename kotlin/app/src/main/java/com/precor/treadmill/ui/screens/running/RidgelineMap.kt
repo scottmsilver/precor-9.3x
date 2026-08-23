@@ -239,6 +239,19 @@ internal data class PreparedTransitionLabel<T>(
     val pillW: Float,
 )
 
+internal data class PreparedTransitionBadge<T>(
+    val text: String,
+    val measured: MeasuredTransitionText<T>,
+    val color: Color,
+)
+
+internal data class PreparedTransitionEndpoint<T>(
+    val label: PreparedTransitionLabel<T>,
+    val badge: PreparedTransitionBadge<T>?,
+    val badgeOffset: Float?,
+    val effectivePillW: Float,
+)
+
 private class BoundedLru<K, V>(private val capacity: Int) {
     private val values = LinkedHashMap<K, V>(capacity, 0.75f, true)
 
@@ -262,6 +275,7 @@ internal class TransitionLabelModel<T>(
 ) {
     private val measuredText = BoundedLru<TransitionTextKey, MeasuredTransitionText<T>>(256)
     private val preparedLabels = MutableList<PreparedTransitionLabel<T>?>(contents.size) { null }
+    private val preparedEndpoints = HashMap<Pair<Int, Int>, PreparedTransitionEndpoint<T>>()
 
     val labels: List<PreparedTransitionLabel<T>> = object : AbstractList<PreparedTransitionLabel<T>>() {
         override val size: Int get() = route.count
@@ -308,6 +322,28 @@ internal class TransitionLabelModel<T>(
             speedOffset = speedOffset,
             pillW = min(safePillWidth, speedOffset + speed.width + sidePadding),
         ).also { preparedLabels[i] = it }
+    }
+
+    internal fun endpointAt(i: Int, aggregateCount: Int? = null): PreparedTransitionEndpoint<T> {
+        val count = aggregateCount ?: 1
+        return preparedEndpoints.getOrPut(i to count) {
+            val label = labelAt(i)
+            if (aggregateCount == null) {
+                PreparedTransitionEndpoint(label, null, null, label.pillW)
+            } else {
+                val text = formatTransitionCount(aggregateCount)
+                val gap = 5f
+                val available = max(1f, maxPillWidth - label.pillW - gap - 5f)
+                val measuredBadge = measured(text, RidgelineTheme.elev, available)
+                val badge = PreparedTransitionBadge(text, measuredBadge, RidgelineTheme.elev)
+                PreparedTransitionEndpoint(
+                    label = label,
+                    badge = badge,
+                    badgeOffset = label.pillW + gap - 5f,
+                    effectivePillW = min(maxPillWidth, label.pillW + gap + measuredBadge.width),
+                )
+            }
+        }
     }
 }
 
@@ -1004,11 +1040,46 @@ private fun DrawScope.drawRidgeline(
     )
     val slots = labelFrame.layout.slots.associateBy { it.key }
 
+    // Dense buckets get a quiet amber brace between the two pills after collision
+    // placement. Keeping it behind chips/leaders makes it an annotation, not clutter.
+    labelFrame.visible.groupBy { it.groupIndex }.values.forEach { endpoints ->
+        val first = endpoints.firstOrNull { it.endpoint == BookendEndpoint.FIRST }
+        val last = endpoints.firstOrNull { it.endpoint == BookendEndpoint.LAST }
+        if (first != null && last != null) {
+            val firstSlot = slots[first.candidate.key]
+            val lastSlot = slots[last.candidate.key]
+            if (firstSlot != null && lastSlot != null) {
+                val firstRect = Rect(
+                    firstSlot.pillLeft, firstSlot.pillTop,
+                    firstSlot.pillLeft + first.endpointContent.effectivePillW, firstSlot.pillTop + CHIP_H,
+                )
+                val lastRect = Rect(
+                    lastSlot.pillLeft, lastSlot.pillTop,
+                    lastSlot.pillLeft + last.endpointContent.effectivePillW, lastSlot.pillTop + CHIP_H,
+                )
+                val alpha = min(
+                    transitionChipAlpha(first.travelled),
+                    transitionChipAlpha(last.travelled),
+                )
+                placedBookendBracket(firstRect, lastRect, centerX).forEach { segment ->
+                    drawLine(
+                        RidgelineTheme.elev,
+                        start = segment.start,
+                        end = segment.end,
+                        strokeWidth = 1f,
+                        alpha = alpha,
+                    )
+                }
+            }
+        }
+    }
+
     // Draw. A chip behind the marker keeps its (legibility-solved) text but
     // drops its chrome to the travelled-trail weight, so the eye still reads forward.
     for (c in labelFrame.visible) {
         val slot = slots[c.candidate.key] ?: continue
         val label = c.label
+        val endpoint = c.endpointContent
         val pos = Offset(c.candidate.anchorX, c.candidate.anchorY)
         val pillLeft = slot.pillLeft
         val pillTop = slot.pillTop
@@ -1016,7 +1087,7 @@ private fun DrawScope.drawRidgeline(
         val chromeAlpha = transitionChipAlpha(c.travelled)
         // Leader line back to the bend when the chip had to step aside.
         if (slot.offBend) {
-            val edgeX = if (pillLeft > pos.x) pillLeft else pillLeft + label.pillW
+            val edgeX = if (pillLeft > pos.x) pillLeft else pillLeft + endpoint.effectivePillW
             drawLine(
                 RidgelineTheme.fg,
                 start = pos,
@@ -1026,13 +1097,13 @@ private fun DrawScope.drawRidgeline(
             )
         }
         drawRoundRectCompat(
-            pillLeft, pillTop, label.pillW, CHIP_H, 6f,
+            pillLeft, pillTop, endpoint.effectivePillW, CHIP_H, 6f,
             RidgelineTheme.pillBg.copy(alpha = RidgelineTheme.pillBg.alpha * chromeAlpha),
         )
         drawRoundRect(
             color = label.gradeColor,
             topLeft = Offset(pillLeft, pillTop),
-            size = Size(label.pillW, CHIP_H),
+            size = Size(endpoint.effectivePillW, CHIP_H),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(6f, 6f),
             style = Stroke(width = 1f),
             alpha = chromeAlpha,
@@ -1057,6 +1128,16 @@ private fun DrawScope.drawRidgeline(
             ),
             alpha = chromeAlpha,
         )
+        endpoint.badge?.let { badge ->
+            drawText(
+                badge.measured.value,
+                topLeft = Offset(
+                    pillLeft + (endpoint.badgeOffset ?: 0f),
+                    textY - badge.measured.value.size.height / 2f,
+                ),
+                alpha = chromeAlpha,
+            )
+        }
     }
 
     // --- path-vs-chip alignment validation (adb logcat -s RidgelineSync) ---
@@ -1385,12 +1466,20 @@ internal class RidgelineGeometry(
 
 /** One prepared label projected through the exact geometry used by the draw pass. */
 internal data class ProjectedTransitionLabel<T>(
-    val label: PreparedTransitionLabel<T>,
+    val endpointContent: PreparedTransitionEndpoint<T>,
     val candidate: ChipCandidate,
     val travelled: Boolean,
+    val groupIndex: Int,
+    val endpoint: BookendEndpoint,
 )
 
+internal val <T> ProjectedTransitionLabel<T>.label: PreparedTransitionLabel<T>
+    get() = endpointContent.label
+
+internal enum class BookendEndpoint { SINGLE, FIRST, LAST }
+
 internal data class TransitionLabelFrame<T>(
+    val groups: List<TransitionBoundaryGroup>,
     val visible: List<ProjectedTransitionLabel<T>>,
     val prioritized: List<ProjectedTransitionLabel<T>>,
     val layout: ChipLayoutResult,
@@ -1405,28 +1494,38 @@ internal fun <T> collectVisibleTransitionCandidates(
     model: TransitionLabelModel<T>,
     geometry: RidgelineGeometry,
     markerPos: Double,
+    groups: List<TransitionBoundaryGroup> = collectTransitionBoundaryGroups(
+        model.route, geometry.camLo, geometry.ew,
+    ),
 ): List<ProjectedTransitionLabel<T>> {
-    val out = ArrayList<ProjectedTransitionLabel<T>>()
-    var i = model.route.idxAt(geometry.camLo)
-    while (i < model.labels.size) {
-        val label = model.labels[i]
-        val boundary = label.key
-        if (boundary > geometry.camHi) break
-        if (boundary >= geometry.camLo) {
-            out.add(
-                ProjectedTransitionLabel(
-                    label = label,
-                    candidate = ChipCandidate(
-                        key = boundary,
-                        anchorX = geometry.worldX(boundary),
-                        anchorY = geometry.screenY(boundary),
-                        pillW = label.pillW,
-                    ),
-                    travelled = boundary < markerPos,
+    val out = ArrayList<ProjectedTransitionLabel<T>>(groups.size * 2)
+    groups.forEachIndexed { groupIndex, group ->
+        val indices = if (group.aggregate) intArrayOf(group.firstIndex, group.lastIndex)
+            else intArrayOf(group.firstIndex)
+        indices.forEachIndexed { endpointIndex, intervalIndex ->
+            val endpointKind = when {
+                !group.aggregate -> BookendEndpoint.SINGLE
+                endpointIndex == 0 -> BookendEndpoint.FIRST
+                else -> BookendEndpoint.LAST
+            }
+            val prepared = model.endpointAt(
+                intervalIndex,
+                aggregateCount = if (endpointKind == BookendEndpoint.LAST) group.count else null,
+            )
+            val boundary = prepared.label.key
+            out += ProjectedTransitionLabel(
+                endpointContent = prepared,
+                candidate = ChipCandidate(
+                    key = boundary,
+                    anchorX = geometry.worldX(boundary),
+                    anchorY = geometry.screenY(boundary),
+                    pillW = prepared.effectivePillW,
                 ),
+                travelled = boundary < markerPos,
+                groupIndex = groupIndex,
+                endpoint = endpointKind,
             )
         }
-        i++
     }
     return out
 }
@@ -1460,7 +1559,8 @@ internal fun <T> layoutTransitionLabelFrame(
         botBound = botBound,
         fixedGuards = fixedGuards,
     )
-    return TransitionLabelFrame(visible, prioritized, layout)
+    val groups = collectTransitionBoundaryGroups(model.route, geometry.camLo, geometry.ew)
+    return TransitionLabelFrame(groups, visible, prioritized, layout)
 }
 
 private const val PACKING_GRID_PX = 2f
@@ -1509,7 +1609,21 @@ internal class TransitionLabelFrameCache<T> {
         botBound: Float,
         fixedGuards: List<Rect> = emptyList(),
     ): TransitionLabelFrame<T> {
-        val visible = collectVisibleTransitionCandidates(model, geometry, markerPos)
+        val cameraPixelsPerUnit = (geometry.botY - geometry.topY) / geometry.ew
+        val cameraPixel = if (kotlin.math.abs(cameraPixelsPerUnit) < 1e-6f) 0 else floor(
+            geometry.camLo * cameraPixelsPerUnit / PACKING_GRID_PX,
+        ).toInt()
+        val packingCamLo = if (kotlin.math.abs(cameraPixelsPerUnit) < 1e-6f) geometry.camLo else
+            cameraPixel * PACKING_GRID_PX / cameraPixelsPerUnit
+        val exactGroups = collectTransitionBoundaryGroups(model.route, geometry.camLo, geometry.ew)
+        // Ordinary windows retain exact membership. Dense bucket membership is snapped
+        // with packing so a reused layout can never contain slots for stale endpoints.
+        val groups = if (exactGroups.any { it.aggregate }) {
+            collectTransitionBoundaryGroups(model.route, packingCamLo, geometry.ew)
+        } else {
+            exactGroups
+        }
+        val visible = collectVisibleTransitionCandidates(model, geometry, markerPos, groups)
         val prioritized = visible.sortedWith(
             compareBy({ it.travelled }, { if (it.travelled) -it.label.key else it.label.key }),
         )
@@ -1517,12 +1631,6 @@ internal class TransitionLabelFrameCache<T> {
         val lastInterval = visible.lastOrNull()?.label?.intervalIndex ?: -1
         val markerInterval = model.route.idxAt(markerPos)
         val travelledCut = if (markerPos > model.route.startOf(markerInterval)) markerInterval else markerInterval - 1
-        val cameraPixelsPerUnit = (geometry.botY - geometry.topY) / geometry.ew
-        val cameraPixel = if (kotlin.math.abs(cameraPixelsPerUnit) < 1e-6f) 0 else floor(
-            geometry.camLo * cameraPixelsPerUnit / PACKING_GRID_PX,
-        ).toInt()
-        val packingCamLo = if (kotlin.math.abs(cameraPixelsPerUnit) < 1e-6f) geometry.camLo else
-            cameraPixel * PACKING_GRID_PX / cameraPixelsPerUnit
         val snappedMarker = packingRect(markerRect)
         val cached = cachedLayout
         if (cached != null && cachedModel === model &&
@@ -1534,7 +1642,7 @@ internal class TransitionLabelFrameCache<T> {
             cachedTravelledCut == travelledCut && cachedMapW == mapW &&
             cachedMarkerRect == snappedMarker && cachedMetricsGuard == metricsGuard &&
             cachedFixedGuards == fixedGuards
-        ) return TransitionLabelFrame(visible, prioritized, cached)
+        ) return TransitionLabelFrame(groups, visible, prioritized, cached)
 
         val packingGeometry = RidgelineGeometry(
             model.route, geometry.centerX, geometry.ampBase, packingCamLo,
@@ -1569,7 +1677,7 @@ internal class TransitionLabelFrameCache<T> {
         cachedMetricsGuard = metricsGuard
         cachedFixedGuards = fixedGuards.toList()
         cachedLayout = layout
-        return TransitionLabelFrame(visible, prioritized, layout)
+        return TransitionLabelFrame(groups, visible, prioritized, layout)
     }
 }
 
