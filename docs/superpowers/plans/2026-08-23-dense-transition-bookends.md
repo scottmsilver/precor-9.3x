@@ -19,6 +19,16 @@
 - Modify `kotlin/app/src/test/java/com/precor/treadmill/ui/screens/running/RidgelineLabelStabilityTest.kt`: production-pipeline cache, exact-anchor, traveled-cut, collision, and workload coverage.
 - Write verification artifacts only under `build/verification/2026-08-23-dense-bookends/` (ignored build output; never commit them).
 
+## Execution order
+
+Tasks have a strict dependency chain: **1 → 2 → 3 → 4 → 5**. Dispatch one
+fresh implementer at a time and complete review before starting the next task.
+Tasks 1, 3, and 4 share `RidgelineMap.kt`; they must never run in parallel or
+invoke concurrent Gradle builds in this worktree.
+
+Every shell block below starts at the integration worktree root. Gradle commands
+therefore use `./kotlin/gradlew -p kotlin`, and every Git path is root-relative.
+
 ### Task 1: Make route lookup and projection indexed
 
 **Files:**
@@ -61,8 +71,7 @@ Add tests covering the label universe `startOf(0 until count)`, duplicates-free 
 Run:
 
 ```bash
-cd kotlin
-./gradlew testDebugUnitTest --tests '*RidgelineRouteTest' --rerun-tasks
+./kotlin/gradlew -p kotlin testDebugUnitTest --tests '*RidgelineRouteTest' --rerun-tasks
 ```
 
 Expected: compilation fails because `firstBoundaryAtOrAfter` and `firstBoundaryAfter` do not exist.
@@ -100,10 +109,8 @@ Declare `floorRate` before initializing `phaseAtBoundary`. Implement `lowerBound
 Run:
 
 ```bash
-./gradlew testDebugUnitTest \
-  --tests '*RidgelineRouteTest' \
-  --tests '*RidgelineSteepnessTest' \
-  --rerun-tasks
+./kotlin/gradlew -p kotlin testDebugUnitTest \
+  --tests '*RidgelineRouteTest' --rerun-tasks
 ```
 
 Expected: all selected tests pass, including exact historical phase anchors.
@@ -129,15 +136,16 @@ Use injectable production defaults (`exactLimit = 64`, `bucketCount = 32`) and s
 
 ```kotlin
 @Test fun `64 boundaries stay exact and 65 aggregate`() {
-    assertTrue(groups(routeWithStarts(64), 0.0, 600.0).all { it.count == 1 })
-    val dense = groups(routeWithStarts(65), 0.0, 600.0)
+    assertTrue(collectTransitionBoundaryGroups(routeWithStarts(64), 0.0, 600.0)
+        .all { it.count == 1 })
+    val dense = collectTransitionBoundaryGroups(routeWithStarts(65), 0.0, 600.0)
     assertTrue(dense.size <= 32)
     assertTrue(dense.sumOf { it.count } == 65)
     assertTrue(dense.sumOf { if (it.count == 1) 1 else 2 } <= 64)
 }
 
 @Test fun `groups cover visible indices once at every edge`() {
-    val grouped = groups(
+    val grouped = collectTransitionBoundaryGroups(
         route = routeWithBoundaryKeys(0.0, 10.0, 20.0, 30.0, 40.0),
         qLo = 10.0,
         ew = 20.0,
@@ -155,7 +163,8 @@ Also cover: route start included; route end excluded; `qLo`/`qHi` included; inte
 Run:
 
 ```bash
-./gradlew testDebugUnitTest --tests '*RidgelineTransitionGroupsTest' --rerun-tasks
+./kotlin/gradlew -p kotlin testDebugUnitTest \
+  --tests '*RidgelineTransitionGroupsTest' --rerun-tasks
 ```
 
 Expected: compilation fails because the grouping module does not exist.
@@ -174,12 +183,15 @@ internal data class TransitionBoundaryGroup(
     val aggregate: Boolean get() = count > 1
 }
 
+internal data class TransitionGroupingStats(var boundarySearches: Int = 0)
+
 internal fun collectTransitionBoundaryGroups(
     route: RidgelineRoute,
     qLo: Double,
     ew: Double,
     exactLimit: Int = 64,
     bucketCount: Int = 32,
+    stats: TransitionGroupingStats? = null,
 ): List<TransitionBoundaryGroup> {
     val qHi = min(qLo + ew, route.total)
     val visibleFirst = route.firstBoundaryAtOrAfter(qLo)
@@ -203,27 +215,49 @@ internal fun collectTransitionBoundaryGroups(
 }
 ```
 
-Validate finite positive `ew`, `exactLimit >= 2`, and `bucketCount >= 1`. Clamp `qLo` consistently with existing route geometry; do not enumerate interior indices in dense mode.
+Increment `stats.boundarySearches` immediately before each route boundary
+lookup. Tests assert a constant upper bound (`<= bucketCount + 2`) for a route
+with a million interior transitions.
 
-- [ ] **Step 4: Add bounded count formatting tests and implementation**
+Validate finite positive `ew`, `exactLimit >= 2`, and `bucketCount >= 1`.
+`qLo` is the frame cache's already-quantized `packingCamLo` and must be used
+unchanged; the caller guarantees `qLo >= 0`. Only `qHi` is clipped to
+`route.total`. Add a test that a non-grid `qLo` is not independently rounded or
+clamped, and do not enumerate interior indices in dense mode.
 
-Test and implement a pure formatter used by the inline badge:
+- [ ] **Step 4: Write count-formatting tests and verify RED**
+
+Add assertions for `×2`, `×999`, `×1.0k`, `×1.2M`, `×2.1B`, and the promotion
+edges 999,949/999,950 and 999,949,999/999,950,000. Run:
+
+```bash
+./kotlin/gradlew -p kotlin testDebugUnitTest \
+  --tests '*RidgelineTransitionGroupsTest' --rerun-tasks
+```
+
+Expected: compilation fails because `formatTransitionCount` does not exist.
+
+- [ ] **Step 5: Implement bounded count formatting and verify GREEN**
+
+Implement a pure formatter used by the inline badge. Promote after rounding so
+it can never emit `×1000.0k` or `×1000.0M`:
 
 ```kotlin
 internal fun formatTransitionCount(count: Int): String = when {
     count < 1_000 -> "×$count"
-    count < 1_000_000 -> "×%.1fk".format(Locale.US, count / 1_000.0)
-    count < 1_000_000_000 -> "×%.1fM".format(Locale.US, count / 1_000_000.0)
+    count < 999_950 -> "×%.1fk".format(Locale.US, count / 1_000.0)
+    count < 999_950_000 -> "×%.1fM".format(Locale.US, count / 1_000_000.0)
     else -> "×%.1fB".format(Locale.US, count / 1_000_000_000.0)
 }
 ```
 
-Expected assertions include `×2`, `×999`, `×1.0k`, `×1.2M`, and `×2.1B`; require `count > 1` for badge callers.
+Add `require(count > 1)` before the `when`. Then rerun the focused test and expect
+all formatter and grouping cases to pass.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [ ] **Step 6: Run focused tests and commit**
 
 ```bash
-./gradlew testDebugUnitTest \
+./kotlin/gradlew -p kotlin testDebugUnitTest \
   --tests '*RidgelineTransitionGroupsTest' \
   --tests '*RidgelineRouteTest'
 git diff --check
@@ -248,33 +282,69 @@ Extend the test model's measurement counter and production frame cache. Cover:
     val frame = cache.layout(model, denseGeometry, markerPos, centerX, mapW, marker, metrics, topY, botY)
     assertTrue(frame.groups.size <= 32)
     assertTrue(frame.visible.size <= 64)
-    assertTrue(model.preparedCount <= 64)
-    assertTrue(frame.stats.worldXCalls <= 64)
-    assertEquals(10_000, frame.groups.sumOf { it.range.count })
+    assertTrue(model.preparationCount <= 64)
+    assertTrue(cache.stats.exactProjectionCalls <= 64)
+    assertTrue(cache.stats.packingProjectionCalls <= 64)
+    assertEquals(10_000, frame.groups.sumOf { it.count })
 }
 
 @Test fun `exact anchors move while dense membership and slots stay cached`() {
     val first = layoutAt(camLo = 100.000)
     val second = layoutAt(camLo = 100.010)
-    assertEquals(first.groupRanges, second.groupRanges)
+    assertEquals(
+        first.groups.map { it.firstIndex until it.endExclusive },
+        second.groups.map { it.firstIndex until it.endExclusive },
+    )
     assertEquals(first.layout.slots, second.layout.slots)
     assertNotEquals(first.visible.map { it.candidate.anchorY }, second.visible.map { it.candidate.anchorY })
 }
 ```
 
-Add a marker-crossing case where the exact marker crosses a selected bookend but remains within the same 2-pixel camera cell and snapped marker rectangle. Assert traveled styling changes, `computations` increments exactly once, and priorities/slots are deterministic. Retain the existing 61-label exact-mode expectations.
+Define explicit cumulative test instrumentation:
+
+```kotlin
+internal data class TransitionFrameCacheStats(
+    val membershipComputations: Int,
+    val packingProjectionCalls: Int,
+    val exactProjectionCalls: Int,
+    val placementComputations: Int,
+)
+```
+
+`TransitionLabelModel.preparationCount` increments only when a new endpoint
+identity is prepared. `TransitionGroupingStats.boundarySearches` is an optional
+counter passed to the pure helper. `TransitionLabelFrameCache.stats` exposes a
+snapshot of its cumulative counters for JVM tests; production does not log.
+
+Add legacy-reference comparisons at 1 and exactly 64 visible boundaries for
+keys, content, traveled state, effective pill widths, priority, and slots. Add
+an explicit 65-boundary production-cache switch test. Add a marker-crossing
+case where the exact marker crosses a selected bookend but remains within the
+same 2-pixel camera cell and snapped marker rectangle. Assert traveled styling
+changes and placement invalidates exactly once. Test unchanged snapped marker,
+metrics, and fixed guards. Retain the existing 61-label expectations.
 
 - [ ] **Step 2: Run the production-pipeline tests and verify RED**
 
 Run:
 
 ```bash
-./gradlew testDebugUnitTest --tests '*RidgelineLabelStabilityTest' --rerun-tasks
+./kotlin/gradlew -p kotlin testDebugUnitTest \
+  --tests '*RidgelineLabelStabilityTest' --rerun-tasks
 ```
 
 Expected: dense-bound assertions fail because all visible labels are still collected.
 
-- [ ] **Step 3: Add badge-aware projected/frame models**
+- [ ] **Step 3: Write badge sizing/cache tests and verify RED**
+
+Before changing models, add failing tests for a narrow `maxPillWidth`, an ending
+label whose ordinary grade/speed already consumes the width, and an
+`Int.MAX_VALUE` group count. Assert one final `effectivePillW <= maxPillWidth`,
+identical placement/chrome/guard widths, a badge offset after the speed run, and
+no text-run overlap. Run the focused stability test and expect missing endpoint
+preparation APIs.
+
+- [ ] **Step 4: Add badge-aware prepared/projected/frame models**
 
 Extend the model without altering ordinary labels:
 
@@ -284,13 +354,21 @@ internal data class PreparedTransitionBadge<T>(
     val measured: MeasuredTransitionText<T>,
 )
 
-internal data class ProjectedTransitionLabel<T>(
+internal data class PreparedTransitionEndpoint<T>(
     val label: PreparedTransitionLabel<T>,
+    val badge: PreparedTransitionBadge<T>?,
+    val gradeOffset: Float,
+    val speedOffset: Float,
+    val badgeOffset: Float?,
+    val effectivePillW: Float,
+)
+
+internal data class ProjectedTransitionLabel<T>(
+    val endpointContent: PreparedTransitionEndpoint<T>,
     val candidate: ChipCandidate,
     val travelled: Boolean,
     val groupIndex: Int,
     val endpoint: BookendEndpoint,
-    val badge: PreparedTransitionBadge<T>? = null,
 )
 
 internal enum class BookendEndpoint { SINGLE, FIRST, LAST }
@@ -303,20 +381,46 @@ internal data class TransitionLabelFrame<T>(
 )
 ```
 
-Expose a model-lifetime cached `badgeFor(count)` that measures amber count text once. For a last endpoint, set candidate width to `label.pillW + BADGE_GAP + badge.width + BADGE_END_PADDING`; singles and first endpoints retain the exact old width.
+Expose model-lifetime cached `endpointAt(index, aggregateCount?)`. Normal and
+first endpoints delegate to the existing prepared label unchanged. An ending
+endpoint measures the badge first, constraining it to the pill's available
+content width when even the badge cannot fit naturally, then reserves
+`badge.width + BADGE_GAP + trailingPadding` inside `maxPillWidth`, and reflows
+grade/speed runs proportionally into the remaining width using the existing
+constrained-measure path. Set
+`badgeOffset = speedOffset + speed.width + BADGE_GAP`; compute one
+`effectivePillW <= maxPillWidth`. Use that exact width for the candidate,
+placement, chrome, leaders, brackets, canvas checks, and all guards.
 
-- [ ] **Step 4: Refactor the frame cache around quantized membership**
+- [ ] **Step 5: Refactor the frame cache into membership and packing phases**
 
-Compute `cameraPixel` and `packingCamLo` before collection. Call `collectTransitionBoundaryGroups(route, packingCamLo, ew)`, prepare/project only each group's first and (when different) last index, and build packing candidates with `packingGeometry`.
+Compute `cameraPixel` and `packingCamLo` before collection.
 
-Cache keys must include: model identity, camera pixel, geometry/style dimensions, group ranges, traveled cut, snapped marker rect, metrics guard, fixed guards, and map bounds. Cache only group identities, prioritization, badges, and slot decisions. On every `layout` call, reproject the selected indices through exact `geometry` and return new candidates with the cached slots. Do not cache exact anchor coordinates.
+- Membership cache key: model identity, camera pixel/`packingCamLo`, and `ew`.
+  Its value is group ranges plus prepared first/last endpoint identities and
+  badges. A subpixel frame with the same key performs no grouping, boundary
+  searches, or preparation.
+- Packing cache key: membership identity plus traveled cut, snapped marker,
+  metrics and fixed guards, geometry/style dimensions, center/map bounds. Its
+  value is priority and slot decisions. A subpixel frame with unchanged keys
+  performs no packing projection or placement.
+- Every call reprojects only selected exact anchors through current `geometry`;
+  `exactProjectionCalls` therefore increases by the bounded selected count.
 
-For instrumentation, add internal counters or injected projector hooks used only by JVM tests; production defaults must add no per-frame logging or allocation beyond the bounded selected set.
+Update `layoutTransitionLabelFrame`, which is used directly by existing tests:
+either route it through the same grouping/cache pipeline or construct explicit
+singleton `TransitionBoundaryGroup`s for its supplied exact visible list and
+populate the new `TransitionLabelFrame.groups` constructor argument. Do not
+leave its constructor/callers broken.
 
-- [ ] **Step 5: Run exact/dense cache tests and commit**
+Add counter assertions proving subpixel frames do not rerun membership,
+preparation, packing projection, or placement, while exact projection does run;
+camera-cell and traveled-cut crossings invalidate their respective phase once.
+
+- [ ] **Step 6: Run exact/dense cache tests and commit**
 
 ```bash
-./gradlew testDebugUnitTest \
+./kotlin/gradlew -p kotlin testDebugUnitTest \
   --tests '*RidgelineLabelStabilityTest' \
   --tests '*RidgelineTransitionGroupsTest' \
   --tests '*RidgelineChipLayoutTest'
@@ -344,20 +448,30 @@ Define pure geometry assertions for heavily displaced pills on opposite sides:
     val last = Rect(500f, 80f, 640f, 104f)
     val marker = Rect(290f, 170f, 350f, 230f)
     val otherChip = Rect(300f, 110f, 430f, 134f)
-    val segments = placedBookendBracket(first, last, centerX = 320f)
+    val segments = placedBookendBracket(first, last, centerX = 320f, strokeWidth = 1f)
     assertTrue(segments.any { it.touchesBoundaryOf(first) })
     assertTrue(segments.any { it.touchesBoundaryOf(last) })
-    val clipped = clipSegmentsOutside(segments, listOf(marker, otherChip))
+    val clipped = clipSegmentsOutside(
+        segments = segments,
+        guards = listOf(marker, otherChip),
+        canvas = Rect(0f, 0f, 700f, 400f),
+        strokeWidth = 1f,
+    )
     assertTrue(clipped.none { it.interiorIntersects(marker) || it.interiorIntersects(otherChip) })
 }
 ```
 
-Also test same-side pills, vertically reversed slot positions, canvas-edge clipping, zero-length fragments, overlapping guards, and preservation of own-pill boundary endpoints.
+Also test same-side pills, overlapping horizontal pill ranges, sub-pixel gaps,
+vertically reversed slot positions, canvas-edge clipping, zero-length fragments,
+overlapping guards, corners/tangency, rounded-pill bounding rectangles, and
+preservation of own-pill boundary endpoints. All assertions operate on the
+painted stroke envelope, not only its centerline.
 
 - [ ] **Step 2: Run bracket tests and verify RED**
 
 ```bash
-./gradlew testDebugUnitTest --tests '*RidgelineTransitionGroupsTest' --rerun-tasks
+./kotlin/gradlew -p kotlin testDebugUnitTest \
+  --tests '*RidgelineTransitionGroupsTest' --rerun-tasks
 ```
 
 Expected: compilation fails because bracket geometry helpers do not exist.
@@ -369,13 +483,31 @@ Add:
 ```kotlin
 internal data class BookendSegment(val start: Offset, val end: Offset)
 
-internal fun placedBookendBracket(first: Rect, last: Rect, centerX: Float): List<BookendSegment> {
+private fun outsideUnionX(first: Rect, last: Rect, centerX: Float, halfStroke: Float): Float {
+    val left = min(first.left, last.left) - halfStroke
+    val right = max(first.right, last.right) + halfStroke
+    return if (abs(centerX - left) <= abs(centerX - right)) left else right
+}
+
+private fun bracketSpineX(first: Rect, last: Rect, centerX: Float, halfStroke: Float): Float {
+    val firstIsLeft = first.left <= last.left
+    val leftRect = if (firstIsLeft) first else last
+    val rightRect = if (firstIsLeft) last else first
+    val gapLo = leftRect.right + halfStroke
+    val gapHi = rightRect.left - halfStroke
+    return if (gapLo <= gapHi) centerX.coerceIn(gapLo, gapHi)
+    else outsideUnionX(first, last, centerX, halfStroke)
+}
+
+internal fun placedBookendBracket(
+    first: Rect,
+    last: Rect,
+    centerX: Float,
+    strokeWidth: Float,
+): List<BookendSegment> {
     val firstY = first.center.y
     val lastY = last.center.y
-    val spineX = centerX.coerceIn(
-        min(first.right, last.right),
-        max(first.left, last.left),
-    )
+    val spineX = bracketSpineX(first, last, centerX, strokeWidth / 2f)
     val firstEdge = nearestHorizontalBoundary(first, spineX)
     val lastEdge = nearestHorizontalBoundary(last, spineX)
     return listOf(
@@ -386,27 +518,67 @@ internal fun placedBookendBracket(first: Rect, last: Rect, centerX: Float): List
 }
 ```
 
-Adjust the spine calculation if tests expose an invalid `coerceIn` range; the required invariant is a deterministic centerline-near spine and arms ending exactly on pill boundaries. Implement axis-aligned segment subtraction against guard rectangles as interval subtraction, then clip to canvas bounds. Do not use raster sampling.
+For disjoint horizontal ranges, this chooses the centerline-nearest point in the
+stroke-inset gap. For overlapping or too-narrow ranges, it chooses the
+centerline-nearest side strictly outside the pills' union, breaking ties to the
+left. `nearestHorizontalBoundary` must select `left` when the spine is left of a
+pill and `right` when it is right; the construction guarantees it is never
+inside either pill.
 
-- [ ] **Step 4: Draw badge and bracket in the specified order**
+Implement axis-aligned segment subtraction as interval subtraction. Inflate
+marker, metrics, fixed guards, and every *other* pill rectangle by half the
+bracket stroke before subtraction. Clip against the canvas rectangle inset by
+the same half-stroke. Do not add the bracket's own first/last pills to the guard
+list: construction keeps the stroke outside their interiors and arms terminate
+at their boundaries. Remove zero-length fragments and do not use raster
+sampling.
 
-Build pill rectangles from `slot.pillLeft`, `slot.pillTop`, `candidate.pillW`, and `CHIP_H`. For aggregate groups, compute bracket segments from the two placed pill rectangles, subtract marker/metrics/other-pill guards, and draw remaining segments after the route but before ordinary leaders and chips at one pixel and the lower endpoint alpha.
+- [ ] **Step 4: Write pure render-geometry assertions and verify RED**
 
-Draw the badge inside the ending pill after speed text using its measured offset. Use `candidate.pillW` for pill chrome, collision bounds, and edge selection; ordinary labels remain byte-for-byte equivalent in size/content.
+Before Canvas code, expose a pure `BookendDecoration` result containing the
+effective first/last pill rectangles, badge baseline/offset, unclipped bracket,
+and clipped drawable segments. Add failing production-level assertions that:
 
-- [ ] **Step 5: Run focused Ridgeline tests and generate visual evidence**
+- z-order data places route → bracket → leaders/chips → marker/metrics;
+- the effective pill rectangles use exactly the placement width;
+- badge text lies inside the ending pill and after speed text;
+- marker, metrics, fixed guards, other chips, and canvas exclude the full
+  painted stroke;
+- a straddling group's endpoints keep independent traveled styling and its
+  bracket alpha is the lower endpoint alpha.
+
+Run the two focused classes and expect missing render-geometry APIs.
+
+- [ ] **Step 5: Draw badge and bracket in the specified order**
+
+Build pill rectangles from `slot.pillLeft`, `slot.pillTop`,
+`endpointContent.effectivePillW`, and `CHIP_H`. Build and test the pure
+`BookendDecoration`, then draw its clipped segments after the route but before
+ordinary leaders/chips and before the marker/metrics at one pixel and the lower
+endpoint alpha.
+
+Draw the badge inside the ending pill at the prepared `badgeOffset`. Use
+`effectivePillW` identically for placement, pill chrome, collision bounds,
+leader edge selection, bracket attachment, canvas exclusion, and guards.
+Ordinary labels retain their legacy prepared runs, widths, and draw data.
+
+- [ ] **Step 6: Run focused Ridgeline tests and generate visual evidence**
 
 ```bash
-./gradlew testDebugUnitTest \
+./kotlin/gradlew -p kotlin testDebugUnitTest \
   --tests '*RidgelineTransitionGroupsTest' \
   --tests '*RidgelineLabelStabilityTest' \
   --tests '*RidgelineChipLayoutTest' \
   --tests '*RidgelineRouteTest'
 ```
 
-Expected: all selected tests pass. Extend the existing SVG/filmstrip fixture with one 65-transition threshold frame and one 1,000-transition dense frame; inspect that brackets touch both pills and badges remain readable.
+Expected: all selected tests pass. Extend the existing SVG/filmstrip fixture
+that writes `kotlin/build/ridgeline-labels.svg` with one 65-transition threshold
+frame and one 1,000-transition dense frame. Copy the reviewed artifact to
+`build/verification/2026-08-23-dense-bookends/ridgeline-labels.svg` and inspect
+that brackets touch both pills and badges remain readable.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git diff --check
@@ -437,9 +609,7 @@ Have a second fresh reviewer inspect boundary math, asymptotic behavior, Compose
 Run from the integration worktree:
 
 ```bash
-cd kotlin
-./gradlew testDebugUnitTest assembleDebug --rerun-tasks
-cd ..
+./kotlin/gradlew -p kotlin testDebugUnitTest assembleDebug --rerun-tasks
 python3 -m pytest python/tests
 bash deploy/tests/run_tests.sh
 git diff --check
@@ -450,7 +620,86 @@ Expected: Android unit tests and APK build pass; Python and deploy suites pass w
 
 - [ ] **Step 4: Verify on the Galaxy Tab**
 
-Use the existing isolated mock-backend harness and the Galaxy Tab device `SM-X115`. Install the fresh APK, then exercise:
+Create the evidence directory, start the repository's mock server with an
+isolated database, discover the current wireless endpoint dynamically, and
+install the fresh APK:
+
+```bash
+mkdir -p build/verification/2026-08-23-dense-bookends
+BOOKEND_TMP=$(mktemp -d)
+env TREADMILL_MOCK=1 TREADMILL_DB="$BOOKEND_TMP/verification.db" \
+  TREADMILL_SERVER_PORT=44084 \
+  python3 python/server.py \
+  >build/verification/2026-08-23-dense-bookends/server.log 2>&1 &
+BOOKEND_SERVER_PID=$!
+echo "$BOOKEND_SERVER_PID" >build/verification/2026-08-23-dense-bookends/server.pid
+
+adb mdns services | tee build/verification/2026-08-23-dense-bookends/adb-mdns.log
+BOOKEND_SERIAL=$(adb devices -l | awk '/model:SM_X115/ {print $1; exit}')
+test -n "$BOOKEND_SERIAL"
+adb -s "$BOOKEND_SERIAL" install -r \
+  kotlin/app/build/outputs/apk/debug/app-debug.apk \
+  | tee build/verification/2026-08-23-dense-bookends/adb-install.log
+```
+
+Back up the server preference before changing it:
+
+```bash
+adb -s "$BOOKEND_SERIAL" exec-out run-as com.precor.treadmill \
+  cat files/datastore/server_prefs.preferences_pb \
+  >build/verification/2026-08-23-dense-bookends/server-prefs-before.pb
+adb -s "$BOOKEND_SERIAL" shell am force-stop com.precor.treadmill
+adb -s "$BOOKEND_SERIAL" shell run-as com.precor.treadmill \
+  rm -f files/datastore/server_prefs.preferences_pb
+adb -s "$BOOKEND_SERIAL" shell am start -n \
+  com.precor.treadmill/.MainActivity
+```
+
+Use the Setup screen to enter `http://<local-LAN-IP>:44084`; save a screenshot
+and `uiautomator dump` before and after. Create/select a verification profile,
+then create exact route fixtures against the mock server. Use `jq -n` to produce
+ordinary, 64-, 65-, and 1,000-boundary JSON bodies; POST each to
+`/api/workouts`, load the returned workout id through
+`/api/workouts/{id}/load`, and call `/api/program/start`. Save every request and
+response in the evidence directory. Durations may be fractional for the dense
+fixture because the exact timeline is intentionally unrestricted.
+
+The server setup and dense fixture commands are:
+
+```bash
+BOOKEND_URL=http://127.0.0.1:44084
+curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/profiles" \
+  -H 'Content-Type: application/json' -d '{"name":"Bookend Verify"}' \
+  | tee build/verification/2026-08-23-dense-bookends/profile-create.json
+BOOKEND_PROFILE=$(jq -r '.profile.id' \
+  build/verification/2026-08-23-dense-bookends/profile-create.json)
+curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/profile/select" \
+  -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$BOOKEND_PROFILE\"}" \
+  | tee build/verification/2026-08-23-dense-bookends/profile-select.json
+
+jq -n '{program:{name:"Dense 1000",intervals:[range(0;1000) |
+  {name:("I" + tostring),duration:0.6,speed:(2.5 + (. % 8) * 0.2),incline:(. % 16)}]},
+  source:"manual"}' \
+  >build/verification/2026-08-23-dense-bookends/dense-1000-request.json
+curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/workouts" \
+  -H 'Content-Type: application/json' \
+  --data-binary @build/verification/2026-08-23-dense-bookends/dense-1000-request.json \
+  | tee build/verification/2026-08-23-dense-bookends/dense-1000-create.json
+BOOKEND_WORKOUT=$(jq -r '.workout.id' \
+  build/verification/2026-08-23-dense-bookends/dense-1000-create.json)
+curl --fail --silent --show-error -X POST \
+  "$BOOKEND_URL/api/workouts/$BOOKEND_WORKOUT/load" \
+  | tee build/verification/2026-08-23-dense-bookends/dense-1000-load.json
+curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/program/start" \
+  | tee build/verification/2026-08-23-dense-bookends/dense-1000-start.json
+```
+
+Generate the 64- and 65-boundary fixtures with the same `jq` shape using 64
+intervals of 9.5 seconds and 65 intervals of 9.375 seconds, respectively; both
+sets fit inside the 600-second viewport and exercise the exact threshold.
+
+Then exercise:
 
 - an ordinary mixed-grade route with fewer than 65 visible boundaries (no visual change);
 - exactly 64 and exactly 65 visible boundaries (mode threshold);
@@ -459,11 +708,35 @@ Use the existing isolated mock-backend harness and the Galaxy Tab device `SM-X11
 - camera movement across a packing-grid boundary;
 - displaced pills around marker and metrics guards.
 
-Capture screenshots/video, `dumpsys gfxinfo ... framestats`, and SurfaceFlinger deltas under `build/verification/2026-08-23-dense-bookends/`. Confirm brackets remain attached to their pills, separate leaders track exact route anchors, no decoration paints over guards, and presentation cadence stays near 60 Hz.
+Capture screenshots/video, `adb -s "$BOOKEND_SERIAL" shell dumpsys gfxinfo
+com.precor.treadmill framestats`, and before/after `dumpsys SurfaceFlinger`
+snapshots under the evidence directory. Confirm brackets remain attached to
+their pills, separate leaders track exact route anchors, no decoration paints
+over guards, and presentation cadence stays near 60 Hz.
 
 - [ ] **Step 5: Restore the device and document evidence**
 
-Restore the original server preference byte-for-byte, animation scales, timeout, app state, and mock backend. Record restoration commands/results and append concise evidence to bead `precor-9_3x-rbg`.
+Restore the original server preference byte-for-byte, animation scales, timeout,
+app state, and mock backend. At minimum:
+
+```bash
+adb -s "$BOOKEND_SERIAL" shell am force-stop com.precor.treadmill
+adb -s "$BOOKEND_SERIAL" push \
+  build/verification/2026-08-23-dense-bookends/server-prefs-before.pb \
+  /data/local/tmp/server-prefs.preferences_pb
+adb -s "$BOOKEND_SERIAL" shell run-as com.precor.treadmill \
+  cp -f /data/local/tmp/server-prefs.preferences_pb \
+  files/datastore/server_prefs.preferences_pb
+adb -s "$BOOKEND_SERIAL" shell rm -f /data/local/tmp/server-prefs.preferences_pb
+kill "$BOOKEND_SERVER_PID"
+```
+
+Record animation-scale/timeout values before mutation and compare them after
+restoration. Verify the preference with a byte-for-byte `cmp` after pulling it
+back, record final `adb`/server process state, validate that `BOOKEND_TMP` is a
+non-empty directory created by `mktemp -d` before removing exactly that path,
+and
+append concise evidence to bead `precor-9_3x-rbg`.
 
 - [ ] **Step 6: Commit any final test-only correction and push the branch**
 
