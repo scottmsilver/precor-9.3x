@@ -7,6 +7,15 @@ import org.junit.Test
 class RidgelineViewportLensTest {
 
     @Test
+    fun minimapViewportLensUsesAmberInsetRimStyle() {
+        val style = minimapViewportLensStyle
+
+        assertEquals(RidgelineTheme.elev, style.rimColor)
+        assertEquals(0.75f, style.rimAlpha)
+        assertEquals(2f, style.rimWidthDp)
+    }
+
+    @Test
     fun lensUsesTheExistingViewportAndStripGeometry() {
         val lens = minimapViewportLens(
             leaderX = 701f,
