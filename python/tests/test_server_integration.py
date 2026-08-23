@@ -526,6 +526,17 @@ class TestChatEndpoint:
 class TestConfigEndpoint:
     """Test /api/config returns ephemeral token, not raw API key."""
 
+    def test_config_identifies_voice_assistant_as_treddy(self, test_app):
+        client, _, _ = test_app
+        with patch("server._create_ephemeral_token", return_value=None):
+            resp = client.get("/api/config")
+
+        assert resp.status_code == 200
+        prompt = resp.json()["system_prompt"]
+        assert "You are Treddy" in prompt
+        assert "lightly jokey and cynical, but always kind" in prompt
+        assert "You control a Precor treadmill" not in prompt
+
     def test_config_returns_ephemeral_token(self, test_app):
         client, server, _ = test_app
         mock_token = MagicMock()
