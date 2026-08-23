@@ -152,23 +152,16 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
         while (i < count && cum[i] < p - 1e-9) {
             val end = min(endOf(i), p)
             val elapsed = end - cum[i]
-            ph += elapsed * turnRate(gradeIdx(i))
+            ph += elapsed * (turnRate(gradeIdx(i)) + floorRate)
             i++
         }
-        return ph * phaseScale
+        return ph
     }
 
-    // Short routes accumulate little natural phase and would draw as a straight stub.
-    // Scale the whole route's grade-derived phase up to a floor of ~2.2π so even tiny
-    // routes sweep at least one full S-curve; long routes are untouched.
-    private val phaseScale: Double
-
-    init {
-        var raw = 0.0
-        for (i in 0 until count) raw +=
-            (cum[i + 1] - cum[i]) * turnRate(gradeIdx(i))
-        phaseScale = if (raw > 1e-9) max(1.0, MIN_TOTAL_PHASE / raw) else 1.0
-    }
+    // A grade-independent additive rate gives a short FLAT route the minimum sweep
+    // without normalizing away grade differences. It depends only on total duration
+    // and the flat baseline; long routes already above the floor receive no addition.
+    private val floorRate: Double = max(0.0, MIN_TOTAL_PHASE / total - TURN_RATE_FLAT)
 
     /** Invert vertAt: route position (seconds) at a given elevation (feet climbed). */
     fun posAtElev(e: Double): Double {
@@ -433,12 +426,31 @@ private const val AMP_STEEP = 0.35f
 private const val STEEP_STOPS = 64
 private const val STEEP_TINT_MAX = 0.92f
 private const val STEEP_GLOW_ALPHA = 0.5f
+private const val STEEPNESS_PAINT_CAMERA_QUANTUM_PX = 2.0
 
 /** Monotonic switchback width, clamped to the treadmill's practical grade range. */
 internal fun switchbackAmpFactor(gradePct: Double): Float {
     val t = (gradePct.coerceIn(0.0, RidgelineRoute.GRADE_REF) /
         RidgelineRoute.GRADE_REF).toFloat()
     return AMP_FLAT + (AMP_STEEP - AMP_FLAT) * t
+}
+
+/**
+ * Quantize only steepness-paint sampling to a two-physical-pixel camera step.
+ * Route geometry and label anchors continue to use the exact animated camera.
+ */
+internal fun quantizedSteepnessPaintCamLo(
+    camLo: Double,
+    ew: Double,
+    topY: Float,
+    botY: Float,
+): Double {
+    val drawableHeight = (botY - topY).toDouble()
+    if (!camLo.isFinite() || !ew.isFinite() || ew <= 0.0 ||
+        !drawableHeight.isFinite() || drawableHeight <= 0.0
+    ) return camLo
+    val step = STEEPNESS_PAINT_CAMERA_QUANTUM_PX * ew / drawableHeight
+    return floor(camLo / step) * step
 }
 
 /** Width left for route geometry after the right-side strip and its margins. */
@@ -1820,8 +1832,9 @@ private class SteepnessPaintSlot {
         fade: Float,
         density: Float,
     ) {
+        val paintCamLo = quantizedSteepnessPaintCamLo(camLo, ew, topY, botY)
         val sameKey = routeKey === route &&
-            camLoBits == camLo.toRawBits() && ewBits == ew.toRawBits() &&
+            camLoBits == paintCamLo.toRawBits() && ewBits == ew.toRawBits() &&
             canvasWidthBits == canvasWidth.toRawBits() &&
             canvasHeightBits == canvasHeight.toRawBits() &&
             topYBits == topY.toRawBits() && botYBits == botY.toRawBits() &&
@@ -1830,7 +1843,7 @@ private class SteepnessPaintSlot {
         if (sameKey) return
 
         routeKey = route
-        camLoBits = camLo.toRawBits()
+        camLoBits = paintCamLo.toRawBits()
         ewBits = ew.toRawBits()
         canvasWidthBits = canvasWidth.toRawBits()
         canvasHeightBits = canvasHeight.toRawBits()
@@ -1852,7 +1865,7 @@ private class SteepnessPaintSlot {
         val haloPositions = FloatArray(count)
         for (i in 0 until count) {
             val fraction = i.toFloat() / STEEP_STOPS
-            val pos = (camLo + (1.0 - fraction) * ew).coerceIn(0.0, route.total)
+            val pos = (paintCamLo + (1.0 - fraction) * ew).coerceIn(0.0, route.total)
             val steepness = (route.smoothedGradeAt(pos) / RidgelineRoute.GRADE_REF)
                 .coerceIn(0.0, 1.0).toFloat()
             val fadeAlpha = if (!cutTop) 1f else

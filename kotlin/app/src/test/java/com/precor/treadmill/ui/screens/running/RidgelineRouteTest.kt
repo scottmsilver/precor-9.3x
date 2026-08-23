@@ -228,6 +228,68 @@ class RidgelineRouteTest {
     }
 
     @Test
+    fun `matched short routes preserve strict grade density through floor thresholds`() {
+        val durations = listOf(10.0, 145.0, 146.0, 154.0, 155.0, 874.0, 875.0, 876.0)
+        for (duration in durations) {
+            val routes = listOf(0.0, 14.0, 15.0).map { grade ->
+                RidgelineRoute(listOf(RouteInterval(grade, speed = 4.0, durSec = duration)))
+            }
+            val rates = routes.map { it.phaseAt(it.total) / it.total }
+            assertTrue("14% did not exceed flat at ${duration}s: $rates", rates[1] > rates[0])
+            assertTrue("15% did not exceed 14% at ${duration}s: $rates", rates[2] > rates[1])
+            for (route in routes) {
+                var previous = route.phaseAt(0.0)
+                for (step in 1..20) {
+                    val phase = route.phaseAt(route.total * step / 20.0)
+                    assertTrue("phase reversed at ${duration}s step $step", phase > previous)
+                    previous = phase
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `short route floor is additive and grade independent`() {
+        val duration = 10.0
+        fun density(grade: Double): Double {
+            val route = RidgelineRoute(listOf(RouteInterval(grade, speed = 4.0, durSec = duration)))
+            return route.phaseAt(route.total) / route.total
+        }
+        val flat = density(0.0)
+        val fourteen = density(14.0)
+        val fifteen = density(15.0)
+        assertEquals(RidgelineRoute.MIN_TOTAL_PHASE / duration, flat, 1e-9)
+        assertEquals(RidgelineRoute.turnRate(14.0) - RidgelineRoute.turnRate(0.0), fourteen - flat, 1e-9)
+        assertEquals(RidgelineRoute.turnRate(15.0) - RidgelineRoute.turnRate(14.0), fifteen - fourteen, 1e-9)
+    }
+
+    @Test
+    fun `steepness paint camera key reuses one two-pixel bucket`() {
+        val ew = 600.0
+        val topY = 74f
+        val botY = 750f
+        val step = 2.0 * ew / (botY - topY)
+        val bucketStart = 40.0 * step
+        val keys = listOf(0.05, 0.25, 0.55, 0.95).map { fraction ->
+            quantizedSteepnessPaintCamLo(bucketStart + fraction * step, ew, topY, botY)
+        }
+        assertEquals("subpixel tween frames rebuilt paint", 1, keys.toSet().size)
+        assertEquals(bucketStart, keys.first(), 1e-9)
+    }
+
+    @Test
+    fun `steepness paint camera key invalidates after two pixels`() {
+        val ew = 600.0
+        val topY = 74f
+        val botY = 750f
+        val step = 2.0 * ew / (botY - topY)
+        val bucketStart = 40.0 * step
+        val before = quantizedSteepnessPaintCamLo(bucketStart + 0.95 * step, ew, topY, botY)
+        val after = quantizedSteepnessPaintCamLo(bucketStart + 1.05 * step, ew, topY, botY)
+        assertEquals(step, after - before, 1e-9)
+    }
+
+    @Test
     fun `short interval inside a long route cannot curl backward`() {
         val r = RidgelineRoute(
             listOf(
