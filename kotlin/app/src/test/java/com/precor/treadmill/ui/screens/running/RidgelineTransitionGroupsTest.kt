@@ -1,5 +1,6 @@
 package com.precor.treadmill.ui.screens.running
 
+import androidx.compose.ui.geometry.Rect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -193,5 +194,19 @@ class RidgelineTransitionGroupsTest {
     @Test(expected = IllegalArgumentException::class)
     fun `transition count requires an aggregate`() {
         formatTransitionCount(1)
+    }
+
+    @Test
+    fun `bookend bracket joins the placed pill edges`() {
+        val first = Rect(40f, 300f, 150f, 324f)
+        val last = Rect(500f, 80f, 640f, 104f)
+
+        val segments = placedBookendBracket(first, last, centerX = 320f)
+
+        assertEquals(3, segments.size)
+        assertEquals(first.right, segments.first().start.x, 0f)
+        assertEquals(first.center.y, segments.first().start.y, 0f)
+        assertEquals(last.left, segments.last().end.x, 0f)
+        assertEquals(last.center.y, segments.last().end.y, 0f)
     }
 }

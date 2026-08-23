@@ -198,6 +198,36 @@ class RidgelineLabelStabilityTest {
         )
     }
 
+    @Test
+    fun denseFramesProjectOnlyBookendsAndBadgeEveryAggregateEnd() {
+        val denseRoute = RidgelineRoute(
+            (0 until 1_000).map { n ->
+                RouteInterval(grade = (n % 10).toDouble(), speed = 3.0, durSec = 1.0)
+            },
+        )
+        val frame = layoutTransitionLabelFrame(
+            model = modelFor(denseRoute),
+            geometry = RidgelineGeometry(
+                denseRoute, centerX, ampBase, camLo = 0.0, ew = denseRoute.total, topY, botY,
+            ),
+            markerPos = 0.0,
+            centerX = centerX,
+            mapW = mapW,
+            markerRect = Rect(centerX - 20f, botY - 20f, centerX + 20f, botY + 20f),
+            metricsGuard = null,
+            topBound = topY,
+            botBound = botY,
+        )
+
+        assertTrue(frame.groups.size <= 32)
+        assertEquals(1_000, frame.groups.sumOf { it.count })
+        assertTrue(frame.visible.size <= 64)
+        assertEquals(
+            frame.groups.count { it.aggregate },
+            frame.visible.count { it.endpointContent.badge != null },
+        )
+    }
+
     /** A long route prepares no TextLayouts until its small visible slice is requested. */
     @Test
     fun longRouteMeasuresOnlyVisibleLabelsOnFirstFrame() {
@@ -312,7 +342,7 @@ class RidgelineLabelStabilityTest {
                 val projected = byKey.getValue(slot.key)
                 slot to Rect(
                     slot.pillLeft, slot.pillTop,
-                    slot.pillLeft + projected.label.pillW, slot.pillTop + CHIP_H,
+                    slot.pillLeft + projected.endpointContent.effectivePillW, slot.pillTop + CHIP_H,
                 )
             }
             for (a in rects.indices) if (!rects[a].first.overlapFallback) {
@@ -369,8 +399,9 @@ class RidgelineLabelStabilityTest {
         val first = run()
         val second = run()
         val elapsedMs = (System.nanoTime() - started) / 1_000_000
-        assertEquals(601, first.visible.size)
-        assertEquals(601, first.layout.slots.size)
+        assertTrue(first.visible.size <= 64)
+        assertEquals(first.visible.size, first.layout.slots.size)
+        assertEquals(601, first.groups.sumOf { it.count })
         assertEquals(first.prioritized.map { it.label.key }, second.prioritized.map { it.label.key })
         assertEquals(first.layout.slots, second.layout.slots)
         assertEquals("pulse-only redraw recomputed dense layout", 1, frameCache.computations)
@@ -387,7 +418,10 @@ class RidgelineLabelStabilityTest {
         )
         val avoidableMarkerClashes = first.layout.slots.zip(first.prioritized).count { (slot, projected) ->
             !slot.overlapFallback &&
-                Rect(slot.pillLeft, slot.pillTop, slot.pillLeft + projected.label.pillW, slot.pillTop + CHIP_H)
+                Rect(
+                    slot.pillLeft, slot.pillTop,
+                    slot.pillLeft + projected.endpointContent.effectivePillW, slot.pillTop + CHIP_H,
+                )
                     .overlaps(marker)
         }
         assertEquals("shared pipeline ignored marker guard for packable slots", 0, avoidableMarkerClashes)
@@ -395,7 +429,7 @@ class RidgelineLabelStabilityTest {
             slot to Rect(
                 slot.pillLeft,
                 slot.pillTop,
-                slot.pillLeft + projected.label.pillW,
+                slot.pillLeft + projected.endpointContent.effectivePillW,
                 slot.pillTop + CHIP_H,
             )
         }
@@ -466,13 +500,14 @@ class RidgelineLabelStabilityTest {
         val firstMeasurements = measurements
         val second = layout(camLo = 2.0, markerPos = 302.0)
 
-        assertEquals(601, first.visible.size)
-        assertEquals(599, second.visible.size)
+        assertTrue(first.visible.size <= 64)
+        assertTrue(second.visible.size <= 64)
+        assertEquals(601, first.groups.sumOf { it.count })
+        assertEquals(599, second.groups.sumOf { it.count })
         assertEquals("moved dense viewport did not recompute layout", 2, frameCache.computations)
-        assertEquals(
-            "already prepared dense labels were measured again",
-            firstMeasurements,
-            measurements,
+        assertTrue(
+            "moving dense viewport prepared unbounded text: first=$firstMeasurements second=$measurements",
+            measurements - firstMeasurements <= 192,
         )
         println(
             "dense prepared cache: firstMeasurements=$firstMeasurements " +
