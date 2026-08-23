@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.content.Intent
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -25,21 +24,19 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val TAG = "MainActivity"
         const val ACTION_VOICE_TEST = "com.precor.treadmill.VOICE_TEST"
         const val ACTION_VOICE_TOGGLE = "com.precor.treadmill.VOICE_TOGGLE"
-        const val ACTION_WAKE_WORD_SELF_TEST = "com.precor.treadmill.WAKE_WORD_SELF_TEST"
     }
 
     private val voiceViewModel: VoiceViewModel by viewModel()
     private var wakeWordEngine: WakeWordEngine? = null
     private var wakeWordDetectionJob: Job? = null
     private var wakeWordStateJob: Job? = null
-    private var wakeTestTts: TextToSpeech? = null
+    private var wakeWordForeground = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -60,7 +57,6 @@ class MainActivity : ComponentActivity() {
         }
 
         handleVoiceTestIntent(intent)
-        startWakeWordPrototype()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -79,36 +75,21 @@ class MainActivity : ComponentActivity() {
                 Log.d(TAG, "Voice toggle (mic mode)")
                 voiceViewModel.toggle()
             }
-            ACTION_WAKE_WORD_SELF_TEST -> playWakeWordSelfTest()
             else -> return
         }
     }
 
-    private fun playWakeWordSelfTest() {
-        Log.i(TAG, "WAKE_WORD_SELF_TEST phrase=hey_treddy")
-        wakeTestTts?.shutdown()
-        wakeTestTts = TextToSpeech(applicationContext) { status ->
-            if (status != TextToSpeech.SUCCESS) {
-                Log.e(TAG, "Wake-word self-test TTS failed to initialize: $status")
-                return@TextToSpeech
-            }
-            wakeTestTts?.language = Locale.US
-            wakeTestTts?.speak(
-                "hey Treddy",
-                TextToSpeech.QUEUE_FLUSH,
-                null,
-                "wake-word-self-test",
-            )
-        }
-    }
-
     /**
-     * Throwaway openWakeWord integration spike. It deliberately uses the wrapper's
-     * own AudioRecord and the bundled "hello world" demo model. If this proves
-     * reliable on the treadmill tablet, the production pass will feed the existing
-     * AudioCapture stream into the detector and replace the classifier with Hey Treddy.
+     * OpenWakeWord integration using the wrapper's AudioRecord and the bundled
+     * full-precision Hey Treddy classifier. Voice activation recreates AudioCapture
+     * after the detector releases the microphone.
      */
     private fun startWakeWordPrototype() {
+        wakeWordEngine?.let { engine ->
+            if (voiceViewModel.voiceState.value == VoiceState.IDLE) engine.start()
+            return
+        }
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -123,7 +104,7 @@ class MainActivity : ComponentActivity() {
                     WakeWordModel(
                         name = "Hey Treddy",
                         modelPath = "hey_treddy.onnx",
-                        threshold = 0.60f,
+                        threshold = 0.70f,
                     )
                 ),
                 detectionCooldownMs = 3_000L,
@@ -148,7 +129,7 @@ class MainActivity : ComponentActivity() {
 
             wakeWordStateJob = lifecycleScope.launch {
                 voiceViewModel.voiceState.collect { state ->
-                    if (state == VoiceState.IDLE) {
+                    if (state == VoiceState.IDLE && wakeWordForeground) {
                         Log.i(TAG, "WAKE_WORD_LISTENING phrase=hey_treddy")
                         engine.start()
                     } else {
@@ -161,11 +142,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        wakeWordForeground = true
+        startWakeWordPrototype()
+    }
+
+    override fun onPause() {
+        wakeWordForeground = false
+        wakeWordEngine?.stop()
+        super.onPause()
+    }
+
     override fun onDestroy() {
         wakeWordDetectionJob?.cancel()
         wakeWordStateJob?.cancel()
         wakeWordEngine?.release()
-        wakeTestTts?.shutdown()
         super.onDestroy()
     }
 
