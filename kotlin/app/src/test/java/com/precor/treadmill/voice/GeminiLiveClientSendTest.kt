@@ -12,6 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.LinkedBlockingQueue
 
 class GeminiLiveClientSendTest {
 
@@ -55,6 +56,9 @@ class GeminiLiveClientSendTest {
         val harness = Harness()
         val connection = harness.connectAndReady()
         connection.socket.acceptAudio = false
+        connection.socket.beforeAudioResult = {
+            connection.listener.onClosed(connection.socket, 1006, "close during send")
+        }
 
         harness.client.sendAudio("rejected-payload")
         connection.listener.onFailure(connection.socket, IllegalStateException("late failure"), null)
@@ -68,6 +72,25 @@ class GeminiLiveClientSendTest {
         assertEquals(1, harness.errorLogs.count { "Audio WebSocket send rejected" in it })
         assertFalse(harness.errorLogs.any { "payload" in it })
         assertFalse(harness.client.isConnected)
+    }
+
+    @Test
+    fun rejectedAudioSend_dispatchesCallbacksAwayFromCapturePath() {
+        val pendingCallbacks = LinkedBlockingQueue<() -> Unit>()
+        val harness = Harness(terminalCallbackDispatch = pendingCallbacks::add)
+        val connection = harness.connectAndReady()
+        connection.socket.acceptAudio = false
+
+        harness.client.sendAudio("rejected-payload")
+
+        assertFalse(harness.client.isConnected)
+        assertEquals(0, harness.callbacks.states.count { it == ClientState.ERROR })
+        assertTrue(harness.callbacks.errors.isEmpty())
+
+        pendingCallbacks.remove().invoke()
+
+        assertEquals(1, harness.callbacks.states.count { it == ClientState.ERROR })
+        assertEquals(1, harness.callbacks.errors.size)
     }
 
     @Test
@@ -88,7 +111,9 @@ class GeminiLiveClientSendTest {
         assertTrue(harness.callbacks.errors.isEmpty())
     }
 
-    private class Harness {
+    private class Harness(
+        terminalCallbackDispatch: ((() -> Unit) -> Unit) = { callback -> callback() },
+    ) {
         val callbacks = RecordingCallbacks()
         val debugLogs = CopyOnWriteArrayList<String>()
         val errorLogs = CopyOnWriteArrayList<String>()
@@ -109,6 +134,7 @@ class GeminiLiveClientSendTest {
             debugLog = { debugLogs += it },
             errorLog = { errorLogs += it },
             elapsedRealtime = { 1L },
+            terminalCallbackDispatch = terminalCallbackDispatch,
         )
 
         fun connectAndReady(): FakeConnection {
@@ -129,6 +155,7 @@ class GeminiLiveClientSendTest {
     private class FakeWebSocket(private val request: Request) : WebSocket {
         @Volatile var acceptAudio = true
         @Volatile var audioSendCount = 0
+        @Volatile var beforeAudioResult: (() -> Unit)? = null
 
         override fun request(): Request = request
         override fun queueSize(): Long = 0
@@ -136,6 +163,7 @@ class GeminiLiveClientSendTest {
         override fun send(text: String): Boolean {
             if ("\"audio\"" !in text) return true
             audioSendCount += 1
+            beforeAudioResult?.invoke()
             return acceptAudio
         }
 

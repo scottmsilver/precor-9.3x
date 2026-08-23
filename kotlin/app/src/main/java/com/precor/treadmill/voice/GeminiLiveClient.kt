@@ -7,6 +7,7 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okhttp3.*
+import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -53,6 +54,9 @@ class GeminiLiveClient(
     private val debugLog: (String) -> Unit = { message -> Log.d(TAG, message) },
     private val errorLog: (String) -> Unit = { message -> Log.e(TAG, message) },
     private val elapsedRealtime: () -> Long = SystemClock::elapsedRealtime,
+    private val terminalCallbackDispatch: ((() -> Unit) -> Unit) = { callback ->
+        (okHttpClient?.dispatcher?.executorService ?: ForkJoinPool.commonPool()).execute(callback)
+    },
 ) {
     companion object {
         private const val TAG = "GeminiLive"
@@ -85,7 +89,15 @@ class GeminiLiveClient(
     private class ConnectionToken {
         val terminal = AtomicBoolean(false)
         val acceptedAudioChunks = AtomicInteger(0)
+        var audioSendInFlight = false
+        var pendingTerminal: TerminalEvent? = null
     }
+
+    private data class TerminalEvent(
+        val state: ClientState,
+        val logMessage: String? = null,
+        val callbackMessage: String? = null,
+    )
 
     /** Set by VoiceViewModel to read speech-end timestamp from AudioCapture. */
     var speechEndTimestampProvider: (() -> Long)? = null
@@ -221,18 +233,45 @@ class GeminiLiveClient(
         logMessage: String? = null,
         callbackMessage: String? = null,
     ) {
-        synchronized(this) {
+        val requested = TerminalEvent(terminalState, logMessage, callbackMessage)
+        val claimed = synchronized(this) {
             if (ws !== webSocket || connectionToken !== token) return
-            if (!token.terminal.compareAndSet(false, true)) return
-
-            if (logMessage != null) {
-                if (terminalState == ClientState.ERROR) errorLog(logMessage)
-                else debugLog(logMessage)
+            if (token.terminal.get()) return
+            if (token.audioSendInFlight) {
+                token.pendingTerminal = preferTerminal(token.pendingTerminal, requested)
+                return
             }
-            callbackMessage?.let(callbacks::onError)
-            cleanup()
-            setState(terminalState)
+            claimTerminalLocked(webSocket, token, requested)
         }
+        claimed?.let(::publishTerminal)
+    }
+
+    private fun preferTerminal(current: TerminalEvent?, requested: TerminalEvent): TerminalEvent =
+        when {
+            current == null -> requested
+            current.state == ClientState.ERROR -> current
+            requested.state == ClientState.ERROR -> requested
+            else -> current
+        }
+
+    private fun claimTerminalLocked(
+        webSocket: WebSocket,
+        token: ConnectionToken,
+        event: TerminalEvent,
+    ): TerminalEvent? {
+        if (ws !== webSocket || connectionToken !== token) return null
+        if (!token.terminal.compareAndSet(false, true)) return null
+        state = event.state
+        cleanup()
+        return event
+    }
+
+    private fun publishTerminal(event: TerminalEvent) {
+        event.logMessage?.let { message ->
+            if (event.state == ClientState.ERROR) errorLog(message) else debugLog(message)
+        }
+        event.callbackMessage?.let(callbacks::onError)
+        callbacks.onStateChange(event.state)
     }
 
     private fun cleanup() {
@@ -539,14 +578,10 @@ class GeminiLiveClient(
 
     /** Send a PCM16 audio chunk (base64 encoded) to Gemini. */
     fun sendAudio(pcmBase64: String) {
-        val socket: WebSocket
-        val token: ConnectionToken
         synchronized(this) {
-            socket = ws ?: return
-            token = connectionToken ?: return
-            if (!setupDone || token.terminal.get()) return
+            val token = connectionToken ?: return
+            if (ws == null || !setupDone || token.terminal.get()) return
         }
-        lastAudioSentMs = elapsedRealtime()
         val msg = buildJsonObject {
             putJsonObject("realtimeInput") {
                 if (isV31) {
@@ -566,19 +601,46 @@ class GeminiLiveClient(
                 }
             }
         }
-        if (socket.send(msg.toString())) {
-            val acceptedCount = token.acceptedAudioChunks.incrementAndGet()
-            if (acceptedCount == 1 || acceptedCount % 100 == 0) {
-                debugLog("Accepted audio chunk $acceptedCount")
+        var acceptedCount: Int? = null
+        val terminalEvent = synchronized(this) {
+            val socket = ws ?: return
+            val token = connectionToken ?: return
+            if (!setupDone || token.terminal.get()) return
+
+            lastAudioSentMs = elapsedRealtime()
+            token.audioSendInFlight = true
+            val accepted = try {
+                socket.send(msg.toString())
+            } catch (_: Exception) {
+                false
+            } finally {
+                token.audioSendInFlight = false
             }
-        } else {
-            finishConnection(
-                webSocket = socket,
-                token = token,
-                terminalState = ClientState.ERROR,
-                logMessage = "Audio WebSocket send rejected",
-                callbackMessage = "WebSocket rejected audio send",
-            )
+
+            if (accepted) {
+                acceptedCount = token.acceptedAudioChunks.incrementAndGet()
+                val pending = token.pendingTerminal
+                token.pendingTerminal = null
+                pending?.let { claimTerminalLocked(socket, token, it) }
+            } else {
+                token.pendingTerminal = null
+                claimTerminalLocked(
+                    socket,
+                    token,
+                    TerminalEvent(
+                        state = ClientState.ERROR,
+                        logMessage = "Audio WebSocket send rejected",
+                        callbackMessage = "WebSocket rejected audio send",
+                    ),
+                )
+            }
+        }
+
+        acceptedCount?.let { count ->
+            if (count == 1 || count % 100 == 0) debugLog("Accepted audio chunk $count")
+        }
+        terminalEvent?.let { event ->
+            terminalCallbackDispatch { publishTerminal(event) }
         }
     }
 }
