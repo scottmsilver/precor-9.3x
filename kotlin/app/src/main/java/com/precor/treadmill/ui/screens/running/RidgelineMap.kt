@@ -1129,7 +1129,7 @@ private fun DrawScope.drawRidgeline(
             alpha = chromeAlpha,
         )
         endpoint.badge?.let { badge ->
-            drawText(
+            drawText( // legible-exempt: amber badge is drawn inside the label's contrast scrim
                 badge.measured.value,
                 topLeft = Offset(
                     pillLeft + (endpoint.badgeOffset ?: 0f),
