@@ -3,6 +3,8 @@ package com.precor.treadmill.ui.screens.running
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Regression suite for HUD marker/route sync.
@@ -17,6 +19,24 @@ import org.junit.Test
  */
 class RidgelineRouteTest {
 
+    private fun referencePhase(intervals: List<RouteInterval>, pos: Double): Double {
+        val total = intervals.sumOf { it.durSec }
+        val p = pos.coerceIn(0.0, total)
+        val floorRate = max(
+            0.0,
+            RidgelineRoute.MIN_TOTAL_PHASE / total - RidgelineRoute.TURN_RATE_FLAT,
+        )
+        var elapsed = 0.0
+        var phase = 0.0
+        for (interval in intervals) {
+            val segmentElapsed = min(interval.durSec, p - elapsed).coerceAtLeast(0.0)
+            phase += segmentElapsed * (RidgelineRoute.turnRate(interval.grade) + floorRate)
+            elapsed += interval.durSec
+            if (elapsed >= p) break
+        }
+        return phase
+    }
+
     // interval 0: 600s @ 3mph (0.5 mi);  interval 1: 600s @ 6mph (1.0 mi)
     private val route = RidgelineRoute(
         listOf(
@@ -24,6 +44,44 @@ class RidgelineRouteTest {
             RouteInterval(grade = 8.0, speed = 6.0, durSec = 600.0),
         ),
     )
+
+    @Test
+    fun `boundary searches use inclusive and exclusive semantics`() {
+        val r = RidgelineRoute(
+            listOf(
+                RouteInterval(0.0, 3.0, 0.25),
+                RouteInterval(2.0, 3.0, 0.75),
+                RouteInterval(4.0, 3.0, 1.0),
+            ),
+        )
+
+        assertEquals(0, r.firstBoundaryAtOrAfter(-1.0))
+        assertEquals(0, r.firstBoundaryAtOrAfter(0.0))
+        assertEquals(1, r.firstBoundaryAfter(0.0))
+        assertEquals(1, r.firstBoundaryAtOrAfter(0.25))
+        assertEquals(2, r.firstBoundaryAfter(0.25))
+        assertEquals(2, r.firstBoundaryAtOrAfter(1.0))
+        assertEquals(3, r.firstBoundaryAfter(1.0))
+        assertEquals(3, r.firstBoundaryAtOrAfter(r.total))
+        assertEquals(3, r.firstBoundaryAfter(r.total))
+
+        assertEquals(
+            listOf(0.0, 0.25, 1.0),
+            (0 until r.count).map(r::startOf),
+        )
+    }
+
+    @Test
+    fun `indexed phase matches reference integration`() {
+        val intervals = (0 until 100_000).map {
+            RouteInterval((it % 16).toDouble(), 2.5 + it % 7, 0.25 + it % 5)
+        }
+        val r = RidgelineRoute(intervals)
+
+        listOf(0.0, 0.25, 123.456, r.total - 0.01, r.total).forEach { p ->
+            assertEquals(referencePhase(intervals, p), r.phaseAt(p), 1e-8)
+        }
+    }
 
     @Test
     fun `interval boundary lands exactly on route boundary`() {

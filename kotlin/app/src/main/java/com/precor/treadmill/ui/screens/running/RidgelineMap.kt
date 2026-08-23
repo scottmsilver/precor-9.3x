@@ -88,11 +88,24 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     /** Planned miles over the whole route (for labels/diagnostics). */
     val totalMi: Double = cumMi[count]
 
-    fun idxAt(pos: Double): Int {
-        var i = 0
-        while (i < count - 1 && cum[i + 1] <= pos) i++
-        return i
+    // A grade-independent additive rate gives a short FLAT route the minimum sweep
+    // without normalizing away grade differences. It depends only on total duration
+    // and the flat baseline; long routes already above the floor receive no addition.
+    private val floorRate: Double = max(0.0, MIN_TOTAL_PHASE / total - TURN_RATE_FLAT)
+
+    private val phaseAtBoundary = DoubleArray(count + 1).also { prefix ->
+        for (i in 0 until count) {
+            prefix[i + 1] = prefix[i] +
+                (cum[i + 1] - cum[i]) * (turnRate(iv[i].grade) + floorRate)
+        }
     }
+
+    internal fun firstBoundaryAtOrAfter(time: Double): Int = lowerBound(cum, count, time)
+
+    internal fun firstBoundaryAfter(time: Double): Int = upperBound(cum, count, time)
+
+    fun idxAt(pos: Double): Int =
+        (upperBound(cum, count + 1, pos) - 1).coerceIn(0, count - 1)
 
     fun gradeIdx(i: Int): Double = iv[min(i, count - 1)].grade
     fun speedIdx(i: Int): Double = iv[min(i, count - 1)].speed
@@ -151,21 +164,30 @@ class RidgelineRoute(intervals: List<RouteInterval>) {
     // perturbation can reorder arbitrarily close grades and corrupt steepness density.
     fun phaseAt(pos: Double): Double {
         val p = pos.coerceIn(0.0, total)
-        var ph = 0.0
-        var i = 0
-        while (i < count && cum[i] < p - 1e-9) {
-            val end = min(endOf(i), p)
-            val elapsed = end - cum[i]
-            ph += elapsed * (turnRate(gradeIdx(i)) + floorRate)
-            i++
-        }
-        return ph
+        val i = idxAt(p)
+        return phaseAtBoundary[i] +
+            (p - cum[i]) * (turnRate(iv[i].grade) + floorRate)
     }
 
-    // A grade-independent additive rate gives a short FLAT route the minimum sweep
-    // without normalizing away grade differences. It depends only on total duration
-    // and the flat baseline; long routes already above the floor receive no addition.
-    private val floorRate: Double = max(0.0, MIN_TOTAL_PHASE / total - TURN_RATE_FLAT)
+    private fun lowerBound(values: DoubleArray, limit: Int, target: Double): Int {
+        var low = 0
+        var high = limit
+        while (low < high) {
+            val mid = low + (high - low) / 2
+            if (values[mid] < target) low = mid + 1 else high = mid
+        }
+        return low
+    }
+
+    private fun upperBound(values: DoubleArray, limit: Int, target: Double): Int {
+        var low = 0
+        var high = limit
+        while (low < high) {
+            val mid = low + (high - low) / 2
+            if (values[mid] <= target) low = mid + 1 else high = mid
+        }
+        return low
+    }
 
     /** Invert vertAt: route position (seconds) at a given elevation (feet climbed). */
     fun posAtElev(e: Double): Double {
