@@ -67,14 +67,18 @@ data class RouteInterval(val grade: Double, val speed: Double, val durSec: Doubl
 
 /** Finite climbing route assembled from planned intervals. */
 class RidgelineRoute(intervals: List<RouteInterval>) {
-    private val iv: List<RouteInterval> = if (intervals.isEmpty())
-        listOf(RouteInterval(2.0, 4.0, 450.0)) else intervals
+    private val iv: List<RouteInterval> = (if (intervals.isEmpty())
+        listOf(RouteInterval(2.0, 4.0, 450.0)) else intervals).also { planned ->
+        require(planned.all { it.durSec.isFinite() && it.durSec > 0.0 }) {
+            "Route interval durations must be finite and positive"
+        }
+    }
     // Cumulative boundaries in both domains: seconds (layout) and miles (elevation).
     private val cum: DoubleArray = DoubleArray(iv.size + 1).also {
-        for (i in iv.indices) it[i + 1] = it[i] + max(1.0, iv[i].durSec)
+        for (i in iv.indices) it[i + 1] = it[i] + iv[i].durSec
     }
     private val cumMi: DoubleArray = DoubleArray(iv.size + 1).also {
-        for (i in iv.indices) it[i + 1] = it[i] + max(1.0, iv[i].durSec) * iv[i].speed / 3600.0
+        for (i in iv.indices) it[i + 1] = it[i] + iv[i].durSec * iv[i].speed / 3600.0
     }
     val count: Int = iv.size
 

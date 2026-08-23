@@ -90,7 +90,6 @@ import com.precor.treadmill.ui.viewmodel.VoiceState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlin.math.max
 
 /**
  * Ridgeline HUD — landscape running console.
@@ -136,7 +135,7 @@ fun RidgelineHud(
                 RouteInterval(
                     grade = iv.incline,
                     speed = iv.speed,
-                    durSec = max(1.0, iv.duration.toDouble()),
+                    durSec = iv.duration,
                 )
             },
         )

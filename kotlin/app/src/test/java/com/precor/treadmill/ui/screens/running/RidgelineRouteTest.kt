@@ -34,6 +34,27 @@ class RidgelineRouteTest {
     }
 
     @Test
+    fun `fractional interval durations define exact route boundaries`() {
+        val fractionalRoute = RidgelineRoute(
+            listOf(
+                RouteInterval(grade = 2.0, speed = 3.0, durSec = 0.25),
+                RouteInterval(grade = 4.0, speed = 4.0, durSec = 0.75),
+            ),
+        )
+
+        assertEquals(0.25, fractionalRoute.endOf(0), 1e-9)
+        assertEquals(0.25, fractionalRoute.startOf(1), 1e-9)
+        assertEquals(1.0, fractionalRoute.total, 1e-9)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `route rejects nonpositive interval duration`() {
+        RidgelineRoute(
+            listOf(RouteInterval(grade = 2.0, speed = 3.0, durSec = 0.0)),
+        )
+    }
+
+    @Test
     fun `mid-interval position is the program clock`() {
         assertEquals(900.0, route.posAtProgram(1, 300.0), 1e-9)
         assertEquals(300.0, route.posAtProgram(0, 300.0), 1e-9)
