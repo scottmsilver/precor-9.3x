@@ -29,8 +29,13 @@ class AudioPlayer(
     companion object {
         private const val TAG = "AudioPlayer"
         private const val BATCH_MIN_BYTES = 9600  // 200ms at 24kHz mono PCM16
-        private const val MAX_QUEUE_BYTES = 480000  // 10 seconds
+        internal const val MAX_QUEUE_SECONDS = 120
         private const val PREBUFFER_MS = 150
+
+        internal fun maxQueueBytes(sampleRate: Int): Int = sampleRate * 2 * MAX_QUEUE_SECONDS
+
+        internal fun canAdmit(queuedBytes: Int, incomingBytes: Int, limitBytes: Int): Boolean =
+            queuedBytes.toLong() + incomingBytes.toLong() <= limitBytes.toLong()
     }
 
     private val queue = ConcurrentLinkedQueue<ByteArray>()
@@ -38,6 +43,7 @@ class AudioPlayer(
     private var playbackThread: Thread? = null
     private val queuedBytes = AtomicInteger(0)
     private val firstEnqueueMs = AtomicLong(0)
+    private val maxQueueBytes = maxQueueBytes(sampleRate)
 
     private val threadRunning = AtomicBoolean(false)
     @Volatile private var released = false
@@ -207,7 +213,7 @@ class AudioPlayer(
             return
         }
 
-        if (queuedBytes.get() + bytes.size > MAX_QUEUE_BYTES) {
+        if (!canAdmit(queuedBytes.get(), bytes.size, maxQueueBytes)) {
             Log.w(TAG, "Queue overflow (${queuedBytes.get()}B), dropping chunk")
             return
         }
