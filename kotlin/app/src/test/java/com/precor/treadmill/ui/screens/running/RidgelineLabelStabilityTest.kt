@@ -198,6 +198,141 @@ class RidgelineLabelStabilityTest {
         )
     }
 
+    /** A long route prepares no TextLayouts until its small visible slice is requested. */
+    @Test
+    fun longRouteMeasuresOnlyVisibleLabelsOnFirstFrame() {
+        val longRoute = RidgelineRoute(
+            (0 until 1_000).map { n ->
+                // The server contract clamps generated intervals to at least 10s.
+                RouteInterval(grade = (n % 17).toDouble(), speed = 2.5 + (n % 11) * 0.1, durSec = 10.0)
+            },
+        )
+        var measurements = 0
+        val model = prepareTransitionLabelModel(
+            route = longRoute,
+            maxPillWidth = mapW - 8f,
+            gradeColorFor = { Color.White },
+            speedColorFor = { Color.White },
+            measure = { text, _, maxWidth ->
+                measurements++
+                val natural = 7f + text.length * 7f
+                MeasuredTransitionText(text, minOf(natural, maxWidth ?: natural))
+            },
+        )
+        assertEquals("model creation eagerly measured the entire route", 0, measurements)
+
+        val geometry = RidgelineGeometry(
+            longRoute, centerX, ampBase, camLo = 4_000.0, ew = POS_WINDOW, topY, botY,
+        )
+        val visible = collectVisibleTransitionCandidates(model, geometry, markerPos = 4_300.0)
+
+        assertEquals(61, visible.size)
+        assertTrue("first viewport measured $measurements layouts", measurements <= 122)
+        println("long-route first viewport: visible=${visible.size} measurements=$measurements")
+        assertEquals(
+            (401..459).map { it * 10.0 },
+            visibleInteriorBoundaries(longRoute, 4_000.0, 4_600.0),
+        )
+    }
+
+    /** Smooth projection continues while 2px-quantized packing is reused. */
+    @Test
+    fun subpixelRunningFramesReusePackingButKeepExactAnchors() {
+        val movingRoute = RidgelineRoute(
+            (0 until 80).map { n ->
+                RouteInterval((n % 12).toDouble(), 3.0 + n % 5 * 0.1, 10.0)
+            },
+        )
+        val model = modelFor(movingRoute)
+        val cache = TransitionLabelFrameCache<String>()
+        var priorAnchorY: Float? = null
+        var sawSmoothAnchorMotion = false
+        var priorSlots: List<ChipSlot>? = null
+        var priorComputations = 0
+        repeat(100) { frameIndex ->
+            val camLo = 100.0 + frameIndex * 0.001
+            val markerPos = 350.0 + frameIndex * 0.001
+            val geometry = RidgelineGeometry(movingRoute, centerX, ampBase, camLo, POS_WINDOW, topY, botY)
+            val mx = geometry.worldX(markerPos)
+            val my = geometry.screenY(markerPos)
+            val frame = cache.layout(
+                model, geometry, markerPos, centerX, mapW,
+                Rect(mx - 20f, my - 20f, mx + 20f, my + 20f), metricsGuard, topY, botY,
+            )
+            val projected = frame.visible[10]
+            assertEquals(geometry.screenY(projected.label.key), projected.candidate.anchorY, 0f)
+            if (cache.computations == priorComputations) assertEquals(priorSlots, frame.layout.slots)
+            priorAnchorY?.let { if (it != projected.candidate.anchorY) sawSmoothAnchorMotion = true }
+            priorAnchorY = projected.candidate.anchorY
+            priorSlots = frame.layout.slots
+            priorComputations = cache.computations
+        }
+        assertTrue("exact leader anchors froze with cached packing", sawSmoothAnchorMotion)
+        assertTrue("subpixel frames repacked ${cache.computations} times", cache.computations <= 3)
+
+        val beforeThreshold = cache.computations
+        val shifted = RidgelineGeometry(movingRoute, centerX, ampBase, 103.0, POS_WINDOW, topY, botY)
+        val shiftedMarker = 353.0
+        val sx = shifted.worldX(shiftedMarker)
+        val sy = shifted.screenY(shiftedMarker)
+        cache.layout(
+            model, shifted, shiftedMarker, centerX, mapW,
+            Rect(sx - 20f, sy - 20f, sx + 20f, sy + 20f), metricsGuard, topY, botY,
+        )
+        assertEquals("crossing the packing grid did not invalidate", beforeThreshold + 1, cache.computations)
+        println("subpixel packing: frames=101 computations=${cache.computations}")
+    }
+
+    /** Normal 10s intervals remain cheap while marker and camera both move. */
+    @Test
+    fun sixtyOneVisibleTransitionsStayWithinRunningFrameBudget() {
+        val normalRoute = RidgelineRoute(
+            (0 until 90).map { n ->
+                RouteInterval((n % 13).toDouble(), 2.5 + (n % 9) * 0.1, 10.0)
+            },
+        )
+        val normalModel = modelFor(normalRoute)
+        val cache = TransitionLabelFrameCache<String>()
+        var first: TransitionLabelFrame<String>? = null
+        val started = System.nanoTime()
+        repeat(120) { frameIndex ->
+            val camLo = 100.0 + frameIndex * 0.01
+            val markerPos = 350.0 + frameIndex * 0.01
+            val geometry = RidgelineGeometry(normalRoute, centerX, ampBase, camLo, POS_WINDOW, topY, botY)
+            val mx = geometry.worldX(markerPos)
+            val my = geometry.screenY(markerPos)
+            val frame = cache.layout(
+                normalModel, geometry, markerPos, centerX, mapW,
+                Rect(mx - 20f, my - 20f, mx + 20f, my + 20f), metricsGuard, topY, botY,
+            )
+            if (first == null) first = frame
+            assertEquals(frame.visible.size, frame.layout.slots.size)
+            val byKey = frame.prioritized.associateBy { it.label.key }
+            val rects = frame.layout.slots.map { slot ->
+                val projected = byKey.getValue(slot.key)
+                slot to Rect(
+                    slot.pillLeft, slot.pillTop,
+                    slot.pillLeft + projected.label.pillW, slot.pillTop + CHIP_H,
+                )
+            }
+            for (a in rects.indices) if (!rects[a].first.overlapFallback) {
+                assertTrue(!rects[a].second.overlaps(metricsGuard))
+                assertTrue(!rects[a].second.overlaps(Rect(mx - 20f, my - 20f, mx + 20f, my + 20f)))
+                for (b in a + 1 until rects.size) if (!rects[b].first.overlapFallback) {
+                    assertTrue(!rects[a].second.overlaps(rects[b].second))
+                }
+            }
+        }
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        assertEquals(61, first!!.visible.size)
+        assertTrue("normal first-frame probes=${first!!.layout.stats.probes}", first!!.layout.stats.probes < 20_000)
+        assertTrue("120 moving frames repacked ${cache.computations} times", cache.computations <= 12)
+        println(
+            "normal moving: frames=120 computations=${cache.computations} " +
+                "probes=${first!!.layout.stats.probes} checks=${first!!.layout.stats.collisionChecks} elapsedMs=$elapsedMs",
+        )
+    }
+
     /** Dense supported routes use the same prepared-model and frame pipeline as drawing. */
     @Test
     fun sixHundredOneVisibleTransitionsHaveBoundedDeterministicLayoutWork() {
@@ -230,17 +365,25 @@ class RidgelineLabelStabilityTest {
             botBound = botY,
         )
 
+        val started = System.nanoTime()
         val first = run()
         val second = run()
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
         assertEquals(601, first.visible.size)
         assertEquals(601, first.layout.slots.size)
         assertEquals(first.prioritized.map { it.label.key }, second.prioritized.map { it.label.key })
         assertEquals(first.layout.slots, second.layout.slots)
         assertEquals("pulse-only redraw recomputed dense layout", 1, frameCache.computations)
-        assertTrue("placement probes were unbounded: ${first.layout.stats.probes}", first.layout.stats.probes < 500_000)
+        assertTrue("placement probes were unbounded: ${first.layout.stats.probes}", first.layout.stats.probes < 50_000)
         assertTrue(
             "spatial collision checks were unbounded: ${first.layout.stats.collisionChecks}",
-            first.layout.stats.collisionChecks < 5_000_000,
+            first.layout.stats.collisionChecks < 500_000,
+        )
+        assertTrue("dense production layout took ${elapsedMs}ms", elapsedMs < 250)
+        println(
+            "dense layout: labels=601 probes=${first.layout.stats.probes} " +
+                "checks=${first.layout.stats.collisionChecks} fallbacks=${first.layout.stats.overlapFallbacks} " +
+                "elapsedMs=$elapsedMs",
         )
         val avoidableMarkerClashes = first.layout.slots.zip(first.prioritized).count { (slot, projected) ->
             !slot.overlapFallback &&

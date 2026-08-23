@@ -208,13 +208,89 @@ internal data class PreparedTransitionLabel<T>(
     val pillW: Float,
 )
 
-internal data class TransitionLabelModel<T>(
+private class BoundedLru<K, V>(private val capacity: Int) {
+    private val values = LinkedHashMap<K, V>(capacity, 0.75f, true)
+
+    fun getOrPut(key: K, create: () -> V): V {
+        values[key]?.let { return it }
+        return create().also {
+            values[key] = it
+            if (values.size > capacity) values.remove(values.entries.iterator().next().key)
+        }
+    }
+}
+
+private data class TransitionTextKey(val text: String, val color: Color, val maxWidthBits: Int?)
+
+/** Cheap route content plus bounded, viewport-driven measured-label caches. */
+internal class TransitionLabelModel<T>(
     val route: RidgelineRoute,
-    val labels: List<PreparedTransitionLabel<T>>,
+    private val maxPillWidth: Float,
+    private val contents: List<TransitionLabelContent>,
+    private val measure: (text: String, color: Color, maxWidth: Float?) -> MeasuredTransitionText<T>,
+) {
+    private val measuredText = BoundedLru<TransitionTextKey, MeasuredTransitionText<T>>(256)
+    private val preparedLabels = BoundedLru<Int, PreparedTransitionLabel<T>>(96)
+
+    val labels: List<PreparedTransitionLabel<T>> = object : AbstractList<PreparedTransitionLabel<T>>() {
+        override val size: Int get() = route.count
+        override fun get(index: Int): PreparedTransitionLabel<T> = labelAt(index)
+    }
+
+    private fun measured(text: String, color: Color, maxWidth: Float?): MeasuredTransitionText<T> {
+        val key = TransitionTextKey(text, color, maxWidth?.toRawBits())
+        return measuredText.getOrPut(key) { measure(text, color, maxWidth) }
+    }
+
+    private fun labelAt(i: Int): PreparedTransitionLabel<T> = preparedLabels.getOrPut(i) {
+        val content = contents[i]
+        val safePillWidth = max(1f, maxPillWidth)
+        val sidePadding = min(7f, safePillWidth / 4f)
+        val gap = min(6f, max(0f, safePillWidth - sidePadding * 2f))
+        val contentWidth = max(0f, safePillWidth - sidePadding * 2f - gap)
+        val naturalGrade = measured(content.gradeText, content.gradeColor, null)
+        val naturalSpeed = measured(content.speedText, content.speedColor, null)
+        val naturalTotal = naturalGrade.width + naturalSpeed.width
+        val (grade, speed) = if (naturalTotal <= contentWidth) {
+            naturalGrade to naturalSpeed
+        } else {
+            val pixelBudget = floor(contentWidth).toInt().coerceAtLeast(0)
+            val gradePixels = if (naturalTotal <= 0f) pixelBudget / 2 else
+                floor(pixelBudget * naturalGrade.width / naturalTotal).toInt().coerceIn(0, pixelBudget)
+            measured(content.gradeText, content.gradeColor, gradePixels.toFloat()) to
+                measured(content.speedText, content.speedColor, (pixelBudget - gradePixels).toFloat())
+        }
+        val gradeOffset = sidePadding
+        val speedOffset = gradeOffset + grade.width + gap
+        PreparedTransitionLabel(
+            intervalIndex = i,
+            key = route.startOf(i),
+            gradeValue = content.gradeValue,
+            gradeText = content.gradeText,
+            speedText = content.speedText,
+            gradeColor = content.gradeColor,
+            speedColor = content.speedColor,
+            grade = grade,
+            speed = speed,
+            gradeOffset = gradeOffset,
+            speedOffset = speedOffset,
+            pillW = min(safePillWidth, speedOffset + speed.width + sidePadding),
+        )
+    }
+}
+
+internal data class TransitionLabelContent(
+    val gradeValue: Double,
+    val gradeText: String,
+    val speedText: String,
+    val gradeColor: Color,
+    val speedColor: Color,
 )
 
 /**
- * Prepare immutable label strings, colors, measurements, and contained pill widths.
+ * Prepare immutable strings/colors cheaply; measured labels are loaded by viewport and
+ * retained in a 96-label LRU (enough for the server-contract 61-label maximum window).
+ * Individual layouts are interned in a 256-entry route/style-scoped LRU.
  * [measure] is generic so JVM tests exercise this exact pipeline with representative
  * widths while production supplies cached [androidx.compose.ui.text.TextLayoutResult]s.
  */
@@ -225,57 +301,20 @@ internal fun <T> prepareTransitionLabelModel(
     speedColorFor: (intervalIndex: Int) -> Color,
     measure: (text: String, color: Color, maxWidth: Float?) -> MeasuredTransitionText<T>,
 ): TransitionLabelModel<T> {
-    val safePillWidth = max(1f, maxPillWidth)
-    // Preserve the normal 7/6/7 chrome, but shrink it with the pill on tiny canvases.
-    // Text constraints use an integral shared budget because TextLayoutResult reports
-    // integer pixel widths; independently rounded fractional caps can overflow by 1px.
-    val sidePadding = min(7f, safePillWidth / 4f)
-    val gap = min(6f, max(0f, safePillWidth - sidePadding * 2f))
-    val contentWidth = max(0f, safePillWidth - sidePadding * 2f - gap)
-    val labels = ArrayList<PreparedTransitionLabel<T>>(route.count)
+    val contents = ArrayList<TransitionLabelContent>(route.count)
     for (i in 0 until route.count) {
-        val gradeText = "%.1f%%".format(route.gradeIdx(i))
-        val speedText = "%.1f".format(route.speedIdx(i))
-        val gradeColor = gradeColorFor(i)
-        val speedColor = speedColorFor(i)
-        val naturalGrade = measure(gradeText, gradeColor, null)
-        val naturalSpeed = measure(speedText, speedColor, null)
-        val naturalTotal = naturalGrade.width + naturalSpeed.width
-        val (grade, speed) = if (naturalTotal <= contentWidth) {
-            naturalGrade to naturalSpeed
-        } else {
-            // Share constrained content width proportionally; both layouts ellipsize
-            // against the same bounds used by pill geometry.
-            val pixelBudget = floor(contentWidth).toInt().coerceAtLeast(0)
-            val gradePixels = if (naturalTotal <= 0f) pixelBudget / 2 else
-                floor(pixelBudget * naturalGrade.width / naturalTotal).toInt().coerceIn(0, pixelBudget)
-            val speedPixels = pixelBudget - gradePixels
-            measure(gradeText, gradeColor, gradePixels.toFloat()) to
-                measure(speedText, speedColor, speedPixels.toFloat())
-        }
-        val gradeOffset = sidePadding
-        val speedOffset = gradeOffset + grade.width + gap
-        labels.add(
-            PreparedTransitionLabel(
-                intervalIndex = i,
-                key = route.startOf(i),
-                gradeValue = route.gradeIdx(i),
-                gradeText = gradeText,
-                speedText = speedText,
-                gradeColor = gradeColor,
-                speedColor = speedColor,
-                grade = grade,
-                speed = speed,
-                gradeOffset = gradeOffset,
-                speedOffset = speedOffset,
-                pillW = min(safePillWidth, speedOffset + speed.width + sidePadding),
+        contents.add(
+            TransitionLabelContent(
+                route.gradeIdx(i), "%.1f%%".format(route.gradeIdx(i)), "%.1f".format(route.speedIdx(i)),
+                gradeColorFor(i), speedColorFor(i),
             ),
         )
     }
-    return TransitionLabelModel(route, labels)
+    return TransitionLabelModel(route, maxPillWidth, contents, measure)
 }
 
 internal enum class RidgelineStaticLabelKind { FINISH, LAST_TIME, NEXT_TIME, GRADE, SPEED }
+private data class StaticTextKey(val kind: RidgelineStaticLabelKind, val text: String, val color: Color)
 
 internal data class PreparedTransitionTick<T>(
     val lastTime: T,
@@ -284,11 +323,41 @@ internal data class PreparedTransitionTick<T>(
     val speed: T,
 )
 
-/** Route-scoped finish and minimap layouts retained across pulse/camera draw frames. */
-internal data class PreparedRidgelineStaticLabels<T>(
-    val finish: T,
-    val transitions: List<PreparedTransitionTick<T>>,
+internal data class StaticTransitionContent(
+    val time: String,
+    val grade: String,
+    val speed: String,
+    val gradeColor: Color,
+    val speedColor: Color,
 )
+
+/** Lazily measures only finish and the current last/next minimap transition. */
+internal class PreparedRidgelineStaticLabels<T>(
+    private val finishLoader: () -> T,
+    private val contents: List<StaticTransitionContent>,
+    private val lastTimeColor: Color,
+    private val nextTimeColor: Color,
+    private val measure: (kind: RidgelineStaticLabelKind, text: String, color: Color) -> T,
+) {
+    private var preparedFinish: T? = null
+    private val ticks = BoundedLru<Int, PreparedTransitionTick<T>>(4)
+    private val measuredText = BoundedLru<StaticTextKey, T>(64)
+    private fun measured(kind: RidgelineStaticLabelKind, text: String, color: Color): T =
+        measuredText.getOrPut(StaticTextKey(kind, text, color)) { measure(kind, text, color) }
+    val finish: T get() = preparedFinish ?: finishLoader().also { preparedFinish = it }
+    val transitions: List<PreparedTransitionTick<T>> = object : AbstractList<PreparedTransitionTick<T>>() {
+        override val size: Int get() = contents.size
+        override fun get(index: Int): PreparedTransitionTick<T> = ticks.getOrPut(index) {
+            val c = contents[index]
+            PreparedTransitionTick(
+                measured(RidgelineStaticLabelKind.LAST_TIME, c.time, lastTimeColor),
+                measured(RidgelineStaticLabelKind.NEXT_TIME, c.time, nextTimeColor),
+                measured(RidgelineStaticLabelKind.GRADE, c.grade, c.gradeColor),
+                measured(RidgelineStaticLabelKind.SPEED, c.speed, c.speedColor),
+            )
+        }
+    }
+}
 
 internal fun <T> prepareRidgelineStaticLabels(
     route: RidgelineRoute,
@@ -299,32 +368,30 @@ internal fun <T> prepareRidgelineStaticLabels(
     speedColorFor: (intervalIndex: Int) -> Color,
     measure: (kind: RidgelineStaticLabelKind, text: String, color: Color) -> T,
 ): PreparedRidgelineStaticLabels<T> {
-    val finish = measure(
-        RidgelineStaticLabelKind.FINISH,
-        "FINISH · ${"%,d".format(Math.round(route.vertAt(route.total)))} ft",
-        finishColor,
-    )
-    val transitions = ArrayList<PreparedTransitionTick<T>>(route.count)
+    val contents = ArrayList<StaticTransitionContent>(route.count)
     for (i in 0 until route.count) {
-        val time = ridgelineFmtTime(route.startOf(i))
-        transitions.add(
-            PreparedTransitionTick(
-                lastTime = measure(RidgelineStaticLabelKind.LAST_TIME, time, lastTimeColor),
-                nextTime = measure(RidgelineStaticLabelKind.NEXT_TIME, time, nextTimeColor),
-                grade = measure(
-                    RidgelineStaticLabelKind.GRADE,
-                    "%.1f%%".format(route.gradeIdx(i)),
-                    gradeColorFor(i),
-                ),
-                speed = measure(
-                    RidgelineStaticLabelKind.SPEED,
-                    "%.1f".format(route.speedIdx(i)),
-                    speedColorFor(i),
-                ),
+        contents.add(
+            StaticTransitionContent(
+                ridgelineFmtTime(route.startOf(i)),
+                "%.1f%%".format(route.gradeIdx(i)),
+                "%.1f".format(route.speedIdx(i)),
+                gradeColorFor(i), speedColorFor(i),
             ),
         )
     }
-    return PreparedRidgelineStaticLabels(finish, transitions)
+    return PreparedRidgelineStaticLabels(
+        finishLoader = {
+            measure(
+                RidgelineStaticLabelKind.FINISH,
+                "FINISH · ${"%,d".format(Math.round(route.vertAt(route.total)))} ft",
+                finishColor,
+            )
+        },
+        contents = contents,
+        lastTimeColor = lastTimeColor,
+        nextTimeColor = nextTimeColor,
+        measure = measure,
+    )
 }
 
 // Route-position (planned seconds) shown at once. 10 minutes per screen: programs
@@ -332,6 +399,20 @@ internal fun <T> prepareRidgelineStaticLabels(
 // box + leader lines activate — while shorter programs fit whole and always FILL the
 // panel. (Was 25min, then 15; the switchbacks read squashed with more in view.)
 internal const val POS_WINDOW = 600.0
+
+/** Interior route boundaries in (camLo, camHi), scanning only the visible interval range. */
+internal fun visibleInteriorBoundaries(route: RidgelineRoute, camLo: Double, camHi: Double): List<Double> {
+    val out = ArrayList<Double>()
+    var i = max(1, route.idxAt(camLo))
+    while (i < route.count && route.startOf(i) <= camLo) i++
+    while (i < route.count) {
+        val boundary = route.startOf(i)
+        if (boundary >= camHi) break
+        out.add(boundary)
+        i++
+    }
+    return out
+}
 
 private fun lerp(a: Double, b: Double, t: Double) = a + (b - a) * t
 
@@ -624,22 +705,18 @@ private fun DrawScope.drawRidgeline(
     // Uniform samples PLUS the exact interval boundaries, so the path's color change
     // (and the chip anchored there) sits precisely on the bend instead of up to one
     // sample step away.
-    val samplePos = ArrayList<Double>(M + route.count + 2)
+    val visibleBoundaries = visibleInteriorBoundaries(route, camLo, min(camHi, route.total))
+    val samplePos = ArrayList<Double>(M + visibleBoundaries.size + 2)
     for (k in 0..M) {
         val p0 = camLo + (k.toDouble() / M) * EW
         if (p0 > route.total + 1e-6) break
         samplePos.add(min(p0, route.total))
     }
-    for (b in 1 until route.count) {
-        val bp = route.startOf(b)
-        if (bp > camLo && bp < min(camHi, route.total)) samplePos.add(bp)
-    }
+    samplePos.addAll(visibleBoundaries)
     samplePos.sort()
     // Validation capture: the EXACT point the path polyline uses at each interval
     // boundary, compared against the chip anchors afterwards (logged once per route/size).
-    val boundarySet = HashSet<Double>().also {
-        for (b in 1 until route.count) it.add(route.startOf(b))
-    }
+    val boundarySet = visibleBoundaries.toHashSet()
     val boundaryPathPts = HashMap<Double, Offset>()
     data class Seg(val key: String, val trav: Boolean, val g: Double, val pts: MutableList<Offset>)
     val segs = ArrayList<Seg>()
@@ -1246,7 +1323,17 @@ internal fun <T> layoutTransitionLabelFrame(
     return TransitionLabelFrame(visible, prioritized, layout)
 }
 
-/** Reuses projected/placed labels when only pulse paint changes between draw frames. */
+private const val PACKING_GRID_PX = 2f
+private fun packingPixel(value: Float): Float = floor(value / PACKING_GRID_PX) * PACKING_GRID_PX
+private fun packingCeil(value: Float): Float = kotlin.math.ceil(value / PACKING_GRID_PX) * PACKING_GRID_PX
+private fun packingRect(rect: Rect): Rect = Rect(
+    packingPixel(rect.left), packingPixel(rect.top), packingCeil(rect.right), packingCeil(rect.bottom),
+)
+
+/**
+ * Reprojects exact anchors every frame, while retaining only 2px-quantized packing.
+ * Thus route/leader motion stays smooth and collision decisions avoid subpixel churn.
+ */
 internal class TransitionLabelFrameCache<T> {
     var computations: Int = 0
         private set
@@ -1254,19 +1341,21 @@ internal class TransitionLabelFrameCache<T> {
     private var cachedModel: TransitionLabelModel<T>? = null
     private var cachedGeometryCenter = Float.NaN
     private var cachedGeometryAmp = Float.NaN
-    private var cachedCamLo = Double.NaN
     private var cachedEw = Double.NaN
     private var cachedGeometryTop = Float.NaN
     private var cachedGeometryBot = Float.NaN
     private var cachedCenterX = Float.NaN
     private var cachedTopBound = Float.NaN
     private var cachedBotBound = Float.NaN
-    private var cachedMarkerPos = Double.NaN
     private var cachedMapW = Float.NaN
     private var cachedMarkerRect: Rect? = null
     private var cachedMetricsGuard: Rect? = null
     private var cachedFixedGuards: List<Rect> = emptyList()
-    private var cachedFrame: TransitionLabelFrame<T>? = null
+    private var cachedFirstInterval = Int.MIN_VALUE
+    private var cachedLastInterval = Int.MIN_VALUE
+    private var cachedTravelledCut = Int.MIN_VALUE
+    private var cachedCameraPixel = Int.MIN_VALUE
+    private var cachedLayout: ChipLayoutResult? = null
 
     fun layout(
         model: TransitionLabelModel<T>,
@@ -1280,39 +1369,67 @@ internal class TransitionLabelFrameCache<T> {
         botBound: Float,
         fixedGuards: List<Rect> = emptyList(),
     ): TransitionLabelFrame<T> {
-        val cached = cachedFrame
+        val visible = collectVisibleTransitionCandidates(model, geometry, markerPos)
+        val prioritized = visible.sortedWith(
+            compareBy({ it.travelled }, { if (it.travelled) -it.label.key else it.label.key }),
+        )
+        val firstInterval = visible.firstOrNull()?.label?.intervalIndex ?: -1
+        val lastInterval = visible.lastOrNull()?.label?.intervalIndex ?: -1
+        val markerInterval = model.route.idxAt(markerPos)
+        val travelledCut = if (markerPos > model.route.startOf(markerInterval)) markerInterval else markerInterval - 1
+        val cameraPixelsPerUnit = (geometry.botY - geometry.topY) / geometry.ew
+        val cameraPixel = if (kotlin.math.abs(cameraPixelsPerUnit) < 1e-6f) 0 else floor(
+            geometry.camLo * cameraPixelsPerUnit / PACKING_GRID_PX,
+        ).toInt()
+        val packingCamLo = if (kotlin.math.abs(cameraPixelsPerUnit) < 1e-6f) geometry.camLo else
+            cameraPixel * PACKING_GRID_PX / cameraPixelsPerUnit
+        val snappedMarker = packingRect(markerRect)
+        val cached = cachedLayout
         if (cached != null && cachedModel === model &&
             cachedGeometryCenter == geometry.centerX && cachedGeometryAmp == geometry.ampBase &&
-            cachedCamLo == geometry.camLo && cachedEw == geometry.ew &&
+            cachedCameraPixel == cameraPixel && cachedEw == geometry.ew &&
             cachedGeometryTop == geometry.topY && cachedGeometryBot == geometry.botY &&
             cachedCenterX == centerX && cachedTopBound == topBound && cachedBotBound == botBound &&
-            cachedMarkerPos == markerPos && cachedMapW == mapW &&
-            cachedMarkerRect == markerRect && cachedMetricsGuard == metricsGuard &&
+            cachedFirstInterval == firstInterval && cachedLastInterval == lastInterval &&
+            cachedTravelledCut == travelledCut && cachedMapW == mapW &&
+            cachedMarkerRect == snappedMarker && cachedMetricsGuard == metricsGuard &&
             cachedFixedGuards == fixedGuards
-        ) return cached
+        ) return TransitionLabelFrame(visible, prioritized, cached)
 
-        val frame = layoutTransitionLabelFrame(
-            model, geometry, markerPos, centerX, mapW, markerRect, metricsGuard,
+        val packingGeometry = RidgelineGeometry(
+            model.route, geometry.centerX, geometry.ampBase, packingCamLo,
+            geometry.ew, geometry.topY, geometry.botY,
+        )
+        val packingCandidates = prioritized.map {
+            it.candidate.copy(
+                anchorX = packingGeometry.worldX(it.label.key),
+                anchorY = packingGeometry.screenY(it.label.key),
+            )
+        }
+        val layout = layoutTransitionChipsDetailed(
+            packingCandidates, centerX, mapW, snappedMarker, metricsGuard,
             topBound, botBound, fixedGuards,
         )
         computations++
         cachedModel = model
         cachedGeometryCenter = geometry.centerX
         cachedGeometryAmp = geometry.ampBase
-        cachedCamLo = geometry.camLo
+        cachedCameraPixel = cameraPixel
         cachedEw = geometry.ew
         cachedGeometryTop = geometry.topY
         cachedGeometryBot = geometry.botY
         cachedCenterX = centerX
         cachedTopBound = topBound
         cachedBotBound = botBound
-        cachedMarkerPos = markerPos
+        cachedFirstInterval = firstInterval
+        cachedLastInterval = lastInterval
+        cachedTravelledCut = travelledCut
         cachedMapW = mapW
-        cachedMarkerRect = markerRect
+        cachedMarkerRect = snappedMarker
         cachedMetricsGuard = metricsGuard
         cachedFixedGuards = fixedGuards.toList()
-        cachedFrame = frame
-        return frame
+        cachedLayout = layout
+        return TransitionLabelFrame(visible, prioritized, layout)
     }
 }
 
@@ -1502,6 +1619,16 @@ internal fun layoutTransitionChipsDetailed(
     fixedGuards.forEach { occupancy.add(it) }
     val out = ArrayList<ChipSlot>(candidates.size)
     var narrowestFailedWidth = Float.POSITIVE_INFINITY
+    // Proof-only lower bound: collision-free inflated chip rectangles must fit within
+    // the canvas area. When their summed area exceeds it, exhaustive blocker-edge
+    // search cannot possibly place every label; retain ordinary bend-relative probes,
+    // then take the explicit fail-visible fallback. Potentially satisfiable layouts
+    // always keep the complete edge search.
+    val inflatedChipArea = candidates.sumOf {
+        ((min(it.pillW, max(1f, mapW - 8f)) + 8f) * (CHIP_H + 8f)).toDouble()
+    }
+    val provablyOverfull = inflatedChipArea >
+        (max(1f, mapW) * max(1f, botBound - topBound + 8f)).toDouble()
 
     for (c in candidates) {
         val pillW = min(c.pillW, max(1f, mapW - 8f))
@@ -1553,7 +1680,7 @@ internal fun layoutTransitionChipsDetailed(
         // a blocker/canvas edge. At each such y, sweep from the canvas edge and jump
         // directly past the rightmost blocker hit. This covers the same blocker-edge
         // positions as a Cartesian x/y search without its quadratic probe explosion.
-        if (slot == null && pillW < narrowestFailedWidth) {
+        if (slot == null && pillW < narrowestFailedWidth && !provablyOverfull) {
             val minLeft = 4f
             val maxLeft = max(minLeft, mapW - pillW - 4f)
             val maxTop = max(topBound, botBound - CHIP_H)

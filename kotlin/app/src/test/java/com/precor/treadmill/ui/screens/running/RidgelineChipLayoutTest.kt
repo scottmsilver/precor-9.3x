@@ -272,11 +272,29 @@ class RidgelineChipLayoutTest {
             },
         )
 
+        assertEquals("route preparation eagerly measured every static label", 0, measures)
         assertEquals("FINISH · 19 ft", labels.finish.second)
-        assertEquals(route.count, labels.transitions.size)
         assertEquals("0:10", labels.transitions[1].lastTime.second)
         assertEquals("3.0%", labels.transitions[1].grade.second)
         assertEquals("4.5", labels.transitions[1].speed.second)
-        assertEquals(1 + route.count * 4, measures)
+        assertEquals("only finish plus the current transition should be measured", 5, measures)
+    }
+
+    /** Repeated minimap values share bounded style-specific layouts across intervals. */
+    @Test
+    fun staticTransitionChromeInternsRepeatedGradeAndSpeedLayouts() {
+        val route = RidgelineRoute(
+            (0 until 3).map { RouteInterval(grade = 3.0, speed = 4.5, durSec = 10.0) },
+        )
+        var measures = 0
+        val labels = prepareRidgelineStaticLabels(
+            route, Color.White, Color.Gray, Color.Green,
+            gradeColorFor = { Color.Yellow }, speedColorFor = { Color.Cyan },
+            measure = { kind, text, color -> measures++; Triple(kind, text, color) },
+        )
+
+        labels.transitions[1]
+        labels.transitions[2]
+        assertEquals("repeated grade/speed layouts were not interned", 6, measures)
     }
 }
