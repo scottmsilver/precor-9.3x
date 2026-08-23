@@ -44,10 +44,14 @@ When more than 64 boundaries are visible, the viewport enters bookend mode:
   the metrics panel, with its path masked out of their guard rectangles.
 
 Crossing the 64-boundary threshold may switch presentation modes. Within a
-mode, membership, prioritization, and placement use the quantized camera key so
-subpixel animation does not cause label flicker or unnecessary recomputation.
-Anchor dots and leader endpoints still use exact current-frame geometry and
-therefore move smoothly between packing-grid boundaries.
+mode, membership, prioritization, and placement use the quantized camera key,
+the traveled boundary cut, and the existing snapped guard keys so subpixel
+animation does not cause label flicker or unnecessary recomputation. Crossing a
+represented boundary changes the traveled cut and therefore recomputes priority
+and placement even when the camera key and snapped marker guard are unchanged.
+Anchor dots and their ordinary anchor-to-pill leader endpoints still use exact
+current-frame geometry and therefore move smoothly between packing-grid
+boundaries.
 
 ## Boundary and bucket semantics
 
@@ -107,24 +111,31 @@ groups or dense bookend groups. Each group records its half-open interval-index
 range, exact count, and first/last content identities.
 
 The existing frame cache owns group membership, prioritization, measured badge
-content, and slot decisions for the quantized camera, marker guard, metrics
-guard, and map bounds. On every draw, the first/last indices are reprojected
-through the exact current geometry; anchor dots and leader endpoints use those
-exact positions while slot choices remain stable. No aggregated state is
-written back to the program, server, or database.
+content, and slot decisions for the quantized camera, traveled boundary cut,
+snapped marker guard, metrics guard, and map bounds. On every draw, the
+first/last indices are reprojected through the exact current geometry; anchor
+dots and ordinary anchor-to-pill leader endpoints use those exact positions
+while slot choices remain stable until one of the cache keys changes. No
+aggregated state is written back to the program, server, or database.
 
 The badge is appended inside the ending pill after the speed run, with the same
 horizontal padding and an amber text color. Its measured width enlarges that
 candidate before placement, so ordinary collision checks cover the whole pill.
-The one-pixel amber bracket runs from the first exact anchor dot to the last,
-with short horizontal caps toward the corresponding placed pill edges. It is
-drawn after the route but before all leader lines, chips, marker, and metrics.
-Before drawing, its path is clipped against the canvas and differenced with the
-inflated marker/metrics guards and every placed chip rectangle. Brackets may
-cross one another or the route at low alpha, but they cannot paint over guarded
-content or labels. A bracket uses the lower of its two endpoint alphas; a group
-straddling the marker therefore remains visually subordinate to its future
-ending chip.
+The one-pixel amber bracket joins the two *placed pills*. From their current
+slot rectangles, choose a deterministic spine beside the route centerline and
+draw one vertical segment between the pill centerlines plus horizontal arms
+that terminate exactly at the nearest boundary of the first and ending pill.
+This geometry is recomputed from the current slot rectangles whenever layout is
+recomputed. Separate ordinary leader lines join each pill to its exact animated
+route anchor, so the bracket communicates grouping while leaders communicate
+route location. The bracket is drawn after the route but before all leader
+lines, chips, marker, and metrics. Before drawing, its path is clipped against
+the canvas and differenced with the inflated marker/metrics guards and every
+placed chip rectangle except for the zero-area arm endpoints that touch its two
+own pill boundaries. Brackets may cross one another or the route at low alpha,
+but they cannot paint over guarded content or labels. A bracket uses the lower
+of its two endpoint alphas; a group straddling the marker therefore remains
+visually subordinate to its future ending chip.
 
 ## Edge cases
 
@@ -156,11 +167,16 @@ Focused unit tests must demonstrate:
    measurement, `phaseAt`/`worldX`, or candidate creation. Production limits
    are injectable into the pure helper so tests also cover all-singleton and
    mixed empty/singleton/aggregate bucket sets.
-6. Subpixel camera motion reuses group membership and slot decisions while
-   exact anchors and leader endpoints move smoothly; crossing a quantization
-   boundary recomputes deterministically.
+6. Subpixel camera motion reuses group membership and slot decisions while the
+   traveled cut and snapped guards are unchanged; exact anchors and leader
+   endpoints move smoothly. Crossing a quantization boundary recomputes
+   deterministically. Crossing a represented boundary within one camera bucket
+   and one snapped guard cell updates traveled styling, priority, and placement
+   deterministically.
 7. Marker, metrics, canvas, and other-chip exclusions hold for the badge-sized
-   pills. Clipped bracket pixels/bounds do not enter those guards.
+   pills. Clipped bracket pixels/bounds do not enter those guards. With heavily
+   displaced bookends, each bracket arm still terminates on its corresponding
+   placed pill boundary.
 8. First/last traveled styling is correct for a group that straddles the
    marker; bracket alpha follows the lower endpoint alpha.
 9. Count formatting and candidate widths remain bounded for counts through the
@@ -169,7 +185,8 @@ Focused unit tests must demonstrate:
 
 Physical-device verification should run a deliberately dense route and confirm
 that normal mode is visually unchanged, dense bookends and badges remain
-legible, bracket endpoints track their chips during marker motion, and frame
+legible, bracket arms remain attached to displaced pills while their independent
+leader lines track the exact route anchors during marker motion, and frame
 presentation remains smooth.
 
 ## Out of scope
