@@ -352,6 +352,7 @@ Extend the model without altering ordinary labels:
 internal data class PreparedTransitionBadge<T>(
     val text: String,
     val measured: MeasuredTransitionText<T>,
+    val color: Color,
 )
 
 internal data class PreparedTransitionEndpoint<T>(
@@ -391,6 +392,9 @@ constrained-measure path. Set
 `badgeOffset = speedOffset + speed.width + BADGE_GAP`; compute one
 `effectivePillW <= maxPillWidth`. Use that exact width for the candidate,
 placement, chrome, leaders, brackets, canvas checks, and all guards.
+Use the Ridgeline amber transition accent for `PreparedTransitionBadge.color`;
+include that color in the endpoint-preparation cache key/model lifetime. Badge
+sizing tests must also assert the prepared amber color.
 
 - [ ] **Step 5: Refactor the frame cache into membership and packing phases**
 
@@ -540,6 +544,7 @@ effective first/last pill rectangles, badge baseline/offset, unclipped bracket,
 and clipped drawable segments. Add failing production-level assertions that:
 
 - z-order data places route → bracket → leaders/chips → marker/metrics;
+- badge and one-pixel bracket both use the specified amber transition accent;
 - the effective pill rectangles use exactly the placement width;
 - badge text lies inside the ending pill and after speed text;
 - marker, metrics, fixed guards, other chips, and canvas exclude the full
@@ -555,7 +560,7 @@ Build pill rectangles from `slot.pillLeft`, `slot.pillTop`,
 `endpointContent.effectivePillW`, and `CHIP_H`. Build and test the pure
 `BookendDecoration`, then draw its clipped segments after the route but before
 ordinary leaders/chips and before the marker/metrics at one pixel and the lower
-endpoint alpha.
+endpoint alpha, using the same amber transition accent as the badge.
 
 Draw the badge inside the ending pill at the prepared `badgeOffset`. Use
 `effectivePillW` identically for placement, pill chrome, collision bounds,
@@ -574,9 +579,16 @@ Ordinary labels retain their legacy prepared runs, widths, and draw data.
 
 Expected: all selected tests pass. Extend the existing SVG/filmstrip fixture
 that writes `kotlin/build/ridgeline-labels.svg` with one 65-transition threshold
-frame and one 1,000-transition dense frame. Copy the reviewed artifact to
-`build/verification/2026-08-23-dense-bookends/ridgeline-labels.svg` and inspect
-that brackets touch both pills and badges remain readable.
+frame and one 1,000-transition dense frame. Copy and inspect it with:
+
+```bash
+mkdir -p build/verification/2026-08-23-dense-bookends
+cp -f kotlin/build/ridgeline-labels.svg \
+  build/verification/2026-08-23-dense-bookends/ridgeline-labels.svg
+test -s build/verification/2026-08-23-dense-bookends/ridgeline-labels.svg
+```
+
+Confirm brackets touch both pills and badges remain readable.
 
 - [ ] **Step 7: Commit**
 
@@ -620,123 +632,241 @@ Expected: Android unit tests and APK build pass; Python and deploy suites pass w
 
 - [ ] **Step 4: Verify on the Galaxy Tab**
 
-Create the evidence directory, start the repository's mock server with an
-isolated database, discover the current wireless endpoint dynamically, and
-install the fresh APK:
+Using `apply_patch`, create the ignored file
+`build/verification/2026-08-23-dense-bookends/verify-device.sh` with the script
+below, then run `chmod +x` and execute it from the worktree root. Keeping setup,
+captures, and cleanup in one process preserves variables and guarantees the
+`EXIT` trap runs after any failure.
 
 ```bash
-mkdir -p build/verification/2026-08-23-dense-bookends
-BOOKEND_TMP=$(mktemp -d)
-env TREADMILL_MOCK=1 TREADMILL_DB="$BOOKEND_TMP/verification.db" \
-  TREADMILL_SERVER_PORT=44084 \
-  python3 python/server.py \
-  >build/verification/2026-08-23-dense-bookends/server.log 2>&1 &
-BOOKEND_SERVER_PID=$!
-echo "$BOOKEND_SERVER_PID" >build/verification/2026-08-23-dense-bookends/server.pid
+#!/usr/bin/env bash
+set -euo pipefail
 
-adb mdns services | tee build/verification/2026-08-23-dense-bookends/adb-mdns.log
+BOOKEND_EVIDENCE=build/verification/2026-08-23-dense-bookends
+BOOKEND_PACKAGE=com.precor.treadmill
+BOOKEND_ACTIVITY=com.precor.treadmill/.MainActivity
+BOOKEND_URL=http://127.0.0.1:44084
+BOOKEND_TMP=$(mktemp -d)
+BOOKEND_SERVER_PID=
+BOOKEND_SERIAL=
+BOOKEND_PREF_PRESENT=0
+BOOKEND_WAS_RUNNING=0
+BOOKEND_WINDOW_SCALE=
+BOOKEND_TRANSITION_SCALE=
+BOOKEND_ANIMATOR_SCALE=
+BOOKEND_TIMEOUT=
+
+mkdir -p "$BOOKEND_EVIDENCE"
+echo "$BOOKEND_TMP" >"$BOOKEND_EVIDENCE/tmp-path.txt"
+
+restore_setting() {
+  local namespace=$1 key=$2 value=$3
+  if [[ "$value" == null || "$value" == empty ]]; then
+    adb -s "$BOOKEND_SERIAL" shell settings delete "$namespace" "$key" >/dev/null
+  else
+    adb -s "$BOOKEND_SERIAL" shell settings put "$namespace" "$key" "$value"
+  fi
+}
+
+cleanup_bookend_device() {
+  local exit_code=$?
+  set +e
+  {
+    if [[ -n "$BOOKEND_SERIAL" ]]; then
+      adb -s "$BOOKEND_SERIAL" shell am force-stop "$BOOKEND_PACKAGE"
+      if [[ "$BOOKEND_PREF_PRESENT" == 1 ]]; then
+        adb -s "$BOOKEND_SERIAL" shell run-as "$BOOKEND_PACKAGE" sh -c \
+          'cat > files/datastore/server_prefs.preferences_pb' \
+          <"$BOOKEND_EVIDENCE/server-prefs-before.pb"
+        adb -s "$BOOKEND_SERIAL" exec-out run-as "$BOOKEND_PACKAGE" \
+          cat files/datastore/server_prefs.preferences_pb \
+          >"$BOOKEND_EVIDENCE/server-prefs-restored.pb"
+        cmp "$BOOKEND_EVIDENCE/server-prefs-before.pb" \
+          "$BOOKEND_EVIDENCE/server-prefs-restored.pb"
+      else
+        adb -s "$BOOKEND_SERIAL" shell run-as "$BOOKEND_PACKAGE" \
+          rm -f files/datastore/server_prefs.preferences_pb
+      fi
+      [[ -n "$BOOKEND_WINDOW_SCALE" ]] && \
+        restore_setting global window_animation_scale "$BOOKEND_WINDOW_SCALE"
+      [[ -n "$BOOKEND_TRANSITION_SCALE" ]] && \
+        restore_setting global transition_animation_scale "$BOOKEND_TRANSITION_SCALE"
+      [[ -n "$BOOKEND_ANIMATOR_SCALE" ]] && \
+        restore_setting global animator_duration_scale "$BOOKEND_ANIMATOR_SCALE"
+      [[ -n "$BOOKEND_TIMEOUT" ]] && \
+        restore_setting system screen_off_timeout "$BOOKEND_TIMEOUT"
+      if [[ "$BOOKEND_WAS_RUNNING" == 1 ]]; then
+        adb -s "$BOOKEND_SERIAL" shell am start -n "$BOOKEND_ACTIVITY" >/dev/null
+      fi
+    fi
+    if [[ -n "$BOOKEND_SERVER_PID" ]]; then
+      kill "$BOOKEND_SERVER_PID" 2>/dev/null
+      wait "$BOOKEND_SERVER_PID" 2>/dev/null
+    fi
+    if [[ -n "$BOOKEND_TMP" && -d "$BOOKEND_TMP" && "$BOOKEND_TMP" == /tmp/* ]]; then
+      rm -rf -- "$BOOKEND_TMP"
+    else
+      echo "refusing unexpected temp cleanup: $BOOKEND_TMP"
+    fi
+    printf 'exit_code=%s\n' "$exit_code"
+    adb devices -l
+  } >"$BOOKEND_EVIDENCE/restoration.log" 2>&1
+  return "$exit_code"
+}
+trap cleanup_bookend_device EXIT
+trap 'exit 130' INT TERM
+
+env TREADMILL_MOCK=1 TREADMILL_DB="$BOOKEND_TMP/verification.db" \
+  TREADMILL_SERVER_PORT=44084 python3 python/server.py \
+  >"$BOOKEND_EVIDENCE/server.log" 2>&1 &
+BOOKEND_SERVER_PID=$!
+echo "$BOOKEND_SERVER_PID" >"$BOOKEND_EVIDENCE/server.pid"
+for _ in $(seq 1 50); do
+  curl --fail --silent "$BOOKEND_URL/" >"$BOOKEND_EVIDENCE/backend-ready.json" && break
+  sleep 0.2
+done
+curl --fail --silent "$BOOKEND_URL/" >/dev/null
+
+adb mdns services | tee "$BOOKEND_EVIDENCE/adb-mdns.log"
+BOOKEND_ENDPOINT=$(awk '$1 ~ /^adb-R9ZY90P5LZP/ && $2 == "_adb-tls-connect._tcp" {print $3; exit}' \
+  "$BOOKEND_EVIDENCE/adb-mdns.log")
+if ! adb devices -l | grep -q 'model:SM_X115'; then
+  test -n "$BOOKEND_ENDPOINT"
+  adb connect "$BOOKEND_ENDPOINT" | tee "$BOOKEND_EVIDENCE/adb-connect.log"
+fi
 BOOKEND_SERIAL=$(adb devices -l | awk '/model:SM_X115/ {print $1; exit}')
 test -n "$BOOKEND_SERIAL"
-adb -s "$BOOKEND_SERIAL" install -r \
-  kotlin/app/build/outputs/apk/debug/app-debug.apk \
-  | tee build/verification/2026-08-23-dense-bookends/adb-install.log
-```
+echo "$BOOKEND_SERIAL" >"$BOOKEND_EVIDENCE/adb-serial.txt"
 
-Back up the server preference before changing it:
+BOOKEND_LAN_IP=$(ip route get 1.1.1.1 | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')
+test -n "$BOOKEND_LAN_IP"
+BOOKEND_DEVICE_URL=http://$BOOKEND_LAN_IP:44084
+echo "$BOOKEND_DEVICE_URL" >"$BOOKEND_EVIDENCE/backend-url.txt"
 
-```bash
-adb -s "$BOOKEND_SERIAL" exec-out run-as com.precor.treadmill \
-  cat files/datastore/server_prefs.preferences_pb \
-  >build/verification/2026-08-23-dense-bookends/server-prefs-before.pb
-adb -s "$BOOKEND_SERIAL" shell am force-stop com.precor.treadmill
-adb -s "$BOOKEND_SERIAL" shell run-as com.precor.treadmill \
+BOOKEND_WINDOW_SCALE=$(adb -s "$BOOKEND_SERIAL" shell settings get global window_animation_scale | tr -d '\r')
+BOOKEND_TRANSITION_SCALE=$(adb -s "$BOOKEND_SERIAL" shell settings get global transition_animation_scale | tr -d '\r')
+BOOKEND_ANIMATOR_SCALE=$(adb -s "$BOOKEND_SERIAL" shell settings get global animator_duration_scale | tr -d '\r')
+BOOKEND_TIMEOUT=$(adb -s "$BOOKEND_SERIAL" shell settings get system screen_off_timeout | tr -d '\r')
+adb -s "$BOOKEND_SERIAL" shell pidof "$BOOKEND_PACKAGE" >/dev/null && BOOKEND_WAS_RUNNING=1 || true
+printf '%s\n%s\n%s\n%s\n' "$BOOKEND_WINDOW_SCALE" "$BOOKEND_TRANSITION_SCALE" \
+  "$BOOKEND_ANIMATOR_SCALE" "$BOOKEND_TIMEOUT" >"$BOOKEND_EVIDENCE/device-settings-before.txt"
+
+adb -s "$BOOKEND_SERIAL" shell am force-stop "$BOOKEND_PACKAGE"
+if adb -s "$BOOKEND_SERIAL" shell run-as "$BOOKEND_PACKAGE" \
+  test -f files/datastore/server_prefs.preferences_pb; then
+  BOOKEND_PREF_PRESENT=1
+  adb -s "$BOOKEND_SERIAL" exec-out run-as "$BOOKEND_PACKAGE" \
+    cat files/datastore/server_prefs.preferences_pb \
+    >"$BOOKEND_EVIDENCE/server-prefs-before.pb"
+fi
+
+adb -s "$BOOKEND_SERIAL" install -r kotlin/app/build/outputs/apk/debug/app-debug.apk \
+  | tee "$BOOKEND_EVIDENCE/adb-install.log"
+adb -s "$BOOKEND_SERIAL" shell run-as "$BOOKEND_PACKAGE" \
   rm -f files/datastore/server_prefs.preferences_pb
-adb -s "$BOOKEND_SERIAL" shell am start -n \
-  com.precor.treadmill/.MainActivity
-```
+adb -s "$BOOKEND_SERIAL" shell settings put global window_animation_scale 1
+adb -s "$BOOKEND_SERIAL" shell settings put global transition_animation_scale 1
+adb -s "$BOOKEND_SERIAL" shell settings put global animator_duration_scale 1
+adb -s "$BOOKEND_SERIAL" shell settings put system screen_off_timeout 180000
+adb -s "$BOOKEND_SERIAL" shell am start -n "$BOOKEND_ACTIVITY"
+sleep 5
+adb -s "$BOOKEND_SERIAL" exec-out screencap -p >"$BOOKEND_EVIDENCE/setup-before.png"
+adb -s "$BOOKEND_SERIAL" shell uiautomator dump /sdcard/bookend-setup-before.xml >/dev/null
+adb -s "$BOOKEND_SERIAL" pull /sdcard/bookend-setup-before.xml \
+  "$BOOKEND_EVIDENCE/setup-before.xml" >/dev/null
+grep -q 'Server URL' "$BOOKEND_EVIDENCE/setup-before.xml"
+adb -s "$BOOKEND_SERIAL" shell input tap 670 445
+adb -s "$BOOKEND_SERIAL" shell input keyevent KEYCODE_MOVE_END
+for _ in $(seq 1 80); do adb -s "$BOOKEND_SERIAL" shell input keyevent KEYCODE_DEL; done
+adb -s "$BOOKEND_SERIAL" shell input text "$BOOKEND_DEVICE_URL"
+adb -s "$BOOKEND_SERIAL" shell input tap 670 535
+sleep 4
+adb -s "$BOOKEND_SERIAL" exec-out screencap -p >"$BOOKEND_EVIDENCE/setup-after.png"
+adb -s "$BOOKEND_SERIAL" shell uiautomator dump /sdcard/bookend-setup-after.xml >/dev/null
+adb -s "$BOOKEND_SERIAL" pull /sdcard/bookend-setup-after.xml \
+  "$BOOKEND_EVIDENCE/setup-after.xml" >/dev/null
+! grep -q 'Server URL' "$BOOKEND_EVIDENCE/setup-after.xml"
 
-Use the Setup screen to enter `http://<local-LAN-IP>:44084`; save a screenshot
-and `uiautomator dump` before and after. Create/select a verification profile,
-then create exact route fixtures against the mock server. Use `jq -n` to produce
-ordinary, 64-, 65-, and 1,000-boundary JSON bodies; POST each to
-`/api/workouts`, load the returned workout id through
-`/api/workouts/{id}/load`, and call `/api/program/start`. Save every request and
-response in the evidence directory. Durations may be fractional for the dense
-fixture because the exact timeline is intentionally unrestricted.
-
-The server setup and dense fixture commands are:
-
-```bash
-BOOKEND_URL=http://127.0.0.1:44084
 curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/profiles" \
   -H 'Content-Type: application/json' -d '{"name":"Bookend Verify"}' \
-  | tee build/verification/2026-08-23-dense-bookends/profile-create.json
-BOOKEND_PROFILE=$(jq -r '.profile.id' \
-  build/verification/2026-08-23-dense-bookends/profile-create.json)
+  | tee "$BOOKEND_EVIDENCE/profile-create.json"
+BOOKEND_PROFILE=$(jq -r '.profile.id' "$BOOKEND_EVIDENCE/profile-create.json")
 curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/profile/select" \
-  -H 'Content-Type: application/json' \
-  -d "{\"id\":\"$BOOKEND_PROFILE\"}" \
-  | tee build/verification/2026-08-23-dense-bookends/profile-select.json
+  -H 'Content-Type: application/json' -d "{\"id\":\"$BOOKEND_PROFILE\"}" \
+  | tee "$BOOKEND_EVIDENCE/profile-select.json"
 
-jq -n '{program:{name:"Dense 1000",intervals:[range(0;1000) |
-  {name:("I" + tostring),duration:0.6,speed:(2.5 + (. % 8) * 0.2),incline:(. % 16)}]},
-  source:"manual"}' \
-  >build/verification/2026-08-23-dense-bookends/dense-1000-request.json
-curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/workouts" \
-  -H 'Content-Type: application/json' \
-  --data-binary @build/verification/2026-08-23-dense-bookends/dense-1000-request.json \
-  | tee build/verification/2026-08-23-dense-bookends/dense-1000-create.json
-BOOKEND_WORKOUT=$(jq -r '.workout.id' \
-  build/verification/2026-08-23-dense-bookends/dense-1000-create.json)
-curl --fail --silent --show-error -X POST \
-  "$BOOKEND_URL/api/workouts/$BOOKEND_WORKOUT/load" \
-  | tee build/verification/2026-08-23-dense-bookends/dense-1000-load.json
-curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/program/start" \
-  | tee build/verification/2026-08-23-dense-bookends/dense-1000-start.json
+run_fixture() {
+  local slug=$1 count=$2 duration=$3
+  curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/program/stop" \
+    >"$BOOKEND_EVIDENCE/$slug-stop.json"
+  jq -n --arg name "$slug" --argjson count "$count" --argjson duration "$duration" \
+    '{program:{name:$name,intervals:[range(0;$count) |
+      {name:("I" + tostring),duration:$duration,
+       speed:(2.5 + (. % 8) * 0.2),incline:(. % 16)}]},source:"manual"}' \
+    >"$BOOKEND_EVIDENCE/$slug-request.json"
+  curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/workouts" \
+    -H 'Content-Type: application/json' --data-binary @"$BOOKEND_EVIDENCE/$slug-request.json" \
+    | tee "$BOOKEND_EVIDENCE/$slug-create.json"
+  local workout
+  workout=$(jq -r '.workout.id' "$BOOKEND_EVIDENCE/$slug-create.json")
+  curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/workouts/$workout/load" \
+    | tee "$BOOKEND_EVIDENCE/$slug-load.json"
+  curl --fail --silent --show-error -X POST "$BOOKEND_URL/api/program/start" \
+    | tee "$BOOKEND_EVIDENCE/$slug-start.json"
+  sleep 3
+  adb -s "$BOOKEND_SERIAL" exec-out screencap -p >"$BOOKEND_EVIDENCE/$slug.png"
+  adb -s "$BOOKEND_SERIAL" shell uiautomator dump "/sdcard/$slug.xml" >/dev/null
+  adb -s "$BOOKEND_SERIAL" pull "/sdcard/$slug.xml" "$BOOKEND_EVIDENCE/$slug.xml" >/dev/null
+}
+
+run_fixture ordinary-8 8 75
+run_fixture exact-64 64 9.5
+run_fixture dense-65 65 9.375
+run_fixture dense-1000 1000 0.6
+
+adb -s "$BOOKEND_SERIAL" shell dumpsys gfxinfo "$BOOKEND_PACKAGE" reset \
+  >"$BOOKEND_EVIDENCE/gfx-reset.txt"
+adb -s "$BOOKEND_SERIAL" shell dumpsys SurfaceFlinger \
+  >"$BOOKEND_EVIDENCE/surfaceflinger-before.txt"
+adb -s "$BOOKEND_SERIAL" shell screenrecord --time-limit 20 /sdcard/bookend-motion.mp4
+adb -s "$BOOKEND_SERIAL" pull /sdcard/bookend-motion.mp4 \
+  "$BOOKEND_EVIDENCE/bookend-motion.mp4" >/dev/null
+adb -s "$BOOKEND_SERIAL" shell dumpsys gfxinfo "$BOOKEND_PACKAGE" framestats \
+  >"$BOOKEND_EVIDENCE/gfxinfo-framestats.txt"
+adb -s "$BOOKEND_SERIAL" shell dumpsys SurfaceFlinger \
+  >"$BOOKEND_EVIDENCE/surfaceflinger-after.txt"
 ```
 
-Generate the 64- and 65-boundary fixtures with the same `jq` shape using 64
-intervals of 9.5 seconds and 65 intervals of 9.375 seconds, respectively; both
-sets fit inside the 600-second viewport and exercise the exact threshold.
+Execute the created script without relying on the current shell's variables:
 
-Then exercise:
+```bash
+chmod +x build/verification/2026-08-23-dense-bookends/verify-device.sh
+bash build/verification/2026-08-23-dense-bookends/verify-device.sh \
+  >build/verification/2026-08-23-dense-bookends/device-run.log 2>&1
+```
 
-- an ordinary mixed-grade route with fewer than 65 visible boundaries (no visual change);
-- exactly 64 and exactly 65 visible boundaries (mode threshold);
-- at least 1,000 visible boundaries (bounded bookends/counts);
-- marker movement across a selected bookend;
-- camera movement across a packing-grid boundary;
-- displaced pills around marker and metrics guards.
+The dense video naturally crosses many 0.6-second represented boundaries and
+exercises traveled-cut invalidation plus displacement around the marker/metrics
+guards. Camera-grid movement remains covered by deterministic unit tests; the
+app has no public fast-forward and the separate bead `precor-9_3x-pix` tracks a
+long-running physical camera-pan capture.
 
-Capture screenshots/video, `adb -s "$BOOKEND_SERIAL" shell dumpsys gfxinfo
-com.precor.treadmill framestats`, and before/after `dumpsys SurfaceFlinger`
-snapshots under the evidence directory. Confirm brackets remain attached to
-their pills, separate leaders track exact route anchors, no decoration paints
-over guards, and presentation cadence stays near 60 Hz.
+Inspect all four screenshots and the dense video. Confirm the 8- and 64-label
+routes retain ordinary labels, 65 switches to bookends, 1,000 remains bounded,
+brackets stay attached to placed pills, independent leaders track route anchors,
+no decoration paints over guards, and recorded presentation cadence remains
+near 60 Hz.
 
 - [ ] **Step 5: Restore the device and document evidence**
 
-Restore the original server preference byte-for-byte, animation scales, timeout,
-app state, and mock backend. At minimum:
-
-```bash
-adb -s "$BOOKEND_SERIAL" shell am force-stop com.precor.treadmill
-adb -s "$BOOKEND_SERIAL" push \
-  build/verification/2026-08-23-dense-bookends/server-prefs-before.pb \
-  /data/local/tmp/server-prefs.preferences_pb
-adb -s "$BOOKEND_SERIAL" shell run-as com.precor.treadmill \
-  cp -f /data/local/tmp/server-prefs.preferences_pb \
-  files/datastore/server_prefs.preferences_pb
-adb -s "$BOOKEND_SERIAL" shell rm -f /data/local/tmp/server-prefs.preferences_pb
-kill "$BOOKEND_SERVER_PID"
-```
-
-Record animation-scale/timeout values before mutation and compare them after
-restoration. Verify the preference with a byte-for-byte `cmp` after pulling it
-back, record final `adb`/server process state, validate that `BOOKEND_TMP` is a
-non-empty directory created by `mktemp -d` before removing exactly that path,
-and
-append concise evidence to bead `precor-9_3x-rbg`.
+The script's `EXIT` trap restores the preference through stdin to `run-as`,
+restores all animation scales and timeout, returns the app to its original
+running/stopped state, stops the exact server PID, validates/removes only its
+`mktemp -d` directory, and records `restoration.log`. After the script exits,
+require a zero exit status, a successful byte comparison when a preference was
+originally present, no live PID from `server.pid`, and the original device
+settings in `device-settings-before.txt`. Append concise visual/performance and
+restoration evidence to bead `precor-9_3x-rbg`.
 
 - [ ] **Step 6: Commit any final test-only correction and push the branch**
 
