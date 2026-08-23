@@ -585,6 +585,15 @@ fun RidgelineMap(
         // Paint ownership follows the route just like the label caches. Camera/canvas
         // changes update the slot key; marker-pulse redraws reuse its shader and blur.
         val steepnessPaint = remember(route) { SteepnessPaintSlot() }
+        // The viewport height is stable for a windowed route, so this brush and its
+        // size-keyed shader are reused across marker-pulse and camera-position frames.
+        val viewportLensBrush = remember {
+            Brush.verticalGradient(
+                0f to RidgelineTheme.fg.copy(alpha = 0.24f),
+                0.45f to RidgelineTheme.fg.copy(alpha = 0.07f),
+                1f to RidgelineTheme.fg.copy(alpha = 0.13f),
+            )
+        }
         Canvas(modifier = Modifier.fillMaxSize()) {
             // Canvas does NOT clip children by default — contours draw past the panel
             // edge (x in [-30, W+30]) and were bleeding onto neighboring UI.
@@ -592,7 +601,7 @@ fun RidgelineMap(
                 drawRidgeline(
                     route, markerPos, pulseR.value, pulseA.value, elevLo.value.toDouble(),
                     metricsPillRect, preparedLabels, staticLabels, labelFrameCache,
-                    steepnessPaint,
+                    steepnessPaint, viewportLensBrush,
                 )
             }
         }
@@ -613,6 +622,33 @@ internal fun computeTargetLo(route: RidgelineRoute, markerPos: Double): Double {
     )
 }
 
+/** Draw-safe geometry for the glass pane over the minimap's visible route slice. */
+internal data class ViewportLens(
+    val left: Float,
+    val top: Float,
+    val width: Float,
+    val height: Float,
+    val radius: Float,
+)
+
+internal fun minimapViewportLens(
+    leaderX: Float,
+    vTop: Float,
+    vBot: Float,
+    stripW: Float,
+): ViewportLens {
+    val safeTop = if (vTop.isFinite()) vTop else 0f
+    val rawHeight = if (vTop.isFinite() && vBot.isFinite()) vBot - vTop else 0f
+    val viewportHeight = if (rawHeight.isFinite()) rawHeight else 0f
+    return ViewportLens(
+        left = if (leaderX.isFinite()) leaderX else 0f,
+        top = safeTop,
+        width = if (stripW.isFinite()) max(0f, stripW + 12f) else 12f,
+        height = max(10f, viewportHeight),
+        radius = 7f,
+    )
+}
+
 private fun DrawScope.drawRidgeline(
     route: RidgelineRoute,
     markerDist: Double,
@@ -624,6 +660,7 @@ private fun DrawScope.drawRidgeline(
     staticLabels: PreparedRidgelineStaticLabels<androidx.compose.ui.text.TextLayoutResult>,
     labelFrameCache: TransitionLabelFrameCache<androidx.compose.ui.text.TextLayoutResult>,
     steepnessPaint: SteepnessPaintSlot,
+    viewportLensBrush: Brush,
 ) {
     val W = size.width
     val H = size.height
@@ -1125,17 +1162,49 @@ private fun DrawScope.drawRidgeline(
                 RidgelineTheme.fg, Offset(leaderX, vBot), Offset(mapRightEdge, botY),
                 strokeWidth = 1f, alpha = 0.28f, pathEffect = dash,
             )
-            // viewport-highlight fill + neutral 1.5px border
-            drawRoundRectCompat(
-                mx - mW / 2f - 6f, vTop, mW + 12f, max(10f, vBot - vTop), 4f,
-                RidgelineTheme.fg.copy(alpha = 0.07f),
-            )
+            val lens = minimapViewportLens(leaderX, vTop, vBot, mW)
+            val rim = androidx.compose.ui.geometry.CornerRadius(lens.radius, lens.radius)
+            // Dark hairline outside the pane gives the glass visible thickness.
             drawRoundRect(
-                color = RidgelineTheme.fg.copy(alpha = 0.55f),
-                topLeft = Offset(mx - mW / 2f - 6f, vTop),
-                size = Size(mW + 12f, max(10f, vBot - vTop)),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(4f, 4f),
-                style = Stroke(width = 1.5f),
+                color = RidgelineTheme.bg.copy(alpha = 0.45f),
+                topLeft = Offset(lens.left - 1f, lens.top - 1f),
+                size = Size(lens.width + 2f, lens.height + 2f),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                    lens.radius + 1f,
+                    lens.radius + 1f,
+                ),
+                style = Stroke(width = 1f),
+            )
+            // The low-opacity surface leaves the route cells legible through the pane.
+            drawRoundRect(
+                brush = viewportLensBrush,
+                topLeft = Offset(lens.left, lens.top),
+                size = Size(lens.width, lens.height),
+                cornerRadius = rim,
+            )
+            // Firm white rim plus lit top and subtler bottom bounce read as glass.
+            drawRoundRect(
+                color = RidgelineTheme.fg.copy(alpha = 0.36f),
+                topLeft = Offset(lens.left, lens.top),
+                size = Size(lens.width, lens.height),
+                cornerRadius = rim,
+                style = Stroke(width = 1f),
+            )
+            drawLine(
+                RidgelineTheme.fg,
+                Offset(lens.left + lens.radius, lens.top + 0.5f),
+                Offset(lens.left + lens.width - lens.radius, lens.top + 0.5f),
+                strokeWidth = 1.25f,
+                alpha = 0.72f,
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                RidgelineTheme.fg,
+                Offset(lens.left + lens.radius, lens.top + lens.height - 0.5f),
+                Offset(lens.left + lens.width - lens.radius, lens.top + lens.height - 0.5f),
+                strokeWidth = 1f,
+                alpha = 0.30f,
+                cap = StrokeCap.Round,
             )
         }
         // (no finish flag on the strip — the strip's top edge IS the finish, and
