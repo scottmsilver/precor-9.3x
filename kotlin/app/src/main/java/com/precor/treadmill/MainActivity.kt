@@ -1,5 +1,7 @@
 package com.precor.treadmill
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
@@ -7,12 +9,20 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
 import com.precor.treadmill.ui.navigation.AppNavigation
 import com.precor.treadmill.ui.theme.PrecorTreadmillTheme
 import com.precor.treadmill.ui.viewmodel.VoiceViewModel
+import com.precor.treadmill.ui.viewmodel.VoiceState
+import com.rementia.openwakeword.lib.WakeWordEngine
+import com.rementia.openwakeword.lib.model.WakeWordModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
 
 class MainActivity : ComponentActivity() {
@@ -23,6 +33,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private val voiceViewModel: VoiceViewModel by viewModel()
+    private var wakeWordEngine: WakeWordEngine? = null
+    private var wakeWordDetectionJob: Job? = null
+    private var wakeWordStateJob: Job? = null
+    private var wakeWordForeground = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -63,6 +77,88 @@ class MainActivity : ComponentActivity() {
             }
             else -> return
         }
+    }
+
+    /**
+     * OpenWakeWord integration using the wrapper's AudioRecord and the bundled
+     * full-precision Hey Treddy classifier. Voice activation recreates AudioCapture
+     * after the detector releases the microphone.
+     */
+    private fun startWakeWordPrototype() {
+        wakeWordEngine?.let { engine ->
+            if (voiceViewModel.voiceState.value == VoiceState.IDLE) engine.start()
+            return
+        }
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "Wake-word prototype disabled: RECORD_AUDIO not granted")
+            return
+        }
+
+        try {
+            val engine = WakeWordEngine(
+                context = applicationContext,
+                models = listOf(
+                    WakeWordModel(
+                        name = "Hey Treddy",
+                        modelPath = "hey_treddy.onnx",
+                        threshold = 0.70f,
+                    )
+                ),
+                detectionCooldownMs = 3_000L,
+            )
+            wakeWordEngine = engine
+
+            wakeWordDetectionJob = lifecycleScope.launch {
+                engine.detections.collect { detection ->
+                    Log.i(
+                        TAG,
+                        "WAKE_WORD_DETECTED name=${detection.model.name} score=${detection.score}",
+                    )
+                    // Give the wrapper's AudioRecord time to release before Gemini's
+                    // existing AudioCapture claims the microphone.
+                    engine.stop()
+                    delay(300)
+                    if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
+                        voiceViewModel.activateAfterWakeWord()
+                    }
+                }
+            }
+
+            wakeWordStateJob = lifecycleScope.launch {
+                voiceViewModel.voiceState.collect { state ->
+                    if (state == VoiceState.IDLE && wakeWordForeground) {
+                        Log.i(TAG, "WAKE_WORD_LISTENING phrase=hey_treddy")
+                        engine.start()
+                    } else {
+                        engine.stop()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Wake-word prototype failed to initialize", e)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        wakeWordForeground = true
+        startWakeWordPrototype()
+    }
+
+    override fun onPause() {
+        wakeWordForeground = false
+        wakeWordEngine?.stop()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        wakeWordDetectionJob?.cancel()
+        wakeWordStateJob?.cancel()
+        wakeWordEngine?.release()
+        super.onDestroy()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

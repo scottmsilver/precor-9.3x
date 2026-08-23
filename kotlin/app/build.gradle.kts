@@ -100,6 +100,9 @@ dependencies {
     // DataStore
     implementation(libs.datastore.preferences)
 
+    // Prototype: run the complete openWakeWord ONNX pipeline on-device.
+    implementation("xyz.rementia:openwakeword:0.1.5")
+
     // Testing
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)

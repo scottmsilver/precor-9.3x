@@ -343,6 +343,15 @@ class VoiceViewModel(
         }
     }
 
+    /** Prototype handoff from a detector that temporarily owns the microphone. */
+    fun activateAfterWakeWord() {
+        if (_voiceState.value != VoiceState.IDLE) return
+        audioCapture?.release()
+        audioCapture = AudioCapture { /* callback installed by startMicCapture */ }
+        audioCapture?.warmUp()
+        toggle()
+    }
+
     fun interrupt() {
         Log.d(TAG, "interrupt() called — flushing player")
         audioPlayer?.flush()
