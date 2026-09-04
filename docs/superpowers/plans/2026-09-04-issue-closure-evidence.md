@@ -215,9 +215,11 @@ test "$(sha256sum "$RED60/kotlin/app/src/test/java/com/precor/treadmill/WakeWord
 From `"$RED60/kotlin"`, preserve the true exit status:
 
 ```bash
+set +e
 set -o pipefail
 ./gradlew testDebugUnitTest --tests com.precor.treadmill.WakeWordActivationPolicyTest 2>&1 | tee "$EVIDENCE_ROOT/issue-60-red.log"
 RED60_STATUS=${PIPESTATUS[0]}
+set -e
 printf '%s\n' "$RED60_STATUS" > "$EVIDENCE_ROOT/issue-60-red.status"
 test "$RED60_STATUS" -ne 0
 rg -q "Unresolved reference.*WakeWordActivationPolicy" "$EVIDENCE_ROOT/issue-60-red.log"
@@ -248,9 +250,11 @@ test "$(sha256sum "$RED62/python/tests/test_server_integration.py" | cut -d' ' -
 Run from `"$RED62"` with `tee`/`${PIPESTATUS[0]}`:
 
 ```bash
+set +e
 set -o pipefail
 pytest -q python/tests/test_server_integration.py::TestHistoryResume 2>&1 | tee "$EVIDENCE_ROOT/issue-62-red.log"
 RED62_STATUS=${PIPESTATUS[0]}
+set -e
 printf '%s\n' "$RED62_STATUS" > "$EVIDENCE_ROOT/issue-62-red.status"
 test "$RED62_STATUS" -ne 0
 rg -q 'test_resume_derives_interval_from_saved_elapsed_time|test_terminal_history_position_is_not_resumable|test_stop_at_terminal_position_persists_completed' "$EVIDENCE_ROOT/issue-62-red.log"
@@ -365,6 +369,23 @@ PY
 
 Dump UIAutomator XML, resolve `Server URL` with `ui_center`, tap it, move to end and send `KEYCODE_DEL` 200 times, enter `"$MOCK_URL"` with `adb shell input text`, resolve/tap `Connect`, and invoke IME Go if required. Re-dump XML and require connected lobby text. Before any mock program API, repeat the `/proc/$MOCK_PID/environ` check above. If any step after retargeting fails, execute Task 6 Step 4 cleanup immediately and post no issue comments.
 
+Before accepting the connected lobby, force-stop the app so the DataStore write is flushed, stream the temporary `server_prefs.preferences_pb` to `"$EVIDENCE_ROOT/mock-server-prefs.pb"`, decode it, and require its URL is exactly `"$MOCK_URL"`. Relaunch, require the lobby again, and require `mock-server.log` to contain the tablet WebSocket acceptance/connection emitted after that relaunch. This proves the UI did not silently auto-select the discoverable real server.
+
+```bash
+adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
+adb -s "$DEVICE_SERIAL" exec-out run-as "$PACKAGE" cat files/datastore/server_prefs.preferences_pb > "$EVIDENCE_ROOT/mock-server-prefs.pb"
+protoc --decode_raw < "$EVIDENCE_ROOT/mock-server-prefs.pb" > "$EVIDENCE_ROOT/mock-server-prefs.txt"
+TEMP_SERVER=$(sed -n 's/.*"\(https\{0,1\}:\/\/[^\"]*\)".*/\1/p' "$EVIDENCE_ROOT/mock-server-prefs.txt" | head -1)
+test "$TEMP_SERVER" = "$MOCK_URL"
+: > "$EVIDENCE_ROOT/mock-server-post-target.log"
+tail -n 0 -F "$EVIDENCE_ROOT/mock-server.log" > "$EVIDENCE_ROOT/mock-server-post-target.log" &
+MOCK_TAIL_PID=$!
+adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
+for _ in $(seq 1 20); do rg -q 'WebSocket.*(accept|connect)|connection open' "$EVIDENCE_ROOT/mock-server-post-target.log" && break; sleep 1; done
+kill "$MOCK_TAIL_PID" 2>/dev/null || true
+rg -q 'WebSocket.*(accept|connect)|connection open' "$EVIDENCE_ROOT/mock-server-post-target.log"
+```
+
 ### Task 6: Capture final-main tablet evidence
 
 **Files:**
@@ -410,9 +431,13 @@ Recheck `/proc/$MOCK_PID/environ`, then stop only the mock program through its A
 tr '\0' '\n' < "/proc/$MOCK_PID/environ" | rg '^TREADMILL_MOCK=1$'
 curl -fsS -X POST "$MOCK_URL/api/program/stop" | jq -e '.running == false'
 curl -fsS "$MOCK_URL/api/session" | jq -e '.active == false'
-adb -s "$DEVICE_SERIAL" shell input tap 40 40
 adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-exit.xml
 adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-exit.xml > "$EVIDENCE_ROOT/exit-window.xml"
+if ! rg -q 'Exit to home' "$EVIDENCE_ROOT/exit-window.xml"; then
+  adb -s "$DEVICE_SERIAL" shell input tap 40 40
+  adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-exit.xml
+  adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-exit.xml > "$EVIDENCE_ROOT/exit-window.xml"
+fi
 read EXIT_X EXIT_Y < <(ui_center "$EVIDENCE_ROOT/exit-window.xml" 'Exit to home')
 adb -s "$DEVICE_SERIAL" shell input tap "$EXIT_X" "$EXIT_Y"
 adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-lobby.xml
@@ -425,6 +450,13 @@ adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-settings.xml > "$EVIDENCE_R
 rg -F 'Microphone Permission' "$EVIDENCE_ROOT/settings-before.xml"
 read VOICE_X VOICE_Y < <(ui_center "$EVIDENCE_ROOT/settings-before.xml" 'Voice Input')
 adb -s "$DEVICE_SERIAL" shell input tap "$VOICE_X" "$VOICE_Y"
+for _ in $(seq 1 20); do
+  adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-settings-toggle.xml >/dev/null
+  adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-settings-toggle.xml > "$EVIDENCE_ROOT/settings-toggle.xml"
+  if [ "$ORIGINAL_VOICE_INPUT" = true ]; then rg -q 'text="Voice Input"[^>]*checked="false"' "$EVIDENCE_ROOT/settings-toggle.xml" && break; else rg -q 'text="Voice Input"[^>]*checked="true"' "$EVIDENCE_ROOT/settings-toggle.xml" && break; fi
+  sleep 1
+done
+if [ "$ORIGINAL_VOICE_INPUT" = true ]; then rg -q 'text="Voice Input"[^>]*checked="false"' "$EVIDENCE_ROOT/settings-toggle.xml"; else rg -q 'text="Voice Input"[^>]*checked="true"' "$EVIDENCE_ROOT/settings-toggle.xml"; fi
 adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
 adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
 adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-lobby-after-relaunch.xml
@@ -511,9 +543,23 @@ for pair in "59:$COMMENT59" "60:$COMMENT60" "61:$COMMENT61" "62:$COMMENT62" "64:
   case "$url" in "https://github.com/scottmsilver/treddy/issues/$issue#issuecomment-"*) ;; *) exit 1;; esac
   id=${url##*issuecomment-}
   printf '%s\n' "$id" > "$EVIDENCE_ROOT/issue-$issue-comment.id"
-  gh api "repos/scottmsilver/treddy/issues/comments/$id" > "$EVIDENCE_ROOT/issue-$issue-comment.json"
+  "$GH_ATTACH" api "repos/scottmsilver/treddy/issues/comments/$id" > "$EVIDENCE_ROOT/issue-$issue-comment.json"
   test "$(jq -r .issue_url "$EVIDENCE_ROOT/issue-$issue-comment.json")" = "https://api.github.com/repos/scottmsilver/treddy/issues/$issue"
   for heading in 'Problem' 'Root cause / gap' 'GREEN' 'Device validation' 'Delivery'; do jq -er .body "$EVIDENCE_ROOT/issue-$issue-comment.json" | rg -F "$heading" >/dev/null; done
+done
+for issue in 59 60 61 62 64; do
+  body=$(jq -r .body "$EVIDENCE_ROOT/issue-$issue-comment.json")
+  printf '%s' "$body" | rg -F "$FINAL_SHA" >/dev/null
+  printf '%s' "$body" | rg -F 'TREADMILL_MOCK=1' >/dev/null
+  printf '%s' "$body" | rg -i 'belt remained stationary' >/dev/null
+  case "$issue" in
+    59) pr=67 ;;
+    60) pr=66; printf '%s' "$body" | rg -F 'RED' >/dev/null ;;
+    61) pr=68 ;;
+    62) pr=65; printf '%s' "$body" | rg -F 'RED' >/dev/null ;;
+    64) pr=69 ;;
+  esac
+  printf '%s' "$body" | rg -F "https://github.com/scottmsilver/treddy/pull/$pr" >/dev/null
 done
 for issue in 59 61 62 64; do
   jq -r .body "$EVIDENCE_ROOT/issue-$issue-comment.json" | rg -o 'https://github.com/user-attachments/assets/[^ )]+' > "$EVIDENCE_ROOT/issue-$issue-assets.txt"
