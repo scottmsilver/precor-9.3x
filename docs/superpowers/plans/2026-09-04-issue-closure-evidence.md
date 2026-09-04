@@ -189,7 +189,8 @@ if ! {
   INSTALLED_APK_PATH=$(adb -s "$DEVICE_SERIAL" shell pm path "$PACKAGE" | tr -d '\r' | sed 's/^package://') &&
   adb -s "$DEVICE_SERIAL" pull "$INSTALLED_APK_PATH" "$EVIDENCE_ROOT/installed-base.apk" &&
   cmp "$APK" "$EVIDENCE_ROOT/installed-base.apk" &&
-  adb -s "$DEVICE_SERIAL" shell dumpsys activity activities | rg "mResumedActivity.*$PACKAGE";
+  for _ in $(seq 1 20); do adb -s "$DEVICE_SERIAL" shell dumpsys activity activities | rg -q "(mResumedActivity|ResumedActivity).*${PACKAGE}" && break; sleep 1; done &&
+  adb -s "$DEVICE_SERIAL" shell dumpsys activity activities | rg "(mResumedActivity|ResumedActivity).*${PACKAGE}";
 }; then rollback_apk; exit 1; fi
 ```
 
