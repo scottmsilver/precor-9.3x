@@ -62,6 +62,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -83,7 +84,6 @@ import com.precor.treadmill.ui.theme.LocalOpacityGroup
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
 import com.precor.treadmill.ui.theme.OpacityGroup
 import com.precor.treadmill.ui.theme.legibleOn
-import com.precor.treadmill.ui.util.fmtDur
 import com.precor.treadmill.ui.util.haptic
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import com.precor.treadmill.ui.viewmodel.VoiceState
@@ -124,6 +124,16 @@ fun RidgelineHud(
     val status by viewModel.status.collectAsState()
     val pgm by viewModel.derivedProgram.collectAsState()
     val sess by viewModel.derivedSession.collectAsState()
+    var timerMode by remember { mutableStateOf(TimerMode.COUNT_DOWN) }
+    var timerProgramRunning by remember { mutableStateOf(false) }
+    LaunchedEffect(pgm.running) {
+        timerMode = timerModeForProgramTransition(
+            wasRunning = timerProgramRunning,
+            isRunning = pgm.running,
+            currentMode = timerMode,
+        )
+        timerProgramRunning = pgm.running
+    }
 
     // Build the route from real planned intervals. Route position = planned SECONDS:
     // the layout follows program time, so interval boundaries are the program clock
@@ -178,6 +188,18 @@ fun RidgelineHud(
         }
     }
     val markerDist = animatedMd
+    val timerProgramPosition = countdownProgramPosition(
+        advancing = advancing,
+        completed = pgm.completed,
+        serverPosition = serverMd,
+        animatedPosition = markerDist,
+    )
+    val timer = runningTimer(
+        countUpElapsedSeconds = sess.displayElapsed,
+        programElapsedSeconds = timerProgramPosition,
+        totalDurationSeconds = pgm.totalDuration,
+        mode = timerMode,
+    )
 
     // --- Sync diagnostics (adb logcat -s RidgelineSync) ---
     // Geometry once per route: what the map is being asked to draw (route position
@@ -358,7 +380,11 @@ fun RidgelineHud(
                         },
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    TimerPanel(elapsed = sess.elapsedDisplay, modifier = Modifier.fillMaxWidth())
+                    TimerPanel(
+                        timer = timer,
+                        onToggle = { timerMode = timerMode.toggled() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     MetricsPill(
                         modifier = Modifier.fillMaxWidth(),
                         vert = sess.vertDisplay,
@@ -372,10 +398,14 @@ fun RidgelineHud(
                         // the row once completed (running can linger true with 0:00 left).
                         next = if (pgm.running && !pgm.completed &&
                             pgm.currentInterval in 0 until route.count
-                        ) fmtDur(
-                            (route.endOf(pgm.currentInterval) -
-                                route.posAtProgram(pgm.currentInterval, pgm.intervalElapsed))
-                                .coerceAtLeast(0.0),
+                        ) formatNextChange(
+                            nextChangeProgramPosition = route.endOf(pgm.currentInterval),
+                            clock = NextChangeClock(
+                                sessionElapsed = sess.displayElapsed,
+                                programElapsed = timerProgramPosition,
+                                programDuration = pgm.totalDuration,
+                            ),
+                            timeMark = timerMode.nextChangeTimeMark(),
                         ) else null,
                     )
                 }
@@ -482,7 +512,7 @@ private fun MetricsPill(
     dist: String,
     hr: String?,
     cal: String,
-    next: String?,
+    next: NextChangeDisplay?,
     modifier: Modifier = Modifier,
 ) {
     // Values are RidgelineTheme.fg; let the panel dim the photo behind it so they clear APCA.
@@ -501,15 +531,33 @@ private fun MetricsPill(
             if (hr != null) MetricRow("HEART", hr, "bpm")
             MetricRow("CALORIES", cal, "cal")
             // Not running -> no NEXT row (nothing is coming).
-            if (next != null) MetricRow("NEXT IN", next, "")
+            if (next != null) {
+                MetricRow(
+                    label = "NEXT IN",
+                    value = next.text,
+                    unit = "",
+                    contentDescription = next.accessibilityDescription,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun MetricRow(label: String, value: String, unit: String, big: Boolean = false) {
+private fun MetricRow(
+    label: String,
+    value: String,
+    unit: String,
+    big: Boolean = false,
+    contentDescription: String? = null,
+) {
     val bg = LocalOverlayBackground.current
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+    Column(
+        modifier = if (contentDescription == null) Modifier else {
+            Modifier.clearAndSetSemantics { this.contentDescription = contentDescription }
+        },
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
         LegibleText(
             text = label,
             color = RidgelineTheme.dim,
@@ -749,16 +797,29 @@ private fun ExitHomeChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun TimerPanel(elapsed: String, modifier: Modifier = Modifier) {
+private fun TimerPanel(
+    timer: RunningTimer,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     LegibleGlassPanel(
         accents = listOf(RidgelineTheme.fg),
-        modifier = modifier,
+        modifier = modifier
+            .clickable(
+                onClickLabel = if (timer.mode == TimerMode.COUNT_DOWN) {
+                    "Show count-up timer"
+                } else {
+                    "Show countdown timer"
+                },
+                onClick = onToggle,
+            )
+            .semantics { contentDescription = timer.contentDescription },
         shape = RoundedCornerShape(12.dp),
     ) {
         // Centered so the pill can stretch to match the metrics pill's width.
         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             LegibleText(
-                text = elapsed,
+                text = timer.text,
                 color = RidgelineTheme.fg,
                 targetLc = 75.0,
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp),
