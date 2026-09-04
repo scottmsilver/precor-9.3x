@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -56,26 +57,51 @@ fun AppNavigation(
     val voiceViewModel: VoiceViewModel = koinViewModel()
     val wsConnected by viewModel.wsConnected.collectAsState()
     val scope = rememberCoroutineScope()
+    val voiceInputPreference by produceState<Boolean?>(initialValue = null, serverPreferences) {
+        serverPreferences.voiceInputEnabled.collect { value = it }
+    }
+    val voiceInputEnabled = voiceInputPreference == true
+
+    LaunchedEffect(voiceInputPreference) {
+        voiceInputPreference?.let { enabled ->
+            voiceViewModel.setVoiceInputEnabled(enabled)
+        }
+    }
 
     // Runtime mic permission handling
     var pendingVoicePrompt by remember { mutableStateOf<String?>(null) }
+    var activateVoiceAfterPermission by remember { mutableStateOf(false) }
+    var microphonePermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    LifecycleResumeEffect(context) {
+        microphonePermissionGranted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        onPauseOrDispose { }
+    }
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) {
+        microphonePermissionGranted = granted
+        if (granted && activateVoiceAfterPermission) {
             voiceViewModel.toggle(pendingVoicePrompt)
         }
+        activateVoiceAfterPermission = false
         pendingVoicePrompt = null
     }
 
-    val handleVoiceToggle: (String?) -> Unit = { prompt ->
+    val handleVoiceToggle: (String?) -> Unit = handleVoiceToggle@{ prompt ->
+        if (!voiceInputEnabled) return@handleVoiceToggle
         if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED
-            ) {
+            if (microphonePermissionGranted) {
                 voiceViewModel.toggle(prompt)
             } else {
                 pendingVoicePrompt = prompt
+                activateVoiceAfterPermission = true
                 micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
             }
         } else {
@@ -133,6 +159,7 @@ fun AppNavigation(
 
     // Wait for DataStore to load before deciding start destination
     val url = serverUrl ?: return
+    if (voiceInputPreference == null) return
 
     // On app restart, check if server already has an active profile — skip picker if so
     var checkedActiveProfile by remember { mutableStateOf(false) }
@@ -333,6 +360,20 @@ fun AppNavigation(
                 }
             },
             onToast = showToast,
+            voiceInputEnabled = voiceInputEnabled,
+            microphonePermissionGranted = microphonePermissionGranted,
+            onVoiceInputEnabledChange = { enabled ->
+                voiceViewModel.setVoiceInputEnabled(enabled)
+                scope.launch { serverPreferences.setVoiceInputEnabled(enabled) }
+                if (enabled && !microphonePermissionGranted) {
+                    activateVoiceAfterPermission = false
+                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            },
+            onRequestMicrophonePermission = {
+                activateVoiceAfterPermission = false
+                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            },
             viewModel = viewModel,
         )
     }

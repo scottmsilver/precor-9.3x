@@ -53,6 +53,10 @@ fun SettingsSheet(
     onDismiss: () -> Unit,
     onNavigateToDebug: () -> Unit,
     onToast: (String) -> Unit,
+    voiceInputEnabled: Boolean,
+    microphonePermissionGranted: Boolean,
+    onVoiceInputEnabledChange: (Boolean) -> Unit,
+    onRequestMicrophonePermission: () -> Unit,
     viewModel: TreadmillViewModel = koinViewModel(),
     serverPreferences: ServerPreferences = koinInject(),
     api: TreadmillApi = koinInject(),
@@ -184,6 +188,58 @@ fun SettingsSheet(
                         uncheckedThumbColor = colors.text3,
                     ),
                 )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .clickable { onVoiceInputEnabledChange(!voiceInputEnabled) }
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Voice Input",
+                    color = colors.text,
+                    fontSize = 15.sp,
+                )
+                Switch(
+                    checked = voiceInputEnabled,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = colors.purple,
+                        uncheckedTrackColor = colors.fill,
+                        checkedThumbColor = colors.text,
+                        uncheckedThumbColor = colors.text3,
+                    ),
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Microphone Permission",
+                    color = colors.text,
+                    fontSize = 15.sp,
+                )
+                if (microphonePermissionGranted) {
+                    Text(
+                        text = "Granted",
+                        color = colors.green,
+                        fontSize = 13.sp,
+                    )
+                } else {
+                    TextButton(onClick = onRequestMicrophonePermission) {
+                        Text("Not granted · Grant")
+                    }
+                }
             }
 
             // Running-screen background photo

@@ -14,6 +14,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.precor.treadmill.data.preferences.ServerPreferences
 import com.precor.treadmill.ui.navigation.AppNavigation
 import com.precor.treadmill.ui.theme.PrecorTreadmillTheme
 import com.precor.treadmill.ui.viewmodel.VoiceViewModel
@@ -24,6 +25,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
+import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -33,10 +35,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private val voiceViewModel: VoiceViewModel by viewModel()
+    private val serverPreferences: ServerPreferences by inject()
     private var wakeWordEngine: WakeWordEngine? = null
     private var wakeWordDetectionJob: Job? = null
     private var wakeWordStateJob: Job? = null
     private var wakeWordForeground = false
+    private var voiceInputEnabled = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -56,12 +60,25 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        observeVoiceInputPreference()
+
         handleVoiceTestIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleVoiceTestIntent(intent)
+    }
+
+    private fun observeVoiceInputPreference() {
+        lifecycleScope.launch {
+            serverPreferences.voiceInputEnabled.collect { enabled ->
+                voiceInputEnabled = enabled
+                voiceViewModel.setVoiceInputEnabled(enabled)
+                if (!enabled) wakeWordEngine?.stop()
+                else if (wakeWordForeground) startWakeWordPrototype()
+            }
+        }
     }
 
     private fun handleVoiceTestIntent(intent: Intent) {
@@ -73,7 +90,7 @@ class MainActivity : ComponentActivity() {
             }
             ACTION_VOICE_TOGGLE -> {
                 Log.d(TAG, "Voice toggle (mic mode)")
-                voiceViewModel.toggle()
+                if (voiceInputEnabled) voiceViewModel.toggle()
             }
             else -> return
         }
@@ -85,6 +102,7 @@ class MainActivity : ComponentActivity() {
      * after the detector releases the microphone.
      */
     private fun startWakeWordPrototype() {
+        if (!voiceInputEnabled) return
         wakeWordEngine?.let { engine ->
             if (voiceViewModel.voiceState.value == VoiceState.IDLE) engine.start()
             return
@@ -121,7 +139,10 @@ class MainActivity : ComponentActivity() {
                     // existing AudioCapture claims the microphone.
                     engine.stop()
                     delay(300)
-                    if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
+                    if (
+                        voiceInputEnabled && wakeWordForeground &&
+                        voiceViewModel.voiceState.value == VoiceState.IDLE
+                    ) {
                         voiceViewModel.activateAfterWakeWord()
                     }
                 }
@@ -129,7 +150,7 @@ class MainActivity : ComponentActivity() {
 
             wakeWordStateJob = lifecycleScope.launch {
                 voiceViewModel.voiceState.collect { state ->
-                    if (state == VoiceState.IDLE && wakeWordForeground) {
+                    if (state == VoiceState.IDLE && wakeWordForeground && voiceInputEnabled) {
                         Log.i(TAG, "WAKE_WORD_LISTENING phrase=hey_treddy")
                         engine.start()
                     } else {
@@ -145,7 +166,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         wakeWordForeground = true
-        startWakeWordPrototype()
+        if (voiceInputEnabled) startWakeWordPrototype()
     }
 
     override fun onPause() {

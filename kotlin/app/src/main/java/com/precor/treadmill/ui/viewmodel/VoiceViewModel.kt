@@ -55,6 +55,8 @@ class VoiceViewModel(
     private var currentStateContext = ""
     /** True only when the user explicitly toggled voice on (not from state updates). */
     private var userActivated = false
+    @Volatile
+    private var voiceInputEnabled = false
 
     private val functionBridge = FunctionBridge(api)
 
@@ -281,6 +283,17 @@ class VoiceViewModel(
 
     // ── Voice toggle (just controls mic) ───────────────────────────────
 
+    fun setVoiceInputEnabled(enabled: Boolean) {
+        voiceInputEnabled = enabled
+        if (!enabled) {
+            userActivated = false
+            pendingPrompt = null
+            stopMicCapture()
+            audioPlayer?.flush()
+            _voiceState.value = VoiceState.IDLE
+        }
+    }
+
     /** Send a text command to Gemini for testing (no mic needed). */
     fun sendTestCommand(text: String) {
         if (geminiClient?.isConnected == true) {
@@ -299,6 +312,7 @@ class VoiceViewModel(
      * If connection isn't ready, shows CONNECTING and waits.
      */
     fun toggle(prompt: String? = null) {
+        if (!voiceInputEnabled) return
         when (_voiceState.value) {
             VoiceState.IDLE -> {
                 userActivated = true
@@ -345,6 +359,7 @@ class VoiceViewModel(
 
     /** Prototype handoff from a detector that temporarily owns the microphone. */
     fun activateAfterWakeWord() {
+        if (!voiceInputEnabled) return
         if (_voiceState.value != VoiceState.IDLE) return
         audioCapture?.release()
         audioCapture = AudioCapture { /* callback installed by startMicCapture */ }
