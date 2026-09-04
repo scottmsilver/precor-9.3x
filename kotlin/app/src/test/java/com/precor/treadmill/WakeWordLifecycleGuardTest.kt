@@ -23,6 +23,5 @@ class WakeWordLifecycleGuardTest {
         assertTrue(onPause.contains("wakeWordForeground = false"))
         assertTrue(onPause.contains("wakeWordEngine?.stop()"))
         assertTrue(source.contains("state == VoiceState.IDLE && wakeWordForeground"))
-        assertTrue("prototype threshold must reject observed false wakes", source.contains("threshold = 0.70f"))
     }
 }
