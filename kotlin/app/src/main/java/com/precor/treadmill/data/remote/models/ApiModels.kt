@@ -156,7 +156,7 @@ data class HistoryEntry(
     val prompt: String? = null,
     val program: Program? = null,
     @SerialName("created_at") val createdAt: String = "",
-    @Serializable(with = LenientIntSerializer::class) @SerialName("total_duration") val totalDuration: Int = 0,
+    @Serializable(with = LenientDoubleSerializer::class) @SerialName("total_duration") val totalDuration: Double = 0.0,
     @Serializable(with = LenientBoolSerializer::class) val completed: Boolean = false,
     @Serializable(with = LenientIntSerializer::class) @SerialName("last_interval") val lastInterval: Int = 0,
     @Serializable(with = LenientDoubleSerializer::class) @SerialName("last_elapsed") val lastElapsed: Double = 0.0,
@@ -165,6 +165,12 @@ data class HistoryEntry(
     @SerialName("last_run") val lastRun: RunRecord? = null,
     @SerialName("last_run_text") val lastRunText: String = "",
 )
+
+val HistoryEntry.isResumable: Boolean
+    get() = !completed && lastElapsed > 0 && lastElapsed < totalDuration
+
+val HistoryEntry.remainingOnResume: Double
+    get() = (totalDuration - lastElapsed).coerceAtLeast(0.0)
 
 @Serializable
 data class SavedWorkout(
