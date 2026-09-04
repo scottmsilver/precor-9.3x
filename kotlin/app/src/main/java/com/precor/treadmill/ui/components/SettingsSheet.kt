@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -23,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,6 +55,10 @@ fun SettingsSheet(
     onDismiss: () -> Unit,
     onNavigateToDebug: () -> Unit,
     onToast: (String) -> Unit,
+    voiceInputEnabled: Boolean,
+    microphonePermissionGranted: Boolean,
+    onVoiceInputEnabledChange: (Boolean) -> Unit,
+    onRequestMicrophonePermission: () -> Unit,
     viewModel: TreadmillViewModel = koinViewModel(),
     serverPreferences: ServerPreferences = koinInject(),
     api: TreadmillApi = koinInject(),
@@ -184,6 +190,62 @@ fun SettingsSheet(
                         uncheckedThumbColor = colors.text3,
                     ),
                 )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .toggleable(
+                        value = voiceInputEnabled,
+                        role = Role.Switch,
+                        onValueChange = onVoiceInputEnabledChange,
+                    )
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Voice Input",
+                    color = colors.text,
+                    fontSize = 15.sp,
+                )
+                Switch(
+                    checked = voiceInputEnabled,
+                    onCheckedChange = null,
+                    colors = SwitchDefaults.colors(
+                        checkedTrackColor = colors.purple,
+                        uncheckedTrackColor = colors.fill,
+                        checkedThumbColor = colors.text,
+                        uncheckedThumbColor = colors.text3,
+                    ),
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Microphone Permission",
+                    color = colors.text,
+                    fontSize = 15.sp,
+                )
+                if (microphonePermissionGranted) {
+                    Text(
+                        text = "Granted",
+                        color = colors.green,
+                        fontSize = 13.sp,
+                    )
+                } else {
+                    TextButton(onClick = onRequestMicrophonePermission) {
+                        Text("Not granted · Grant")
+                    }
+                }
             }
 
             // Running-screen background photo

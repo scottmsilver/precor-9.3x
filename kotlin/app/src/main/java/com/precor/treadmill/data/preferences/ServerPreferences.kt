@@ -17,6 +17,9 @@ class ServerPreferences(private val context: Context) {
     companion object {
         private val KEY_SERVER_URL = stringPreferencesKey("server_url")
         private val KEY_SMARTASS_MODE = booleanPreferencesKey("smartass_mode")
+        private val KEY_VOICE_INPUT_ENABLED = booleanPreferencesKey("voice_input_enabled")
+        private val KEY_MICROPHONE_PERMISSION_REQUESTED =
+            booleanPreferencesKey("microphone_permission_requested")
         private val KEY_BACKGROUND = stringPreferencesKey("background_image")
     }
 
@@ -26,6 +29,14 @@ class ServerPreferences(private val context: Context) {
 
     val smartassMode: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[KEY_SMARTASS_MODE] ?: false
+    }
+
+    val voiceInputEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_VOICE_INPUT_ENABLED] ?: true
+    }
+
+    val microphonePermissionRequested: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[KEY_MICROPHONE_PERMISSION_REQUESTED] ?: false
     }
 
     /** Running-screen background photo key (see Backgrounds registry). */
@@ -48,6 +59,18 @@ class ServerPreferences(private val context: Context) {
     suspend fun setSmartassMode(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[KEY_SMARTASS_MODE] = enabled
+        }
+    }
+
+    suspend fun setVoiceInputEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_VOICE_INPUT_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setMicrophonePermissionRequested(requested: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MICROPHONE_PERMISSION_REQUESTED] = requested
         }
     }
 }

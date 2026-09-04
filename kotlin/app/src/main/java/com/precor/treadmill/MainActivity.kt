@@ -15,6 +15,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.precor.treadmill.data.preferences.ServerPreferences
 import com.precor.treadmill.ui.navigation.AppNavigation
 import com.precor.treadmill.ui.theme.PrecorTreadmillTheme
 import com.precor.treadmill.ui.viewmodel.VoiceViewModel
@@ -25,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.androidx.viewmodel.ext.android.viewModel
+import org.koin.android.ext.android.inject
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -34,10 +36,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private val voiceViewModel: VoiceViewModel by viewModel()
+    private val serverPreferences: ServerPreferences by inject()
     private var wakeWordEngine: WakeWordEngine? = null
     private var wakeWordDetectionJob: Job? = null
     private var wakeWordStateJob: Job? = null
     private var wakeWordForeground = false
+    private var voiceInputEnabled = false
+    private var voiceInputPreferenceLoaded = false
+    private var pendingVoiceToggleIntent = false
     private val wakeWordActivationPolicy = WakeWordActivationPolicy()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,9 +60,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PrecorTreadmillTheme {
-                AppNavigation()
+                AppNavigation(onVoiceInputDisabled = ::disableVoiceInputImmediately)
             }
         }
+
+        observeVoiceInputPreference()
 
         handleVoiceTestIntent(intent)
     }
@@ -64,6 +72,33 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleVoiceTestIntent(intent)
+    }
+
+    private fun observeVoiceInputPreference() {
+        lifecycleScope.launch {
+            serverPreferences.voiceInputEnabled.collect { enabled ->
+                voiceInputEnabled = enabled
+                voiceInputPreferenceLoaded = true
+                val activatePendingVoice = pendingVoiceToggleIntent
+                pendingVoiceToggleIntent = false
+                voiceViewModel.setVoiceInputEnabled(enabled)
+                if (!enabled) {
+                    wakeWordActivationPolicy.invalidatePendingHandoffs()
+                    wakeWordEngine?.stop()
+                }
+                else {
+                    if (activatePendingVoice) voiceViewModel.toggle()
+                    if (wakeWordForeground) startWakeWordPrototype()
+                }
+            }
+        }
+    }
+
+    private fun disableVoiceInputImmediately() {
+        voiceInputEnabled = false
+        pendingVoiceToggleIntent = false
+        wakeWordActivationPolicy.invalidatePendingHandoffs()
+        wakeWordEngine?.stop()
     }
 
     private fun handleVoiceTestIntent(intent: Intent) {
@@ -75,7 +110,8 @@ class MainActivity : ComponentActivity() {
             }
             ACTION_VOICE_TOGGLE -> {
                 Log.d(TAG, "Voice toggle (mic mode)")
-                voiceViewModel.toggle()
+                if (!voiceInputPreferenceLoaded) pendingVoiceToggleIntent = true
+                else if (voiceInputEnabled) voiceViewModel.toggle()
             }
             else -> return
         }
@@ -87,6 +123,7 @@ class MainActivity : ComponentActivity() {
      * after the detector releases the microphone.
      */
     private fun startWakeWordPrototype() {
+        if (!voiceInputEnabled) return
         wakeWordEngine?.let { engine ->
             if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
                 startWakeWordListening(engine)
@@ -129,11 +166,16 @@ class MainActivity : ComponentActivity() {
                         TAG,
                         "WAKE_WORD_DETECTED name=${detection.model.name} score=${detection.score}",
                     )
+                    val handoffGeneration = wakeWordActivationPolicy.currentHandoffGeneration()
                     // Give the wrapper's AudioRecord time to release before Gemini's
                     // existing AudioCapture claims the microphone.
                     engine.stop()
                     delay(300)
-                    if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
+                    if (
+                        voiceInputEnabled && wakeWordForeground &&
+                        wakeWordActivationPolicy.isHandoffCurrent(handoffGeneration) &&
+                        voiceViewModel.voiceState.value == VoiceState.IDLE
+                    ) {
                         voiceViewModel.activateAfterWakeWord()
                     }
                 }
@@ -141,7 +183,7 @@ class MainActivity : ComponentActivity() {
 
             wakeWordStateJob = lifecycleScope.launch {
                 voiceViewModel.voiceState.collect { state ->
-                    if (state == VoiceState.IDLE && wakeWordForeground) {
+                    if (state == VoiceState.IDLE && wakeWordForeground && voiceInputEnabled) {
                         Log.i(TAG, "WAKE_WORD_LISTENING phrase=hey_treddy")
                         startWakeWordListening(engine)
                     } else {
@@ -162,11 +204,12 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         wakeWordForeground = true
-        startWakeWordPrototype()
+        if (voiceInputEnabled) startWakeWordPrototype()
     }
 
     override fun onPause() {
         wakeWordForeground = false
+        wakeWordActivationPolicy.invalidatePendingHandoffs()
         wakeWordEngine?.stop()
         super.onPause()
     }

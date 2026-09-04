@@ -2,6 +2,7 @@ package com.precor.treadmill.data.remote
 
 import com.precor.treadmill.data.remote.models.*
 import okhttp3.MultipartBody
+import retrofit2.Call
 import retrofit2.http.*
 
 interface TreadmillApi {
@@ -109,7 +110,7 @@ interface TreadmillApi {
     // --- Generic Tool Execution ---
 
     @POST("/api/tool")
-    suspend fun execTool(@Body request: ToolCallRequest): ToolCallResponse
+    fun execToolCall(@Body request: ToolCallRequest): Call<ToolCallResponse>
 
     // --- Heart Rate Monitor ---
 

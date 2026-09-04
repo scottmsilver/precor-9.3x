@@ -25,4 +25,19 @@ class WakeWordActivationPolicyTest {
         assertFalse(policy.shouldActivate(score = 0.725f, nowMs = 69_999L))
         assertTrue(policy.shouldActivate(score = 0.725f, nowMs = 70_000L))
     }
+
+    @Test
+    fun invalidatesAcceptedHandoffAcrossDisableAndReenable() {
+        val policy = WakeWordActivationPolicy()
+
+        assertTrue(policy.shouldActivate(score = 0.725f, nowMs = 1_000L))
+        val staleHandoff = policy.currentHandoffGeneration()
+
+        policy.invalidatePendingHandoffs()
+        policy.onListeningStarted(nowMs = 2_000L)
+
+        assertFalse(policy.isHandoffCurrent(staleHandoff))
+        assertFalse(policy.shouldActivate(score = 0.725f, nowMs = 11_999L))
+        assertTrue(policy.shouldActivate(score = 0.725f, nowMs = 12_000L))
+    }
 }

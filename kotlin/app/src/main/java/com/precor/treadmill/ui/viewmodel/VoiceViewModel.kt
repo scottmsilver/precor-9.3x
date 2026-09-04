@@ -47,6 +47,7 @@ class VoiceViewModel(
     private var tokenRefreshJob: Job? = null
     private var reconnectJob: Job? = null
     private var connectJob: Job? = null
+    private var fallbackJob: Job? = null
     private var serverConnected = false
 
     private var pendingPrompt: String? = null
@@ -55,8 +56,9 @@ class VoiceViewModel(
     private var currentStateContext = ""
     /** True only when the user explicitly toggled voice on (not from state updates). */
     private var userActivated = false
-
-    private val functionBridge = FunctionBridge(api)
+    private val gate = VoiceActivationGate()
+    private var activeSessionGeneration = 0L
+    private val voiceInputEnabled: Boolean get() = gate.isEnabled()
 
     /** Call this when treadmill status or program state changes to keep voice context current. */
     fun updateTreadmillState(status: StatusMessage?, program: ProgramMessage?) {
@@ -99,6 +101,7 @@ class VoiceViewModel(
     /** Called when server WebSocket connects. Starts background Gemini connection. */
     fun ensureConnected() {
         serverConnected = true
+        if (!voiceInputEnabled) return
         if (geminiClient?.isConnected == true) return
         connectBackground()
     }
@@ -109,10 +112,21 @@ class VoiceViewModel(
         tokenRefreshJob?.cancel()
         reconnectJob?.cancel()
         connectJob?.cancel()
+        fallbackJob?.cancel()
         teardownConnection()
     }
 
     private fun connectBackground() {
+        if (!voiceInputEnabled) return
+        val generation = gate.beginSession()
+        activeSessionGeneration = generation
+        gate.runIfActive(generation) {
+            if (userActivated) {
+                stopMicCapture()
+                audioPlayer?.flush()
+                _voiceState.value = VoiceState.CONNECTING
+            }
+        }
         connectJob?.cancel()
         connectJob = viewModelScope.launch {
             // Gemini ephemeral tokens are single-use. Close any connection attempt
@@ -123,6 +137,7 @@ class VoiceViewModel(
                 Log.e(TAG, "Failed to fetch config for background connect", e)
                 null
             }
+            if (!gate.isActive(generation)) return@launch
             val cfg = config ?: return@launch
             if (cfg.geminiApiKey.isEmpty()) {
                 Log.w(TAG, "No Gemini API key — skipping background connect")
@@ -146,8 +161,10 @@ class VoiceViewModel(
                 apiKey = cfg.geminiApiKey,
                 model = cfg.geminiLiveModel.ifEmpty { "gemini-3.1-flash-live-preview" },
                 voice = cfg.geminiVoice.ifEmpty { "Kore" },
-                callbacks = backgroundCallbacks(player),
-                functionBridge = functionBridge,
+                callbacks = backgroundCallbacks(player, generation),
+                functionBridge = FunctionBridge(api) { start ->
+                    gate.runIfActive(generation, start)
+                },
                 stateContext = currentStateContext,
                 smartass = false,
                 okHttpClient = okHttpClient,
@@ -155,101 +172,111 @@ class VoiceViewModel(
                 serverPrompt = cfg.systemPrompt,
                 serverSmartass = cfg.smartassAddendum,
             )
-            geminiClient = client
-            client.speechEndTimestampProvider = { audioCapture?.silenceStartMs ?: 0L }
-            Log.d(TAG, "Opening background Gemini connection (model=${cfg.geminiLiveModel.ifEmpty { "gemini-3.1-flash-live-preview" }})")
-            client.connect()
-
-            startTokenRefresh()
+            gate.runIfActive(generation) {
+                geminiClient = client
+                client.speechEndTimestampProvider = { audioCapture?.silenceStartMs ?: 0L }
+                Log.d(TAG, "Opening background Gemini connection (model=${cfg.geminiLiveModel.ifEmpty { "gemini-3.1-flash-live-preview" }})")
+                client.connect()
+                startTokenRefresh()
+            }
         }
     }
 
     /** Callbacks for the always-on background connection. */
-    private fun backgroundCallbacks(player: AudioPlayer) = object : GeminiLiveCallbacks {
+    private fun backgroundCallbacks(
+        player: AudioPlayer,
+        generation: Long,
+    ) = object : GeminiLiveCallbacks {
         override fun onStateChange(state: ClientState) {
-            when (state) {
-                ClientState.CONNECTED -> {
-                    Log.d(TAG, "Background connection ready")
-                    // If we were in CONNECTING state (user tapped before connection ready),
-                    // transition to active voice
-                    if (_voiceState.value == VoiceState.CONNECTING) {
-                        _voiceState.value = VoiceState.LISTENING
-                        val prompt = pendingPrompt
-                        if (prompt != null) {
-                            Log.d(TAG, "Sending pending prompt (mic deferred): $prompt")
-                            geminiClient?.sendTextPrompt(prompt)
-                            pendingPrompt = null
-                        } else {
-                            startMicCapture()
+            gate.runIfActive(generation) {
+                when (state) {
+                    ClientState.CONNECTED -> {
+                        Log.d(TAG, "Background connection ready")
+                        // If we were in CONNECTING state (user tapped before connection ready),
+                        // transition to active voice
+                        if (_voiceState.value == VoiceState.CONNECTING) {
+                            _voiceState.value = VoiceState.LISTENING
+                            val prompt = pendingPrompt
+                            if (prompt != null) {
+                                Log.d(TAG, "Sending pending prompt (mic deferred): $prompt")
+                                geminiClient?.sendTextPrompt(prompt)
+                                pendingPrompt = null
+                            } else {
+                                startMicCapture(generation)
+                            }
                         }
+                        // Otherwise, just sitting ready in background — don't change state
                     }
-                    // Otherwise, just sitting ready in background — don't change state
-                }
-                ClientState.DISCONNECTED, ClientState.ERROR -> {
-                    Log.d(TAG, "Background connection lost: $state")
-                    userActivated = false
-                    if (_voiceState.value != VoiceState.IDLE) {
-                        stopMicCapture()
-                        player.flush()
-                        _voiceState.value = VoiceState.IDLE
+                    ClientState.DISCONNECTED, ClientState.ERROR -> {
+                        Log.d(TAG, "Background connection lost: $state")
+                        userActivated = false
+                        if (_voiceState.value != VoiceState.IDLE) {
+                            stopMicCapture()
+                            player.flush()
+                            _voiceState.value = VoiceState.IDLE
+                        }
+                        if (serverConnected) scheduleReconnect()
                     }
-                    if (serverConnected) scheduleReconnect()
+                    ClientState.CONNECTING -> {}
                 }
-                ClientState.CONNECTING -> {}
             }
         }
 
         override fun onAudioChunk(pcmBase64: String) {
-            if (!userActivated) return  // Don't play audio unless user toggled voice
-            player.enqueue(pcmBase64)
+            gate.runIfActive(generation) {
+                if (userActivated) player.enqueue(pcmBase64)
+            }
         }
 
         override fun onSpeakingStart() {
-            if (!userActivated) return  // Don't change state unless user toggled voice
-            _voiceState.value = VoiceState.SPEAKING
+            gate.runIfActive(generation) {
+                if (userActivated) _voiceState.value = VoiceState.SPEAKING
+            }
         }
 
         override fun onSpeakingEnd() {
-            if (!userActivated) return  // Silently ignore — user didn't activate voice
-            _voiceState.value = VoiceState.LISTENING
-            // Start mic if not already running (deferred from text prompt)
-            if (audioCapture?.let { !isMicActive() } == true) {
-                Log.d(TAG, "Starting deferred mic capture after speaking")
-                startMicCapture()
+            gate.runIfActive(generation) {
+                if (!userActivated) return@runIfActive
+                _voiceState.value = VoiceState.LISTENING
+                // Start mic if not already running (deferred from text prompt)
+                if (audioCapture?.let { !isMicActive() } == true) {
+                    Log.d(TAG, "Starting deferred mic capture after speaking")
+                    startMicCapture(generation)
+                }
             }
         }
 
         override fun onInterrupted() {
-            Log.d(TAG, "onInterrupted — flushing player (barge-in)")
-            // Flush is always safe (idempotent + needed for in-flight audio).
-            player.flush()
-            // Don't bounce voiceState back to LISTENING if user deactivated.
-            // The server-side "barge-in" signal can arrive in response to silent
-            // context pushes (e.g. incline bumps) after the user toggled voice
-            // off; without this gate the UI flashes back to "active" even though
-            // no audio plays (audio still gated by onAudioChunk). precor-9_3x-hmo.
-            if (!userActivated) return
-            _voiceState.value = VoiceState.LISTENING
+            gate.runIfActive(generation) {
+                Log.d(TAG, "onInterrupted — flushing player (barge-in)")
+                player.flush()
+                if (userActivated) _voiceState.value = VoiceState.LISTENING
+            }
         }
 
         override fun onError(msg: String) {
-            Log.e(TAG, "Gemini error: $msg")
+            if (gate.isActive(generation)) Log.e(TAG, "Gemini error: $msg")
         }
 
         override fun onTextFallback(text: String, executedCalls: List<String>) {
+            if (!gate.isActive(generation) || !userActivated) return
             Log.d(TAG, "Text fallback triggered: $text")
             Log.d(TAG, "Already executed by Live: $executedCalls")
-            viewModelScope.launch {
+            fallbackJob?.cancel()
+            fallbackJob = viewModelScope.launch {
+                if (!gate.isActive(generation)) return@launch
                 try {
                     Log.d(TAG, "Extracting intent via Flash...")
                     val result = api.extractIntent(
                         ExtractIntentRequest(text, executedCalls)
                     )
+                    if (!gate.isActive(generation)) return@launch
                     Log.d(TAG, "Fallback result: actions=${result.actions}, text=${result.text}")
                     if (result.actions.isNotEmpty()) {
                         Log.d(TAG, "Fallback executed: ${result.actions.map { "${it.name} -> ${it.result}" }}")
                     }
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
                     Log.e(TAG, "Intent extraction failed", e)
                 }
             }
@@ -281,8 +308,24 @@ class VoiceViewModel(
 
     // ── Voice toggle (just controls mic) ───────────────────────────────
 
+    fun setVoiceInputEnabled(enabled: Boolean) {
+        if (!gate.setEnabled(enabled)) return
+        if (!enabled) {
+            tokenRefreshJob?.cancel()
+            reconnectJob?.cancel()
+            connectJob?.cancel()
+            fallbackJob?.cancel()
+            userActivated = false
+            pendingPrompt = null
+            teardownConnection()
+        } else if (serverConnected) {
+            connectBackground()
+        }
+    }
+
     /** Send a text command to Gemini for testing (no mic needed). */
     fun sendTestCommand(text: String) {
+        if (!voiceInputEnabled) return
         if (geminiClient?.isConnected == true) {
             Log.d(TAG, "Sending test command: $text")
             geminiClient?.sendTextPrompt(text)
@@ -299,6 +342,13 @@ class VoiceViewModel(
      * If connection isn't ready, shows CONNECTING and waits.
      */
     fun toggle(prompt: String? = null) {
+        if (!voiceInputEnabled) return
+        if (!gate.isActive(activeSessionGeneration)) connectBackground()
+        val generation = activeSessionGeneration
+        gate.runIfActive(generation) { toggleActive(prompt, generation) }
+    }
+
+    private fun toggleActive(prompt: String?, generation: Long) {
         when (_voiceState.value) {
             VoiceState.IDLE -> {
                 userActivated = true
@@ -310,7 +360,7 @@ class VoiceViewModel(
                         _voiceState.value = VoiceState.LISTENING
                         // Mic deferred until onSpeakingEnd
                     } else {
-                        startMicCapture()
+                        startMicCapture(generation)
                         _voiceState.value = VoiceState.LISTENING
                     }
                 } else {
@@ -345,17 +395,23 @@ class VoiceViewModel(
 
     /** Prototype handoff from a detector that temporarily owns the microphone. */
     fun activateAfterWakeWord() {
-        if (_voiceState.value != VoiceState.IDLE) return
-        audioCapture?.release()
-        audioCapture = AudioCapture { /* callback installed by startMicCapture */ }
-        audioCapture?.warmUp()
-        toggle()
+        if (!voiceInputEnabled) return
+        val generation = activeSessionGeneration
+        gate.runIfActive(generation) {
+            if (_voiceState.value != VoiceState.IDLE) return@runIfActive
+            audioCapture?.release()
+            audioCapture = AudioCapture { /* callback installed by startMicCapture */ }
+            audioCapture?.warmUp()
+            toggleActive(null, generation)
+        }
     }
 
     fun interrupt() {
-        Log.d(TAG, "interrupt() called — flushing player")
-        audioPlayer?.flush()
-        _voiceState.value = VoiceState.LISTENING
+        gate.runIfActive(activeSessionGeneration) {
+            Log.d(TAG, "interrupt() called — flushing player")
+            audioPlayer?.flush()
+            _voiceState.value = VoiceState.LISTENING
+        }
     }
 
     // ── Mic capture ────────────────────────────────────────────────────
@@ -365,23 +421,26 @@ class VoiceViewModel(
 
     private fun isMicActive() = micActive
 
-    private fun startMicCapture() {
-        if (geminiClient == null) return
-        Log.d(TAG, "Starting mic capture...")
-        // Reference geminiClient directly so token refresh doesn't strand the callback
-        audioCapture?.updateCallback { pcmBase64 ->
-            geminiClient?.takeIf { it.isConnected }?.sendAudio(pcmBase64)
-        }
-        // Save raw PCM for offline replay testing
-        audioCapture?.recordingPath = "/sdcard/Download/voice_recording.pcm"
-        val started = audioCapture?.start() ?: false
-        if (started) {
-            micActive = true
-            Log.d(TAG, "Mic capture started successfully")
-        } else {
-            Log.e(TAG, "Failed to start mic capture — check RECORD_AUDIO permission")
-            userActivated = false   // precor-9_3x-hmo: don't leave armed on failure
-            _voiceState.value = VoiceState.IDLE
+    private fun startMicCapture(sessionGeneration: Long = activeSessionGeneration) {
+        gate.runIfActive(sessionGeneration) {
+            if (geminiClient == null) return@runIfActive
+            Log.d(TAG, "Starting mic capture...")
+            audioCapture?.updateCallback { pcmBase64 ->
+                gate.runIfActive(sessionGeneration) {
+                    geminiClient?.takeIf { it.isConnected }?.sendAudio(pcmBase64)
+                }
+            }
+            // Save raw PCM for offline replay testing
+            audioCapture?.recordingPath = "/sdcard/Download/voice_recording.pcm"
+            val started = audioCapture?.start() ?: false
+            if (started) {
+                micActive = true
+                Log.d(TAG, "Mic capture started successfully")
+            } else {
+                Log.e(TAG, "Failed to start mic capture — check RECORD_AUDIO permission")
+                userActivated = false
+                _voiceState.value = VoiceState.IDLE
+            }
         }
     }
 
@@ -407,6 +466,7 @@ class VoiceViewModel(
         tokenRefreshJob?.cancel()
         reconnectJob?.cancel()
         connectJob?.cancel()
+        fallbackJob?.cancel()
         stopMicCapture()
         audioCapture?.release()
         geminiClient?.disconnect()

@@ -1,8 +1,12 @@
 package com.precor.treadmill.ui.navigation
 
 import android.Manifest
+import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -15,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -48,6 +54,7 @@ object Routes {
 fun AppNavigation(
     navController: NavHostController = rememberNavController(),
     serverPreferences: ServerPreferences = koinInject(),
+    onVoiceInputDisabled: () -> Unit = {},
 ) {
     val colors = LocalPrecorColors.current
     val context = LocalContext.current
@@ -56,27 +63,99 @@ fun AppNavigation(
     val voiceViewModel: VoiceViewModel = koinViewModel()
     val wsConnected by viewModel.wsConnected.collectAsState()
     val scope = rememberCoroutineScope()
+    val voiceInputPreference by produceState<Boolean?>(initialValue = null, serverPreferences) {
+        serverPreferences.voiceInputEnabled.collect { value = it }
+    }
+    val voiceInputEnabled = voiceInputPreference == true
+    val persistedMicrophonePermissionRequested by
+        serverPreferences.microphonePermissionRequested.collectAsState(initial = false)
+
+    LaunchedEffect(voiceInputPreference) {
+        voiceInputPreference?.let { enabled ->
+            voiceViewModel.setVoiceInputEnabled(enabled)
+        }
+    }
 
     // Runtime mic permission handling
     var pendingVoicePrompt by remember { mutableStateOf<String?>(null) }
+    var activateVoiceAfterPermission by remember { mutableStateOf(false) }
+    var microphonePermissionRequested by remember { mutableStateOf(false) }
+    LaunchedEffect(persistedMicrophonePermissionRequested) {
+        if (persistedMicrophonePermissionRequested) microphonePermissionRequested = true
+    }
+    var microphonePermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED,
+        )
+    }
+    LifecycleResumeEffect(context) {
+        val granted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        if (granted && !microphonePermissionGranted && activateVoiceAfterPermission) {
+            voiceViewModel.toggle(pendingVoicePrompt)
+            activateVoiceAfterPermission = false
+            pendingVoicePrompt = null
+        }
+        microphonePermissionGranted = granted
+        onPauseOrDispose { }
+    }
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) {
+        microphonePermissionGranted = granted
+        if (granted && activateVoiceAfterPermission) {
             voiceViewModel.toggle(pendingVoicePrompt)
         }
+        activateVoiceAfterPermission = false
         pendingVoicePrompt = null
     }
 
-    val handleVoiceToggle: (String?) -> Unit = { prompt ->
+    val requestMicrophonePermission: (Boolean, String?) -> Unit = { activateVoice, prompt ->
+        val activity = context as? Activity
+        when (
+            microphonePermissionAction(
+                granted = microphonePermissionGranted,
+                previouslyRequested = microphonePermissionRequested,
+                shouldShowRationale = activity?.let {
+                    ActivityCompat.shouldShowRequestPermissionRationale(
+                        it,
+                        Manifest.permission.RECORD_AUDIO,
+                    )
+                } ?: false,
+            )
+        ) {
+            MicrophonePermissionAction.None -> {
+                if (activateVoice) voiceViewModel.toggle(prompt)
+            }
+            MicrophonePermissionAction.RequestPermission -> {
+                pendingVoicePrompt = prompt
+                activateVoiceAfterPermission = activateVoice
+                microphonePermissionRequested = true
+                scope.launch { serverPreferences.setMicrophonePermissionRequested(true) }
+                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            MicrophonePermissionAction.OpenAppSettings -> {
+                pendingVoicePrompt = prompt
+                activateVoiceAfterPermission = activateVoice
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}"),
+                    ),
+                )
+            }
+        }
+    }
+
+    val handleVoiceToggle: (String?) -> Unit = handleVoiceToggle@{ prompt ->
+        if (!voiceInputEnabled) return@handleVoiceToggle
         if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
-                == PackageManager.PERMISSION_GRANTED
-            ) {
+            if (microphonePermissionGranted) {
                 voiceViewModel.toggle(prompt)
             } else {
-                pendingVoicePrompt = prompt
-                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                requestMicrophonePermission(true, prompt)
             }
         } else {
             voiceViewModel.toggle(prompt)
@@ -133,6 +212,7 @@ fun AppNavigation(
 
     // Wait for DataStore to load before deciding start destination
     val url = serverUrl ?: return
+    if (voiceInputPreference == null) return
 
     // On app restart, check if server already has an active profile — skip picker if so
     var checkedActiveProfile by remember { mutableStateOf(false) }
@@ -333,6 +413,19 @@ fun AppNavigation(
                 }
             },
             onToast = showToast,
+            voiceInputEnabled = voiceInputEnabled,
+            microphonePermissionGranted = microphonePermissionGranted,
+            onVoiceInputEnabledChange = { enabled ->
+                if (!enabled) onVoiceInputDisabled()
+                voiceViewModel.setVoiceInputEnabled(enabled)
+                scope.launch { serverPreferences.setVoiceInputEnabled(enabled) }
+                if (enabled && !microphonePermissionGranted) {
+                    requestMicrophonePermission(false, null)
+                }
+            },
+            onRequestMicrophonePermission = {
+                requestMicrophonePermission(false, null)
+            },
             viewModel = viewModel,
         )
     }

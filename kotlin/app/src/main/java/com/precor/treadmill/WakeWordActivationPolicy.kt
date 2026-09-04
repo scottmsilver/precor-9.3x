@@ -9,6 +9,15 @@ internal class WakeWordActivationPolicy {
 
     private var waitingForListeningRestart = false
     private var suppressUntilMs = Long.MIN_VALUE
+    private var handoffGeneration = 0L
+
+    fun currentHandoffGeneration(): Long = handoffGeneration
+
+    fun invalidatePendingHandoffs() {
+        handoffGeneration++
+    }
+
+    fun isHandoffCurrent(generation: Long): Boolean = generation == handoffGeneration
 
     fun onListeningStarted(nowMs: Long) {
         if (!waitingForListeningRestart) return
