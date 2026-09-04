@@ -124,6 +124,16 @@ fun RidgelineHud(
     val status by viewModel.status.collectAsState()
     val pgm by viewModel.derivedProgram.collectAsState()
     val sess by viewModel.derivedSession.collectAsState()
+    var timerMode by remember { mutableStateOf(TimerMode.COUNT_DOWN) }
+    var timerProgramRunning by remember { mutableStateOf(false) }
+    LaunchedEffect(pgm.running) {
+        timerMode = timerModeForProgramTransition(
+            wasRunning = timerProgramRunning,
+            isRunning = pgm.running,
+            currentMode = timerMode,
+        )
+        timerProgramRunning = pgm.running
+    }
 
     // Build the route from real planned intervals. Route position = planned SECONDS:
     // the layout follows program time, so interval boundaries are the program clock
@@ -178,6 +188,18 @@ fun RidgelineHud(
         }
     }
     val markerDist = animatedMd
+    val timerProgramPosition = countdownProgramPosition(
+        advancing = advancing,
+        completed = pgm.completed,
+        serverPosition = serverMd,
+        animatedPosition = markerDist,
+    )
+    val timer = runningTimer(
+        countUpElapsedSeconds = sess.displayElapsed,
+        programElapsedSeconds = timerProgramPosition,
+        totalDurationSeconds = pgm.totalDuration,
+        mode = timerMode,
+    )
 
     // --- Sync diagnostics (adb logcat -s RidgelineSync) ---
     // Geometry once per route: what the map is being asked to draw (route position
@@ -358,7 +380,11 @@ fun RidgelineHud(
                         },
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    TimerPanel(elapsed = sess.elapsedDisplay, modifier = Modifier.fillMaxWidth())
+                    TimerPanel(
+                        timer = timer,
+                        onToggle = { timerMode = timerMode.toggled() },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     MetricsPill(
                         modifier = Modifier.fillMaxWidth(),
                         vert = sess.vertDisplay,
@@ -749,16 +775,29 @@ private fun ExitHomeChip(onClick: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun TimerPanel(elapsed: String, modifier: Modifier = Modifier) {
+private fun TimerPanel(
+    timer: RunningTimer,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     LegibleGlassPanel(
         accents = listOf(RidgelineTheme.fg),
-        modifier = modifier,
+        modifier = modifier
+            .clickable(
+                onClickLabel = if (timer.mode == TimerMode.COUNT_DOWN) {
+                    "Show count-up timer"
+                } else {
+                    "Show countdown timer"
+                },
+                onClick = onToggle,
+            )
+            .semantics { contentDescription = timer.contentDescription },
         shape = RoundedCornerShape(12.dp),
     ) {
         // Centered so the pill can stretch to match the metrics pill's width.
         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             LegibleText(
-                text = elapsed,
+                text = timer.text,
                 color = RidgelineTheme.fg,
                 targetLc = 75.0,
                 modifier = Modifier.padding(horizontal = 22.dp, vertical = 6.dp),
