@@ -349,6 +349,9 @@ def _add_to_history(program, prompt=""):
 
 def _update_history_position(program_name, interval, elapsed, completed=False, program=None):
     """Update the history entry for a program with its last position (and plan)."""
+    if program:
+        total_duration = sum(float(iv.get("duration", 0)) for iv in program.get("intervals", []))
+        completed = completed or (total_duration > 0 and elapsed >= total_duration)
     history = db.get_program_history(_active_profile_id())
     for entry in history:
         if entry["program"].get("name") == program_name:
@@ -360,6 +363,17 @@ def _update_history_position(program_name, interval, elapsed, completed=False, p
                 program=program,
             )
             return
+
+
+def _resume_position(program, elapsed):
+    """Return the interval containing elapsed, or None for a terminal position."""
+    elapsed = max(0.0, float(elapsed))
+    cumulative = 0.0
+    for index, iv in enumerate(program.get("intervals", [])):
+        cumulative += float(iv.get("duration", 0))
+        if elapsed < cumulative:
+            return index, elapsed
+    return None
 
 
 def _program_fingerprint(program):
@@ -1509,11 +1523,11 @@ async def api_resume_from_history(entry_id: str):
     # Ownership check
     if entry.get("profile_id") != _active_profile_id():
         return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
-    if entry.get("completed"):
+    resume = _resume_position(entry["program"], entry.get("last_elapsed", 0))
+    if entry.get("completed") or resume is None:
         return {"ok": False, "error": "Program already completed — use load to start over"}
     sess.prog.load(entry["program"])
-    resume_iv = entry.get("last_interval", 0)
-    resume_elapsed = entry.get("last_elapsed", 0)
+    resume_iv, resume_elapsed = resume
     await sess.start_program(
         _prog_on_change(),
         _prog_on_update(),

@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.sp
 import com.precor.treadmill.data.remote.TreadmillApi
 import com.precor.treadmill.data.remote.models.HistoryEntry
 import com.precor.treadmill.data.remote.models.SaveWorkoutRequest
+import com.precor.treadmill.data.remote.models.isResumable
+import com.precor.treadmill.data.remote.models.remainingOnResume
 import com.precor.treadmill.ui.theme.LegibleText
 import com.precor.treadmill.ui.theme.LocalPrecorColors
 import com.precor.treadmill.ui.util.fmtDur
@@ -163,8 +165,8 @@ private fun HistoryCard(
     val name = entry.program?.name?.ifBlank { "Workout" } ?: "Workout"
     val intervals = entry.program?.intervals?.size ?: 0
     val duration = fmtDur(entry.totalDuration.toInt())
-    val canResume = !entry.completed && entry.lastElapsed > 0
-    val resumeLabel = if (canResume) "Resume from ${fmtDur(entry.lastElapsed)}" else null
+    val canResume = entry.isResumable
+    val resumeLabel = if (canResume) "Resume · ${fmtDur(entry.remainingOnResume)} left" else null
     val displayName = if (entry.completed) "$name \u2713" else name
 
     if (variant == "lobby") {
