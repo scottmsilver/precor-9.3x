@@ -62,6 +62,7 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -83,7 +84,6 @@ import com.precor.treadmill.ui.theme.LocalOpacityGroup
 import com.precor.treadmill.ui.theme.LocalOverlayBackground
 import com.precor.treadmill.ui.theme.OpacityGroup
 import com.precor.treadmill.ui.theme.legibleOn
-import com.precor.treadmill.ui.util.fmtDur
 import com.precor.treadmill.ui.util.haptic
 import com.precor.treadmill.ui.viewmodel.TreadmillViewModel
 import com.precor.treadmill.ui.viewmodel.VoiceState
@@ -398,10 +398,14 @@ fun RidgelineHud(
                         // the row once completed (running can linger true with 0:00 left).
                         next = if (pgm.running && !pgm.completed &&
                             pgm.currentInterval in 0 until route.count
-                        ) fmtDur(
-                            (route.endOf(pgm.currentInterval) -
-                                route.posAtProgram(pgm.currentInterval, pgm.intervalElapsed))
-                                .coerceAtLeast(0.0),
+                        ) formatNextChange(
+                            nextChangeProgramPosition = route.endOf(pgm.currentInterval),
+                            clock = NextChangeClock(
+                                sessionElapsed = sess.displayElapsed,
+                                programElapsed = timerProgramPosition,
+                                programDuration = pgm.totalDuration,
+                            ),
+                            timeMark = timerMode.nextChangeTimeMark(),
                         ) else null,
                     )
                 }
@@ -508,7 +512,7 @@ private fun MetricsPill(
     dist: String,
     hr: String?,
     cal: String,
-    next: String?,
+    next: NextChangeDisplay?,
     modifier: Modifier = Modifier,
 ) {
     // Values are RidgelineTheme.fg; let the panel dim the photo behind it so they clear APCA.
@@ -527,15 +531,33 @@ private fun MetricsPill(
             if (hr != null) MetricRow("HEART", hr, "bpm")
             MetricRow("CALORIES", cal, "cal")
             // Not running -> no NEXT row (nothing is coming).
-            if (next != null) MetricRow("NEXT IN", next, "")
+            if (next != null) {
+                MetricRow(
+                    label = "NEXT IN",
+                    value = next.text,
+                    unit = "",
+                    contentDescription = next.accessibilityDescription,
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun MetricRow(label: String, value: String, unit: String, big: Boolean = false) {
+private fun MetricRow(
+    label: String,
+    value: String,
+    unit: String,
+    big: Boolean = false,
+    contentDescription: String? = null,
+) {
     val bg = LocalOverlayBackground.current
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+    Column(
+        modifier = if (contentDescription == null) Modifier else {
+            Modifier.clearAndSetSemantics { this.contentDescription = contentDescription }
+        },
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
         LegibleText(
             text = label,
             color = RidgelineTheme.dim,
