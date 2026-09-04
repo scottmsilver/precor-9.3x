@@ -89,6 +89,16 @@ TREADMILL_MOCK=1 ./scripts/dev.sh  # mock mode, no Pi needed
 
 **Verifying UI changes:** The UI is the Android app (`kotlin/`). Build and install it on the emulator or tablet (see Kotlin/Android notes) and point it at the dev server or the Pi.
 
+## Issue Closure Evidence
+
+Before closing an issue, add an evidence comment that explains the observed problem and its root cause or implementation gap, identifies the landed commit and PR, and records the relevant test and delivery context (including the exact device/build when applicable).
+
+For a bug, show a focused RED test run against the broken state. Preserve the command, real nonzero status, and unedited output demonstrating that it failed for the intended reason. Then show the corresponding GREEN run against the fix and the broader relevant quality gates. Do not manufacture a failing test after the fact or present an unrelated historical failure as evidence.
+
+For visual bugs, safely reproduce and attach a before screenshot when practical, followed by an after screenshot of the fix. For visual features, attach a post-fix screenshot when relevant. Upload screenshots as native GitHub attachments; do not add evidence images to the repository unless the user explicitly requests that. If a before-state screenshot would be unsafe, destructive, or no longer reproducible, state that limitation honestly and provide the strongest safe post-fix evidence available.
+
+An issue is ready to close only after the implementation is landed and delivered to the requested environment, its focused and broad checks are GREEN, relevant device validation has passed, and the evidence comment has been posted and verified.
+
 ## Dependencies
 
 - `pigpio` (system package, libpigpio) — linked by `treadmill_io` for GPIO access
