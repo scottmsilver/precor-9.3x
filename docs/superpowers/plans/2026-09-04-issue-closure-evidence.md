@@ -25,9 +25,10 @@ Require a problem/root-cause explanation; a focused RED run against the broken s
 Stage the policy first, then run from the closure-evidence worktree:
 
 ```bash
+set -e
 git add CLAUDE.md
-for phrase in "Issue Closure Evidence" "root cause" "intended reason" "RED" "GREEN" "GitHub attachment" "landed"; do rg -F "$phrase" CLAUDE.md; done
-git diff --check
+for phrase in "Issue Closure Evidence" "root cause" "intended reason" "RED" "GREEN" "screenshot" "GitHub attachment" "unless the user explicitly requests" "device" "limitation" "evidence comment" "landed"; do rg -F "$phrase" CLAUDE.md >/dev/null || exit 1; done
+git diff --cached --check
 test "$(git diff --cached --name-only)" = "CLAUDE.md"
 ```
 
@@ -68,11 +69,12 @@ git fetch origin
 
 - [ ] **Step 3: Pin authoritative final main**
 
-Create an OS evidence directory and a clean detached worktree at `origin/main`, save its full SHA, and verify a second fetch does not move it before build. Do not modify or stash the dirty primary worktree.
+Start one persistent Bash PTY (`bash --noprofile --norc`, followed by `set -euo pipefail`) and execute Tasks 2 Step 3 through Task 8 in that same shell so variables and functions remain available. Create an OS evidence directory and a clean detached worktree at `origin/main`, save its full SHA, and verify a second fetch does not move it before build. Do not modify or stash the dirty primary worktree.
 
 ```bash
 EVIDENCE_ROOT=$(mktemp -d /tmp/precor-closure.XXXXXX)
-FINAL_PARENT=$(mktemp -d .worktrees/final-main.XXXXXX)
+PRIMARY_ROOT=/home/ssilver/development/precor-9.3x
+FINAL_PARENT=$(mktemp -d "$PRIMARY_ROOT/.worktrees/final-main.XXXXXX")
 FINAL_TREE="$FINAL_PARENT/worktree"
 git worktree add --detach "$FINAL_TREE" origin/main
 FINAL_SHA=$(git -C "$FINAL_TREE" rev-parse HEAD)
@@ -121,7 +123,7 @@ set -o pipefail
 
 - [ ] **Step 4: Perform read-only device and treadmill preflight and capture immutable original state**
 
-Use `DEVICE_SERIAL='adb-R9ZY90P5LZP-WMXOYu._adb-tls-connect._tcp'` and `PACKAGE='com.precor.treadmill'`. Before any mutation, save distinct `original-*` files: `dumpsys package`, resumed activity, full raw DataStore, its SHA-256 and `protoc --decode_raw` output, microphone grant/flags, and current connectivity. Extract the original server URL from the decoded DataStore. Query `api/status`, `api/session`, and `api/program` read-only and require `.motor.belt == "0"`, `.motor.mph == "0"`, `.active == false`, and `.running == false`. Repeat this same preflight immediately before the first force-stop/retarget. Abort without commands to the equipment if any assertion is unavailable or ambiguous.
+Use `DEVICE_SERIAL='adb-R9ZY90P5LZP-WMXOYu._adb-tls-connect._tcp'` and `PACKAGE='com.precor.treadmill'`. Before any mutation, save distinct `original-*` files: `dumpsys package`, resumed activity, UI XML, full raw DataStore, its SHA-256 and `protoc --decode_raw` output, Voice Input value, microphone grant/flags, and current connectivity. Extract the original server URL from the decoded DataStore. The observed API has real motor feedback at `.motor.belt`/`.motor.mph`; top-level `.speed` is a configured target and is not evidence of belt motion. Query `api/status`, `api/session`, and `api/program` read-only with pipe failures preserved and require connected motor feedback of zero, emulated speed zero, inactive session/program, and an idle UI with no workout timer or Pause control. Repeat this same preflight immediately before the first force-stop/retarget. Abort without commands to the equipment if any assertion is unavailable or ambiguous.
 
 ```bash
 adb -s "$DEVICE_SERIAL" exec-out run-as "$PACKAGE" cat files/datastore/server_prefs.preferences_pb > "$EVIDENCE_ROOT/original-server-prefs.pb"
@@ -129,10 +131,19 @@ sha256sum "$EVIDENCE_ROOT/original-server-prefs.pb" > "$EVIDENCE_ROOT/original-s
 protoc --decode_raw < "$EVIDENCE_ROOT/original-server-prefs.pb" > "$EVIDENCE_ROOT/original-server-prefs.txt"
 adb -s "$DEVICE_SERIAL" shell dumpsys package "$PACKAGE" > "$EVIDENCE_ROOT/original-package.txt"
 adb -s "$DEVICE_SERIAL" shell dumpsys activity activities > "$EVIDENCE_ROOT/original-activity.txt"
+adb -s "$DEVICE_SERIAL" shell dumpsys connectivity > "$EVIDENCE_ROOT/original-connectivity.txt"
+adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/original-window.xml
+adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/original-window.xml > "$EVIDENCE_ROOT/original-window.xml"
 ORIGINAL_SERVER=$(sed -n 's/.*"\(https\{0,1\}:\/\/[^\"]*\)".*/\1/p' "$EVIDENCE_ROOT/original-server-prefs.txt" | head -1)
-curl -ksS "$ORIGINAL_SERVER/api/status" | tee "$EVIDENCE_ROOT/original-status.json" | jq -e '.motor.belt == "0" and .motor.mph == "0"'
-curl -ksS "$ORIGINAL_SERVER/api/session" | tee "$EVIDENCE_ROOT/original-session.json" | jq -e '.active == false'
-curl -ksS "$ORIGINAL_SERVER/api/program" | tee "$EVIDENCE_ROOT/original-program.json" | jq -e '.running == false'
+ORIGINAL_VOICE_INPUT=$(awk '/"voice_input_enabled"/{getline; getline; print ($2 == 1 ? "true" : "false"); exit}' "$EVIDENCE_ROOT/original-server-prefs.txt")
+ORIGINAL_MIC_LINE=$(rg 'android.permission.RECORD_AUDIO: granted=' "$EVIDENCE_ROOT/original-package.txt" | sed 's/^[[:space:]]*//')
+printf '%s\n' "$ORIGINAL_VOICE_INPUT" > "$EVIDENCE_ROOT/original-voice-input.txt"
+printf '%s\n' "$ORIGINAL_MIC_LINE" > "$EVIDENCE_ROOT/original-mic-line.txt"
+set -o pipefail
+curl -kfsS "$ORIGINAL_SERVER/api/status" | tee "$EVIDENCE_ROOT/original-status.json" | jq -e '.treadmill_connected == true and .motor.belt == "0" and .motor.mph == "0" and .emu_speed_mph == 0'
+curl -kfsS "$ORIGINAL_SERVER/api/session" | tee "$EVIDENCE_ROOT/original-session.json" | jq -e '.active == false'
+curl -kfsS "$ORIGINAL_SERVER/api/program" | tee "$EVIDENCE_ROOT/original-program.json" | jq -e '.running == false'
+! rg -q 'Workout timer|Pause workout' "$EVIDENCE_ROOT/original-window.xml"
 ```
 
 - [ ] **Step 5: Preserve rollback APK**
@@ -147,19 +158,39 @@ sha256sum "$EVIDENCE_ROOT/original-base.apk" > "$EVIDENCE_ROOT/original-base.sha
 
 - [ ] **Step 6: Install and verify the exact artifact with rollback on every mismatch**
 
-Run serial-qualified `adb install -r`, launch the package, and verify application ID, version code/name, installed path, resumed activity, and byte-identical installed APK. On any install/package/path/version/activity/checksum failure, immediately reinstall `original-base.apk`, verify it launches, restore the original DataStore hash and microphone flags, and stop.
+Define `restore_mic` from the freshly captured `ORIGINAL_MIC_LINE`: clear `user-set`/`user-fixed`, grant or revoke according to `granted=`, then restore each captured mutable flag and compare the resulting grant/user flag signature. Define `rollback_apk` to reinstall `original-base.apk`, stream the immutable DataStore back through `run-as`, call `restore_mic`, launch, pull the rollback APK, verify its checksum, and exit nonzero. Run serial-qualified `adb install -r`, launch the package, and verify application ID, version code/name, installed path, resumed activity, and byte-identical installed APK inside a checked block; invoke `rollback_apk` on any failure.
 
 ```bash
-adb -s "$DEVICE_SERIAL" install -r "$APK"
-adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
-adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
-adb -s "$DEVICE_SERIAL" shell dumpsys package "$PACKAGE" | tee "$EVIDENCE_ROOT/installed-package.txt"
-INSTALLED_APK_PATH=$(adb -s "$DEVICE_SERIAL" shell pm path "$PACKAGE" | tr -d '\r' | sed 's/^package://')
-adb -s "$DEVICE_SERIAL" pull "$INSTALLED_APK_PATH" "$EVIDENCE_ROOT/installed-base.apk"
-test "$(sha256sum "$APK" | cut -d' ' -f1)" = "$(sha256sum "$EVIDENCE_ROOT/installed-base.apk" | cut -d' ' -f1)"
-rg -q 'versionCode=1' "$EVIDENCE_ROOT/installed-package.txt"
-rg -q 'versionName=1.0' "$EVIDENCE_ROOT/installed-package.txt"
-adb -s "$DEVICE_SERIAL" shell dumpsys activity activities | rg "mResumedActivity.*$PACKAGE"
+restore_mic() {
+  adb -s "$DEVICE_SERIAL" shell pm clear-permission-flags "$PACKAGE" android.permission.RECORD_AUDIO user-set user-fixed
+  if [[ "$ORIGINAL_MIC_LINE" == *'granted=true'* ]]; then adb -s "$DEVICE_SERIAL" shell pm grant "$PACKAGE" android.permission.RECORD_AUDIO; else adb -s "$DEVICE_SERIAL" shell pm revoke "$PACKAGE" android.permission.RECORD_AUDIO; fi
+  [[ "$ORIGINAL_MIC_LINE" == *'USER_SET'* ]] && adb -s "$DEVICE_SERIAL" shell pm set-permission-flags "$PACKAGE" android.permission.RECORD_AUDIO user-set || true
+  [[ "$ORIGINAL_MIC_LINE" == *'USER_FIXED'* ]] && adb -s "$DEVICE_SERIAL" shell pm set-permission-flags "$PACKAGE" android.permission.RECORD_AUDIO user-fixed || true
+}
+rollback_apk() {
+  adb -s "$DEVICE_SERIAL" install -r "$EVIDENCE_ROOT/original-base.apk"
+  adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
+  adb -s "$DEVICE_SERIAL" shell run-as "$PACKAGE" sh -c 'cat > files/datastore/server_prefs.preferences_pb' < "$EVIDENCE_ROOT/original-server-prefs.pb"
+  restore_mic
+  adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
+  local rollback_path
+  rollback_path=$(adb -s "$DEVICE_SERIAL" shell pm path "$PACKAGE" | tr -d '\r' | sed 's/^package://')
+  adb -s "$DEVICE_SERIAL" pull "$rollback_path" "$EVIDENCE_ROOT/rollback-verified.apk"
+  cmp "$EVIDENCE_ROOT/original-base.apk" "$EVIDENCE_ROOT/rollback-verified.apk"
+  return 1
+}
+if ! {
+  adb -s "$DEVICE_SERIAL" install -r "$APK" &&
+  adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE" &&
+  adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1 &&
+  adb -s "$DEVICE_SERIAL" shell dumpsys package "$PACKAGE" > "$EVIDENCE_ROOT/installed-package.txt" &&
+  rg -q 'versionCode=1' "$EVIDENCE_ROOT/installed-package.txt" &&
+  rg -q 'versionName=1.0' "$EVIDENCE_ROOT/installed-package.txt" &&
+  INSTALLED_APK_PATH=$(adb -s "$DEVICE_SERIAL" shell pm path "$PACKAGE" | tr -d '\r' | sed 's/^package://') &&
+  adb -s "$DEVICE_SERIAL" pull "$INSTALLED_APK_PATH" "$EVIDENCE_ROOT/installed-base.apk" &&
+  cmp "$APK" "$EVIDENCE_ROOT/installed-base.apk" &&
+  adb -s "$DEVICE_SERIAL" shell dumpsys activity activities | rg "mResumedActivity.*$PACKAGE";
+}; then rollback_apk; exit 1; fi
 ```
 
 ### Task 4: Produce retrospective RED/GREEN bug evidence
@@ -187,14 +218,20 @@ From `"$RED60/kotlin"`, preserve the true exit status:
 set -o pipefail
 ./gradlew testDebugUnitTest --tests com.precor.treadmill.WakeWordActivationPolicyTest 2>&1 | tee "$EVIDENCE_ROOT/issue-60-red.log"
 RED60_STATUS=${PIPESTATUS[0]}
+printf '%s\n' "$RED60_STATUS" > "$EVIDENCE_ROOT/issue-60-red.status"
 test "$RED60_STATUS" -ne 0
+rg -q "Unresolved reference.*WakeWordActivationPolicy" "$EVIDENCE_ROOT/issue-60-red.log"
 ```
 
 Expected: nonzero compile failure because the debounce/rearm policy does not exist. Save unedited relevant output and exit status; label it as a compile-time RED.
 
 - [ ] **Step 2: Run #60 GREEN on pinned main**
 
-From `"$GREEN60/kotlin"`, run the identical focused test source and command with `tee`/`${PIPESTATUS[0]}`. Expected: success. Keep the separate current-main focused suite from Task 3 as broader current coverage.
+From `"$GREEN60/kotlin"`, run the identical focused test source and command. Keep the separate current-main focused suite from Task 3 as broader current coverage.
+
+```bash
+(cd "$GREEN60/kotlin" && set -o pipefail; ./gradlew testDebugUnitTest --tests com.precor.treadmill.WakeWordActivationPolicyTest 2>&1 | tee "$EVIDENCE_ROOT/issue-60-green.log"; printf '%s\n' "${PIPESTATUS[0]}" > "$EVIDENCE_ROOT/issue-60-green.status"; test "$(cat "$EVIDENCE_ROOT/issue-60-green.status")" -eq 0)
+```
 
 - [ ] **Step 3: Reproduce #62 RED with the identical regression source**
 
@@ -214,14 +251,20 @@ Run from `"$RED62"` with `tee`/`${PIPESTATUS[0]}`:
 set -o pipefail
 pytest -q python/tests/test_server_integration.py::TestHistoryResume 2>&1 | tee "$EVIDENCE_ROOT/issue-62-red.log"
 RED62_STATUS=${PIPESTATUS[0]}
+printf '%s\n' "$RED62_STATUS" > "$EVIDENCE_ROOT/issue-62-red.status"
 test "$RED62_STATUS" -ne 0
+rg -q 'test_resume_derives_interval_from_saved_elapsed_time|test_terminal_history_position_is_not_resumable|test_stop_at_terminal_position_persists_completed' "$EVIDENCE_ROOT/issue-62-red.log"
 ```
 
 Expected: nonzero assertion failures for stale interval/terminal resume behavior. Save unedited relevant output and exit status.
 
 - [ ] **Step 4: Run #62 GREEN on pinned main**
 
-Run the identical class command from `"$GREEN62"` with `tee`/`${PIPESTATUS[0]}`. Expected: all eight `TestHistoryResume` tests pass. The clean pinned-main full suite remains the broader gate.
+Run the identical class command from `"$GREEN62"`; require all eight tests pass. The clean pinned-main full suite remains the broader gate.
+
+```bash
+(cd "$GREEN62" && set -o pipefail; pytest -q python/tests/test_server_integration.py::TestHistoryResume 2>&1 | tee "$EVIDENCE_ROOT/issue-62-green.log"; printf '%s\n' "${PIPESTATUS[0]}" > "$EVIDENCE_ROOT/issue-62-green.status"; test "$(cat "$EVIDENCE_ROOT/issue-62-green.status")" -eq 0; rg -q '8 passed' "$EVIDENCE_ROOT/issue-62-green.log")
+```
 
 - [ ] **Step 5: Remove disposable RED worktrees**
 
@@ -243,7 +286,11 @@ export TREADMILL_MOCK=1
 export TREADMILL_DB="$EVIDENCE_ROOT/mock-treadmill.db"
 PYTHONPATH="$FINAL_TREE/python" python3 - <<'PY' > "$EVIDENCE_ROOT/mock-history-ids.json"
 import json
-import server
+import os
+from db import TreadmillDB
+db = TreadmillDB(os.environ["TREADMILL_DB"])
+profile = db.create_profile("Closure Evidence")
+db.set_active_profile_id(profile["id"])
 resumable = {
     "name": "Evidence Resume 1:50",
     "intervals": [
@@ -255,11 +302,13 @@ terminal = {
     "name": "Evidence Completed",
     "intervals": [{"name": "Only", "duration": 60, "speed": 3.0, "incline": 0}],
 }
-r = server._add_to_history(resumable, "closure evidence")
-server.db.update_history_entry(r["id"], completed=False, last_interval=0, last_elapsed=130)
-t = server._add_to_history(terminal, "closure evidence")
-server.db.update_history_entry(t["id"], completed=False, last_interval=0, last_elapsed=60)
+r = db.add_to_history(profile["id"], resumable, prompt="closure evidence")
+db.update_history_entry(r["id"], completed=False, last_interval=0, last_elapsed=130)
+t = db.add_to_history(profile["id"], terminal, prompt="closure evidence")
+db.update_history_entry(t["id"], completed=False, last_interval=0, last_elapsed=60)
 print(json.dumps({"resumable": r["id"], "terminal": t["id"]}))
+db._read.close()
+db._write.close()
 PY
 jq -e '.resumable and .terminal' "$EVIDENCE_ROOT/mock-history-ids.json"
 ```
@@ -269,7 +318,7 @@ jq -e '.resumable and .terminal' "$EVIDENCE_ROOT/mock-history-ids.json"
 Launch `python/server.py` with the temporary DB and allocated port. Resolve the host LAN address along the tablet route, capture PID, and prove the environment and endpoints:
 
 ```bash
-env TREADMILL_MOCK=1 TREADMILL_DB="$TREADMILL_DB" TREADMILL_SERVER_PORT="$TREADMILL_SERVER_PORT" python3 "$FINAL_TREE/python/server.py" > "$EVIDENCE_ROOT/mock-server.log" 2>&1 &
+(cd "$FINAL_TREE" && env TREADMILL_MOCK=1 TREADMILL_DB="$TREADMILL_DB" TREADMILL_SERVER_PORT="$TREADMILL_SERVER_PORT" python3 python/server.py) > "$EVIDENCE_ROOT/mock-server.log" 2>&1 &
 MOCK_PID=$!
 printf '%s\n' "$MOCK_PID" > "$EVIDENCE_ROOT/mock-server.pid"
 for _ in $(seq 1 30); do rg -q 'Mock mode — no Pi connection' "$EVIDENCE_ROOT/mock-server.log" && break; sleep 1; done
@@ -355,9 +404,37 @@ rg -F 'elapsed. Tap to count down' "$EVIDENCE_ROOT/count-up-window.xml"
 
 - [ ] **Step 3: Validate and capture #61 settings behavior**
 
-The immutable original DataStore establishes Voice Input enabled and microphone denied with `USER_SET` on this tablet. Dump XML, resolve/tap `Settings`, re-dump, resolve/tap `Voice Input`, force-stop/relaunch, reopen Settings, and require the `Voice Input` node reports `checked="false"`. Capture Settings. Do not grant microphone permission; if a dialog appears, resolve/tap `Don't allow`. Final restoration comes from the immutable original DataStore, not another UI toggle.
+Recheck `/proc/$MOCK_PID/environ`, then stop only the mock program through its API, require inactive mock session, reveal/tap `Exit to home`, and require Lobby. The immutable baseline provides the original Voice Input value. Dump XML, resolve/tap `Settings`, re-dump, resolve/tap the `Voice Input` switch, force-stop/relaunch, reopen Settings, and require the switch has the opposite checked state plus visible `Microphone Permission` text. Capture Settings. Do not grant microphone permission; if a dialog appears, resolve/tap `Don't allow`. Final restoration comes from the immutable original DataStore, not another UI toggle.
 
 ```bash
+tr '\0' '\n' < "/proc/$MOCK_PID/environ" | rg '^TREADMILL_MOCK=1$'
+curl -fsS -X POST "$MOCK_URL/api/program/stop" | jq -e '.running == false'
+curl -fsS "$MOCK_URL/api/session" | jq -e '.active == false'
+adb -s "$DEVICE_SERIAL" shell input tap 40 40
+adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-exit.xml
+adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-exit.xml > "$EVIDENCE_ROOT/exit-window.xml"
+read EXIT_X EXIT_Y < <(ui_center "$EVIDENCE_ROOT/exit-window.xml" 'Exit to home')
+adb -s "$DEVICE_SERIAL" shell input tap "$EXIT_X" "$EXIT_Y"
+adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-lobby.xml
+adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-lobby.xml > "$EVIDENCE_ROOT/lobby-window.xml"
+rg -q 'Start Program|RECENT PROGRAMS' "$EVIDENCE_ROOT/lobby-window.xml"
+read SETTINGS_X SETTINGS_Y < <(ui_center "$EVIDENCE_ROOT/lobby-window.xml" 'Settings')
+adb -s "$DEVICE_SERIAL" shell input tap "$SETTINGS_X" "$SETTINGS_Y"
+adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-settings.xml
+adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-settings.xml > "$EVIDENCE_ROOT/settings-before.xml"
+rg -F 'Microphone Permission' "$EVIDENCE_ROOT/settings-before.xml"
+read VOICE_X VOICE_Y < <(ui_center "$EVIDENCE_ROOT/settings-before.xml" 'Voice Input')
+adb -s "$DEVICE_SERIAL" shell input tap "$VOICE_X" "$VOICE_Y"
+adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
+adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
+adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-lobby-after-relaunch.xml
+adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-lobby-after-relaunch.xml > "$EVIDENCE_ROOT/lobby-after-relaunch.xml"
+read SETTINGS_X SETTINGS_Y < <(ui_center "$EVIDENCE_ROOT/lobby-after-relaunch.xml" 'Settings')
+adb -s "$DEVICE_SERIAL" shell input tap "$SETTINGS_X" "$SETTINGS_Y"
+adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-settings-after.xml
+adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-settings-after.xml > "$EVIDENCE_ROOT/settings-after.xml"
+if [ "$ORIGINAL_VOICE_INPUT" = true ]; then rg -q 'text="Voice Input"[^>]*checked="false"' "$EVIDENCE_ROOT/settings-after.xml"; else rg -q 'text="Voice Input"[^>]*checked="true"' "$EVIDENCE_ROOT/settings-after.xml"; fi
+rg -F 'Microphone Permission' "$EVIDENCE_ROOT/settings-after.xml"
 adb -s "$DEVICE_SERIAL" exec-out screencap -p > "$EVIDENCE_ROOT/issue-61-settings.png"
 ```
 
@@ -370,10 +447,12 @@ adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
 adb -s "$DEVICE_SERIAL" shell run-as "$PACKAGE" sh -c 'mv -f files/datastore/server_prefs.preferences_pb files/datastore/server_prefs.preferences_pb.mock-evidence; mv -f files/datastore/server_prefs.preferences_pb.pre-evidence files/datastore/server_prefs.preferences_pb'
 adb -s "$DEVICE_SERIAL" exec-out run-as "$PACKAGE" cat files/datastore/server_prefs.preferences_pb > "$EVIDENCE_ROOT/restored-server-prefs.pb"
 cmp "$EVIDENCE_ROOT/original-server-prefs.pb" "$EVIDENCE_ROOT/restored-server-prefs.pb"
-adb -s "$DEVICE_SERIAL" shell pm revoke "$PACKAGE" android.permission.RECORD_AUDIO
-adb -s "$DEVICE_SERIAL" shell pm clear-permission-flags "$PACKAGE" android.permission.RECORD_AUDIO user-fixed
-adb -s "$DEVICE_SERIAL" shell pm set-permission-flags "$PACKAGE" android.permission.RECORD_AUDIO user-set
+restore_mic
 adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
+adb -s "$DEVICE_SERIAL" shell dumpsys package "$PACKAGE" | rg 'android.permission.RECORD_AUDIO: granted=' | sed 's/^[[:space:]]*//' > "$EVIDENCE_ROOT/restored-mic-line.txt"
+test "$(sed -E 's/USER_SENSITIVE_[A-Z_|]*//g; s/[| ]+/ /g' "$EVIDENCE_ROOT/original-mic-line.txt")" = "$(sed -E 's/USER_SENSITIVE_[A-Z_|]*//g; s/[| ]+/ /g' "$EVIDENCE_ROOT/restored-mic-line.txt")"
+protoc --decode_raw < "$EVIDENCE_ROOT/restored-server-prefs.pb" > "$EVIDENCE_ROOT/restored-server-prefs.txt"
+cmp "$EVIDENCE_ROOT/original-server-prefs.txt" "$EVIDENCE_ROOT/restored-server-prefs.txt"
 kill "$(cat "$EVIDENCE_ROOT/mock-server.pid")"
 for _ in $(seq 1 20); do curl -fsS "$MOCK_URL/" >/dev/null 2>&1 || break; sleep 1; done
 ! curl -fsS "$MOCK_URL/" >/dev/null 2>&1
@@ -400,7 +479,15 @@ GH_ATTACH="$EVIDENCE_ROOT/gh_2.100.0_linux_amd64/bin/gh"
 
 - [ ] **Step 2: Compose five evidence comments**
 
-Create `"$EVIDENCE_ROOT/issue-{59,60,61,62,64}-comment.md"`. Each body must identify problem/request, root cause or gap, exact fix/PR/final-main SHA, focused RED for #60/#62, focused GREEN and broad gate, device/mock context, belt-stationary statement, screenshot relevance, and any limitation. Do not claim a screenshot for #60.
+Create `"$EVIDENCE_ROOT/issue-{59,60,61,62,64}-comment.md"` with `printf`, using these exact facts and links:
+
+- #59: problem was count-up-only timer; gap was direct session-elapsed rendering with no timer mode; fix `890c4f8`, PR `https://github.com/scottmsilver/treddy/pull/67`; include #59 focused GREEN and final Android gate.
+- #60: problem was repeated/false wake activation; root cause was callbacks could reactivate without a listening restart/rearm policy; fix `872281b` plus integration hardening `fa8a99d`, PR `https://github.com/scottmsilver/treddy/pull/66`; include compile-time RED status/output showing the absent policy, identical-source GREEN, and final Android gate. No screenshot.
+- #61: problem was no persistent way to disable voice capture; gap spanned settings, permission recovery, and stale asynchronous work; implementation `b777f33` plus `fa8a99d`, PR `https://github.com/scottmsilver/treddy/pull/68`; include focused GREEN, persistence result, permission restoration, and final Android gate.
+- #62: problem was wrong remaining time and terminal sessions offered as resumable; root cause was trusting separately persisted interval state instead of authoritative elapsed time and not rejecting the terminal boundary; fix `f7cef1e`, PR `https://github.com/scottmsilver/treddy/pull/65`; include behavioral RED status and the unedited failing test-name/result lines, identical-source eight-test GREEN, full 137-test server gate, and mock-tablet history result.
+- #64: request was an absolute workout-clock mark beside relative next-change time; gap was no mark, and combined review also found detached server remainder could flicker; implementation `0ec58d4`, PR `https://github.com/scottmsilver/treddy/pull/69`; include focused GREEN, final Android gate, and stable mock-tablet result.
+
+Every body uses headings `Problem`, `Root cause / gap`, `RED` (bugs only), `GREEN`, `Device validation`, and `Delivery`; names `"$FINAL_SHA"`; says screenshots were produced on a `TREADMILL_MOCK=1` backend with no Pi connection and the real belt remained stationary; and inserts relevant unedited log tails inside fenced code blocks. Use `tail -n` only to select contiguous unedited output; do not rewrite command output.
 
 Before composing or posting, run `git fetch origin` and require `"$FINAL_SHA" == "$(git rev-parse origin/main)"`. If it advanced, create a fresh detached worktree and repeat build, gates, install/pull checksum, focused GREENs, and affected tablet checks before posting anything.
 
@@ -416,7 +503,25 @@ COMMENT62=$("$GH_ATTACH" issue comment 62 --repo scottmsilver/treddy --body-file
 COMMENT64=$("$GH_ATTACH" issue comment 64 --repo scottmsilver/treddy --body-file "$EVIDENCE_ROOT/issue-64-comment.md" --attach "$EVIDENCE_ROOT/issues-59-64-running.png#Final-main next-change display with relative and absolute workout-clock times")
 ```
 
-Post #60 without `--attach`. Verify each returned URL belongs to the intended issue. Read each comment via `gh api`, extract every `https://github.com/user-attachments/assets/...` URL, then require `curl -fsSIL` returns HTTP success and an `image/*` content type. Only after all consumers verify may screenshots be trashed. Canonicalize every PNG path with `realpath` and require it begins with `"$EVIDENCE_ROOT/"`.
+Post #60 without `--attach`. Capture IDs and verify issue ownership, required headings, attachments, and rendered content:
+
+```bash
+for pair in "59:$COMMENT59" "60:$COMMENT60" "61:$COMMENT61" "62:$COMMENT62" "64:$COMMENT64"; do
+  issue=${pair%%:*}; url=${pair#*:}
+  case "$url" in "https://github.com/scottmsilver/treddy/issues/$issue#issuecomment-"*) ;; *) exit 1;; esac
+  id=${url##*issuecomment-}
+  printf '%s\n' "$id" > "$EVIDENCE_ROOT/issue-$issue-comment.id"
+  gh api "repos/scottmsilver/treddy/issues/comments/$id" > "$EVIDENCE_ROOT/issue-$issue-comment.json"
+  test "$(jq -r .issue_url "$EVIDENCE_ROOT/issue-$issue-comment.json")" = "https://api.github.com/repos/scottmsilver/treddy/issues/$issue"
+  for heading in 'Problem' 'Root cause / gap' 'GREEN' 'Device validation' 'Delivery'; do jq -er .body "$EVIDENCE_ROOT/issue-$issue-comment.json" | rg -F "$heading" >/dev/null; done
+done
+for issue in 59 61 62 64; do
+  jq -r .body "$EVIDENCE_ROOT/issue-$issue-comment.json" | rg -o 'https://github.com/user-attachments/assets/[^ )]+' > "$EVIDENCE_ROOT/issue-$issue-assets.txt"
+  test -s "$EVIDENCE_ROOT/issue-$issue-assets.txt"
+  while read -r asset; do curl -fsSIL "$asset" | tee "$EVIDENCE_ROOT/issue-$issue-asset-headers.txt" | rg -i '^content-type: image/'; done < "$EVIDENCE_ROOT/issue-$issue-assets.txt"
+done
+for image in "$EVIDENCE_ROOT/issue-62-history.png" "$EVIDENCE_ROOT/issue-61-settings.png" "$EVIDENCE_ROOT/issues-59-64-running.png"; do case "$(realpath "$image")" in "$EVIDENCE_ROOT"/*) ;; *) exit 1;; esac; done
+```
 
 - [ ] **Step 4: Verify all retrospective annotations**
 
@@ -429,7 +534,7 @@ Read back issue comments 59/60/61/62/64 through the API and independently check 
 
 - [ ] **Step 1: Verify authoritative main still matches deployed/commented evidence**
 
-Fetch `origin/main`; compare it to the pinned deployed SHA. If it advanced after comments, repeat the build/install/validation loop and update the just-created comments so their SHA and evidence remain truthful before continuing.
+Fetch `origin/main`; compare it to the pinned deployed SHA. If it advanced after comments, repeat Tasks 3–6 in a fresh clean detached worktree, regenerate all five body files, and update each just-created comment with the pinned `"$GH_ATTACH" issue comment <issue> --edit-last --body-file ...` command (plus the new `--attach` file for 59/61/62/64). Verify the returned comment IDs equal the saved IDs and repeat all ownership/attachment checks before continuing.
 
 - [ ] **Step 2: Close and sync the tracking bead**
 
