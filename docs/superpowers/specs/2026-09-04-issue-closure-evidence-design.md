@@ -10,11 +10,11 @@ Deploy the exact merged `main` Android build to the gym tablet, validate the fix
 - Keep all ADB and GitHub writes in the primary session.
 - Never start a real workout or send speed/incline/belt commands during validation.
 - Use an isolated mock backend for running-screen and resume scenarios. Record the tablet's original server preference, microphone permission, and visible state, then restore them after validation.
-- Treat screenshots as temporary local artifacts. Upload them directly to the applicable GitHub issue with `gh issue comment --attach`, verify the resulting GitHub attachment URL, and remove the local temporary files. No screenshot is committed to the repository.
+- Treat screenshots as temporary local artifacts stored in an OS temporary directory outside every repository/worktree. The system `gh` 2.45.0 predates attachments, so download the official current GitHub CLI tarball into that temporary directory, verify it against the checksum published in the same `cli/cli` release, and use that binary's `gh issue comment --attach` support. Verify the comment is on the intended issue, its body contains a `github.com/user-attachments/` URL, and the rendered image URL returns successfully before deleting the local file. No screenshot is staged, tracked, or committed.
 
 ## Exact-build deployment
 
-The APK must be built from the same commit as `origin/main`. Record both the Git SHA and APK checksum, install it with the tablet's exact ADB serial, launch the package, and confirm the installed package update time and a healthy resumed activity. Preserve microphone permission as denied unless a specific validation step requires otherwise; restore it afterward.
+First land the `CLAUDE.md` process change. Then fetch authoritative `origin/main`, pin its SHA in a clean detached worktree, and build the APK there. Record the Git SHA and local APK checksum. Before installation, preserve the prior installed APK and app preferences in an OS temporary directory for rollback. Install with the tablet's exact ADB serial without uninstalling or clearing application data, confirm package/version/path and a healthy resumed activity, pull the installed base APK, and require its checksum to match the pinned local artifact. Re-fetch `origin/main` before completion; if it advanced, rebuild and reinstall the new pinned head. On installation or launch failure, restore the preserved APK where feasible and stop rather than clearing device data. A successful run intentionally leaves only the new final-main APK installed.
 
 ## Validation evidence
 
@@ -29,13 +29,19 @@ Each issue receives one retrospective evidence comment containing:
 
 Validation by issue:
 
-- **#59:** Use the mock backend to show that the running timer defaults to countdown and can switch to count-up. Capture the running-screen result.
-- **#60:** Reproduce the old duplicate/rearm behavior with the focused wake activation regression and show the passing policy tests on `main`. Validate without granting the tablet microphone or synthesizing a real activation. A screenshot is not required because the behavior is event/lifecycle based.
-- **#61:** Show the persistent Voice Input switch and microphone permission state in Settings. Toggle off, relaunch, confirm persistence, then restore the enabled preference while leaving microphone permission denied. Capture Settings.
-- **#62:** Reproduce incorrect resume/terminal handling against the pre-fix server parent and show the passing resume integration tests on `main`. Use mock data for any tablet-visible resume confirmation; never create a real treadmill session. Capture only if the mock scenario produces a meaningful resume UI.
-- **#64:** Use the mock running program to show relative time until the next interval together with the stable absolute workout-clock mark. Capture the running screen, ideally sharing the #59 screenshot when both are legible.
+- **#59 (feature):** fix commit `890c4f8`, base `e186c68`. No RED run is required. GREEN: `./gradlew testDebugUnitTest --tests com.precor.treadmill.ui.screens.running.RunningTimerTest`; broader gate: Android unit tests and debug assembly. Use the mock backend to show that the running timer defaults to countdown and can switch to count-up. Capture the running-screen result.
+- **#60 (bug):** fix commit `872281b`, broken parent `e186c68`. In a disposable detached worktree at the broken parent, apply only the focused `WakeWordActivationPolicyTest` test source from the fix and run `./gradlew testDebugUnitTest --tests com.precor.treadmill.WakeWordActivationPolicyTest`; the intended RED is the concrete absence of the debounce/rearm policy (a compile failure, labeled as such). Run the identical test source/command on final `main` for GREEN, plus the full Android gate. Validate without granting the tablet microphone or synthesizing a real activation. No screenshot is required because the behavior is event/lifecycle based.
+- **#61 (feature):** implementation through `b777f33`, integration fix `fa8a99d`, final squash on `main`. No RED run is required. GREEN: focused settings, voice-input, and wake-policy tests, plus the full Android gate. Show the persistent Voice Input switch and microphone permission state in Settings. Toggle off, relaunch, confirm persistence, then restore the exact original Voice Input preference and microphone permission. Capture Settings.
+- **#62 (bug):** fix commit `f7cef1e`, broken parent `e186c68`. In a disposable detached worktree at the broken parent, apply only the changed `TestHistoryResume` regression source from the fix and run `pytest -q python/tests/test_server_integration.py::TestHistoryResume`; record the intended assertion failure(s) and exit status. Run the identical test source/command on final `main` for GREEN, plus the full server integration and Android gates.
+- **#64 (feature):** implementation commit `0ec58d4` stacked on #59 and landed with #59. No RED run is required. GREEN: `./gradlew testDebugUnitTest --tests com.precor.treadmill.ui.screens.running.NextChangeDisplayTest --tests com.precor.treadmill.ui.screens.running.RidgelineNextChangeClockSourceTest`, plus the full Android gate. Use the mock running program to show relative time until the next interval together with the stable absolute workout-clock mark. Capture the running screen, ideally sharing the #59 screenshot when both are legible.
 
-If a pre-fix regression cannot execute because the test's required seam did not exist, the comment must say so explicitly and show the concrete compile/assertion failure rather than implying a behavioral failure. Evidence must not be fabricated or paraphrased as command output.
+The RED and GREEN runs use the same focused test source; the broken tree may receive only a disclosed test-only patch. Commands, source SHA, exit status, and relevant unedited output are recorded. If a pre-fix regression cannot execute because the test's required seam did not exist, the comment must say so explicitly and show the concrete compile/assertion failure rather than implying a behavioral failure. Evidence must not be fabricated or paraphrased as command output.
+
+## Mock-backend interlock and restoration
+
+Run `python/server.py` with `TREADMILL_MOCK=1` on a worktree-specific port and verify its log states `Mock mode — no Pi connection`. The server then instantiates `MockTreadmillClient` instead of `TreadmillClient`, which is the hard transport interlock: no treadmill Unix socket, BLE, USB, or GPIO transport is opened. Before launching a running or resume screen, force-stop the app, back up its complete DataStore preferences through `run-as`, and temporarily remove only that preference file so Setup can target the mock host. Confirm the app is connected to the mock endpoint and the server process environment still contains `TREADMILL_MOCK=1` before invoking mock program APIs.
+
+Record the original server preference, Voice Input preference, microphone permission flags, visible activity, and connectivity state. After screenshots, force-stop the app, restore the exact DataStore file and permission state, relaunch the original visible activity where practical, and verify the app is no longer connected to the mock server. Stop the mock server. Every visual issue comment must state that the backend was mocked and the belt remained stationary.
 
 ## Project process update
 
@@ -51,7 +57,7 @@ Add an "Issue Closure Evidence" section to `CLAUDE.md` requiring agents to:
 
 ## Git and delivery
 
-Commit only `CLAUDE.md` and the required design/plan documentation on `codex/closure-evidence`, push it, open and merge a PR, and update local `main` by fast-forward without touching existing user changes. Issue annotations and image uploads are external evidence, not repository content. Close the tracking bead only after the tablet, GitHub issues, documentation PR, and final verification are complete.
+Commit only `CLAUDE.md` and the required design/plan documentation on `codex/closure-evidence`, push it, open and merge a PR, and then pin/build/deploy authoritative final `main`. Never stash, reset, overwrite, or relocate the user's existing main-worktree changes. Fast-forward local `main` only if Git can do so without touching those paths; otherwise leave it unchanged and report the blocker. Before committing, verify no image extension or screenshot artifact is staged or tracked. Issue annotations and image uploads are external evidence, not repository content. Close the tracking bead only after the tablet, GitHub issues, documentation PR, and final verification are complete.
 
 ## Failure handling
 
@@ -59,4 +65,3 @@ Commit only `CLAUDE.md` and the required design/plan documentation on `codex/clo
 - If the mock backend cannot be isolated from the real treadmill, skip the UI action and rely on automated evidence; do not widen hardware authority.
 - If `gh issue comment --attach` is unsupported or upload verification fails, stop and report the blocker rather than placing images in the repository or on an unapproved host.
 - If any regression or build fails unexpectedly, diagnose it before deployment or annotation.
-
