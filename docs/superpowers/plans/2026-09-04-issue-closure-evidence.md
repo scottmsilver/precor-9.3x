@@ -247,10 +247,11 @@ git show f7cef1e:python/tests/test_server_integration.py | tee "$RED62/python/te
 test "$(sha256sum "$RED62/python/tests/test_server_integration.py" | cut -d' ' -f1)" = "$(sha256sum "$GREEN62/python/tests/test_server_integration.py" | cut -d' ' -f1)"
 ```
 
-Run from `"$RED62"` with `tee`/`${PIPESTATUS[0]}`:
+Run from `"$RED62"` with `tee`/`${PIPESTATUS[0]}`. Change directory outside the expected-failure pipeline so inherited fail-fast mode cannot terminate before the status is captured:
 
 ```bash
 set +e
+cd "$RED62"
 set -o pipefail
 pytest -q python/tests/test_server_integration.py::TestHistoryResume 2>&1 | tee "$EVIDENCE_ROOT/issue-62-red.log"
 RED62_STATUS=${PIPESTATUS[0]}
@@ -264,10 +265,10 @@ Expected: nonzero assertion failures for stale interval/terminal resume behavior
 
 - [ ] **Step 4: Run #62 GREEN on pinned main**
 
-Run the identical class command from `"$GREEN62"`; require all eight tests pass. The clean pinned-main full suite remains the broader gate.
+Run the identical class command from `"$GREEN62"`; require all nine tests pass. The clean pinned-main full suite remains the broader gate.
 
 ```bash
-(cd "$GREEN62" && set -o pipefail; pytest -q python/tests/test_server_integration.py::TestHistoryResume 2>&1 | tee "$EVIDENCE_ROOT/issue-62-green.log"; printf '%s\n' "${PIPESTATUS[0]}" > "$EVIDENCE_ROOT/issue-62-green.status"; test "$(cat "$EVIDENCE_ROOT/issue-62-green.status")" -eq 0; rg -q '8 passed' "$EVIDENCE_ROOT/issue-62-green.log")
+(cd "$GREEN62" && set -o pipefail; pytest -q python/tests/test_server_integration.py::TestHistoryResume 2>&1 | tee "$EVIDENCE_ROOT/issue-62-green.log"; printf '%s\n' "${PIPESTATUS[0]}" > "$EVIDENCE_ROOT/issue-62-green.status"; test "$(cat "$EVIDENCE_ROOT/issue-62-green.status")" -eq 0; rg -q '9 passed' "$EVIDENCE_ROOT/issue-62-green.log")
 ```
 
 - [ ] **Step 5: Remove disposable RED worktrees**
@@ -516,7 +517,7 @@ Create `"$EVIDENCE_ROOT/issue-{59,60,61,62,64}-comment.md"` with `printf`, using
 - #59: problem was count-up-only timer; gap was direct session-elapsed rendering with no timer mode; fix `890c4f8`, PR `https://github.com/scottmsilver/treddy/pull/67`; include #59 focused GREEN and final Android gate.
 - #60: problem was repeated/false wake activation; root cause was callbacks could reactivate without a listening restart/rearm policy; fix `872281b` plus integration hardening `fa8a99d`, PR `https://github.com/scottmsilver/treddy/pull/66`; include compile-time RED status/output showing the absent policy, identical-source GREEN, and final Android gate. No screenshot.
 - #61: problem was no persistent way to disable voice capture; gap spanned settings, permission recovery, and stale asynchronous work; implementation `b777f33` plus `fa8a99d`, PR `https://github.com/scottmsilver/treddy/pull/68`; include focused GREEN, persistence result, permission restoration, and final Android gate.
-- #62: problem was wrong remaining time and terminal sessions offered as resumable; root cause was trusting separately persisted interval state instead of authoritative elapsed time and not rejecting the terminal boundary; fix `f7cef1e`, PR `https://github.com/scottmsilver/treddy/pull/65`; include behavioral RED status and the unedited failing test-name/result lines, identical-source eight-test GREEN, full 137-test server gate, and mock-tablet history result.
+- #62: problem was wrong remaining time and terminal sessions offered as resumable; root cause was trusting separately persisted interval state instead of authoritative elapsed time and not rejecting the terminal boundary; fix `f7cef1e`, PR `https://github.com/scottmsilver/treddy/pull/65`; include behavioral RED status and the unedited failing test-name/result lines, identical-source nine-test GREEN, full 137-test server gate, and mock-tablet history result.
 - #64: request was an absolute workout-clock mark beside relative next-change time; gap was no mark, and combined review also found detached server remainder could flicker; implementation `0ec58d4`, PR `https://github.com/scottmsilver/treddy/pull/69`; include focused GREEN, final Android gate, and stable mock-tablet result.
 
 Every body uses headings `Problem`, `Root cause / gap`, `RED` (bugs only), `GREEN`, `Device validation`, and `Delivery`; names `"$FINAL_SHA"`; says screenshots were produced on a `TREADMILL_MOCK=1` backend with no Pi connection and the real belt remained stationary; and inserts relevant unedited log tails inside fenced code blocks. Use `tail -n` only to select contiguous unedited output; do not rewrite command output.
