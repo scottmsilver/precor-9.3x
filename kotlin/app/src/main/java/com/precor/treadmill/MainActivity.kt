@@ -41,6 +41,8 @@ class MainActivity : ComponentActivity() {
     private var wakeWordStateJob: Job? = null
     private var wakeWordForeground = false
     private var voiceInputEnabled = false
+    private var voiceInputPreferenceLoaded = false
+    private var pendingVoiceToggleIntent = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -74,9 +76,16 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             serverPreferences.voiceInputEnabled.collect { enabled ->
                 voiceInputEnabled = enabled
+                voiceInputPreferenceLoaded = true
                 voiceViewModel.setVoiceInputEnabled(enabled)
                 if (!enabled) wakeWordEngine?.stop()
-                else if (wakeWordForeground) startWakeWordPrototype()
+                else {
+                    if (pendingVoiceToggleIntent) {
+                        pendingVoiceToggleIntent = false
+                        voiceViewModel.toggle()
+                    }
+                    if (wakeWordForeground) startWakeWordPrototype()
+                }
             }
         }
     }
@@ -90,7 +99,8 @@ class MainActivity : ComponentActivity() {
             }
             ACTION_VOICE_TOGGLE -> {
                 Log.d(TAG, "Voice toggle (mic mode)")
-                if (voiceInputEnabled) voiceViewModel.toggle()
+                if (!voiceInputPreferenceLoaded) pendingVoiceToggleIntent = true
+                else if (voiceInputEnabled) voiceViewModel.toggle()
             }
             else -> return
         }

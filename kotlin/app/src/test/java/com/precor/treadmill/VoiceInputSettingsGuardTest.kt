@@ -21,12 +21,13 @@ class VoiceInputSettingsGuardTest {
     private val voiceViewModelSource = File(
         "src/main/java/com/precor/treadmill/ui/viewmodel/VoiceViewModel.kt",
     ).readText()
-
     @Test
     fun voiceInputPreferenceIsPersistentAndDefaultsOn() {
         assertTrue(preferencesSource.contains("booleanPreferencesKey(\"voice_input_enabled\")"))
         assertTrue(preferencesSource.contains("prefs[KEY_VOICE_INPUT_ENABLED] ?: true"))
         assertTrue(preferencesSource.contains("suspend fun setVoiceInputEnabled(enabled: Boolean)"))
+        assertTrue(preferencesSource.contains("booleanPreferencesKey(\"microphone_permission_requested\")"))
+        assertTrue(preferencesSource.contains("suspend fun setMicrophonePermissionRequested(requested: Boolean)"))
     }
 
     @Test
@@ -36,6 +37,8 @@ class VoiceInputSettingsGuardTest {
         assertTrue(settingsSource.contains("text = \"Granted\""))
         assertTrue(settingsSource.contains("Text(\"Not granted · Grant\")"))
         assertTrue(settingsSource.contains("onRequestMicrophonePermission"))
+        assertTrue(settingsSource.contains(".toggleable("))
+        assertTrue(settingsSource.contains("role = Role.Switch"))
     }
 
     @Test
@@ -44,6 +47,10 @@ class VoiceInputSettingsGuardTest {
         assertTrue(navigationSource.contains("if (!voiceInputEnabled) return@handleVoiceToggle"))
         assertTrue(voiceViewModelSource.contains("fun setVoiceInputEnabled(enabled: Boolean)"))
         assertTrue(voiceViewModelSource.contains("if (!voiceInputEnabled) return"))
+        assertTrue(voiceViewModelSource.contains("teardownConnection()"))
+        assertTrue(voiceViewModelSource.contains("gate.runIfActive"))
+        assertTrue(voiceViewModelSource.contains("gate.runIfActive(generation) {\n                when (state)"))
+        assertTrue(voiceViewModelSource.contains("if (userActivated) {\n                stopMicCapture()"))
     }
 
     @Test
@@ -52,5 +59,6 @@ class VoiceInputSettingsGuardTest {
         assertTrue(activitySource.contains("if (!enabled) wakeWordEngine?.stop()"))
         assertTrue(activitySource.contains("state == VoiceState.IDLE && wakeWordForeground && voiceInputEnabled"))
         assertTrue(activitySource.contains("if (voiceInputEnabled) startWakeWordPrototype()"))
+        assertTrue(activitySource.contains("pendingVoiceToggleIntent"))
     }
 }
