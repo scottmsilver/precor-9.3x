@@ -1,9 +1,10 @@
 package com.precor.treadmill
 
 import android.Manifest
-import android.content.pm.PackageManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -43,6 +44,7 @@ class MainActivity : ComponentActivity() {
     private var voiceInputEnabled = false
     private var voiceInputPreferenceLoaded = false
     private var pendingVoiceToggleIntent = false
+    private val wakeWordActivationPolicy = WakeWordActivationPolicy()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -119,7 +121,9 @@ class MainActivity : ComponentActivity() {
     private fun startWakeWordPrototype() {
         if (!voiceInputEnabled) return
         wakeWordEngine?.let { engine ->
-            if (voiceViewModel.voiceState.value == VoiceState.IDLE) engine.start()
+            if (voiceViewModel.voiceState.value == VoiceState.IDLE) {
+                startWakeWordListening(engine)
+            }
             return
         }
 
@@ -137,7 +141,7 @@ class MainActivity : ComponentActivity() {
                     WakeWordModel(
                         name = "Hey Treddy",
                         modelPath = "hey_treddy.onnx",
-                        threshold = 0.70f,
+                        threshold = WakeWordActivationPolicy.MINIMUM_SCORE,
                     )
                 ),
                 detectionCooldownMs = 3_000L,
@@ -146,6 +150,14 @@ class MainActivity : ComponentActivity() {
 
             wakeWordDetectionJob = lifecycleScope.launch {
                 engine.detections.collect { detection ->
+                    if (!wakeWordActivationPolicy.shouldActivate(
+                            score = detection.score,
+                            nowMs = SystemClock.elapsedRealtime(),
+                        )
+                    ) {
+                        Log.d(TAG, "WAKE_WORD_SUPPRESSED score=${detection.score}")
+                        return@collect
+                    }
                     Log.i(
                         TAG,
                         "WAKE_WORD_DETECTED name=${detection.model.name} score=${detection.score}",
@@ -167,7 +179,7 @@ class MainActivity : ComponentActivity() {
                 voiceViewModel.voiceState.collect { state ->
                     if (state == VoiceState.IDLE && wakeWordForeground && voiceInputEnabled) {
                         Log.i(TAG, "WAKE_WORD_LISTENING phrase=hey_treddy")
-                        engine.start()
+                        startWakeWordListening(engine)
                     } else {
                         engine.stop()
                     }
@@ -176,6 +188,11 @@ class MainActivity : ComponentActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "Wake-word prototype failed to initialize", e)
         }
+    }
+
+    private fun startWakeWordListening(engine: WakeWordEngine) {
+        wakeWordActivationPolicy.onListeningStarted(SystemClock.elapsedRealtime())
+        engine.start()
     }
 
     override fun onResume() {

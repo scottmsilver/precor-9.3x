@@ -69,6 +69,7 @@ data class KVEntry(
 data class DerivedSession(
     val active: Boolean,
     val elapsed: Double,
+    val displayElapsed: Double,
     val elapsedDisplay: String,
     val distance: Double,
     val distDisplay: String,
@@ -252,6 +253,7 @@ class TreadmillViewModel(
         DerivedSession(
             active = sess.active,
             elapsed = sess.elapsed,
+            displayElapsed = displayElapsed,
             elapsedDisplay = fmtDur(displayElapsed.toInt()),
             distance = sess.distance,
             distDisplay = "%.2f".format(sess.distance),
@@ -264,7 +266,7 @@ class TreadmillViewModel(
             endReason = sess.endReason,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DerivedSession(
-        active = false, elapsed = 0.0, elapsedDisplay = "0:00", distance = 0.0,
+        active = false, elapsed = 0.0, displayElapsed = 0.0, elapsedDisplay = "0:00", distance = 0.0,
         distDisplay = "0.00", vertFeet = 0.0, vertDisplay = "0", calories = 0.0,
         caloriesDisplay = "0", pace = "--:--", speedMph = 0.0, endReason = null,
     ))

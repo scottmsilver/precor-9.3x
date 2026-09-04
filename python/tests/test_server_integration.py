@@ -1175,6 +1175,73 @@ class TestHistoryResume:
         assert data["current_interval"] == 1
         assert data["running"] is True
 
+    def test_resume_derives_interval_from_saved_elapsed_time(self, test_app):
+        """Elapsed time is authoritative when the persisted interval is stale."""
+        client, server, _ = test_app
+        program = {
+            "name": "Stale Resume Interval",
+            "intervals": [
+                {"name": "A", "duration": 120, "speed": 3.0, "incline": 0},
+                {"name": "B", "duration": 120, "speed": 5.0, "incline": 2},
+            ],
+        }
+        entry = server._add_to_history(program)
+        # A crash/race can leave the separately persisted interval behind the
+        # clock.  130 elapsed means 10 seconds into B, with 110 seconds left.
+        server.db.update_history_entry(entry["id"], last_interval=0, last_elapsed=130)
+
+        data = client.post(f"/api/programs/history/{entry['id']}/resume").json()
+
+        assert data["ok"] is True
+        assert data["current_interval"] == 1
+        assert data["interval_elapsed"] == pytest.approx(10)
+        assert data["total_duration"] - data["total_elapsed"] == pytest.approx(110)
+        client.post("/api/program/stop")
+
+    def test_terminal_history_position_is_not_resumable(self, test_app):
+        """A finalized clock must not restart merely because completed stayed stale."""
+        client, server, _ = test_app
+        program = {
+            "name": "Ended At Finish",
+            "intervals": [
+                {"name": "Only", "duration": 60, "speed": 3.0, "incline": 0},
+            ],
+        }
+        entry = server._add_to_history(program)
+        # Reproduce the race at the end: the position is terminal, but the
+        # independent completed flag has not yet been written.
+        server.db.update_history_entry(entry["id"], completed=False, last_interval=0, last_elapsed=60)
+
+        data = client.post(f"/api/programs/history/{entry['id']}/resume").json()
+
+        assert data["ok"] is False
+        assert "completed" in data["error"].lower()
+        assert server.sess.active is False
+
+    def test_stop_at_terminal_position_persists_completed(self, test_app):
+        """Stopping on the finish boundary must persist a finalized history row."""
+        client, server, _ = test_app
+        program = {
+            "name": "Stop On Finish",
+            "intervals": [
+                {"name": "Only", "duration": 60, "speed": 3.0, "incline": 0},
+            ],
+        }
+        server._add_to_history(program)
+        server.sess.prog.load(program)
+        server.sess.prog.running = True
+        server.sess.prog.current_interval = 0
+        server.sess.prog.interval_elapsed = 60
+        server.sess.prog.total_elapsed = 60
+        server.sess.prog._on_change = AsyncMock()
+        server.sess.prog._on_update = AsyncMock()
+        server.sess.start()
+
+        assert client.post("/api/program/stop").status_code == 200
+
+        entry = server.db.get_program_history(server._active_profile_id())[0]
+        assert entry["completed"] is True
+
     def test_resume_completed_program_rejected(self, test_app):
         """Completed programs should not be resumable."""
         client, server, _ = test_app

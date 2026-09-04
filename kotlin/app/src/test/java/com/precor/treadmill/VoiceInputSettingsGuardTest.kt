@@ -71,4 +71,11 @@ class VoiceInputSettingsGuardTest {
                 0 until preferenceObserver.indexOf("if (!enabled)"),
         )
     }
+
+    @Test
+    fun voiceOptOutKeepsWakeWordDebouncePolicyInTheCapturePath() {
+        assertTrue(activitySource.contains("private val wakeWordActivationPolicy = WakeWordActivationPolicy()"))
+        assertTrue(activitySource.contains("wakeWordActivationPolicy.shouldActivate("))
+        assertTrue(activitySource.contains("wakeWordActivationPolicy.onListeningStarted("))
+    }
 }
