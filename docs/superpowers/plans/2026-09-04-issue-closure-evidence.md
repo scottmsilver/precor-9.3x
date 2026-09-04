@@ -471,10 +471,17 @@ adb -s "$DEVICE_SERIAL" shell input tap "$VOICE_X" "$VOICE_Y"
 for _ in $(seq 1 20); do
   adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-settings-toggle.xml >/dev/null
   adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-settings-toggle.xml > "$EVIDENCE_ROOT/settings-toggle.xml"
-  if [ "$ORIGINAL_VOICE_INPUT" = true ]; then rg -q 'text="Voice Input"[^>]*checked="false"' "$EVIDENCE_ROOT/settings-toggle.xml" && break; else rg -q 'text="Voice Input"[^>]*checked="true"' "$EVIDENCE_ROOT/settings-toggle.xml" && break; fi
+  VOICE_CHECKED=$(python3 - "$EVIDENCE_ROOT/settings-toggle.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+for node in ET.parse(sys.argv[1]).getroot().iter("node"):
+    if node.attrib.get("checkable") == "true" and any(child.attrib.get("text") == "Voice Input" for child in node.iter("node")):
+        print(node.attrib["checked"]); break
+PY
+)
+  if [ "$ORIGINAL_VOICE_INPUT" = true ]; then [ "$VOICE_CHECKED" = false ] && break; else [ "$VOICE_CHECKED" = true ] && break; fi
   sleep 1
 done
-if [ "$ORIGINAL_VOICE_INPUT" = true ]; then rg -q 'text="Voice Input"[^>]*checked="false"' "$EVIDENCE_ROOT/settings-toggle.xml"; else rg -q 'text="Voice Input"[^>]*checked="true"' "$EVIDENCE_ROOT/settings-toggle.xml"; fi
+if [ "$ORIGINAL_VOICE_INPUT" = true ]; then [ "$VOICE_CHECKED" = false ]; else [ "$VOICE_CHECKED" = true ]; fi
 adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
 adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
 adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-lobby-after-relaunch.xml
@@ -483,7 +490,14 @@ read SETTINGS_X SETTINGS_Y < <(ui_center "$EVIDENCE_ROOT/lobby-after-relaunch.xm
 adb -s "$DEVICE_SERIAL" shell input tap "$SETTINGS_X" "$SETTINGS_Y"
 adb -s "$DEVICE_SERIAL" shell uiautomator dump /sdcard/closure-settings-after.xml
 adb -s "$DEVICE_SERIAL" exec-out cat /sdcard/closure-settings-after.xml > "$EVIDENCE_ROOT/settings-after.xml"
-if [ "$ORIGINAL_VOICE_INPUT" = true ]; then rg -q 'text="Voice Input"[^>]*checked="false"' "$EVIDENCE_ROOT/settings-after.xml"; else rg -q 'text="Voice Input"[^>]*checked="true"' "$EVIDENCE_ROOT/settings-after.xml"; fi
+VOICE_CHECKED=$(python3 - "$EVIDENCE_ROOT/settings-after.xml" <<'PY'
+import sys, xml.etree.ElementTree as ET
+for node in ET.parse(sys.argv[1]).getroot().iter("node"):
+    if node.attrib.get("checkable") == "true" and any(child.attrib.get("text") == "Voice Input" for child in node.iter("node")):
+        print(node.attrib["checked"]); break
+PY
+)
+if [ "$ORIGINAL_VOICE_INPUT" = true ]; then [ "$VOICE_CHECKED" = false ]; else [ "$VOICE_CHECKED" = true ]; fi
 rg -F 'Microphone Permission' "$EVIDENCE_ROOT/settings-after.xml"
 adb -s "$DEVICE_SERIAL" exec-out screencap -p > "$EVIDENCE_ROOT/issue-61-settings.png"
 ```
@@ -494,7 +508,8 @@ This cleanup is unconditional after any retarget mutation, whether validation su
 
 ```bash
 adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
-adb -s "$DEVICE_SERIAL" shell run-as "$PACKAGE" sh -c 'mv -f files/datastore/server_prefs.preferences_pb files/datastore/server_prefs.preferences_pb.mock-evidence; mv -f files/datastore/server_prefs.preferences_pb.pre-evidence files/datastore/server_prefs.preferences_pb'
+adb -s "$DEVICE_SERIAL" shell "run-as $PACKAGE mv -f files/datastore/server_prefs.preferences_pb files/datastore/server_prefs.preferences_pb.mock-evidence"
+adb -s "$DEVICE_SERIAL" shell "run-as $PACKAGE mv -f files/datastore/server_prefs.preferences_pb.pre-evidence files/datastore/server_prefs.preferences_pb"
 adb -s "$DEVICE_SERIAL" exec-out run-as "$PACKAGE" cat files/datastore/server_prefs.preferences_pb > "$EVIDENCE_ROOT/restored-server-prefs.pb"
 cmp "$EVIDENCE_ROOT/original-server-prefs.pb" "$EVIDENCE_ROOT/restored-server-prefs.pb"
 restore_mic
