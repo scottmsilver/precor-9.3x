@@ -45,12 +45,14 @@ class VoiceInputSettingsGuardTest {
     fun disabledPreferenceStopsAndGuardsManualVoiceCapture() {
         assertTrue(navigationSource.contains("voiceViewModel.setVoiceInputEnabled(enabled)"))
         assertTrue(navigationSource.contains("if (!voiceInputEnabled) return@handleVoiceToggle"))
+        assertTrue(navigationSource.contains("if (!enabled) onVoiceInputDisabled()"))
         assertTrue(voiceViewModelSource.contains("fun setVoiceInputEnabled(enabled: Boolean)"))
         assertTrue(voiceViewModelSource.contains("if (!voiceInputEnabled) return"))
         assertTrue(voiceViewModelSource.contains("teardownConnection()"))
         assertTrue(voiceViewModelSource.contains("gate.runIfActive"))
         assertTrue(voiceViewModelSource.contains("gate.runIfActive(generation) {\n                when (state)"))
         assertTrue(voiceViewModelSource.contains("if (userActivated) {\n                stopMicCapture()"))
+        assertTrue(voiceViewModelSource.contains("gate.runIfActive(sessionGeneration) {\n                    geminiClient"))
     }
 
     @Test
@@ -60,5 +62,13 @@ class VoiceInputSettingsGuardTest {
         assertTrue(activitySource.contains("state == VoiceState.IDLE && wakeWordForeground && voiceInputEnabled"))
         assertTrue(activitySource.contains("if (voiceInputEnabled) startWakeWordPrototype()"))
         assertTrue(activitySource.contains("pendingVoiceToggleIntent"))
+        assertTrue(activitySource.contains("onVoiceInputDisabled = ::disableVoiceInputImmediately"))
+        val preferenceObserver = activitySource
+            .substringAfter("serverPreferences.voiceInputEnabled.collect")
+            .substringBefore("private fun handleVoiceTestIntent")
+        assertTrue(
+            preferenceObserver.indexOf("pendingVoiceToggleIntent = false") in
+                0 until preferenceObserver.indexOf("if (!enabled)"),
+        )
     }
 }

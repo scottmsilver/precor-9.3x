@@ -162,7 +162,9 @@ class VoiceViewModel(
                 model = cfg.geminiLiveModel.ifEmpty { "gemini-3.1-flash-live-preview" },
                 voice = cfg.geminiVoice.ifEmpty { "Kore" },
                 callbacks = backgroundCallbacks(player, generation),
-                functionBridge = FunctionBridge(api) { gate.isActive(generation) },
+                functionBridge = FunctionBridge(api) { start ->
+                    gate.runIfActive(generation, start)
+                },
                 stateContext = currentStateContext,
                 smartass = false,
                 okHttpClient = okHttpClient,
@@ -424,7 +426,7 @@ class VoiceViewModel(
             if (geminiClient == null) return@runIfActive
             Log.d(TAG, "Starting mic capture...")
             audioCapture?.updateCallback { pcmBase64 ->
-                if (gate.isActive(sessionGeneration)) {
+                gate.runIfActive(sessionGeneration) {
                     geminiClient?.takeIf { it.isConnected }?.sendAudio(pcmBase64)
                 }
             }

@@ -54,6 +54,7 @@ object Routes {
 fun AppNavigation(
     navController: NavHostController = rememberNavController(),
     serverPreferences: ServerPreferences = koinInject(),
+    onVoiceInputDisabled: () -> Unit = {},
 ) {
     val colors = LocalPrecorColors.current
     val context = LocalContext.current
@@ -415,6 +416,7 @@ fun AppNavigation(
             voiceInputEnabled = voiceInputEnabled,
             microphonePermissionGranted = microphonePermissionGranted,
             onVoiceInputEnabledChange = { enabled ->
+                if (!enabled) onVoiceInputDisabled()
                 voiceViewModel.setVoiceInputEnabled(enabled)
                 scope.launch { serverPreferences.setVoiceInputEnabled(enabled) }
                 if (enabled && !microphonePermissionGranted) {

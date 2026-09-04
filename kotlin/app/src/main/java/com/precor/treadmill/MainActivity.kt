@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PrecorTreadmillTheme {
-                AppNavigation()
+                AppNavigation(onVoiceInputDisabled = ::disableVoiceInputImmediately)
             }
         }
 
@@ -77,17 +77,22 @@ class MainActivity : ComponentActivity() {
             serverPreferences.voiceInputEnabled.collect { enabled ->
                 voiceInputEnabled = enabled
                 voiceInputPreferenceLoaded = true
+                val activatePendingVoice = pendingVoiceToggleIntent
+                pendingVoiceToggleIntent = false
                 voiceViewModel.setVoiceInputEnabled(enabled)
                 if (!enabled) wakeWordEngine?.stop()
                 else {
-                    if (pendingVoiceToggleIntent) {
-                        pendingVoiceToggleIntent = false
-                        voiceViewModel.toggle()
-                    }
+                    if (activatePendingVoice) voiceViewModel.toggle()
                     if (wakeWordForeground) startWakeWordPrototype()
                 }
             }
         }
+    }
+
+    private fun disableVoiceInputImmediately() {
+        voiceInputEnabled = false
+        pendingVoiceToggleIntent = false
+        wakeWordEngine?.stop()
     }
 
     private fun handleVoiceTestIntent(intent: Intent) {
