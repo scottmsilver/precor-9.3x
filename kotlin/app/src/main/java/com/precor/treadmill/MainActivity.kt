@@ -82,7 +82,10 @@ class MainActivity : ComponentActivity() {
                 val activatePendingVoice = pendingVoiceToggleIntent
                 pendingVoiceToggleIntent = false
                 voiceViewModel.setVoiceInputEnabled(enabled)
-                if (!enabled) wakeWordEngine?.stop()
+                if (!enabled) {
+                    wakeWordActivationPolicy.invalidatePendingHandoffs()
+                    wakeWordEngine?.stop()
+                }
                 else {
                     if (activatePendingVoice) voiceViewModel.toggle()
                     if (wakeWordForeground) startWakeWordPrototype()
@@ -94,6 +97,7 @@ class MainActivity : ComponentActivity() {
     private fun disableVoiceInputImmediately() {
         voiceInputEnabled = false
         pendingVoiceToggleIntent = false
+        wakeWordActivationPolicy.invalidatePendingHandoffs()
         wakeWordEngine?.stop()
     }
 
@@ -162,12 +166,14 @@ class MainActivity : ComponentActivity() {
                         TAG,
                         "WAKE_WORD_DETECTED name=${detection.model.name} score=${detection.score}",
                     )
+                    val handoffGeneration = wakeWordActivationPolicy.currentHandoffGeneration()
                     // Give the wrapper's AudioRecord time to release before Gemini's
                     // existing AudioCapture claims the microphone.
                     engine.stop()
                     delay(300)
                     if (
                         voiceInputEnabled && wakeWordForeground &&
+                        wakeWordActivationPolicy.isHandoffCurrent(handoffGeneration) &&
                         voiceViewModel.voiceState.value == VoiceState.IDLE
                     ) {
                         voiceViewModel.activateAfterWakeWord()
@@ -203,6 +209,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         wakeWordForeground = false
+        wakeWordActivationPolicy.invalidatePendingHandoffs()
         wakeWordEngine?.stop()
         super.onPause()
     }

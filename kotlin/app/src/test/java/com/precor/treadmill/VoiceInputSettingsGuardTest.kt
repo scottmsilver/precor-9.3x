@@ -58,7 +58,11 @@ class VoiceInputSettingsGuardTest {
     @Test
     fun disabledPreferenceStopsAndGuardsWakeWordCapture() {
         assertTrue(activitySource.contains("serverPreferences.voiceInputEnabled.collect"))
-        assertTrue(activitySource.contains("if (!enabled) wakeWordEngine?.stop()"))
+        val disabledPreferenceBranch = activitySource
+            .substringAfter("if (!enabled) {")
+            .substringBefore("} else {")
+        assertTrue(disabledPreferenceBranch.contains("wakeWordActivationPolicy.invalidatePendingHandoffs()"))
+        assertTrue(disabledPreferenceBranch.contains("wakeWordEngine?.stop()"))
         assertTrue(activitySource.contains("state == VoiceState.IDLE && wakeWordForeground && voiceInputEnabled"))
         assertTrue(activitySource.contains("if (voiceInputEnabled) startWakeWordPrototype()"))
         assertTrue(activitySource.contains("pendingVoiceToggleIntent"))
@@ -73,9 +77,12 @@ class VoiceInputSettingsGuardTest {
     }
 
     @Test
-    fun voiceOptOutKeepsWakeWordDebouncePolicyInTheCapturePath() {
+    fun voiceOptOutInvalidatesDelayedWakeHandoffWithoutDroppingDebounce() {
         assertTrue(activitySource.contains("private val wakeWordActivationPolicy = WakeWordActivationPolicy()"))
         assertTrue(activitySource.contains("wakeWordActivationPolicy.shouldActivate("))
         assertTrue(activitySource.contains("wakeWordActivationPolicy.onListeningStarted("))
+        assertTrue(activitySource.contains("wakeWordActivationPolicy.invalidatePendingHandoffs()"))
+        assertTrue(activitySource.contains("val handoffGeneration = wakeWordActivationPolicy.currentHandoffGeneration()"))
+        assertTrue(activitySource.contains("wakeWordActivationPolicy.isHandoffCurrent(handoffGeneration)"))
     }
 }
