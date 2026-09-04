@@ -340,14 +340,32 @@ curl -fsS "$MOCK_URL/api/programs/history" | jq -e 'length == 2'
 
 - [ ] **Step 3: Retarget tablet without retaining altered preferences**
 
-Repeat the real-server stationary preflight immediately here. Force-stop the app, save a distinct `pre-retarget-server-prefs.pb`, verify it hashes identically to `original-server-prefs.pb`, then use a recoverable internal rename (not data clearing) so Setup can target `"$MOCK_URL"`:
+Repeat the real-server stationary preflight immediately here. Force-stop the app, save a distinct `pre-retarget-server-prefs.pb`, verify it hashes identically to `original-server-prefs.pb`, and make a recoverable internal copy. Do not use the Setup screen for this evidence run: mDNS can auto-connect between a UI dump and a tap, making coordinate automation unsafe. Instead, generate the same AndroidX Preferences protobuf directly, first proving the encoder recreates the immutable original byte-for-byte, then changing only `server_url` to `"$MOCK_URL"`:
 
 ```bash
 adb -s "$DEVICE_SERIAL" exec-out run-as "$PACKAGE" cat files/datastore/server_prefs.preferences_pb > "$EVIDENCE_ROOT/pre-retarget-server-prefs.pb"
 cmp "$EVIDENCE_ROOT/original-server-prefs.pb" "$EVIDENCE_ROOT/pre-retarget-server-prefs.pb"
 adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
-adb -s "$DEVICE_SERIAL" shell run-as "$PACKAGE" sh -c 'mv -f files/datastore/server_prefs.preferences_pb files/datastore/server_prefs.preferences_pb.pre-evidence'
-adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
+adb -s "$DEVICE_SERIAL" shell "run-as $PACKAGE cp -f files/datastore/server_prefs.preferences_pb files/datastore/server_prefs.preferences_pb.pre-evidence"
+python3 - "$ORIGINAL_SERVER" "$MOCK_URL" "$EVIDENCE_ROOT/original-encoded.pb" "$EVIDENCE_ROOT/mock-server-prefs.pb" <<'PY'
+import sys
+def v(n):
+    out=bytearray()
+    while n > 127: out.append((n & 127) | 128); n >>= 7
+    out.append(n); return bytes(out)
+def field(tag, payload): return bytes([tag]) + v(len(payload)) + payload
+def entry(key, value): return field(0x0a, field(0x0a, key.encode()) + field(0x12, value))
+def prefs(url):
+    return (entry("server_url", field(0x2a, url.encode())) +
+            entry("voice_input_enabled", b"\x08\x01") +
+            entry("microphone_permission_requested", b"\x08\x01"))
+open(sys.argv[3], "wb").write(prefs(sys.argv[1]))
+open(sys.argv[4], "wb").write(prefs(sys.argv[2]))
+PY
+cmp "$EVIDENCE_ROOT/original-server-prefs.pb" "$EVIDENCE_ROOT/original-encoded.pb"
+adb -s "$DEVICE_SERIAL" push "$EVIDENCE_ROOT/mock-server-prefs.pb" /data/local/tmp/treddy-mock-server-prefs.pb
+adb -s "$DEVICE_SERIAL" shell "run-as $PACKAGE cp -f /data/local/tmp/treddy-mock-server-prefs.pb files/datastore/server_prefs.preferences_pb"
+adb -s "$DEVICE_SERIAL" shell rm -f /data/local/tmp/treddy-mock-server-prefs.pb
 ```
 
 Use this temporary XML-center helper for every accessibility-selected tap:
@@ -369,20 +387,18 @@ PY
 }
 ```
 
-Dump UIAutomator XML, resolve `Server URL` with `ui_center`, tap it, move to end and send `KEYCODE_DEL` 200 times, enter `"$MOCK_URL"` with `adb shell input text`, resolve/tap `Connect`, and invoke IME Go if required. Re-dump XML and require connected lobby text. Before any mock program API, repeat the `/proc/$MOCK_PID/environ` check above. If any step after retargeting fails, execute Task 6 Step 4 cleanup immediately and post no issue comments.
-
-Before accepting the connected lobby, force-stop the app so the DataStore write is flushed, stream the temporary `server_prefs.preferences_pb` to `"$EVIDENCE_ROOT/mock-server-prefs.pb"`, decode it, and require its URL is exactly `"$MOCK_URL"`. Relaunch, require the lobby again, and require `mock-server.log` to contain the tablet WebSocket acceptance/connection emitted after that relaunch. This proves the UI did not silently auto-select the discoverable real server.
+Decode and require the installed temporary DataStore URL is exactly `"$MOCK_URL"`. Launch, require the profile/lobby UI, and require `mock-server.log` to contain the tablet WebSocket acceptance/connection emitted after that launch. Before any mock program API, repeat the `/proc/$MOCK_PID/environ` check above. If any step after retargeting fails, execute Task 6 Step 4 cleanup immediately and post no issue comments.
 
 ```bash
-adb -s "$DEVICE_SERIAL" shell am force-stop "$PACKAGE"
-adb -s "$DEVICE_SERIAL" exec-out run-as "$PACKAGE" cat files/datastore/server_prefs.preferences_pb > "$EVIDENCE_ROOT/mock-server-prefs.pb"
-protoc --decode_raw < "$EVIDENCE_ROOT/mock-server-prefs.pb" > "$EVIDENCE_ROOT/mock-server-prefs.txt"
+adb -s "$DEVICE_SERIAL" exec-out run-as "$PACKAGE" cat files/datastore/server_prefs.preferences_pb > "$EVIDENCE_ROOT/installed-mock-server-prefs.pb"
+cmp "$EVIDENCE_ROOT/mock-server-prefs.pb" "$EVIDENCE_ROOT/installed-mock-server-prefs.pb"
+protoc --decode_raw < "$EVIDENCE_ROOT/installed-mock-server-prefs.pb" > "$EVIDENCE_ROOT/mock-server-prefs.txt"
 TEMP_SERVER=$(sed -n 's/.*"\(https\{0,1\}:\/\/[^\"]*\)".*/\1/p' "$EVIDENCE_ROOT/mock-server-prefs.txt" | head -1)
 test "$TEMP_SERVER" = "$MOCK_URL"
 : > "$EVIDENCE_ROOT/mock-server-post-target.log"
 tail -n 0 -F "$EVIDENCE_ROOT/mock-server.log" > "$EVIDENCE_ROOT/mock-server-post-target.log" &
 MOCK_TAIL_PID=$!
-adb -s "$DEVICE_SERIAL" shell monkey -p "$PACKAGE" -c android.intent.category.LAUNCHER 1
+adb -s "$DEVICE_SERIAL" shell am start -W -n "$PACKAGE/.MainActivity"
 for _ in $(seq 1 20); do rg -q 'WebSocket.*(accept|connect)|connection open' "$EVIDENCE_ROOT/mock-server-post-target.log" && break; sleep 1; done
 kill "$MOCK_TAIL_PID" 2>/dev/null || true
 rg -q 'WebSocket.*(accept|connect)|connection open' "$EVIDENCE_ROOT/mock-server-post-target.log"
